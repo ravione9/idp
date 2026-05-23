@@ -1,0 +1,132 @@
+# =============================================================================
+# LILG IdP — Single-tier DEV server (e.g. 192.168.24.254)
+#
+# Usage on server:
+#   cp env.dev.example .env   # edit secrets
+#   docker compose -f docker-compose.dev.yml up -d --build
+#
+# Only port 8080 is exposed on the host LAN.
+# =============================================================================
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: idp-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: lilg
+      MYSQL_USER: lilg_app
+      MYSQL_PASSWORD: s3cr3t_change_me
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - idp-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: idp-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - idp-net
+
+  localstack:
+    image: localstack/localstack:3
+    container_name: idp-localstack
+    restart: unless-stopped
+    environment:
+      SERVICES: sqs
+      DEFAULT_REGION: ap-south-1
+      LOCALSTACK_HOSTNAME: localstack
+      PERSISTENCE: 1
+    volumes:
+      - localstack-data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - idp-net
+
+  lilg-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: idp-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DB_HOST: mysql
+      REDIS_URL: redis://redis:6379/0
+      AWS_ENDPOINT_URL: http://localstack:4566
+    ports:
+      - "0.0.0.0:8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - idp-net
+
+  lilg-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: idp-worker
+    restart: unless-stopped
+    command: ["node", "dist/services/outbox-worker.js"]
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DB_HOST: mysql
+      REDIS_URL: redis://redis:6379/0
+      AWS_ENDPOINT_URL: http://localstack:4566
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      lilg-api:
+        condition: service_healthy
+    networks:
+      - idp-net
+
+networks:
+  idp-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
+  localstack-data:

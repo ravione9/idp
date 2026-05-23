@@ -1,0 +1,148 @@
+version: "3.9"
+
+# =============================================================================
+# LILG — Local development stack
+# =============================================================================
+
+networks:
+  lilg-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
+  localstack-data:
+
+services:
+  # ---------------------------------------------------------------------------
+  # MySQL 8
+  # ---------------------------------------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: lilg-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: lilg
+      MYSQL_USER: lilg_app
+      MYSQL_PASSWORD: s3cr3t_change_me
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - lilg-net
+
+  # ---------------------------------------------------------------------------
+  # Redis 7
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: lilg-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - lilg-net
+
+  # ---------------------------------------------------------------------------
+  # LocalStack (SQS emulation)
+  # ---------------------------------------------------------------------------
+  localstack:
+    image: localstack/localstack:3
+    container_name: lilg-localstack
+    restart: unless-stopped
+    environment:
+      SERVICES: sqs
+      DEFAULT_REGION: ap-south-1
+      LOCALSTACK_HOSTNAME: localstack
+      PERSISTENCE: 1
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack-data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - lilg-net
+
+  # ---------------------------------------------------------------------------
+  # LILG API server
+  # ---------------------------------------------------------------------------
+  lilg-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: lilg-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DB_HOST: mysql
+      REDIS_URL: redis://redis:6379/0
+      AWS_ENDPOINT_URL: http://localstack:4566
+      # Production: set in .env — PUBLIC_BASE_URL=https://idp.lenskart.com
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - lilg-net
+
+  # ---------------------------------------------------------------------------
+  # LILG Outbox worker (separate process)
+  # ---------------------------------------------------------------------------
+  lilg-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: lilg-worker
+    restart: unless-stopped
+    command: ["node", "dist/services/outbox-worker.js"]
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DB_HOST: mysql
+      REDIS_URL: redis://redis:6379/0
+      AWS_ENDPOINT_URL: http://localstack:4566
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - lilg-net
