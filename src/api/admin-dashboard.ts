@@ -66,7 +66,7 @@ router.get('/', async (_req: Request, res: Response): Promise<void> => {
       publicBaseUrl: base ?? null,
       metadataUrl:  base ? `${base}/saml/metadata` : null,
       googleConfigured: !config.google.clientId.startsWith('REPLACE_ME'),
-      zohoConfigured:   !config.zoho.clientId.startsWith('dev-zoho'),
+      zohoSamlConfigured: false, // populated once the seeded Zoho Mail SAML app is registered & keys are in place
     },
   });
 });

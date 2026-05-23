@@ -45,20 +45,39 @@ const api = {
   mfaConfirm:       (code) => api.fetch('/api/me/mfa/confirm', { method: 'POST', body: JSON.stringify({ code }) }),
   mfaDisable:       () => api.fetch('/api/me/mfa/disable', { method: 'POST' }),
   mfaRegenCodes:    () => api.fetch('/api/me/mfa/regenerate-codes', { method: 'POST' }),
+  igaApps:          () => api.fetch('/api/iga/applications'),
+  igaConnectors:    () => api.fetch('/api/iga/connectors'),
+  igaConnectorRuns: (id) => api.fetch(`/api/iga/connectors/${id}/runs`),
+  igaEntitlements:  (appId) => api.fetch(`/api/iga/entitlements${appId ? `?appId=${appId}` : ''}`),
+  igaMyAccess:      () => api.fetch('/api/iga/entitlements/me'),
+  igaAccessReqs:    (scope = 'mine') => api.fetch(`/api/iga/access-requests?scope=${scope}`),
+  igaMyTasks:       () => api.fetch('/api/iga/access-requests?scope=tasks'),
+  igaReviews:       () => api.fetch('/api/iga/access-reviews'),
+  igaMyReviews:     () => api.fetch('/api/iga/access-reviews/me'),
+  igaSodPolicies:   () => api.fetch('/api/iga/sod-policies'),
+  igaSodViolations: (status = 'OPEN') => api.fetch(`/api/iga/sod-violations?status=${status}`),
+  igaRisk:          () => api.fetch('/api/iga/risk/dashboard'),
+  igaReports:       () => api.fetch('/api/iga/reports'),
 };
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
 const ICONS = {
-  dashboard: '◉',
-  apps:      '▦',
-  users:     '◍',
-  saml:      '⛨',
-  auth:      '⚿',
-  audit:     '⌖',
-  settings:  '⚙',
-  logout:    '↪',
-  search:    '🔍',
+  dashboard:  '◉',
+  apps:       '▦',
+  myaccess:   '◫',
+  request:    '✦',
+  tasks:      '◐',
+  users:      '◍',
+  saml:       '⛨',
+  connectors: '⇄',
+  reviews:    '✓',
+  sod:        '⚠',
+  risk:       '◆',
+  reports:    '☰',
+  auth:       '⚿',
+  audit:      '⌖',
+  settings:   '⚙',
 };
 
 function el(html) {
@@ -114,7 +133,7 @@ function renderLogin() {
           <p>Enterprise single sign-on, SAML 2.0 identity provider, and identity governance for Lenskart.</p>
           <ul class="auth-features">
             <li>SAML 2.0 / OIDC single sign-on</li>
-            <li>Local, Google &amp; Zoho authentication</li>
+            <li>Local password &amp; Google SSO, with TOTP MFA</li>
             <li>Centralized application catalog</li>
             <li>Audit trail &amp; access governance</li>
           </ul>
@@ -139,7 +158,6 @@ function renderLogin() {
           </form>
           <div class="divider">or</div>
           <a href="/auth/google" class="btn btn-secondary btn-block">Continue with Google</a>
-          <a href="/auth/zoho"   class="btn btn-secondary btn-block" style="margin-top:0.5rem">Continue with Zoho</a>
         </div>
       </main>
     </div>
@@ -255,13 +273,29 @@ function buildShell(activeView) {
           <div class="nav-section">Workspace</div>
           ${navItem('dashboard', ICONS.dashboard, 'Dashboard', true)}
           ${navItem('apps',      ICONS.apps,      'My Applications')}
-          ${isAdmin ? `<div class="nav-section">Administration</div>` : ''}
-          ${navItem('saml-apps', ICONS.saml,      'SAML Applications', true)}
-          ${navItem('users',     ICONS.users,     'Users', true)}
-          ${navItem('admins',    ICONS.users,     'Administrators', false, true)}
-          ${navItem('auth',      ICONS.auth,      'Authentication', true)}
-          ${navItem('audit',     ICONS.audit,     'Audit Logs', true)}
-          ${navItem('settings',  ICONS.settings,  'Settings')}
+          ${navItem('myaccess',  ICONS.myaccess,  'My Access')}
+          ${navItem('request',   ICONS.request,   'Request Access')}
+          ${navItem('tasks',     ICONS.tasks,     'My Tasks')}
+
+          ${isAdmin ? `<div class="nav-section">Access Management</div>` : ''}
+          ${navItem('saml-apps',  ICONS.saml,       'SAML Applications', true)}
+          ${navItem('iga-apps',   ICONS.apps,       'Application Catalog', true)}
+          ${navItem('connectors', ICONS.connectors, 'Connectors', true)}
+          ${navItem('auth',       ICONS.auth,       'Authentication', true)}
+
+          ${isAdmin ? `<div class="nav-section">Identity Governance</div>` : ''}
+          ${navItem('users',      ICONS.users,      'Users', true)}
+          ${navItem('admins',     ICONS.users,      'Administrators', false, true)}
+          ${navItem('reviews',    ICONS.reviews,    'Access Reviews', true)}
+          ${navItem('sod',        ICONS.sod,        'Segregation of Duties', true)}
+          ${navItem('risk',       ICONS.risk,       'Risk', true)}
+
+          ${isAdmin ? `<div class="nav-section">Compliance</div>` : ''}
+          ${navItem('audit',      ICONS.audit,      'Audit Logs', true)}
+          ${navItem('reports',    ICONS.reports,    'Reports', true)}
+
+          <div class="nav-section">Account</div>
+          ${navItem('settings',   ICONS.settings,   'Settings')}
         </nav>
         <div class="sidebar-footer">v1.0 · ${esc(me?.session?.iss || 'local')}</div>
       </aside>
@@ -376,7 +410,7 @@ async function viewDashboard() {
     ['Public base URL',   sys.publicBaseUrl ? esc(sys.publicBaseUrl) : '—'],
     ['SAML metadata',     sys.metadataUrl ? `<a href="${esc(sys.metadataUrl)}" target="_blank">${esc(sys.metadataUrl)}</a>` : '—'],
     ['Google OIDC',       sys.googleConfigured ? '<span class="badge badge-success">Configured</span>' : '<span class="badge badge-neutral">Not configured</span>'],
-    ['Zoho OIDC',         sys.zohoConfigured ? '<span class="badge badge-success">Configured</span>' : '<span class="badge badge-neutral">Not configured</span>'],
+    ['Zoho Mail SAML SP', sys.zohoSamlConfigured ? '<span class="badge badge-success">Registered</span>' : '<span class="badge badge-neutral">Not registered</span>'],
     ['Local administrators', `${c.localAdmins}`],
   ];
 
@@ -713,7 +747,7 @@ async function viewAdmins() {
     </div>
     <details class="card" style="margin-bottom:1rem">
       <summary style="cursor:pointer;font-weight:600">Create local administrator</summary>
-      <p class="subtitle" style="margin:0.5rem 0 1rem">Use sparingly. Prefer Google/Zoho SSO for employees.</p>
+      <p class="subtitle" style="margin:0.5rem 0 1rem">Use sparingly. Prefer Google SSO for employees.</p>
       <div id="ca-error"></div>
       <form id="ca-form">
         <div class="grid-2">
@@ -796,15 +830,15 @@ async function viewAuth() {
           </div>` : ''}
       </div>
 
-      <div class="card">
-        <h2>OIDC providers</h2>
-        <p class="subtitle" style="margin-bottom:1rem">Federated login for end users</p>
-        <div class="kv-list">
-          <div class="kv"><div class="k">Google</div><div class="v"><a href="/auth/google">/auth/google</a></div></div>
-          <div class="kv"><div class="k">Zoho</div><div class="v"><a href="/auth/zoho">/auth/zoho</a></div></div>
+        <div class="card">
+          <h2>Inbound OIDC providers</h2>
+          <p class="subtitle" style="margin-bottom:1rem">Federated login for end users</p>
+          <div class="kv-list">
+            <div class="kv"><div class="k">Google Workspace</div><div class="v"><a href="/auth/google">/auth/google</a></div></div>
+          </div>
+          <p class="subtitle" style="margin-top:1rem">Configure <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>, <code>GOOGLE_HOSTED_DOMAIN</code> in <code>.env</code>.</p>
+          <p class="subtitle">Zoho Mail is consumed as a <a href="#" data-view-link="saml-apps">SAML application</a>, not a sign-in provider.</p>
         </div>
-        <p class="subtitle" style="margin-top:1rem">Configure <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>, <code>ZOHO_CLIENT_ID</code> in <code>.env</code>.</p>
-      </div>
 
       <div class="card">
         <h2>Local password login</h2>
@@ -1165,16 +1199,404 @@ function navigate(view) {
   history.replaceState(null, '', view === 'dashboard' ? '/' : `/?v=${view}`);
 
   switch (view) {
-    case 'dashboard': return viewDashboard();
-    case 'apps':      return viewApps();
-    case 'saml-apps': return viewSamlApps();
-    case 'users':     return viewUsers();
-    case 'admins':    return viewAdmins();
-    case 'auth':      return viewAuth();
-    case 'audit':     return viewAudit();
-    case 'settings':  return viewSettings();
-    default:          return viewDashboard();
+    case 'dashboard':  return viewDashboard();
+    case 'apps':       return viewApps();
+    case 'myaccess':   return viewMyAccess();
+    case 'request':    return viewRequestAccess();
+    case 'tasks':      return viewMyTasks();
+    case 'saml-apps':  return viewSamlApps();
+    case 'iga-apps':   return viewIgaApps();
+    case 'connectors': return viewConnectors();
+    case 'users':      return viewUsers();
+    case 'admins':     return viewAdmins();
+    case 'reviews':    return viewReviews();
+    case 'sod':        return viewSod();
+    case 'risk':       return viewRisk();
+    case 'auth':       return viewAuth();
+    case 'audit':      return viewAudit();
+    case 'reports':    return viewReports();
+    case 'settings':   return viewSettings();
+    default:           return viewDashboard();
   }
+}
+
+/* ---------- Helpers for placeholder/foundation views ---------- */
+function comingSoonView(title, subtitle, body = '') {
+  setPageTitle(title);
+  const wrap = el(`
+    <div>
+      <div class="page-header">
+        <div>
+          <h1>${esc(title)}</h1>
+          <p class="subtitle">${esc(subtitle)}</p>
+        </div>
+      </div>
+      ${body || `
+        <div class="card">
+          <h2>Foundation in place</h2>
+          <p class="subtitle" style="margin-top:0.5rem">
+            Schema and read APIs are live. The interactive workflow
+            (forms, approvals, notifications, fulfillment) ships in a
+            follow-up commit. See <code>ARCHITECTURE.md §15 Roadmap</code>.
+          </p>
+        </div>`}
+    </div>
+  `);
+  setContent(wrap);
+}
+
+async function loadAndRenderTable(opts) {
+  const { fetchFn, columns, render, emptyText, emptyIcon = '◌' } = opts;
+  const wrap = el(`<div></div>`);
+  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
+  try {
+    const r = await fetchFn();
+    const rows = r.data || [];
+    const head = `<thead><tr>${columns.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>`;
+    const body = rows.length
+      ? rows.map((row) => `<tr>${render(row)}</tr>`).join('')
+      : `<tr><td colspan="${columns.length}" class="empty-state"><div class="empty-icon">${emptyIcon}</div>${esc(emptyText)}</td></tr>`;
+    wrap.innerHTML = `<div class="table-wrap"><table>${head}<tbody>${body}</tbody></table></div>`;
+    return wrap;
+  } catch (err) {
+    wrap.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    return wrap;
+  }
+}
+
+/* ---------- IGA / AM Views ---------- */
+async function viewMyAccess() {
+  setPageTitle('My Access');
+  const header = `
+    <div class="page-header">
+      <div>
+        <h1>My Access</h1>
+        <p class="subtitle">Entitlements and roles currently assigned to you</p>
+      </div>
+      <a href="#" data-view-link="request" class="btn btn-primary">Request access</a>
+    </div>`;
+  const wrap = el(`<div>${header}</div>`);
+  setContent(wrap);
+  wrap.querySelector('[data-view-link]')?.addEventListener('click', (e) => {
+    e.preventDefault(); navigate('request');
+  });
+  const tableNode = await loadAndRenderTable({
+    fetchFn:   () => api.igaMyAccess(),
+    columns:   ['Application', 'Entitlement', 'Type', 'Source', 'Granted', 'Expires'],
+    emptyText: 'You have no managed entitlements yet',
+    emptyIcon: '◫',
+    render: (r) => `
+      <td class="cell-strong">${esc(r.app_name || '—')}</td>
+      <td>${esc(r.entitlement_name)}</td>
+      <td><span class="badge badge-info">${esc(r.type)}</span></td>
+      <td><span class="badge badge-neutral">${esc(r.source)}</span></td>
+      <td class="muted">${fmtDate(r.granted_at)}</td>
+      <td class="muted">${fmtDate(r.expires_at) || 'Never'}</td>`,
+  });
+  wrap.appendChild(tableNode);
+}
+
+async function viewRequestAccess() {
+  comingSoonView(
+    'Request Access',
+    'Browse the application and entitlement catalog and submit access requests',
+    `
+    <div class="card">
+      <h2>Catalog browser</h2>
+      <p class="subtitle" style="margin-top:0.5rem">
+        End-user catalog with one-click request, justification, validity period,
+        and pre-flight SoD check ships next. The
+        <code>POST /api/iga/access-requests</code> endpoint is scaffolded
+        and returns 501 until the approval-chain resolver lands.
+      </p>
+    </div>`,
+  );
+}
+
+async function viewMyTasks() {
+  setPageTitle('My Tasks');
+  const wrap = el(`
+    <div>
+      <div class="page-header">
+        <div>
+          <h1>My Tasks</h1>
+          <p class="subtitle">Pending approvals and access reviews assigned to you</p>
+        </div>
+      </div>
+      <h3 class="section-title">Access request approvals</h3>
+      <div id="tasks-approvals"></div>
+      <h3 class="section-title">Access review items</h3>
+      <div id="tasks-reviews"></div>
+    </div>
+  `);
+  setContent(wrap);
+
+  try {
+    const r = await api.igaMyTasks();
+    const rows = r.data || [];
+    wrap.querySelector('#tasks-approvals').appendChild(
+      rows.length
+        ? el(`<div class="table-wrap"><table>
+            <thead><tr><th>Request</th><th>Requester</th><th>For</th><th>Type</th><th>Submitted</th></tr></thead>
+            <tbody>${rows.map((r) => `<tr>
+              <td><code>${esc(String(r.id).slice(0, 8))}</code></td>
+              <td>${esc(r.requester_name || r.requester_emp_id)}</td>
+              <td>${esc(r.target_name || r.target_emp_id)}</td>
+              <td><span class="badge badge-info">${esc(r.item_type)}</span></td>
+              <td class="muted">${fmtDate(r.created_at)}</td>
+            </tr>`).join('')}</tbody></table></div>`)
+        : el(`<div class="card"><p class="subtitle">No pending approvals.</p></div>`),
+    );
+  } catch (err) {
+    wrap.querySelector('#tasks-approvals').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+  }
+
+  try {
+    const r = await api.igaMyReviews();
+    const rows = r.data || [];
+    wrap.querySelector('#tasks-reviews').appendChild(
+      rows.length
+        ? el(`<div class="table-wrap"><table>
+            <thead><tr><th>Campaign</th><th>Subject</th><th>Item</th><th>Due</th></tr></thead>
+            <tbody>${rows.map((r) => `<tr>
+              <td>${esc(r.campaign_name)}</td>
+              <td>${esc(r.subject_name || r.emp_id)}</td>
+              <td>${esc(r.entitlement_name || r.role_name || '—')}</td>
+              <td class="muted">${fmtDate(r.end_date)}</td>
+            </tr>`).join('')}</tbody></table></div>`)
+        : el(`<div class="card"><p class="subtitle">No active review items.</p></div>`),
+    );
+  } catch (err) {
+    wrap.querySelector('#tasks-reviews').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+  }
+}
+
+async function viewIgaApps() {
+  setPageTitle('Application Catalog');
+  const header = `
+    <div class="page-header">
+      <div>
+        <h1>Application Catalog</h1>
+        <p class="subtitle">Protocol-agnostic registry. Each app may have one or more SAML / OIDC / SCIM bindings.</p>
+      </div>
+    </div>`;
+  const wrap = el(`<div>${header}</div>`);
+  setContent(wrap);
+  const node = await loadAndRenderTable({
+    fetchFn:   () => api.igaApps(),
+    columns:   ['Name', 'Slug', 'Category', 'Visibility', 'SSO', 'Provisioning', 'Protocols', 'Status'],
+    emptyText: 'No applications registered. SAML SPs from /admin/saml-apps will be migrated to this catalog in the next release.',
+    emptyIcon: '▦',
+    render: (a) => `
+      <td class="cell-strong">${esc(a.name)}</td>
+      <td><code>${esc(a.slug)}</code></td>
+      <td>${esc(a.category || '—')}</td>
+      <td><span class="badge badge-neutral">${esc(a.visibility)}</span></td>
+      <td>${a.sso_enabled ? '<span class="badge badge-success">On</span>' : '—'}</td>
+      <td>${a.provisioning ? '<span class="badge badge-info">On</span>' : '—'}</td>
+      <td>${a.protocol_count}</td>
+      <td>${a.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>`,
+  });
+  wrap.appendChild(node);
+}
+
+async function viewConnectors() {
+  setPageTitle('Connectors');
+  const header = `
+    <div class="page-header">
+      <div>
+        <h1>Connectors</h1>
+        <p class="subtitle">Pluggable adapters to target systems (HRMS, AD, Google, Slack, AWS IAM, …)</p>
+      </div>
+    </div>`;
+  const wrap = el(`<div>${header}</div>`);
+  setContent(wrap);
+  const node = await loadAndRenderTable({
+    fetchFn:   () => api.igaConnectors(),
+    columns:   ['Name', 'Type', 'Direction', 'Sync mode', 'Status', 'Last sync'],
+    emptyText: 'No connectors registered. The connector framework runs adapter_outbox jobs once the dispatcher is wired.',
+    emptyIcon: '⇄',
+    render: (c) => `
+      <td class="cell-strong">${esc(c.name)}</td>
+      <td><span class="badge badge-info">${esc(c.connector_type)}</span></td>
+      <td>${esc(c.direction)}</td>
+      <td>${esc(c.sync_mode)}</td>
+      <td>${{
+        CONFIGURED: '<span class="badge badge-neutral">Configured</span>',
+        CONNECTED:  '<span class="badge badge-success">Connected</span>',
+        ERROR:      '<span class="badge badge-danger">Error</span>',
+        DISABLED:   '<span class="badge badge-neutral">Disabled</span>',
+      }[c.status] || esc(c.status)}</td>
+      <td class="muted">${fmtDate(c.last_sync_at)}</td>`,
+  });
+  wrap.appendChild(node);
+}
+
+async function viewReviews() {
+  setPageTitle('Access Reviews');
+  const header = `
+    <div class="page-header">
+      <div>
+        <h1>Access Reviews</h1>
+        <p class="subtitle">Quarterly certification campaigns — managers and app owners certify or revoke access</p>
+      </div>
+    </div>`;
+  const wrap = el(`<div>${header}</div>`);
+  setContent(wrap);
+  const node = await loadAndRenderTable({
+    fetchFn:   () => api.igaReviews(),
+    columns:   ['Name', 'Reviewer kind', 'Period', 'Status', 'Items', 'Pending'],
+    emptyText: 'No campaigns yet. Create one in the next release.',
+    emptyIcon: '✓',
+    render: (c) => `
+      <td class="cell-strong">${esc(c.name)}</td>
+      <td>${esc(c.reviewer_kind)}</td>
+      <td class="muted">${fmtDate(c.start_date)} → ${fmtDate(c.end_date)}</td>
+      <td>${{
+        DRAFT:     '<span class="badge badge-neutral">Draft</span>',
+        ACTIVE:    '<span class="badge badge-success">Active</span>',
+        COMPLETED: '<span class="badge badge-info">Completed</span>',
+        CANCELLED: '<span class="badge badge-danger">Cancelled</span>',
+      }[c.status] || esc(c.status)}</td>
+      <td>${c.item_count}</td>
+      <td>${c.pending_count}</td>`,
+  });
+  wrap.appendChild(node);
+}
+
+async function viewSod() {
+  setPageTitle('Segregation of Duties');
+  const wrap = el(`
+    <div>
+      <div class="page-header">
+        <div>
+          <h1>Segregation of Duties</h1>
+          <p class="subtitle">Toxic combinations and policy violations</p>
+        </div>
+      </div>
+      <h3 class="section-title">Open violations</h3>
+      <div id="sod-violations"></div>
+      <h3 class="section-title">Active policies</h3>
+      <div id="sod-policies"></div>
+    </div>
+  `);
+  setContent(wrap);
+
+  try {
+    const v = await api.igaSodViolations();
+    const rows = v.data || [];
+    wrap.querySelector('#sod-violations').appendChild(
+      rows.length
+        ? el(`<div class="table-wrap"><table>
+            <thead><tr><th>Severity</th><th>Policy</th><th>Employee</th><th>Detected</th></tr></thead>
+            <tbody>${rows.map((r) => `<tr>
+              <td>${{LOW:'<span class="badge badge-neutral">Low</span>',MEDIUM:'<span class="badge badge-info">Medium</span>',HIGH:'<span class="badge badge-warning">High</span>',CRITICAL:'<span class="badge badge-danger">Critical</span>'}[r.severity] || esc(r.severity)}</td>
+              <td>${esc(r.policy_name)}</td>
+              <td>${esc(r.emp_name || r.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(r.email_corp || '')}</span></td>
+              <td class="muted">${fmtDate(r.detected_at)}</td>
+            </tr>`).join('')}</tbody></table></div>`)
+        : el(`<div class="card"><p class="subtitle">No open violations. (Policies are scaffolded; the detection job runs in the next release.)</p></div>`),
+    );
+  } catch (err) {
+    wrap.querySelector('#sod-violations').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+  }
+
+  try {
+    const p = await api.igaSodPolicies();
+    const rows = p.data || [];
+    wrap.querySelector('#sod-policies').appendChild(
+      rows.length
+        ? el(`<div class="table-wrap"><table>
+            <thead><tr><th>Name</th><th>Severity</th><th>Enforcement</th><th>Active</th></tr></thead>
+            <tbody>${rows.map((r) => `<tr>
+              <td class="cell-strong">${esc(r.name)}</td>
+              <td>${esc(r.severity)}</td>
+              <td><span class="badge badge-neutral">${esc(r.enforcement)}</span></td>
+              <td>${r.active ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-neutral">No</span>'}</td>
+            </tr>`).join('')}</tbody></table></div>`)
+        : el(`<div class="card"><p class="subtitle">No policies defined. SoD authoring UI ships next release.</p></div>`),
+    );
+  } catch (err) {
+    wrap.querySelector('#sod-policies').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+  }
+}
+
+async function viewRisk() {
+  setPageTitle('Risk');
+  const wrap = el(`
+    <div>
+      <div class="page-header">
+        <div>
+          <h1>Risk Dashboard</h1>
+          <p class="subtitle">Login risk events and identities scoring above threshold</p>
+        </div>
+      </div>
+      <div id="risk-content"><div class="loading-row"><span class="spinner"></span></div></div>
+    </div>`);
+  setContent(wrap);
+  try {
+    const r = await api.igaRisk();
+    const stats = `
+      <section class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-icon warning">◆</div>
+          <div class="stat-label">Identities at risk</div>
+          <div class="stat-value">${(r.topRisk || []).length}</div>
+          <div class="stat-sub">score ≥ 50</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon info">◐</div>
+          <div class="stat-label">MFA challenged (24h)</div>
+          <div class="stat-value">${r.counters?.mfaChallengeLast24h ?? 0}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon primary">⊘</div>
+          <div class="stat-label">Logins denied (24h)</div>
+          <div class="stat-value">${r.counters?.deniedLast24h ?? 0}</div>
+        </div>
+      </section>
+      <h3 class="section-title">High-risk identities</h3>
+      ${(r.topRisk || []).length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Identity</th><th>Email</th><th>Score</th><th>Last evaluated</th></tr></thead>
+            <tbody>${r.topRisk.map((u) => `<tr>
+              <td class="cell-strong">${esc(u.full_name || u.emp_id)}</td>
+              <td>${esc(u.email_corp || '')}</td>
+              <td><span class="badge ${u.score >= 80 ? 'badge-danger' : (u.score >= 60 ? 'badge-warning' : 'badge-info')}">${u.score}</span></td>
+              <td class="muted">${fmtDate(u.updated_at)}</td>
+            </tr>`).join('')}</tbody></table></div>`
+        : `<div class="card"><p class="subtitle">No risk scores computed yet. Risk engine runs once configured.</p></div>`}
+    `;
+    wrap.querySelector('#risk-content').innerHTML = stats;
+  } catch (err) {
+    wrap.querySelector('#risk-content').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+  }
+}
+
+async function viewReports() {
+  setPageTitle('Compliance Reports');
+  const header = `
+    <div class="page-header">
+      <div>
+        <h1>Compliance Reports</h1>
+        <p class="subtitle">SOX, GDPR, HIPAA evidence — generated snapshots</p>
+      </div>
+    </div>`;
+  const wrap = el(`<div>${header}</div>`);
+  setContent(wrap);
+  const node = await loadAndRenderTable({
+    fetchFn:   () => api.igaReports(),
+    columns:   ['Name', 'Framework', 'Period', 'Generated', 'Artifact'],
+    emptyText: 'No reports generated yet. Report generator ships in the next release.',
+    emptyIcon: '☰',
+    render: (r) => `
+      <td class="cell-strong">${esc(r.name)}</td>
+      <td><span class="badge badge-info">${esc(r.framework)}</span></td>
+      <td class="muted">${fmtDate(r.period_start)} → ${fmtDate(r.period_end)}</td>
+      <td class="muted">${fmtDate(r.generated_at)}</td>
+      <td>${r.artifact_url ? `<a href="${esc(r.artifact_url)}" target="_blank">Download</a>` : '—'}</td>`,
+  });
+  wrap.appendChild(node);
 }
 
 async function main() {

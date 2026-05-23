@@ -29,15 +29,15 @@ import adminDashboardRouter from './api/admin-dashboard.js';
 import adminAuditRouter from './api/admin-audit.js';
 import adminUsersRouter from './api/admin-users.js';
 import meActionsRouter from './api/me-actions.js';
+import igaRouter from './api/iga.js';
 
 // Auth
 import {
   googleCallbackHandler,
-  zohoCallbackHandler,
   logoutHandler,
   requireAuth,
 } from './auth/middleware.js';
-import { googleLoginHandler, zohoLoginHandler } from './auth/login-routes.js';
+import { googleLoginHandler } from './auth/login-routes.js';
 import { localLoginHandler, localLoginMfaVerifyHandler } from './auth/local-auth.js';
 import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
@@ -95,8 +95,10 @@ app.use('/', healthRouter);
 // ---------------------------------------------------------------------------
 app.get('/auth/google',          googleLoginHandler);
 app.get('/auth/google/callback', (req, res) => { void googleCallbackHandler(req, res); });
-app.get('/auth/zoho',            zohoLoginHandler);
-app.get('/auth/zoho/callback',   (req, res) => { void zohoCallbackHandler(req, res); });
+// Zoho is no longer a portal sign-in method — Zoho Mail is consumed as a
+// SAML application via /saml/launch/zoho-mail (see seeded application).
+app.get('/auth/zoho',         (_req, res) => res.status(410).json({ error: 'Zoho login deprecated — use Zoho Mail SAML SSO' }));
+app.get('/auth/zoho/callback',(_req, res) => res.status(410).json({ error: 'Zoho login deprecated — use Zoho Mail SAML SSO' }));
 app.post('/auth/logout',         requireAuth, (req, res) => { void logoutHandler(req, res); });
 const loginRateLimiter = rateLimit({
   max:      10,
@@ -124,6 +126,7 @@ app.use('/api/admin/saml-apps', adminSamlAppsRouter);
 app.use('/api/admin/dashboard', adminDashboardRouter);
 app.use('/api/admin/audit', adminAuditRouter);
 app.use('/api/admin/users', adminUsersRouter);
+app.use('/api/iga', igaRouter);
 
 // ---------------------------------------------------------------------------
 // Internal routes (internal token gated — no session cookie required)

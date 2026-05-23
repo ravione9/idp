@@ -38,10 +38,11 @@ const ConfigSchema = z.object({
   GOOGLE_HOSTED_DOMAIN: z.string().min(1),
   GOOGLE_SA_KEY_JSON: z.string().min(1),
 
-  // Zoho
-  ZOHO_CLIENT_ID: z.string().min(1),
-  ZOHO_CLIENT_SECRET: z.string().min(1),
-  ZOHO_SCIM_BASE_URL: z.string().url(),
+  // Zoho — only used by the outbound IGA adapter (zoho-adapter.ts) for
+  // SCIM-style provisioning into Zoho. NOT used for portal login anymore.
+  ZOHO_CLIENT_ID:     z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.string().min(1).optional()),
+  ZOHO_CLIENT_SECRET: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.string().min(1).optional()),
+  ZOHO_SCIM_BASE_URL: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.string().url().optional()),
 
   // Active Directory
   AD_URL: z.string().min(1),
@@ -166,9 +167,10 @@ export const config = {
     saKeyJson: parsed.GOOGLE_SA_KEY_JSON,
   },
   zoho: {
-    clientId: parsed.ZOHO_CLIENT_ID,
-    clientSecret: parsed.ZOHO_CLIENT_SECRET,
-    scimBaseUrl: parsed.ZOHO_SCIM_BASE_URL,
+    /** Only set when ZOHO_* env vars exist; used by outbound provisioning adapter. */
+    clientId:     parsed.ZOHO_CLIENT_ID ?? '',
+    clientSecret: parsed.ZOHO_CLIENT_SECRET ?? '',
+    scimBaseUrl:  parsed.ZOHO_SCIM_BASE_URL ?? '',
   },
   ad: {
     url: parsed.AD_URL,

@@ -1,5 +1,9 @@
 /**
- * LILG — OIDC login initiation (Google / Zoho)
+ * LILG — OIDC login initiation (Google).
+ *
+ * Zoho was removed as a portal sign-in method — Zoho Mail is now consumed as
+ * a SAML application served by this IdP rather than a federated identity
+ * provider. See ARCHITECTURE.md.
  */
 
 import { Request, Response } from 'express';
@@ -37,23 +41,6 @@ export function googleLoginHandler(req: Request, res: Response): void {
   });
 
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
-}
-
-export function zohoLoginHandler(req: Request, res: Response): void {
-  const returnTo = safeReturnTo(req.query['returnTo'] as string | undefined);
-  const redirectUri = `${baseUrl(req)}/auth/zoho/callback`;
-  const state = Buffer.from(JSON.stringify({ returnTo }), 'utf8').toString('base64url');
-
-  const params = new URLSearchParams({
-    client_id:     config.zoho.clientId,
-    redirect_uri:  redirectUri,
-    response_type: 'code',
-    scope:         'openid email',
-    access_type:   'offline',
-    state,
-  });
-
-  res.redirect(`https://accounts.zoho.in/oauth/v2/auth?${params.toString()}`);
 }
 
 export function parseOAuthState(state: string | undefined): { returnTo: string } {

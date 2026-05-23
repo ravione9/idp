@@ -2,7 +2,7 @@
  * LILG Auth Middleware
  * --------------------
  * - HMAC-signed session cookies
- * - OIDC callback handlers for Google and Zoho
+ * - OIDC callback handler for Google
  * - Session lookup: Redis (hot) → DB (fallback)
  * - Logout with IDP end_session redirect
  */
@@ -43,7 +43,6 @@ export type { LilgUser };
 // JWKS sets (cached in-process)
 // ---------------------------------------------------------------------------
 const googleJwks = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
-const zohoJwks   = createRemoteJWKSet(new URL('https://accounts.zoho.in/oauth/v2/certs'));
 
 // ---------------------------------------------------------------------------
 // Cookie helpers — see session.ts
@@ -220,72 +219,6 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
 }
 
 // ---------------------------------------------------------------------------
-// zohoCallbackHandler
-// ---------------------------------------------------------------------------
-export async function zohoCallbackHandler(req: Request, res: Response): Promise<void> {
-  const code = req.query['code'] as string | undefined;
-  if (!code) {
-    res.status(400).json({ error: 'Missing code' });
-    return;
-  }
-
-  try {
-    const tokenRes = await (await import('axios')).default.post<{
-      id_token: string;
-      access_token: string;
-    }>(
-      'https://accounts.zoho.in/oauth/v2/token',
-      new URLSearchParams({
-        code,
-        client_id:     config.zoho.clientId,
-        client_secret: config.zoho.clientSecret,
-        redirect_uri:  `${config.app.publicBaseUrl ?? `${req.protocol}://${req.get('host')}`}/auth/zoho/callback`,
-        grant_type:    'authorization_code',
-      }).toString(),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 10_000 },
-    );
-
-    const { id_token } = tokenRes.data;
-
-    const { payload } = await jwtVerify(id_token, zohoJwks, {
-      issuer:   'https://accounts.zoho.in',
-      audience: config.zoho.clientId,
-    });
-
-    const email = payload['email'] as string;
-    const sub   = payload['sub'] as string;
-
-    const emp = await queryOne<{ emp_id: string; role: string }>(
-      'SELECT emp_id, role FROM employees WHERE email_corp = ? AND ilg_state = ?',
-      [email, 'ACTIVE'],
-    );
-
-    if (!emp) {
-      res.status(403).json({ error: 'No active employee record for this account' });
-      return;
-    }
-
-    const sessionId = await createSession({
-      empId:     emp.emp_id,
-      email,
-      role:      emp.role ?? 'EMPLOYEE',
-      iss:       'zoho',
-      sub,
-      ttlHours:  config.session.ttlCorporateHours,
-      ip:        req.ip ?? '',
-      userAgent: req.get('user-agent') ?? '',
-    });
-
-    setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
-    const { returnTo } = parseOAuthState(req.query['state'] as string | undefined);
-    res.redirect(returnTo === '/' ? '/login' : returnTo);
-  } catch (err) {
-    logger.error({ err }, 'Zoho OIDC callback failed');
-    res.status(500).json({ error: 'Authentication failed' });
-  }
-}
-
-// ---------------------------------------------------------------------------
 // logoutHandler
 // ---------------------------------------------------------------------------
 export async function logoutHandler(req: Request, res: Response): Promise<void> {
@@ -314,9 +247,7 @@ export async function logoutHandler(req: Request, res: Response): Promise<void> 
     return;
   }
 
-  const endSessionUrl = iss === 'zoho'
-    ? `https://accounts.zoho.in/oauth/v2/logout?redirect_uri=${encodeURIComponent(req.protocol + '://' + req.get('host') + '/')}`
-    : `https://accounts.google.com/logout`;
+  const endSessionUrl = `https://accounts.google.com/logout`;
 
   res.redirect(endSessionUrl);
 }
