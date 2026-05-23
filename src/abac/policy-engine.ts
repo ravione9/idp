@@ -334,11 +334,13 @@ export class PolicyEngine {
         const resource = resourceFn(req);
 
         const env: PolicyEnv = {
-          ip:          req.ip ?? undefined,
           hour:        new Date().getHours(),
           isWeekend:   [0, 6].includes(new Date().getDay()),
           deviceManaged: req.headers['x-device-managed'] === 'true',
         };
+        if (req.ip) {
+          env.ip = req.ip;
+        }
 
         const decision = await this.evaluate(subject, resource, req.method, env);
 

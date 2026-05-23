@@ -8,7 +8,8 @@
  *   transaction  — wraps a callback in BEGIN/COMMIT/ROLLBACK
  */
 
-import mysql, { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+import mysql, { Pool, PoolConnection, ResultSetHeader } from 'mysql2/promise';
+import type { ExecuteValues } from 'mysql2';
 import { config } from '../config.js';
 import logger from '../utils/logger.js';
 
@@ -55,7 +56,7 @@ export async function query<T>(
 ): Promise<T[]> {
   const executor = conn ?? pool;
   try {
-    const [rows] = await executor.execute(sql, params);
+    const [rows] = await executor.execute(sql, params as ExecuteValues);
     return rows as unknown as T[];
   } catch (err) {
     logger.error({ sql, err }, 'DB query failed');
@@ -74,7 +75,7 @@ export async function execute(
 ): Promise<ResultSetHeader> {
   const executor = conn ?? pool;
   try {
-    const [header] = await executor.execute<ResultSetHeader>(sql, params);
+    const [header] = await executor.execute<ResultSetHeader>(sql, params as ExecuteValues);
     return header;
   } catch (err) {
     logger.error({ sql, err }, 'DB execute failed');

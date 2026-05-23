@@ -17,7 +17,8 @@ import logger from '../utils/logger.js';
 import { GoogleAdapter }  from '../adapters/google-adapter.js';
 import { ZohoAdapter }    from '../adapters/zoho-adapter.js';
 import { ADAdapter }      from '../adapters/ad-adapter.js';
-import { BaseAdapter }    from '../adapters/base-adapter.js';
+import { BaseAdapter } from '../adapters/base-adapter.js';
+import type { AdapterResult } from '../adapters/base-adapter.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -119,7 +120,7 @@ async function dispatch(row: OutboxRow): Promise<void> {
     throw new Error(`Outbox row ${row.id} is missing externalId in payload`);
   }
 
-  let result: Awaited<ReturnType<typeof adapter.getUser>>;
+  let result: AdapterResult<unknown>;
 
   switch (row.op) {
     case 'DISABLE':
@@ -145,7 +146,7 @@ async function dispatch(row: OutboxRow): Promise<void> {
   }
 
   if (!result.success) {
-    const retryable = 'retryable' in result ? result.retryable : true;
+    const retryable = result.retryable;
     const error = new Error(result.error);
     (error as unknown as Record<string, boolean>)['retryable'] = retryable;
     throw error;
@@ -303,9 +304,10 @@ export async function stop(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Entrypoint when run as a standalone process
+// Entrypoint when run as a standalone process (node dist/services/outbox-worker.js)
 // ---------------------------------------------------------------------------
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isWorkerMain = process.argv[1]?.includes('outbox-worker');
+if (isWorkerMain) {
   start().catch((err) => {
     logger.error({ err }, 'Outbox worker failed to start');
     process.exit(1);

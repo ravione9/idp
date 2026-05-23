@@ -82,7 +82,7 @@ docker exec idp-localstack awslocal sqs create-queue --queue-name lilg-celery 2>
 echo "==> Health check..."
 sleep 5
 curl -sf "http://127.0.0.1:8080/healthz" && echo ""
-curl -sf "http://127.0.0.1:8080/readyz" && echo "" || echo "WARN: readyz not OK yet — check logs: docker compose -f ${COMPOSE_FILE} logs -f lilg-api"
+curl -sf "http://127.0.0.1:8080/readyz" && echo "" || echo "WARN: readyz not OK yet — check logs: ${COMPOSE[*]} -f ${COMPOSE_FILE} logs -f lilg-api"
 
 echo ""
 echo "==> Deploy complete"

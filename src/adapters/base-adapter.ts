@@ -166,7 +166,11 @@ export abstract class BaseAdapter {
     protected readonly systemName: string,
     errorThreshold?: number,
   ) {
-    this.cb = new CircuitBreaker(redis, systemName, { errorThreshold });
+    const cbOpts: { errorThreshold?: number } = {};
+    if (errorThreshold !== undefined) {
+      cbOpts.errorThreshold = errorThreshold;
+    }
+    this.cb = new CircuitBreaker(redis, systemName, cbOpts);
   }
 
   /** Retrieve a user's information from the target system. */

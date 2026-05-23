@@ -220,7 +220,15 @@ export class EmployeeStateMachine {
     await Promise.all(
       empIds.map(async (empId) => {
         try {
-          await this.transition({ empId, toState, actor, actorId, origin, reasonCode, evidence });
+          await this.transition({
+            empId,
+            toState,
+            actor,
+            actorId,
+            origin,
+            reasonCode,
+            ...(evidence !== undefined ? { evidence } : {}),
+          });
           succeeded.push(empId);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);

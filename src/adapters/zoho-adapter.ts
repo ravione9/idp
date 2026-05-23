@@ -45,7 +45,7 @@ export class ZohoAdapter extends BaseAdapter {
     redis: Redis,
     private readonly clientId: string,
     private readonly clientSecret: string,
-    private readonly scimBaseUrl: string,
+    scimBaseUrl: string,
   ) {
     super(redis, 'ZOHO');
 

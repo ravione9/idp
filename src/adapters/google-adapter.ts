@@ -1,17 +1,8 @@
 import { google, admin_directory_v1 } from 'googleapis';
-import { JWT } from 'googleapis/build/src/auth/jwtclient.js';
+import type { JWT } from 'google-auth-library';
 import { Redis } from 'ioredis';
 import { BaseAdapter, AdapterResult, UserInfo, Binding } from './base-adapter.js';
 import logger from '../utils/logger.js';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-interface GoogleToken {
-  access_token: string;
-  token_type: string;
-  expiry_date: number;
-}
 
 // ---------------------------------------------------------------------------
 // GoogleAdapter
@@ -181,12 +172,15 @@ export class GoogleAdapter extends BaseAdapter {
         });
 
         for (const g of res.data.groups ?? []) {
-          bindings.push({
-            id:   g.id     ?? '',
-            name: g.name   ?? '',
+          const binding: Binding = {
+            id:   g.id   ?? '',
+            name: g.name ?? '',
             type: 'GOOGLE_GROUP',
-            scope: g.email ?? undefined,
-          });
+          };
+          if (g.email) {
+            binding.scope = g.email;
+          }
+          bindings.push(binding);
         }
 
         pageToken = res.data.nextPageToken ?? undefined;

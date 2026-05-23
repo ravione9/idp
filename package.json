@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Lenskart Identity Lifecycle & Governance — IGA Orchestrator",
   "private": true,
+  "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc --project tsconfig.json",

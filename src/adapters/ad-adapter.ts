@@ -180,7 +180,7 @@ export class ADAdapter extends BaseAdapter {
         const cn      = currentDn.split(',')[0];          // e.g. CN=John Doe
         const newRdn  = cn;
         const newSup  = `${this.disabledOu}${this.baseDn}`;
-        await this.client.modifyDN(currentDn, newRdn, false, newSup);
+        await this.client.modifyDN(currentDn, `${newRdn},${newSup}`);
         logger.info({ externalId, newDn: `${newRdn},${newSup}` }, 'AD user moved to Disabled OU');
       }
 
@@ -224,7 +224,7 @@ export class ADAdapter extends BaseAdapter {
       if (targetOu && currentDn.toUpperCase().includes(this.disabledOu.toUpperCase())) {
         const cn     = currentDn.split(',')[0];
         const newRdn = cn;
-        await this.client.modifyDN(currentDn, newRdn, false, targetOu);
+        await this.client.modifyDN(currentDn, `${newRdn},${targetOu}`);
         logger.info({ externalId, targetOu }, 'AD user moved back to active OU');
       }
 
