@@ -68,3 +68,122 @@ Object.assign(api, {
   igaRisk:          () => f('/api/iga/risk/dashboard'),
   igaReports:       () => f('/api/iga/reports'),
 });
+
+Object.assign(api, {
+  // Groups
+  listGroups:       () => f('/api/admin/groups'),
+  getGroup:         (id) => f(`/api/admin/groups/${id}`),
+  createGroup:      (data) => f('/api/admin/groups', { method: 'POST', body: JSON.stringify(data) }),
+  updateGroup:      (id, data) => f(`/api/admin/groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteGroup:      (id) => f(`/api/admin/groups/${id}`, { method: 'DELETE' }),
+  addGroupMember:   (id, empId) => f(`/api/admin/groups/${id}/members`, { method: 'POST', body: JSON.stringify({ empId }) }),
+  removeGroupMember:(id, empId) => f(`/api/admin/groups/${id}/members/${empId}`, { method: 'DELETE' }),
+
+  // Identity Profiles
+  listIdentityProfiles:  () => f('/api/admin/identity-profiles'),
+  createIdentityProfile: (data) => f('/api/admin/identity-profiles', { method: 'POST', body: JSON.stringify(data) }),
+  updateIdentityProfile: (id, data) => f(`/api/admin/identity-profiles/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteIdentityProfile: (id) => f(`/api/admin/identity-profiles/${id}`, { method: 'DELETE' }),
+
+  // Adaptive Auth
+  listAdaptivePolicies:  () => f('/api/admin/adaptive-auth'),
+  createAdaptivePolicy:  (data) => f('/api/admin/adaptive-auth', { method: 'POST', body: JSON.stringify(data) }),
+  updateAdaptivePolicy:  (id, data) => f(`/api/admin/adaptive-auth/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteAdaptivePolicy:  (id) => f(`/api/admin/adaptive-auth/${id}`, { method: 'DELETE' }),
+  evaluateAdaptive:      (ctx) => f('/api/admin/adaptive-auth/evaluate', { method: 'POST', body: JSON.stringify(ctx) }),
+
+  // Password Policies
+  listPasswordPolicies:  () => f('/api/admin/password-policies'),
+  createPasswordPolicy:  (data) => f('/api/admin/password-policies', { method: 'POST', body: JSON.stringify(data) }),
+  updatePasswordPolicy:  (id, data) => f(`/api/admin/password-policies/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deletePasswordPolicy:  (id) => f(`/api/admin/password-policies/${id}`, { method: 'DELETE' }),
+
+  // Branding
+  getBranding:    () => f('/api/admin/branding'),
+  saveBranding:   (data) => f('/api/admin/branding', { method: 'PUT', body: JSON.stringify(data) }),
+
+  // General Settings
+  getGeneralSettings:  () => f('/api/admin/general-settings'),
+  saveGeneralSettings: (data) => f('/api/admin/general-settings', { method: 'PUT', body: JSON.stringify(data) }),
+
+  // OIDC Clients
+  listOidcClients:    () => f('/api/admin/oidc-clients'),
+  createOidcClient:   (data) => f('/api/admin/oidc-clients', { method: 'POST', body: JSON.stringify(data) }),
+  updateOidcClient:   (id, data) => f(`/api/admin/oidc-clients/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteOidcClient:   (id) => f(`/api/admin/oidc-clients/${id}`, { method: 'DELETE' }),
+  rotateOidcSecret:   (id) => f(`/api/admin/oidc-clients/${id}/rotate-secret`, { method: 'POST' }),
+
+  // PAM
+  listPamResources:    () => f('/api/admin/pam/resources'),
+  createPamResource:   (data) => f('/api/admin/pam/resources', { method: 'POST', body: JSON.stringify(data) }),
+  updatePamResource:   (id, data) => f(`/api/admin/pam/resources/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deletePamResource:   (id) => f(`/api/admin/pam/resources/${id}`, { method: 'DELETE' }),
+  listPamSessions:     () => f('/api/admin/pam/sessions'),
+  terminatePamSession: (id) => f(`/api/admin/pam/sessions/${id}/terminate`, { method: 'POST' }),
+  listVaultEntries:    () => f('/api/admin/pam/vault'),
+  createVaultEntry:    (data) => f('/api/admin/pam/vault', { method: 'POST', body: JSON.stringify(data) }),
+  deleteVaultEntry:    (id) => f(`/api/admin/pam/vault/${id}`, { method: 'DELETE' }),
+  checkoutVaultEntry:  (id) => f(`/api/admin/pam/vault/${id}/checkout`, { method: 'POST' }),
+  listSystemUsers:     () => f('/api/admin/pam/system-users'),
+  createSystemUser:    (data) => f('/api/admin/pam/system-users', { method: 'POST', body: JSON.stringify(data) }),
+  deleteSystemUser:    (id) => f(`/api/admin/pam/system-users/${id}`, { method: 'DELETE' }),
+
+  // Workflows
+  listWorkflows:       () => f('/api/admin/workflows/definitions'),
+  createWorkflow:      (data) => f('/api/admin/workflows/definitions', { method: 'POST', body: JSON.stringify(data) }),
+  updateWorkflow:      (id, data) => f(`/api/admin/workflows/definitions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteWorkflow:      (id) => f(`/api/admin/workflows/definitions/${id}`, { method: 'DELETE' }),
+  listEventTriggers:   () => f('/api/admin/workflows/triggers'),
+  createEventTrigger:  (data) => f('/api/admin/workflows/triggers', { method: 'POST', body: JSON.stringify(data) }),
+  updateEventTrigger:  (id, data) => f(`/api/admin/workflows/triggers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteEventTrigger:  (id) => f(`/api/admin/workflows/triggers/${id}`, { method: 'DELETE' }),
+
+  // Tickets
+  listTickets:    (status = '', cat = '') => f(`/api/admin/tickets?status=${encodeURIComponent(status)}&category=${encodeURIComponent(cat)}`),
+  createTicket:   (data) => f('/api/admin/tickets', { method: 'POST', body: JSON.stringify(data) }),
+  updateTicket:   (id, data) => f(`/api/admin/tickets/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  // System Health
+  systemHealth:  () => f('/api/admin/system-health'),
+
+  // SSO Reports
+  ssoLoginSummary:  () => f('/api/admin/sso-reports/login-summary'),
+  ssoFailedLogins:  () => f('/api/admin/sso-reports/failed-logins'),
+  ssoAppAdoption:   () => f('/api/admin/sso-reports/app-adoption'),
+  ssoDormantUsers:  () => f('/api/admin/sso-reports/dormant-users'),
+
+  // Business Roles
+  listBusinessRoles:     () => f('/api/admin/business-roles'),
+  createBusinessRole:    (data) => f('/api/admin/business-roles', { method: 'POST', body: JSON.stringify(data) }),
+  updateBusinessRole:    (id, data) => f(`/api/admin/business-roles/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteBusinessRole:    (id) => f(`/api/admin/business-roles/${id}`, { method: 'DELETE' }),
+  getRoleEntitlements:   (id) => f(`/api/admin/business-roles/${id}/entitlements`),
+  addRoleEntitlement:    (id, entId) => f(`/api/admin/business-roles/${id}/entitlements`, { method: 'POST', body: JSON.stringify({ entitlementId: entId }) }),
+  removeRoleEntitlement: (id, entId) => f(`/api/admin/business-roles/${id}/entitlements/${entId}`, { method: 'DELETE' }),
+
+  // Birthright
+  listBirthrightRules: () => f('/api/admin/birthright'),
+  birthrightDryRun:    () => f('/api/admin/birthright/dry-run'),
+  runBirthright:       () => f('/api/admin/birthright/run', { method: 'POST' }),
+
+  // Notifications
+  listNotifications:     (status='', ch='', limit=50, offset=0) => f(`/api/admin/notifications?status=${status}&channel=${ch}&limit=${limit}&offset=${offset}`),
+  notificationStats:     () => f('/api/admin/notifications/stats'),
+  sendTestNotification:  (data) => f('/api/admin/notifications/test', { method: 'POST', body: JSON.stringify(data) }),
+  dispatchNotifications: () => f('/api/admin/notifications/dispatch-pending', { method: 'POST' }),
+
+  // User lifecycle
+  suspendUser:   (empId, reason) => f(`/api/admin/users/${empId}/suspend`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  unsuspendUser: (empId, reason) => f(`/api/admin/users/${empId}/unsuspend`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  terminateUser: (empId, reason) => f(`/api/admin/users/${empId}/terminate`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  userLifecycle: (empId) => f(`/api/admin/users/${empId}/lifecycle`),
+
+  // Access reviews CRUD
+  createAccessReview: (data) => f('/api/iga/access-reviews', { method: 'POST', body: JSON.stringify(data) }),
+  submitReviewDecision: (campaignId, itemId, decision, comment) => f(`/api/iga/access-reviews/${campaignId}/items/${itemId}/decision`, { method: 'POST', body: JSON.stringify({ decision, comment }) }),
+
+  // SoD Policy CRUD
+  createSodPolicy: (data) => f('/api/iga/sod-policies', { method: 'POST', body: JSON.stringify(data) }),
+  updateSodPolicy: (id, data) => f(`/api/iga/sod-policies/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteSodPolicy: (id) => f(`/api/iga/sod-policies/${id}`, { method: 'DELETE' }),
+});

@@ -31,6 +31,21 @@ import adminUsersRouter from './api/admin-users.js';
 import meActionsRouter from './api/me-actions.js';
 import igaRouter from './api/iga.js';
 import adminLifecycleRouter from './api/admin-lifecycle.js';
+import configGroupsRouter from './api/config-groups.js';
+import configIdentityProfilesRouter from './api/config-identity-profiles.js';
+import configAdaptiveAuthRouter from './api/config-adaptive-auth.js';
+import configPasswordPoliciesRouter from './api/config-password-policies.js';
+import configBrandingRouter from './api/config-branding.js';
+import configGeneralSettingsRouter from './api/config-general-settings.js';
+import configOidcClientsRouter from './api/config-oidc-clients.js';
+import configPamRouter from './api/config-pam.js';
+import configWorkflowsRouter from './api/config-workflows.js';
+import configTicketsRouter from './api/config-tickets.js';
+import configSystemHealthRouter from './api/config-system-health.js';
+import configSsoReportsRouter from './api/config-sso-reports.js';
+import configBusinessRolesRouter from './api/config-business-roles.js';
+import configBirthrightRouter from './api/config-birthright.js';
+import configNotificationsRouter from './api/config-notifications.js';
 
 // Auth
 import {
@@ -129,6 +144,21 @@ app.use('/api/admin/audit', adminAuditRouter);
 app.use('/api/admin/users', adminUsersRouter);
 app.use('/api/admin/users', adminLifecycleRouter);
 app.use('/api/iga', igaRouter);
+app.use('/api/admin/groups', configGroupsRouter);
+app.use('/api/admin/identity-profiles', configIdentityProfilesRouter);
+app.use('/api/admin/adaptive-auth', configAdaptiveAuthRouter);
+app.use('/api/admin/password-policies', configPasswordPoliciesRouter);
+app.use('/api/admin/branding', configBrandingRouter);
+app.use('/api/admin/general-settings', configGeneralSettingsRouter);
+app.use('/api/admin/oidc-clients', configOidcClientsRouter);
+app.use('/api/admin/pam', configPamRouter);
+app.use('/api/admin/workflows', configWorkflowsRouter);
+app.use('/api/admin/tickets', configTicketsRouter);
+app.use('/api/admin/system-health', configSystemHealthRouter);
+app.use('/api/admin/sso-reports', configSsoReportsRouter);
+app.use('/api/admin/business-roles', configBusinessRolesRouter);
+app.use('/api/admin/birthright', configBirthrightRouter);
+app.use('/api/admin/notifications', configNotificationsRouter);
 
 // ---------------------------------------------------------------------------
 // Internal routes (internal token gated — no session cookie required)

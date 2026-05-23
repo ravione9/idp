@@ -700,4 +700,42 @@ router.post(
   }),
 );
 
+// ===========================================================================
+// /sod-policies — CRUD for SoD policy authoring
+// ===========================================================================
+
+// POST /sod-policies — create
+router.post('/sod-policies', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+  const { name, description, severity, enforcement, conflict_groups } = req.body as {
+    name: string; description?: string; severity?: string;
+    enforcement?: string; conflict_groups?: unknown[];
+  };
+  const id = uuidv4();
+  await execute(
+    `INSERT INTO sod_policies (id, name, description, severity, enforcement, conflict_groups, active)
+     VALUES (?, ?, ?, ?, ?, ?, 1)`,
+    [id, name, description ?? null, severity ?? 'MEDIUM', enforcement ?? 'WARN', JSON.stringify(conflict_groups ?? [])],
+  );
+  res.status(201).json({ id });
+}));
+
+// PUT /sod-policies/:id
+router.put('/sod-policies/:id', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+  const { name, description, severity, enforcement, conflict_groups, active } = req.body as {
+    name?: string; description?: string; severity?: string;
+    enforcement?: string; conflict_groups?: unknown[]; active?: number;
+  };
+  await execute(
+    `UPDATE sod_policies SET name=?, description=?, severity=?, enforcement=?, conflict_groups=?, active=? WHERE id=?`,
+    [name, description ?? null, severity, enforcement, JSON.stringify(conflict_groups ?? []), active ? 1 : 0, req.params['id']],
+  );
+  res.json({ success: true });
+}));
+
+// DELETE /sod-policies/:id
+router.delete('/sod-policies/:id', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+  await execute('DELETE FROM sod_policies WHERE id = ?', [req.params['id']]);
+  res.json({ success: true });
+}));
+
 export default router;

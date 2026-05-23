@@ -660,7 +660,48 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/services/access-review.ts`** — `createCampaign` (scopes: ALL_USERS/APP_SPECIFIC/HIGH_RISK, batch inserts review items, notifies reviewers); `submitReviewDecision` (CERTIFY/REVOKE/EXCEPTION, revokes entitlement on REVOKE, auto-closes campaign).
 - **`src/api/iga.ts`** — all 501 stubs replaced with real service-layer wiring; added `POST /access-reviews/:id/items/:itemId/decision` and `POST /entitlements/:entId/grant`.
 
-### *(this commit)* — 2026-05-23 — Phase 2 service layer lands: lifecycle, birthright, connector dispatcher, access workflow, reviews, SoD, notifications
+### *(this commit)* — 2026-05-24 — Configuration modules: 15 admin sub-systems go from feature-card stubs to real CRUD APIs
+
+**Reviewed and pushed unchanged from contributor.** TS build clean, lints clean, all 15 routers imported and mounted in `src/index.ts`. Zero schema regressions — every new table is in migration `006_config_modules.sql` with `IF NOT EXISTS` guards.
+
+- **Migration `006_config_modules.sql`** adds 13 new tables backing the previously-stubbed admin pages:
+  - `groups`, `group_members` — static + dynamic-rule groupings of identities
+  - `identity_profiles` — per-population (employee / contractor / partner / customer / service) source-of-truth definitions with attribute-mapping JSON and lifecycle policy
+  - `adaptive_auth_policies` — risk-based policy rows with conditions JSON, action `ALLOW`/`MFA`/`DENY`/`BLOCK`, scope `ALL`/`APP_SPECIFIC`/`USER_GROUP`
+  - `password_policies` — complexity, history, rotation, lockout, breach-check (seeded with a `Default Policy` row)
+  - `branding_settings` — singleton row: org name, logo, accent colour, login hero copy, support contacts, custom CSS
+  - `general_settings` — singleton row: display name, session TTLs, MFA grace period, audit retention, login provider toggles, maintenance mode
+  - `pam_resources`, `pam_sessions`, `credential_vault_entries` — full PAM data model: SSH/RDP/DB/Web targets, session recording, JIT credentials, KMS-rooted vault entries with rotation
+  - `event_triggers` — webhook / Slack / email / workflow subscriptions to platform events
+  - `tickets` — in-product help-desk: password reset, MFA reset, access requests with status + priority
+  - `system_users` — service accounts / API clients / robot identities with vault credential link
+
+- **15 new admin REST routers** (`src/api/config-*.ts`) — each with `requireAuth + requireRole('ADMIN','SUPER_ADMIN')`, list / create / update / delete (plus add/remove members for groups), `asyncHandler` wrapping every route:
+  - `/api/admin/groups`
+  - `/api/admin/identity-profiles`
+  - `/api/admin/adaptive-auth`
+  - `/api/admin/password-policies`
+  - `/api/admin/branding`
+  - `/api/admin/general-settings`
+  - `/api/admin/oidc-clients`
+  - `/api/admin/pam` (resources / sessions / vault)
+  - `/api/admin/workflows` (event_triggers + workflow library)
+  - `/api/admin/tickets`
+  - `/api/admin/system-health`
+  - `/api/admin/sso-reports`
+  - `/api/admin/business-roles`
+  - `/api/admin/birthright`
+  - `/api/admin/notifications`
+
+- **Frontend** (`web/js/views-stubs.js`) — every previously-stubbed admin page (Groups, Identity Profiles, Adaptive Auth, Password Policies, Branding, PAM Resources / Sessions / Vault, Workflows, Event Triggers, Tickets, System Users, SSO Reports, System Health, Business Roles, Birthright Rules, OIDC Clients, Notifications, General Settings) is now a working CRUD form + table backed by the new endpoints. `web/js/api.js` extended with the matching client functions.
+- **`src/api/iga.ts`** — additional IGA write paths now connected to the live service layer.
+- **`src/services/birthright.ts`** — small fix to align with the live schema.
+
+### `4ef4854` — 2026-05-23 — Migration 005 fix: drop nonexistent `entitlement_rule` from connector seed INSERT
+
+- The seed INSERT in 005 referenced a column that lives on `saml_service_providers`, not `connectors`. Removed it. Migration is recovery-safe: rerun side-effects are guarded by `information_schema` checks for `lilg_sessions`/`config`/`config_json`.
+
+### `144ae18` — 2026-05-23 — Phase 2 service layer lands: lifecycle, birthright, connector dispatcher, access workflow, reviews, SoD, notifications
 
 **Code review note:** this commit incorporates Phase-2 service-layer code authored outside this conversation. It was reviewed before pushing — TS build clean, lints clean, two integrity issues fixed in-place: (a) migration 005 ALTERs the `connectors` table to match the new dispatcher's expectations (`config_json` column rename, `ACTIVE`/`INCREMENTAL`/`GOOGLE` enum values added) and (b) `birthright.ts` no longer tries to insert a UUID into a `BIGINT AUTO_INCREMENT` column.
 
