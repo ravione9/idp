@@ -116,7 +116,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- =========================================================================
 INSERT IGNORE INTO `connectors`
   (id, name, slug, connector_type, direction, sync_mode, sync_schedule,
-   status, config_json, entitlement_rule, created_at, updated_at)
+   status, config_json, created_at, updated_at)
 SELECT * FROM (
   SELECT
     UUID()                    AS id,
@@ -128,7 +128,6 @@ SELECT * FROM (
     '0 2 * * *'               AS sync_schedule,
     'ACTIVE'                  AS status,
     JSON_OBJECT('type','AD','autoProvision',true,'autoDisable',true) AS config_json,
-    JSON_OBJECT('all_active', true) AS entitlement_rule,
     UTC_TIMESTAMP()           AS created_at,
     UTC_TIMESTAMP()           AS updated_at
 ) AS seed_ad
@@ -137,7 +136,7 @@ WHERE EXISTS (SELECT 1 FROM information_schema.tables
 
 INSERT IGNORE INTO `connectors`
   (id, name, slug, connector_type, direction, sync_mode, sync_schedule,
-   status, config_json, entitlement_rule, created_at, updated_at)
+   status, config_json, created_at, updated_at)
 SELECT * FROM (
   SELECT
     UUID()                    AS id,
@@ -149,7 +148,6 @@ SELECT * FROM (
     '0 3 * * *'               AS sync_schedule,
     'ACTIVE'                  AS status,
     JSON_OBJECT('type','GOOGLE','autoProvision',true,'autoDisable',true) AS config_json,
-    JSON_OBJECT('all_active', true) AS entitlement_rule,
     UTC_TIMESTAMP()           AS created_at,
     UTC_TIMESTAMP()           AS updated_at
 ) AS seed_google
