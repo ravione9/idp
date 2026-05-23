@@ -21,10 +21,10 @@ const ConfigSchema = z.object({
   // Redis
   REDIS_URL: z.string().url(),
 
-  // AWS
+  // AWS / SQS — accept http URLs for LocalStack in dev
   AWS_REGION: z.string().min(1),
-  SQS_HRMS_EVENTS_URL: z.string().url(),
-  SQS_CELERY_BROKER_URL: z.string().url(),
+  SQS_HRMS_EVENTS_URL: z.string().min(1),
+  SQS_CELERY_BROKER_URL: z.string().min(1),
 
   // Google
   GOOGLE_CLIENT_ID: z.string().min(1),
@@ -71,11 +71,11 @@ const ConfigSchema = z.object({
   // One-time bootstrap token for first local super admin (dev only — unset in prod after bootstrap)
   LOCAL_BOOTSTRAP_TOKEN: z.string().min(16).optional(),
 
-  // Public URL (production: https://idp.lenskart.com) — used for OAuth redirect URIs
-  PUBLIC_BASE_URL: z.string().url().optional(),
+  // Public URL — relaxed for dev IPs (e.g. http://192.168.24.254:8080)
+  PUBLIC_BASE_URL: z.string().min(1).optional(),
 
   // SAML IdP (optional — production host: https://idp.lenskart.com)
-  SAML_IDP_BASE_URL: z.string().url().optional(),
+  SAML_IDP_BASE_URL: z.string().min(1).optional(),
   SAML_IDP_ENTITY_ID: z.string().min(1).optional(),
   SAML_IDP_PRIVATE_KEY_PEM: z
     .string()
