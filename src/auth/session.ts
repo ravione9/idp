@@ -82,7 +82,7 @@ export async function createSession(params: {
 export function setSessionCookie(res: Response, sessionId: string, ttlHours: number): void {
   res.cookie(COOKIE_NAME, signSessionId(sessionId), {
     httpOnly: true,
-    secure:   config.app.nodeEnv === 'production',
+    secure:   config.session.cookieSecure,
     sameSite: 'lax',
     maxAge:   ttlHours * 3600 * 1000,
     path:     '/',

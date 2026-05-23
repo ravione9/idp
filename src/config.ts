@@ -57,6 +57,11 @@ const ConfigSchema = z.object({
   SESSION_SECRET: z.string().min(32),
   SESSION_TTL_CORPORATE_HOURS: envInt.default('8'),
   SESSION_TTL_STORE_HOURS: envInt.default('12'),
+  /** Set 'false' for plain-HTTP dev (192.168.24.254). Defaults to true in production. */
+  COOKIE_SECURE: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    envBool.optional(),
+  ),
 
   // Application
   PORT: envInt.default('8080'),
@@ -179,6 +184,8 @@ export const config = {
     secret: parsed.SESSION_SECRET,
     ttlCorporateHours: parsed.SESSION_TTL_CORPORATE_HOURS,
     ttlStoreHours: parsed.SESSION_TTL_STORE_HOURS,
+    cookieSecure:
+      parsed.COOKIE_SECURE ?? (parsed.NODE_ENV === 'production'),
   },
   app: {
     port: parsed.PORT,
