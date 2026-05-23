@@ -660,7 +660,13 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/services/access-review.ts`** — `createCampaign` (scopes: ALL_USERS/APP_SPECIFIC/HIGH_RISK, batch inserts review items, notifies reviewers); `submitReviewDecision` (CERTIFY/REVOKE/EXCEPTION, revokes entitlement on REVOKE, auto-closes campaign).
 - **`src/api/iga.ts`** — all 501 stubs replaced with real service-layer wiring; added `POST /access-reviews/:id/items/:itemId/decision` and `POST /entitlements/:entId/grant`.
 
-### *(this commit)* — 2026-05-24 — IGA write-path expansion: connector CRUD + SoD policy authoring + matching console flows
+### *(this commit)* — 2026-05-24 — UI polish: modal, form-component and utility CSS
+
+- `web/css/styles.css` (+317 lines) — new shared component classes consumed by the IGA / config admin pages: `.modal*` (backdrop / header / body / footer), `.form-group / .form-label / .form-input / .form-select / .form-textarea / .form-check / .form-check-row`, `.filter-bar`, `.tag / .tag-list / .tag-remove`, `.detail-panel`, `.inline-tabs / .inline-tab`, `.form-2col`, `.display-field`, `.info-box`, `.table-actions`, `.step-indicator / .step-dot / .step-line`, `.row-detail`, `.card-loading`, `.health-row`, plus text-color and flex-utility helpers.
+- Existing pages (Connectors editor modal, SoD policy form, group editor, password-policy form, branding, PAM, etc.) now share a consistent visual language.
+- No JS, schema or API changes in this commit. Cosmetic polish only.
+
+### `57614f5` — 2026-05-24 — IGA write-path expansion: connector CRUD + SoD policy authoring + matching console flows
 
 **Reviewed and pushed unchanged from contributor.** TS build clean, lints clean.
 
