@@ -48,6 +48,12 @@ pool.on('connection', (conn) => {
 /**
  * Execute a SELECT-style query and return typed rows.
  * Accepts an optional connection for use inside transactions.
+ *
+ * Uses pool.query() (NOT pool.execute()): mysql2's prepared-statement
+ * protocol on MySQL 8 rejects integer parameters in `LIMIT ? OFFSET ?`
+ * with ER_WRONG_ARGUMENTS (errno 1210). pool.query() escapes values
+ * inline as text, which works correctly with LIMIT/OFFSET and is still
+ * SQL-injection-safe because mysql2 escapes every placeholder value.
  */
 export async function query<T>(
   sql:    string,
@@ -56,7 +62,7 @@ export async function query<T>(
 ): Promise<T[]> {
   const executor = conn ?? pool;
   try {
-    const [rows] = await executor.execute(sql, params as ExecuteValues);
+    const [rows] = await executor.query(sql, params as ExecuteValues);
     return rows as unknown as T[];
   } catch (err) {
     logger.error({ sql, err }, 'DB query failed');
@@ -67,6 +73,9 @@ export async function query<T>(
 /**
  * Execute a DML statement (INSERT / UPDATE / DELETE) and return the
  * ResultSetHeader (affectedRows, insertId, etc.).
+ *
+ * Also uses pool.query() to avoid the prepared-statement LIMIT/OFFSET
+ * type-binding issue on MySQL 8 — see the comment on `query()` above.
  */
 export async function execute(
   sql:    string,
@@ -75,7 +84,7 @@ export async function execute(
 ): Promise<ResultSetHeader> {
   const executor = conn ?? pool;
   try {
-    const [header] = await executor.execute<ResultSetHeader>(sql, params as ExecuteValues);
+    const [header] = await executor.query<ResultSetHeader>(sql, params as ExecuteValues);
     return header;
   } catch (err) {
     logger.error({ sql, err }, 'DB execute failed');
