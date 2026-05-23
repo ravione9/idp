@@ -54,7 +54,9 @@ for i in $(seq 1 36); do
   fi
 done
 
-echo "==> [5/6] Ensure local_accounts table exists..."
+echo "==> [5/6] Apply full schema (idempotent — existing tables untouched)..."
+docker exec -i idp-mysql mysql -ulilg_app -p"${DB_PASS}" lilg \
+  < src/db/schema.sql 2>&1 | grep -v 'Using a password' || true
 docker exec -i idp-mysql mysql -ulilg_app -p"${DB_PASS}" lilg \
   < scripts/migrate-local-accounts.sql 2>/dev/null || true
 
