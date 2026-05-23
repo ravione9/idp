@@ -530,35 +530,421 @@ export async function viewAppDiscovery(content) {
 }
 
 // ─── 10. Directory Sync ───────────────────────────────────────────────────────
+// ─── connector type metadata ─────────────────────────────────────────────────
+const CONNECTOR_TYPES = {
+  AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',           fields: ['host','port','bindDn','bindPassword','baseDn','useSsl'] },
+  LDAP:             { label: 'LDAP',             icon: '📂', badge: 'badge-info',    desc: 'Generic LDAP v3 directory server',             fields: ['host','port','bindDn','bindPassword','baseDn','useSsl'] },
+  GOOGLE_WORKSPACE: { label: 'Google Workspace', icon: '🔵', badge: 'badge-success', desc: 'Google Workspace / G Suite directory',          fields: ['customerDomain','serviceAccountEmail','serviceAccountKey','adminEmail'] },
+  AZURE_AD:         { label: 'Azure AD / Entra', icon: '☁️', badge: 'badge-info',    desc: 'Microsoft Entra ID (Azure AD)',                 fields: ['tenantId','clientId','clientSecret','domain'] },
+  OKTA:             { label: 'Okta',             icon: '🔑', badge: 'badge-warning', desc: 'Okta Universal Directory',                      fields: ['domain','apiToken'] },
+  SCIM:             { label: 'SCIM 2.0',         icon: '⚙️', badge: 'badge-neutral', desc: 'Any SCIM 2.0-compliant directory',              fields: ['baseUrl','bearerToken','syncMode'] },
+  ZOHO:             { label: 'Zoho People',      icon: '🟢', badge: 'badge-success', desc: 'Zoho People HR + identity',                     fields: ['orgId','oauthToken'] },
+  HRMS:             { label: 'HRMS (Custom)',     icon: '👥', badge: 'badge-neutral', desc: 'Internal HRMS via REST / JDBC',                 fields: ['baseUrl','apiKey','syncMode'] },
+};
+
+// human-readable labels for config fields
+const FIELD_LABELS = {
+  host:               'Server Host / IP',
+  port:               'Port',
+  bindDn:             'Bind DN',
+  bindPassword:       'Bind Password',
+  baseDn:             'Base DN',
+  useSsl:             'Use SSL/TLS',
+  customerDomain:     'Customer Domain',
+  serviceAccountEmail:'Service Account Email',
+  serviceAccountKey:  'Service Account JSON Key',
+  adminEmail:         'Admin Email (for impersonation)',
+  tenantId:           'Tenant ID',
+  clientId:           'Client ID',
+  clientSecret:       'Client Secret',
+  domain:             'Domain',
+  apiToken:           'API Token',
+  baseUrl:            'Base URL',
+  bearerToken:        'Bearer Token',
+  orgId:              'Organisation ID',
+  oauthToken:         'OAuth Token',
+  syncMode:           'Sync Mode',
+};
+
+function connectorStatusBadge(status) {
+  const map = { CONNECTED:'badge-success', ACTIVE:'badge-success', CONFIGURED:'badge-info', ERROR:'badge-danger', DISABLED:'badge-neutral' };
+  return `<span class="badge ${map[status]||'badge-neutral'}">${esc(status||'—')}</span>`;
+}
+
 export async function viewDirectorySync(content) {
-  content.replaceChildren(el(`<div>${header('Directory Sync', 'Manage directory connectors and synchronisation')}<div id="ds-area">${loading()}</div></div>`));
+  content.replaceChildren(el(`<div>
+    ${header('Universal Directory', 'Connect and manage identity sources — Active Directory, Google Workspace, Azure AD and more',
+      `<button class="btn btn-primary" id="ds-add-btn">+ Add Directory Source</button>`)}
+    <div id="ds-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem"></div>
+    <div id="ds-area">${loading()}</div>
+  </div>`));
   const wrap = content.firstChild;
 
+  // ── render connector cards ──────────────────────────────────────────────────
   async function load() {
     try {
-      const connectors = await api.igaConnectors();
-      const rows = (connectors || []).length ? connectors.map(c => `
-        <tr>
-          <td class="cell-strong">${esc(c.name)}</td>
-          <td><span class="badge badge-info">${esc(c.type||c.connector_type||'—')}</span></td>
-          <td>${c.status === 'ACTIVE' ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">'+esc(c.status||'Unknown')+'</span>'}</td>
-          <td class="muted">${c.last_run_at ? fmtDate(c.last_run_at) : '—'}</td>
-          <td>${c.last_run_status ? `<span class="badge ${c.last_run_status==='SUCCESS'?'badge-success':c.last_run_status==='FAILED'?'badge-danger':'badge-warning'}">${esc(c.last_run_status)}</span>` : '—'}</td>
-          <td><button class="btn btn-sm btn-primary sync-btn" data-id="${esc(String(c.id))}">Sync Now</button></td>
-        </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No connectors configured.</p></div></td></tr>`;
-      wrap.querySelector('#ds-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Last Run</th><th>Last Result</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
-      wrap.querySelectorAll('.sync-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          btn.disabled = true; btn.textContent = 'Syncing…';
-          try {
-            await fetch(`/api/iga/connectors/${btn.dataset.id}/sync`, { method: 'POST' });
-            await load();
-          } catch(e) { alert('Sync failed: ' + e.message); btn.disabled = false; btn.textContent = 'Sync Now'; }
-        });
-      });
+      const r = await api.igaConnectors();
+      const connectors = (r && r.data) ? r.data : (Array.isArray(r) ? r : []);
+
+      // stats bar
+      const total  = connectors.length;
+      const active = connectors.filter(c => ['CONNECTED','ACTIVE'].includes(c.status)).length;
+      const errors = connectors.filter(c => c.status === 'ERROR').length;
+      const lastSync = connectors.reduce((best, c) => {
+        if (!c.last_sync_at) return best;
+        return !best || new Date(c.last_sync_at) > new Date(best) ? c.last_sync_at : best;
+      }, null);
+      wrap.querySelector('#ds-stats').innerHTML = `
+        <div class="card" style="text-align:center;padding:1rem">
+          <div style="font-size:1.75rem;font-weight:700;color:var(--accent)">${total}</div>
+          <div class="muted" style="font-size:0.8rem;margin-top:0.25rem">Total Sources</div>
+        </div>
+        <div class="card" style="text-align:center;padding:1rem">
+          <div style="font-size:1.75rem;font-weight:700;color:var(--success)">${active}</div>
+          <div class="muted" style="font-size:0.8rem;margin-top:0.25rem">Connected</div>
+        </div>
+        <div class="card" style="text-align:center;padding:1rem">
+          <div style="font-size:1.75rem;font-weight:700;color:${errors?'var(--danger)':'var(--text-dim)'}">${errors}</div>
+          <div class="muted" style="font-size:0.8rem;margin-top:0.25rem">Errors</div>
+        </div>
+        <div class="card" style="text-align:center;padding:1rem">
+          <div style="font-size:1rem;font-weight:600;color:var(--text)">${lastSync ? fmtDate(lastSync) : '—'}</div>
+          <div class="muted" style="font-size:0.8rem;margin-top:0.25rem">Last Sync</div>
+        </div>`;
+
+      if (!connectors.length) {
+        wrap.querySelector('#ds-area').innerHTML = `
+          <div class="card" style="text-align:center;padding:3rem 2rem">
+            <div style="font-size:3rem;margin-bottom:1rem">🔌</div>
+            <h2 style="margin:0 0 0.5rem">No directory sources configured</h2>
+            <p class="muted" style="margin-bottom:1.5rem">Connect Active Directory, Google Workspace, Azure AD or any SCIM-compatible directory to start syncing identities.</p>
+            <button class="btn btn-primary" id="ds-empty-add">+ Add Your First Directory Source</button>
+          </div>`;
+        wrap.querySelector('#ds-empty-add').addEventListener('click', openAddWizard);
+        return;
+      }
+
+      // connector cards
+      const cards = connectors.map(c => {
+        const meta = CONNECTOR_TYPES[c.connector_type] || { label: c.connector_type, icon: '⚙️', badge: 'badge-neutral' };
+        return `<div class="card" style="margin-bottom:1rem" data-cid="${esc(String(c.id))}">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem">
+            <div style="display:flex;align-items:center;gap:0.75rem">
+              <div style="font-size:2rem;line-height:1">${meta.icon}</div>
+              <div>
+                <div style="font-weight:700;font-size:1.05rem">${esc(c.name)}</div>
+                <div class="muted" style="font-size:0.8rem;margin-top:0.15rem">${esc(meta.label)} · ${esc(c.direction||'—')} · ${esc(c.sync_mode||'—')}</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+              ${connectorStatusBadge(c.status)}
+              ${c.sync_schedule ? `<span class="badge badge-neutral" title="Cron schedule">${esc(c.sync_schedule)}</span>` : ''}
+            </div>
+          </div>
+          <div style="display:flex;gap:1.5rem;margin-top:0.75rem;flex-wrap:wrap;font-size:0.82rem;color:var(--text-dim)">
+            <span>Last sync: ${c.last_sync_at ? fmtDate(c.last_sync_at) : 'Never'}</span>
+            ${c.last_error ? `<span style="color:var(--danger)" title="${esc(c.last_error)}">⚠ ${esc(c.last_error.slice(0,60))}${c.last_error.length>60?'…':''}</span>` : ''}
+          </div>
+          <div style="display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap">
+            <button class="btn btn-sm btn-primary ds-sync"   data-id="${esc(String(c.id))}">▶ Sync Now</button>
+            <button class="btn btn-sm btn-secondary ds-test" data-id="${esc(String(c.id))}">✓ Test Connection</button>
+            <button class="btn btn-sm btn-secondary ds-edit" data-id="${esc(String(c.id))}" data-type="${esc(c.connector_type)}" data-name="${esc(c.name)}" data-mode="${esc(c.sync_mode||'')}" data-sched="${esc(c.sync_schedule||'')}">✏ Edit</button>
+            <button class="btn btn-sm btn-secondary ds-logs" data-id="${esc(String(c.id))}" data-name="${esc(c.name)}">📋 Sync History</button>
+            <button class="btn btn-sm btn-danger ds-del"     data-id="${esc(String(c.id))}">Delete</button>
+          </div>
+        </div>`;
+      }).join('');
+      wrap.querySelector('#ds-area').innerHTML = cards;
+      bindCardActions();
     } catch(e) { wrap.querySelector('#ds-area').innerHTML = errHtml(e.message); }
   }
 
+  // ── bind all card button actions ────────────────────────────────────────────
+  function bindCardActions() {
+    // Sync Now
+    wrap.querySelectorAll('.ds-sync').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true; btn.textContent = '⟳ Syncing…';
+        try {
+          const r = await api.igaConnectors(); // ping to confirm alive
+          await fetch(`/api/iga/connectors/${btn.dataset.id}/sync`, { method: 'POST', credentials: 'include' });
+          showToast('Sync triggered — check history for results.');
+          await load();
+        } catch(e) { alert('Sync failed: ' + e.message); btn.disabled = false; btn.textContent = '▶ Sync Now'; }
+      });
+    });
+
+    // Test Connection
+    wrap.querySelectorAll('.ds-test').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true; btn.textContent = '⟳ Testing…';
+        try {
+          const r = await api.testConnector(btn.dataset.id);
+          showToast(r.message || (r.success ? '✓ Connection successful' : '✗ Test failed'));
+        } catch(e) { showToast('✗ ' + e.message, true); }
+        btn.disabled = false; btn.textContent = '✓ Test Connection';
+      });
+    });
+
+    // Edit
+    wrap.querySelectorAll('.ds-edit').forEach(btn => {
+      btn.addEventListener('click', () => openEditModal(btn.dataset.id, btn.dataset));
+    });
+
+    // Sync History
+    wrap.querySelectorAll('.ds-logs').forEach(btn => {
+      btn.addEventListener('click', () => openLogsModal(btn.dataset.id, btn.dataset.name));
+    });
+
+    // Delete
+    wrap.querySelectorAll('.ds-del').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Remove this directory source? This will not delete synced users.')) return;
+        try { await api.deleteConnector(btn.dataset.id); await load(); } catch(e) { alert(e.message); }
+      });
+    });
+  }
+
+  // ── toast helper ────────────────────────────────────────────────────────────
+  function showToast(msg, isError = false) {
+    const t = el(`<div style="position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;
+      padding:0.75rem 1.25rem;border-radius:6px;font-size:0.9rem;max-width:380px;
+      background:${isError?'var(--danger)':'var(--success)'};color:#fff;
+      box-shadow:0 4px 16px rgba(0,0,0,0.25)">${esc(msg)}</div>`);
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 4000);
+  }
+
+  // ── step-1: choose connector type ───────────────────────────────────────────
+  function openAddWizard() {
+    const typeCards = Object.entries(CONNECTOR_TYPES).map(([k, v]) =>
+      `<div class="ds-type-card" data-type="${k}" style="cursor:pointer;border:2px solid var(--border);border-radius:8px;
+        padding:1rem;display:flex;align-items:center;gap:0.75rem;transition:border-color 0.15s">
+        <span style="font-size:1.75rem">${v.icon}</span>
+        <div>
+          <div style="font-weight:600">${esc(v.label)}</div>
+          <div class="muted" style="font-size:0.78rem">${esc(v.desc)}</div>
+        </div>
+      </div>`).join('');
+
+    const bd = openModal(`<div class="modal" style="width:600px;max-width:96vw">
+      <div class="modal-header"><h2>Add Directory Source — Step 1: Choose Type</h2></div>
+      <div class="modal-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">${typeCards}</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="wiz-cancel">Cancel</button>
+      </div>
+    </div>`);
+
+    bd.querySelector('#wiz-cancel').addEventListener('click', () => bd.remove());
+
+    bd.querySelectorAll('.ds-type-card').forEach(card => {
+      card.addEventListener('mouseenter', () => { card.style.borderColor = 'var(--accent)'; });
+      card.addEventListener('mouseleave', () => { card.style.borderColor = 'var(--border)'; });
+      card.addEventListener('click', () => {
+        bd.remove();
+        openConfigModal(null, card.dataset.type, {});
+      });
+    });
+  }
+
+  // ── step-2: configure ───────────────────────────────────────────────────────
+  function openConfigModal(existingId, connectorType, defaults) {
+    const meta = CONNECTOR_TYPES[connectorType] || { label: connectorType, fields: [] };
+    const isEdit = !!existingId;
+
+    const configFields = (meta.fields || []).map(f => {
+      const label = FIELD_LABELS[f] || f;
+      const val = esc(String(defaults[f] || ''));
+      if (f === 'useSsl') {
+        return `<div class="form-group" style="display:flex;align-items:center;gap:0.5rem">
+          <input type="checkbox" id="cfg-${f}" class="form-check" ${defaults[f] ? 'checked' : ''}>
+          <label class="form-label" style="margin:0" for="cfg-${f}">${esc(label)}</label>
+        </div>`;
+      }
+      if (f === 'serviceAccountKey') {
+        return `<div class="form-group">
+          <label class="form-label">${esc(label)}</label>
+          <textarea class="form-textarea" id="cfg-${f}" rows="4" placeholder='{"type":"service_account","project_id":"..."}'>${val}</textarea>
+        </div>`;
+      }
+      if (f === 'syncMode') {
+        return `<div class="form-group"><label class="form-label">${esc(label)}</label>
+          <select class="form-select" id="cfg-${f}">
+            <option ${defaults[f]==='INCREMENTAL'?'selected':''}>INCREMENTAL</option>
+            <option ${defaults[f]==='FULL'?'selected':''}>FULL</option>
+            <option ${defaults[f]==='RECONCILE'?'selected':''}>RECONCILE</option>
+          </select></div>`;
+      }
+      const type = (f.toLowerCase().includes('password')||f.toLowerCase().includes('token')||f.toLowerCase().includes('secret')||f.toLowerCase().includes('key')) ? 'password' : 'text';
+      const ph = { host:'ldap.company.com', port:'389', bindDn:'CN=svc-idp,DC=company,DC=com',
+        baseDn:'DC=company,DC=com', customerDomain:'company.com', tenantId:'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+        clientId:'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', domain:'company.okta.com',
+        baseUrl:'https://scim.app.com/v2', apiKey:'sk_...', orgId:'12345' }[f] || '';
+      return `<div class="form-group">
+        <label class="form-label">${esc(label)}${['bindPassword','clientSecret','apiToken','bearerToken','oauthToken','serviceAccountKey'].includes(f)?` <span class="muted" style="font-size:0.75rem">(stored encrypted)</span>`:''}${['bindPassword','clientSecret','apiToken','bearerToken','oauthToken'].includes(f)&&isEdit?` <span class="muted" style="font-size:0.75rem">— leave blank to keep existing</span>`:''}</label>
+        <input type="${type}" class="form-input" id="cfg-${f}" value="${val}" placeholder="${esc(ph)}">
+      </div>`;
+    }).join('');
+
+    const bd = openModal(`<div class="modal" style="width:640px;max-width:96vw">
+      <div class="modal-header">
+        <h2>${isEdit ? 'Edit' : 'Configure'} — ${esc(meta.icon||'')} ${esc(meta.label||connectorType)}</h2>
+      </div>
+      <div class="modal-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">
+          <div class="form-group">
+            <label class="form-label">Display Name <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="cfg-name" value="${esc(defaults.name||meta.label||'')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Slug <span class="muted" style="font-size:0.75rem">(URL-safe ID)</span></label>
+            <input class="form-input" id="cfg-slug" value="${esc(defaults.slug||connectorType.toLowerCase().replace(/_/g,'-'))}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Direction</label>
+            <select class="form-select" id="cfg-direction">
+              <option ${defaults.direction==='INBOUND'?'selected':''} value="INBOUND">INBOUND (read users from source)</option>
+              <option ${defaults.direction==='OUTBOUND'?'selected':''} value="OUTBOUND">OUTBOUND (provision to source)</option>
+              <option ${(!defaults.direction||defaults.direction==='BIDIRECTIONAL')?'selected':''} value="BIDIRECTIONAL">BIDIRECTIONAL</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Sync Schedule <span class="muted" style="font-size:0.75rem">(cron or blank for manual)</span></label>
+            <input class="form-input" id="cfg-schedule" value="${esc(defaults.sync_schedule||'0 */6 * * *')}" placeholder="0 */6 * * *">
+          </div>
+        </div>
+        <hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 1rem">
+        <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:0.75rem;color:var(--text-dim)">CONNECTION SETTINGS</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">
+          ${configFields}
+        </div>
+        <div id="cfg-err"></div>
+      </div>
+      <div class="modal-footer" style="gap:0.5rem">
+        ${!isEdit ? `<button class="btn btn-secondary" id="cfg-back">‹ Back</button>` : ''}
+        <button class="btn btn-secondary" id="cfg-test-btn">✓ Test Connection</button>
+        <button class="btn btn-primary"   id="cfg-save">${isEdit ? 'Save Changes' : 'Add Source'}</button>
+        <button class="btn btn-secondary" id="cfg-cancel">Cancel</button>
+      </div>
+    </div>`);
+
+    if (!isEdit) bd.querySelector('#cfg-back').addEventListener('click', () => { bd.remove(); openAddWizard(); });
+    bd.querySelector('#cfg-cancel').addEventListener('click', () => bd.remove());
+
+    // Auto-generate slug from name
+    if (!isEdit) {
+      bd.querySelector('#cfg-name').addEventListener('input', (e) => {
+        bd.querySelector('#cfg-slug').value = e.target.value.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+      });
+    }
+
+    // Test Connection button (saves first, then tests)
+    bd.querySelector('#cfg-test-btn').addEventListener('click', async () => {
+      const testBtn = bd.querySelector('#cfg-test-btn');
+      testBtn.disabled = true; testBtn.textContent = '⟳ Testing…';
+      try {
+        if (isEdit) {
+          const data = collectFormData(bd, connectorType);
+          await api.updateConnector(existingId, data);
+          const r = await api.testConnector(existingId);
+          bd.querySelector('#cfg-err').innerHTML = `<div class="alert ${r.success?'alert-success':'alert-error'}">${esc(r.message||'')}</div>`;
+        } else {
+          bd.querySelector('#cfg-err').innerHTML = `<div class="alert alert-info">Save the connector first, then use "Test Connection" from the directory list.</div>`;
+        }
+      } catch(e) { bd.querySelector('#cfg-err').innerHTML = errHtml(e.message); }
+      testBtn.disabled = false; testBtn.textContent = '✓ Test Connection';
+    });
+
+    // Save
+    bd.querySelector('#cfg-save').addEventListener('click', async () => {
+      const saveBtn = bd.querySelector('#cfg-save');
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+      try {
+        const data = collectFormData(bd, connectorType);
+        if (!data.name) { bd.querySelector('#cfg-err').innerHTML = errHtml('Display Name is required'); saveBtn.disabled=false; saveBtn.textContent=isEdit?'Save Changes':'Add Source'; return; }
+        if (isEdit) {
+          await api.updateConnector(existingId, data);
+        } else {
+          await api.createConnector(data);
+        }
+        bd.remove();
+        await load();
+        showToast(isEdit ? 'Connector updated.' : '✓ Directory source added! Use "Test Connection" to verify.');
+      } catch(e) { bd.querySelector('#cfg-err').innerHTML = errHtml(e.message); saveBtn.disabled=false; saveBtn.textContent=isEdit?'Save Changes':'Add Source'; }
+    });
+  }
+
+  // ── collect form values from config modal ───────────────────────────────────
+  function collectFormData(bd, connectorType) {
+    const meta = CONNECTOR_TYPES[connectorType] || { fields: [] };
+    const configJson = {};
+    for (const f of (meta.fields || [])) {
+      const el2 = bd.querySelector(`#cfg-${f}`);
+      if (!el2) continue;
+      if (el2.type === 'checkbox') configJson[f] = el2.checked;
+      else if (el2.value.trim() !== '') configJson[f] = el2.value.trim();
+    }
+    return {
+      name:          bd.querySelector('#cfg-name').value.trim(),
+      slug:          bd.querySelector('#cfg-slug').value.trim(),
+      connectorType,
+      direction:     bd.querySelector('#cfg-direction').value,
+      syncSchedule:  bd.querySelector('#cfg-schedule').value.trim() || null,
+      syncMode:      'INCREMENTAL',
+      configJson,
+    };
+  }
+
+  // ── edit modal (loads existing config first) ─────────────────────────────────
+  async function openEditModal(connectorId, btnData) {
+    try {
+      const c = await api.getConnector(connectorId);
+      const defaults = {
+        name:          c.name,
+        slug:          c.slug,
+        direction:     c.direction,
+        sync_schedule: c.sync_schedule,
+        ...(c.config || {}),
+      };
+      openConfigModal(connectorId, btnData.type || c.connector_type, defaults);
+    } catch(e) { alert('Could not load connector: ' + e.message); }
+  }
+
+  // ── sync history modal ───────────────────────────────────────────────────────
+  async function openLogsModal(connectorId, connectorName) {
+    const bd = openModal(`<div class="modal" style="width:760px;max-width:96vw">
+      <div class="modal-header"><h2>Sync History — ${esc(connectorName)}</h2></div>
+      <div class="modal-body" id="logs-body">${loading()}</div>
+      <div class="modal-footer"><button class="btn btn-secondary" id="logs-close">Close</button></div>
+    </div>`);
+    bd.querySelector('#logs-close').addEventListener('click', () => bd.remove());
+    try {
+      const r = await api.getConnectorRuns(connectorId, 20);
+      const runs = (r && r.data) ? r.data : [];
+      if (!runs.length) {
+        bd.querySelector('#logs-body').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div><p>No sync runs yet.</p></div>`;
+        return;
+      }
+      const rows = runs.map(r2 => `<tr>
+        <td class="muted" style="font-size:0.8rem">${r2.started_at ? fmtDate(r2.started_at) : '—'}</td>
+        <td><span class="badge badge-neutral">${esc(r2.run_type||'—')}</span></td>
+        <td><span class="badge ${r2.status==='SUCCESS'?'badge-success':r2.status==='FAILED'?'badge-danger':'badge-warning'}">${esc(r2.status||'—')}</span></td>
+        <td>${r2.items_processed ?? '—'}</td>
+        <td style="color:var(--success)">${r2.items_succeeded ?? '—'}</td>
+        <td style="color:${r2.items_failed?'var(--danger)':'inherit'}">${r2.items_failed ?? '—'}</td>
+        <td class="muted" style="font-size:0.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(r2.error_summary||'')}">${r2.error_summary ? esc(r2.error_summary.slice(0,80)) : '—'}</td>
+      </tr>`).join('');
+      bd.querySelector('#logs-body').innerHTML = `
+        <div class="table-wrap"><table>
+          <thead><tr><th>Started</th><th>Type</th><th>Status</th><th>Processed</th><th>OK</th><th>Failed</th><th>Error</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+    } catch(e) { bd.querySelector('#logs-body').innerHTML = errHtml(e.message); }
+  }
+
+  wrap.querySelector('#ds-add-btn').addEventListener('click', openAddWizard);
   await load();
 }
 

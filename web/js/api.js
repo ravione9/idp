@@ -67,6 +67,14 @@ Object.assign(api, {
   igaSodViolations: (status = 'OPEN') => f(`/api/iga/sod-violations?status=${status}`),
   igaRisk:          () => f('/api/iga/risk/dashboard'),
   igaReports:       () => f('/api/iga/reports'),
+
+  // Connector CRUD
+  getConnector:      (id) => f(`/api/iga/connectors/${id}`),
+  createConnector:   (data) => f('/api/iga/connectors', { method: 'POST', body: JSON.stringify(data) }),
+  updateConnector:   (id, data) => f(`/api/iga/connectors/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteConnector:   (id) => f(`/api/iga/connectors/${id}`, { method: 'DELETE' }),
+  testConnector:     (id) => f(`/api/iga/connectors/${id}/test`, { method: 'POST' }),
+  getConnectorRuns:  (id, limit = 10) => f(`/api/iga/connectors/${id}/runs?limit=${limit}`),
 });
 
 Object.assign(api, {

@@ -238,6 +238,143 @@ router.post(
   }),
 );
 
+// GET /connectors/:id — get single connector with config
+router.get(
+  '/connectors/:id',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const row = await queryOne<Record<string, unknown>>(
+      `SELECT id, name, slug, connector_type, direction, sync_mode, sync_schedule,
+              status, config_json, last_sync_at, last_error, created_at, updated_at
+         FROM connectors WHERE id = ?`,
+      [req.params['id']],
+    );
+    if (!row) { res.status(404).json({ error: 'Not found' }); return; }
+    // Parse config_json but strip secrets before returning
+    try {
+      const cfg = typeof row['config_json'] === 'string'
+        ? JSON.parse(row['config_json'] as string)
+        : (row['config_json'] ?? {});
+      // Redact secret fields
+      const safe: Record<string, unknown> = { ...cfg };
+      for (const k of ['bindPassword', 'password', 'secret', 'apiKey', 'serviceAccountKey', 'clientSecret']) {
+        if (k in safe) safe[k] = '••••••••';
+      }
+      row['config'] = safe;
+    } catch { row['config'] = {}; }
+    delete row['config_json'];
+    res.json(row);
+  }),
+);
+
+// PUT /connectors/:id — update connector
+router.put(
+  '/connectors/:id',
+  requireRole('SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { name, syncMode, syncSchedule, configJson, status } = req.body as {
+      name?: string;
+      syncMode?: string;
+      syncSchedule?: string;
+      configJson?: Record<string, unknown>;
+      status?: string;
+    };
+
+    // Merge config_json: load existing, patch non-redacted fields
+    if (configJson) {
+      const existing = await queryOne<{ config_json: string }>(
+        `SELECT config_json FROM connectors WHERE id = ?`, [req.params['id']],
+      );
+      if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
+      const existingCfg: Record<string, unknown> = JSON.parse(existing.config_json || '{}');
+      const merged: Record<string, unknown> = { ...existingCfg };
+      for (const [k, v] of Object.entries(configJson)) {
+        // Don't overwrite secret fields with redaction placeholder
+        if (typeof v === 'string' && v === '••••••••') continue;
+        merged[k] = v;
+      }
+      await execute(
+        `UPDATE connectors SET
+           name          = COALESCE(?, name),
+           sync_mode     = COALESCE(?, sync_mode),
+           sync_schedule = COALESCE(?, sync_schedule),
+           status        = COALESCE(?, status),
+           config_json   = ?,
+           updated_at    = UTC_TIMESTAMP()
+         WHERE id = ?`,
+        [name ?? null, syncMode ?? null, syncSchedule ?? null, status ?? null,
+         JSON.stringify(merged), req.params['id']],
+      );
+    } else {
+      await execute(
+        `UPDATE connectors SET
+           name          = COALESCE(?, name),
+           sync_mode     = COALESCE(?, sync_mode),
+           sync_schedule = COALESCE(?, sync_schedule),
+           status        = COALESCE(?, status),
+           updated_at    = UTC_TIMESTAMP()
+         WHERE id = ?`,
+        [name ?? null, syncMode ?? null, syncSchedule ?? null, status ?? null, req.params['id']],
+      );
+    }
+    res.json({ success: true });
+  }),
+);
+
+// DELETE /connectors/:id — remove connector
+router.delete(
+  '/connectors/:id',
+  requireRole('SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    await execute(`DELETE FROM connectors WHERE id = ?`, [req.params['id']]);
+    res.json({ success: true });
+  }),
+);
+
+// POST /connectors/:id/test — test connectivity
+router.post(
+  '/connectors/:id/test',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const row = await queryOne<{ connector_type: string; config_json: string }>(
+      `SELECT connector_type, config_json FROM connectors WHERE id = ?`,
+      [req.params['id']],
+    );
+    if (!row) { res.status(404).json({ error: 'Not found' }); return; }
+    const cfg: Record<string, unknown> = JSON.parse(row.config_json || '{}');
+    const type = row.connector_type;
+
+    // Lightweight connectivity check per type
+    try {
+      if (type === 'AD' || type === 'LDAP') {
+        const { Client: LdapClient } = await import('ldapts');
+        const host = cfg['host'] as string || 'localhost';
+        const port = Number(cfg['port'] ?? 389);
+        const useSsl = Boolean(cfg['useSsl']);
+        const client = new LdapClient({ url: `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`, connectTimeout: 5000 });
+        await client.bind(cfg['bindDn'] as string || '', cfg['bindPassword'] as string || '');
+        await client.unbind();
+        res.json({ success: true, message: `LDAP bind succeeded (${host}:${port})` });
+      } else if (type === 'GOOGLE_WORKSPACE') {
+        // Just validate that config fields are present
+        const required = ['customerDomain', 'serviceAccountEmail'];
+        const missing = required.filter((k) => !cfg[k]);
+        if (missing.length) {
+          res.status(400).json({ success: false, message: `Missing config: ${missing.join(', ')}` });
+        } else {
+          res.json({ success: true, message: `Google Workspace config looks valid for ${cfg['customerDomain']}` });
+        }
+      } else {
+        // Generic: just confirm config is non-empty and connector exists
+        res.json({ success: true, message: `Connector "${type}" configuration saved. Full test on next sync.` });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(422).json({ success: false, message: msg });
+    }
+  }),
+);
+
 // ===========================================================================
 // /entitlements — granular permissions
 // ===========================================================================

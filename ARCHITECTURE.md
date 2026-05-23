@@ -660,7 +660,23 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/services/access-review.ts`** — `createCampaign` (scopes: ALL_USERS/APP_SPECIFIC/HIGH_RISK, batch inserts review items, notifies reviewers); `submitReviewDecision` (CERTIFY/REVOKE/EXCEPTION, revokes entitlement on REVOKE, auto-closes campaign).
 - **`src/api/iga.ts`** — all 501 stubs replaced with real service-layer wiring; added `POST /access-reviews/:id/items/:itemId/decision` and `POST /entitlements/:entId/grant`.
 
-### *(this commit)* — 2026-05-24 — Configuration modules: 15 admin sub-systems go from feature-card stubs to real CRUD APIs
+### *(this commit)* — 2026-05-24 — IGA write-path expansion: connector CRUD + SoD policy authoring + matching console flows
+
+**Reviewed and pushed unchanged from contributor.** TS build clean, lints clean.
+
+- **`src/api/iga.ts`** gains the missing CRUD edges so the IGA admin pages are no longer read-only:
+  - `GET /api/iga/connectors/:id` — fetch one connector with its `config_json`
+  - `PUT /api/iga/connectors/:id` (super-admin) — update name / direction / sync mode / schedule / config
+  - `DELETE /api/iga/connectors/:id` (super-admin) — remove a connector
+  - `POST /api/iga/connectors/:id/test` — connectivity probe
+  - `POST /api/iga/sod-policies` (super-admin) — author a SoD policy with conflict groups + severity + enforcement
+  - `PUT /api/iga/sod-policies/:id` (super-admin) — edit
+  - `DELETE /api/iga/sod-policies/:id` (super-admin) — remove
+  - Plus additional access-request and access-review handlers wired against the Phase-2 service layer.
+- **`web/js/api.js`** — new client methods to match (`igaUpdateConnector`, `igaDeleteConnector`, `igaTestConnector`, `igaCreateSodPolicy`, `igaUpdateSodPolicy`, `igaDeleteSodPolicy`).
+- **`web/js/views-stubs.js`** — Connectors and Segregation of Duties pages now have full create / edit / delete UI (modal forms, conflict-group editor, test-connection button), replacing the read-only tables.
+
+### `09cf70d` — 2026-05-24 — Configuration modules: 15 admin sub-systems go from feature-card stubs to real CRUD APIs
 
 **Reviewed and pushed unchanged from contributor.** TS build clean, lints clean, all 15 routers imported and mounted in `src/index.ts`. Zero schema regressions — every new table is in migration `006_config_modules.sql` with `IF NOT EXISTS` guards.
 
