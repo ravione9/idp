@@ -58,23 +58,54 @@ router.get('/diagz', async (_req: Request, res: Response): Promise<void> => {
   } catch (err) {
     out['migrations_error'] = err instanceof Error ? err.message : String(err);
   }
-  try {
-    const tables = await query<{ name: string; exists: number }>(
-      `SELECT 'applications' AS name, COUNT(*) AS exists FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'applications'
-       UNION ALL SELECT 'app_protocol_configs', COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'app_protocol_configs'
-       UNION ALL SELECT 'connectors',           COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'connectors'
-       UNION ALL SELECT 'entitlements',         COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'entitlements'
-       UNION ALL SELECT 'user_entitlements',    COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'user_entitlements'
-       UNION ALL SELECT 'access_requests',      COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'access_requests'
-       UNION ALL SELECT 'sod_policies',         COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'sod_policies'
-       UNION ALL SELECT 'risk_scores',          COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'risk_scores'
-       UNION ALL SELECT 'compliance_reports',   COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'compliance_reports'`,
-      [],
-    );
-    out['iga_tables'] = tables;
-  } catch (err) {
-    out['iga_tables_error'] = err instanceof Error ? err.message : String(err);
-  }
+
+  const probe = async (label: string, sql: string): Promise<Record<string, unknown>> => {
+    try {
+      const rows = await query(sql, []);
+      return { table: label, ok: true, rows: (rows as unknown[]).length };
+    } catch (err) {
+      const e = err as { code?: string; errno?: number; sqlMessage?: string };
+      return {
+        table:   label,
+        ok:      false,
+        code:    e.code ?? null,
+        errno:   e.errno ?? null,
+        message: e.sqlMessage ?? (err instanceof Error ? err.message : String(err)),
+      };
+    }
+  };
+
+  out['probes'] = [
+    await probe('applications',                'SELECT id FROM applications LIMIT 1'),
+    await probe('app_protocol_configs',        'SELECT id FROM app_protocol_configs LIMIT 1'),
+    await probe('connectors',                  'SELECT id FROM connectors LIMIT 1'),
+    await probe('connector_runs',              'SELECT id FROM connector_runs LIMIT 1'),
+    await probe('entitlements',                'SELECT id FROM entitlements LIMIT 1'),
+    await probe('user_entitlements',           'SELECT id FROM user_entitlements LIMIT 1'),
+    await probe('business_roles',              'SELECT id FROM business_roles LIMIT 1'),
+    await probe('access_requests',             'SELECT id FROM access_requests LIMIT 1'),
+    await probe('access_request_approvals',    'SELECT id FROM access_request_approvals LIMIT 1'),
+    await probe('access_review_campaigns',     'SELECT id FROM access_review_campaigns LIMIT 1'),
+    await probe('access_review_items',         'SELECT id FROM access_review_items LIMIT 1'),
+    await probe('sod_policies',                'SELECT id FROM sod_policies LIMIT 1'),
+    await probe('sod_violations',              'SELECT id FROM sod_violations LIMIT 1'),
+    await probe('risk_scores',                 'SELECT emp_id FROM risk_scores LIMIT 1'),
+    await probe('login_risk_events',           'SELECT id FROM login_risk_events LIMIT 1'),
+    await probe('compliance_reports',          'SELECT id FROM compliance_reports LIMIT 1'),
+    await probe('notifications',               'SELECT id FROM notifications LIMIT 1'),
+    await probe('oidc_clients',                'SELECT id FROM oidc_clients LIMIT 1'),
+    await probe('oauth_tokens',                'SELECT id FROM oauth_tokens LIMIT 1'),
+    await probe('webauthn_credentials',        'SELECT id FROM webauthn_credentials LIMIT 1'),
+    // Run the actual /api/iga/applications query so any column-name bug surfaces here
+    await probe(
+      'iga_apps_query',
+      `SELECT a.id, a.slug, a.name,
+              (SELECT COUNT(*) FROM app_protocol_configs c WHERE c.app_id = a.id AND c.active = 1) AS protocol_count
+         FROM applications a
+        ORDER BY a.sort_order ASC, a.name ASC
+        LIMIT 1`,
+    ),
+  ];
   res.json(out);
 });
 
