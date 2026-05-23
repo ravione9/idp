@@ -23,6 +23,9 @@ import appsRouter from './api/apps.js';
 import meRouter from './api/me.js';
 import adminLocalUsersRouter from './api/admin-local-users.js';
 import adminSamlAppsRouter from './api/admin-saml-apps.js';
+import adminDashboardRouter from './api/admin-dashboard.js';
+import adminAuditRouter from './api/admin-audit.js';
+import adminUsersRouter from './api/admin-users.js';
 
 // Auth
 import {
@@ -108,6 +111,9 @@ app.use('/api/employees', employeeRouter);
 app.use('/api/manager',   managerRouter);
 app.use('/api/admin/local-users', adminLocalUsersRouter);
 app.use('/api/admin/saml-apps', adminSamlAppsRouter);
+app.use('/api/admin/dashboard', adminDashboardRouter);
+app.use('/api/admin/audit', adminAuditRouter);
+app.use('/api/admin/users', adminUsersRouter);
 
 // ---------------------------------------------------------------------------
 // Internal routes (internal token gated — no session cookie required)

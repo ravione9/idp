@@ -1,3 +1,7 @@
+/* ============================================================
+   Lenskart IdP Console — SPA
+   ============================================================ */
+
 const api = {
   async fetch(path, options = {}) {
     const res = await fetch(path, {
@@ -5,36 +9,47 @@ const api = {
       headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
       ...options,
     });
-    const body = res.headers.get('content-type')?.includes('json')
-      ? await res.json()
-      : await res.text();
+    const ct = res.headers.get('content-type') || '';
+    const body = ct.includes('json') ? await res.json() : await res.text();
     if (!res.ok) {
-      const err = new Error(body?.error || res.statusText);
+      const err = new Error((body && body.error) || res.statusText);
       err.status = res.status;
       err.body = body;
       throw err;
     }
     return body;
   },
-  me: () => api.fetch('/api/me'),
-  apps: () => api.fetch('/api/apps'),
-  localLogin: (email, password) =>
-    api.fetch('/auth/local/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  logout: () => api.fetch('/auth/logout', { method: 'POST' }),
-  listLocalAdmins: () => api.fetch('/api/admin/local-users'),
-  createLocalAdmin: (data) =>
-    api.fetch('/api/admin/local-users', { method: 'POST', body: JSON.stringify(data) }),
-  bootstrapAdmin: (data) =>
-    api.fetch('/api/admin/local-users/bootstrap', { method: 'POST', body: JSON.stringify(data) }),
-  adminStatus: () => api.fetch('/api/admin/local-users/status'),
-  deactivateAdmin: (id) =>
-    api.fetch(`/api/admin/local-users/${id}`, { method: 'DELETE' }),
-  idpStatus: () => api.fetch('/api/admin/saml-apps/status'),
-  listSamlApps: () => api.fetch('/api/admin/saml-apps'),
-  createSamlApp: (data) =>
-    api.fetch('/api/admin/saml-apps', { method: 'POST', body: JSON.stringify(data) }),
-  deactivateSamlApp: (id) =>
-    api.fetch(`/api/admin/saml-apps/${id}`, { method: 'DELETE' }),
+  me:               () => api.fetch('/api/me'),
+  apps:             () => api.fetch('/api/apps'),
+  dashboard:        () => api.fetch('/api/admin/dashboard'),
+  listUsers:        (q = '', state = '') => api.fetch(`/api/admin/users?q=${encodeURIComponent(q)}&state=${encodeURIComponent(state)}&limit=200`),
+  listLocalAdmins:  () => api.fetch('/api/admin/local-users'),
+  createLocalAdmin: (data) => api.fetch('/api/admin/local-users', { method: 'POST', body: JSON.stringify(data) }),
+  bootstrapAdmin:   (data) => api.fetch('/api/admin/local-users/bootstrap', { method: 'POST', body: JSON.stringify(data) }),
+  adminStatus:      () => api.fetch('/api/admin/local-users/status'),
+  deactivateAdmin:  (id) => api.fetch(`/api/admin/local-users/${id}`, { method: 'DELETE' }),
+  idpStatus:        () => api.fetch('/api/admin/saml-apps/status'),
+  listSamlApps:     () => api.fetch('/api/admin/saml-apps'),
+  createSamlApp:    (data) => api.fetch('/api/admin/saml-apps', { method: 'POST', body: JSON.stringify(data) }),
+  deactivateSamlApp:(id) => api.fetch(`/api/admin/saml-apps/${id}`, { method: 'DELETE' }),
+  samlAudit:        () => api.fetch('/api/admin/audit/saml'),
+  systemAudit:      () => api.fetch('/api/admin/audit/system'),
+  localLogin:       (email, password) => api.fetch('/auth/local/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  logout:           () => api.fetch('/auth/logout', { method: 'POST' }),
+};
+
+const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
+
+const ICONS = {
+  dashboard: '◉',
+  apps:      '▦',
+  users:     '◍',
+  saml:      '⛨',
+  auth:      '⚿',
+  audit:     '⌖',
+  settings:  '⚙',
+  logout:    '↪',
+  search:    '🔍',
 };
 
 function el(html) {
@@ -43,82 +58,89 @@ function el(html) {
   return t.content.firstChild;
 }
 
-function route() {
-  return location.pathname.replace(/\/$/, '') || '/';
-}
-
-function esc(s) {
-  return String(s ?? '')
+function esc(v) {
+  return String(v ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
 
-function bindLogout(root) {
-  root.querySelector('#logout-link')?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    await api.logout();
-    location.href = '/login';
-  });
+function fmtDate(s) {
+  if (!s) return '—';
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return esc(s);
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-function nav(user, active) {
-  const isAdmin = user && ['ADMIN', 'SUPER_ADMIN'].includes(user.session?.role || user.employee?.role);
-  return `
-    <header>
-      <div class="logo">Lens<span>kart</span> IdP</div>
-      <nav>
-        ${user ? `<a href="/" class="${active === 'home' ? 'active' : ''}">My Apps</a>` : ''}
-        ${isAdmin ? `<a href="/admin-central" class="${active === 'admin' ? 'active' : ''}">Admin Central</a>` : ''}
-        ${user ? `<a href="#" id="logout-link">Logout</a>` : `<a href="/login" class="${active === 'login' ? 'active' : ''}">Login</a>`}
-      </nav>
-    </header>`;
+function initials(name = '') {
+  return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '?';
 }
 
+function ilgBadge(state) {
+  const s = (state || '').toUpperCase();
+  if (s === 'ACTIVE' || s === 'REACTIVATED') return `<span class="badge badge-success">${esc(s)}</span>`;
+  if (s.startsWith('SUSPENDED') || s === 'PENDING_MGR' || s === 'ESCALATED_HRBP') return `<span class="badge badge-warning">${esc(s)}</span>`;
+  if (s === 'DEPARTED' || s === 'DEPROVISIONED') return `<span class="badge badge-neutral">${esc(s)}</span>`;
+  return `<span class="badge badge-neutral">${esc(s || '—')}</span>`;
+}
+
+const state = {
+  me: null,
+  view: 'dashboard',
+  query: '',
+};
+
+/* ---------- Login ---------- */
 function renderLogin() {
   const root = el(`
-    <div class="layout">
-      ${nav(null, 'login')}
-      <div class="card">
-        <h1>Sign in</h1>
-        <p class="subtitle">Local administrator or corporate SSO</p>
-        <div id="login-error"></div>
-        <form id="local-login-form">
-          <div class="field">
-            <label for="email">Email</label>
-            <input id="email" name="email" type="email" required autocomplete="username" />
-          </div>
-          <div class="field">
-            <label for="password">Password</label>
-            <input id="password" name="password" type="password" required autocomplete="current-password" />
-          </div>
-          <button type="submit" class="btn btn-primary">Sign in with password</button>
-        </form>
-        <div class="divider">or</div>
-        <a href="/auth/google" class="btn btn-secondary">Sign in with Google</a>
-        <a href="/auth/zoho" class="btn btn-secondary">Sign in with Zoho</a>
-      </div>
-      <div class="card" id="bootstrap-card" style="display:none">
-        <h1>First-time setup</h1>
-        <p class="subtitle">Create the first super administrator (bootstrap)</p>
-        <div id="bootstrap-error"></div>
-        <form id="bootstrap-form">
-          <div class="field"><label>Full name</label><input name="fullName" required /></div>
-          <div class="field"><label>Email</label><input name="email" type="email" required /></div>
-          <div class="field"><label>Password (min 10)</label><input name="password" type="password" minlength="10" required /></div>
-          <div class="field"><label>Bootstrap token</label><input name="token" type="password" required /></div>
-          <button type="submit" class="btn btn-primary">Create super admin</button>
-        </form>
-      </div>
+    <div class="auth-shell">
+      <aside class="auth-hero">
+        <div class="brand-mark">
+          <span class="brand-logo" style="width:32px;height:32px;background:linear-gradient(135deg,#fff,#dbeafe);border-radius:8px;display:inline-flex;align-items:center;justify-content:center;color:#1e3a8a;font-weight:800">L</span>
+          Lenskart IdP
+        </div>
+        <div>
+          <h1>One identity. Every application.</h1>
+          <p>Enterprise single sign-on, SAML 2.0 identity provider, and identity governance for Lenskart.</p>
+          <ul class="auth-features">
+            <li>SAML 2.0 / OIDC single sign-on</li>
+            <li>Local, Google &amp; Zoho authentication</li>
+            <li>Centralized application catalog</li>
+            <li>Audit trail &amp; access governance</li>
+          </ul>
+        </div>
+        <div class="auth-footer">© Lenskart Identity Lifecycle &amp; Governance · idp.lenskart.com</div>
+      </aside>
+      <main class="auth-panel">
+        <div class="auth-card">
+          <h2>Sign in</h2>
+          <p class="muted">Use your administrator account or corporate SSO.</p>
+          <div id="login-error"></div>
+          <form id="local-login-form">
+            <div class="field">
+              <label for="email">Email</label>
+              <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@lenskart.com" />
+            </div>
+            <div class="field">
+              <label for="password">Password</label>
+              <input id="password" name="password" type="password" required autocomplete="current-password" />
+            </div>
+            <button type="submit" class="btn btn-primary btn-block btn-lg">Sign in</button>
+          </form>
+          <div class="divider">or</div>
+          <a href="/auth/google" class="btn btn-secondary btn-block">Continue with Google</a>
+          <a href="/auth/zoho"   class="btn btn-secondary btn-block" style="margin-top:0.5rem">Continue with Zoho</a>
+        </div>
+      </main>
     </div>
   `);
 
+  const errEl = root.querySelector('#login-error');
   root.querySelector('#local-login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const fd = new FormData(e.target);
-    const errEl = root.querySelector('#login-error');
     errEl.innerHTML = '';
+    const fd = new FormData(e.target);
     try {
       await api.localLogin(fd.get('email'), fd.get('password'));
       location.href = '/';
@@ -127,158 +149,527 @@ function renderLogin() {
     }
   });
 
-  root.querySelector('#bootstrap-form')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const errEl = root.querySelector('#bootstrap-error');
-    errEl.innerHTML = '';
-    try {
-      await api.bootstrapAdmin(Object.fromEntries(fd));
-      errEl.innerHTML = `<div class="alert alert-success">Super admin created. Sign in above.</div>`;
-      e.target.reset();
-    } catch (err) {
-      errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-    }
-  });
-
+  // First-time bootstrap card (only when no admins exist)
   api.adminStatus().then((s) => {
-    if (s.bootstrapEnabled) {
-      root.querySelector('#bootstrap-card').style.display = 'block';
-    }
+    if (!s.bootstrapEnabled) return;
+    const card = el(`
+      <div class="auth-card" style="margin-top:1.5rem">
+        <h2 style="font-size:1.15rem">First-time setup</h2>
+        <p class="muted">Create the first super administrator.</p>
+        <div id="bs-error"></div>
+        <form id="bs-form">
+          <div class="field"><label>Full name</label><input name="fullName" required /></div>
+          <div class="field"><label>Email</label><input name="email" type="email" required /></div>
+          <div class="field"><label>Password (min 10)</label><input name="password" type="password" minlength="10" required /></div>
+          <div class="field"><label>Bootstrap token</label><input name="token" type="password" required /><p class="hint">Value of LOCAL_BOOTSTRAP_TOKEN in .env</p></div>
+          <button type="submit" class="btn btn-primary btn-block">Create super administrator</button>
+        </form>
+      </div>
+    `);
+    root.querySelector('.auth-panel').appendChild(card);
+    card.querySelector('#bs-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const bsErr = card.querySelector('#bs-error');
+      bsErr.innerHTML = '';
+      try {
+        await api.bootstrapAdmin(Object.fromEntries(new FormData(e.target)));
+        bsErr.innerHTML = `<div class="alert alert-success">Created. Sign in above.</div>`;
+        e.target.reset();
+      } catch (err) {
+        bsErr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    });
   }).catch(() => {});
 
   return root;
 }
 
-function appTile(app) {
-  const initial = (app.name || '?').charAt(0).toUpperCase();
-  return `
-    <a class="app-tile" href="${esc(app.launchUrl)}" target="_blank" rel="noopener">
-      ${app.iconUrl
-        ? `<img class="app-icon" src="${esc(app.iconUrl)}" alt="" />`
-        : `<div class="app-icon app-icon-fallback">${esc(initial)}</div>`}
-      <span class="app-name">${esc(app.name)}</span>
-    </a>`;
-}
+/* ---------- Shell ---------- */
+function buildShell(activeView) {
+  const me = state.me;
+  const isAdmin = me && ROLES_ADMIN.includes(me.employee?.role);
+  const isSuper = me && me.employee?.role === 'SUPER_ADMIN';
 
-async function renderHome(me) {
+  const navItem = (key, icon, label, requiresAdmin = false, requiresSuper = false) => {
+    if (requiresAdmin && !isAdmin) return '';
+    if (requiresSuper && !isSuper) return '';
+    return `<button class="nav-item ${activeView === key ? 'active' : ''}" data-view="${key}">
+      <span class="icon">${icon}</span>${label}
+    </button>`;
+  };
+
   const root = el(`
-    <div class="layout layout-wide">
-      ${nav(me, 'home')}
-      <div class="portal-header">
-        <div>
-          <h1>My Applications</h1>
-          <p class="subtitle">Single sign-on to your entitled enterprise apps</p>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-logo">L</span>
+          <span>Lenskart IdP</span>
         </div>
-        <div class="profile-chip">
-          <div class="profile-name">${esc(me.employee?.full_name || me.session.email)}</div>
-          <div class="profile-meta">
-            <span class="badge">${esc(me.employee?.role || 'USER')}</span>
-            ${esc(me.session.email)}
+        <nav>
+          <div class="nav-section">Workspace</div>
+          ${navItem('dashboard', ICONS.dashboard, 'Dashboard', true)}
+          ${navItem('apps',      ICONS.apps,      'My Applications')}
+          ${isAdmin ? `<div class="nav-section">Administration</div>` : ''}
+          ${navItem('saml-apps', ICONS.saml,      'SAML Applications', true)}
+          ${navItem('users',     ICONS.users,     'Users', true)}
+          ${navItem('admins',    ICONS.users,     'Administrators', false, true)}
+          ${navItem('auth',      ICONS.auth,      'Authentication', true)}
+          ${navItem('audit',     ICONS.audit,     'Audit Logs', true)}
+          ${navItem('settings',  ICONS.settings,  'Settings')}
+        </nav>
+        <div class="sidebar-footer">v1.0 · ${esc(me?.session?.iss || 'local')}</div>
+      </aside>
+      <div class="main">
+        <header class="topbar">
+          <div class="page-title" id="page-title">Loading…</div>
+          <div class="topbar-actions">
+            <div class="profile-menu" id="profile-menu">
+              <span class="avatar">${esc(initials(me?.employee?.full_name || me?.session?.email))}</span>
+              <div>
+                <div class="profile-name">${esc(me?.employee?.full_name || me?.session?.email || 'User')}</div>
+                <div class="profile-role">${esc(me?.employee?.role || 'USER')}</div>
+              </div>
+              <div class="profile-dropdown" id="profile-dropdown">
+                <a href="#" data-view-link="settings">Account settings</a>
+                ${isAdmin ? `<a href="#" data-view-link="audit">Audit logs</a>` : ''}
+                ${me?.capabilities?.metadataUrl ? `<a href="${esc(me.capabilities.metadataUrl)}" target="_blank">SAML metadata</a>` : ''}
+                <div class="sep"></div>
+                <button class="danger" id="logout-btn">Sign out</button>
+              </div>
+            </div>
           </div>
-        </div>
+        </header>
+        <main class="content" id="content"><div class="loading-row"><span class="spinner"></span></div></main>
       </div>
-      <div id="apps-area">Loading applications…</div>
     </div>
   `);
 
-  bindLogout(root);
-
-  const area = root.querySelector('#apps-area');
-  try {
-    const appsResp = await api.apps();
-    const apps = appsResp.data || [];
-
-    if (!appsResp.samlEnabled) {
-      area.innerHTML = `
-        <div class="card wide">
-          <h2>SAML IdP not configured</h2>
-          <p class="subtitle">Application SSO requires SAML signing keys in <code>.env</code>.</p>
-          <ol class="setup-steps">
-            <li>On the server: <code>bash scripts/gen-saml-dev-keys.sh</code></li>
-            <li>Add <code>SAML_IDP_PRIVATE_KEY_PEM</code> and <code>SAML_IDP_CERT_PEM</code> to <code>.env</code></li>
-            <li>Restart API: <code>bash scripts/restart-api.sh</code></li>
-            <li>Register apps in <a href="/admin-central?tab=apps">Admin Central → SAML Applications</a></li>
-          </ol>
-          ${me.capabilities?.canAdmin ? '<a href="/admin-central?tab=apps" class="btn btn-primary btn-inline">Open Admin Central</a>' : ''}
-        </div>`;
-      return root;
-    }
-
-    if (!apps.length) {
-      area.innerHTML = `
-        <div class="card wide">
-          <h2>No applications yet</h2>
-          <p class="subtitle">SAML IdP is ready. Register Service Providers to show app tiles here.</p>
-          ${me.capabilities?.metadataUrl ? `<p class="subtitle">IdP metadata: <a href="${esc(me.capabilities.metadataUrl)}" target="_blank">${esc(me.capabilities.metadataUrl)}</a></p>` : ''}
-          ${me.capabilities?.canAdmin
-            ? '<a href="/admin-central?tab=apps" class="btn btn-primary btn-inline">Register SAML application</a>'
-            : '<p class="subtitle">Contact your IdP administrator to register applications.</p>'}
-        </div>`;
-      return root;
-    }
-
-    area.innerHTML = `
-      <div class="app-grid">
-        ${apps.map(appTile).join('')}
-      </div>
-      <p class="subtitle portal-footer">
-        Click an app to launch via SAML SSO · ${apps.length} application${apps.length === 1 ? '' : 's'}
-      </p>`;
-  } catch (err) {
-    area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-  }
+  // Sidebar nav clicks
+  root.querySelectorAll('[data-view]').forEach((btn) => {
+    btn.addEventListener('click', () => navigate(btn.dataset.view));
+  });
+  // Profile dropdown
+  const pm = root.querySelector('#profile-menu');
+  const dd = root.querySelector('#profile-dropdown');
+  pm.addEventListener('click', (e) => {
+    if (e.target.closest('.profile-dropdown')) return;
+    dd.classList.toggle('open');
+  });
+  document.addEventListener('click', (e) => {
+    if (!pm.contains(e.target)) dd.classList.remove('open');
+  });
+  root.querySelectorAll('[data-view-link]').forEach((a) => {
+    a.addEventListener('click', (e) => { e.preventDefault(); navigate(a.dataset.viewLink); });
+  });
+  root.querySelector('#logout-btn').addEventListener('click', async () => {
+    try { await api.logout(); } catch {}
+    location.href = '/login';
+  });
 
   return root;
 }
 
-function adminTabs(active) {
-  return `
-    <div class="tabs">
-      <button type="button" class="tab ${active === 'admins' ? 'active' : ''}" data-tab="admins">Administrators</button>
-      <button type="button" class="tab ${active === 'apps' ? 'active' : ''}" data-tab="apps">SAML Applications</button>
-      <button type="button" class="tab ${active === 'idp' ? 'active' : ''}" data-tab="idp">IdP Setup</button>
-    </div>`;
+function setPageTitle(title) {
+  const t = document.querySelector('#page-title');
+  if (t) t.textContent = title;
 }
 
-function renderAdminPanel(me, tab = 'admins') {
-  const isSuper = me.employee?.role === 'SUPER_ADMIN';
-  const root = el(`
-    <div class="layout layout-wide">
-      ${nav(me, 'admin')}
-      <div class="card wide">
-        <h1>Admin Central</h1>
-        <p class="subtitle">Identity governance &amp; SAML application management</p>
-        ${adminTabs(tab)}
-        <div id="tab-content"></div>
-      </div>
-    </div>
-  `);
+function setContent(node) {
+  const c = document.querySelector('#content');
+  if (!c) return;
+  c.replaceChildren(node);
+}
 
-  bindLogout(root);
+/* ---------- Views ---------- */
 
-  const content = root.querySelector('#tab-content');
-
-  function showTab(name) {
-    history.replaceState(null, '', `/admin-central?tab=${name}`);
-    root.querySelectorAll('.tab').forEach((t) => {
-      t.classList.toggle('active', t.dataset.tab === name);
-    });
-    if (name === 'admins') renderAdminsTab();
-    else if (name === 'apps') renderAppsTab();
-    else renderIdpTab();
+async function viewDashboard() {
+  setPageTitle('Dashboard');
+  const wrap = el(`<div></div>`);
+  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
+  let d;
+  try { d = await api.dashboard(); }
+  catch (err) {
+    setContent(el(`<div class="alert alert-error">${esc(err.message)}</div>`));
+    return;
   }
 
-  root.querySelectorAll('.tab').forEach((btn) => {
-    btn.addEventListener('click', () => showTab(btn.dataset.tab));
+  const c = d.counts;
+  const sys = d.system;
+
+  const stats = `
+    <section class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-icon primary">◍</div>
+        <div class="stat-label">Total users</div>
+        <div class="stat-value">${c.employees}</div>
+        <div class="stat-sub">${c.activeEmployees} active</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon accent">⛨</div>
+        <div class="stat-label">SAML applications</div>
+        <div class="stat-value">${c.activeSamlApps}</div>
+        <div class="stat-sub">${c.samlApps} total registered</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon success">●</div>
+        <div class="stat-label">Active sessions</div>
+        <div class="stat-value">${c.activeSessions}</div>
+        <div class="stat-sub">across all users</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon info">⌖</div>
+        <div class="stat-label">SSO logins (24h)</div>
+        <div class="stat-value">${c.assertions24h}</div>
+        <div class="stat-sub">${c.assertions7d} in last 7 days</div>
+      </div>
+    </section>
+  `;
+
+  const sysRows = [
+    ['SAML IdP',          sys.samlEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-warning">Not configured</span>'],
+    ['Public base URL',   sys.publicBaseUrl ? esc(sys.publicBaseUrl) : '—'],
+    ['SAML metadata',     sys.metadataUrl ? `<a href="${esc(sys.metadataUrl)}" target="_blank">${esc(sys.metadataUrl)}</a>` : '—'],
+    ['Google OIDC',       sys.googleConfigured ? '<span class="badge badge-success">Configured</span>' : '<span class="badge badge-neutral">Not configured</span>'],
+    ['Zoho OIDC',         sys.zohoConfigured ? '<span class="badge badge-success">Configured</span>' : '<span class="badge badge-neutral">Not configured</span>'],
+    ['Local administrators', `${c.localAdmins}`],
+  ];
+
+  const recent = (d.recentAssertions && d.recentAssertions.length)
+    ? d.recentAssertions.map((r) => `
+        <tr>
+          <td>${fmtDate(r.ts)}</td>
+          <td class="cell-strong">${esc(r.sp_name)}</td>
+          <td>${esc(r.emp_id)}</td>
+          <td><span class="badge badge-info">${esc(r.binding)}</span></td>
+        </tr>`).join('')
+    : `<tr><td colspan="4" class="empty-state">No SSO assertions yet</td></tr>`;
+
+  const ilg = (d.ilgStates || []).map((s) => `
+    <div class="kv">
+      <div class="k">${esc(s.ilg_state)}</div>
+      <div class="v">${s.n}</div>
+    </div>`).join('') || '<div class="empty-state" style="padding:1rem">No data</div>';
+
+  wrap.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1>Dashboard</h1>
+        <p class="subtitle">Overview of your identity &amp; access management deployment</p>
+      </div>
+    </div>
+    ${stats}
+    <div class="grid-3">
+      <div class="card" style="grid-column: span 2; min-width:0">
+        <h2>Recent SSO activity</h2>
+        <p class="subtitle" style="margin-bottom:1rem">Latest SAML assertions issued by the IdP</p>
+        <table>
+          <thead><tr><th>Time</th><th>Application</th><th>User</th><th>Binding</th></tr></thead>
+          <tbody>${recent}</tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>System status</h2>
+        <p class="subtitle" style="margin-bottom:1rem">Identity provider configuration</p>
+        <div class="kv-list">
+          ${sysRows.map(([k, v]) => `<div class="kv"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')}
+        </div>
+      </div>
+      <div class="card">
+        <h2>User lifecycle states</h2>
+        <p class="subtitle" style="margin-bottom:1rem">Distribution of employees by ILG state</p>
+        <div class="kv-list">${ilg}</div>
+      </div>
+    </div>
+  `;
+
+  setContent(wrap);
+}
+
+async function viewApps() {
+  setPageTitle('My Applications');
+  const wrap = el(`<div></div>`);
+  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
+
+  let r;
+  try { r = await api.apps(); }
+  catch (err) {
+    setContent(el(`<div class="alert alert-error">${esc(err.message)}</div>`));
+    return;
+  }
+
+  const isAdmin = ROLES_ADMIN.includes(state.me.employee?.role);
+  const apps = r.data || [];
+
+  let body;
+  if (!r.samlEnabled) {
+    body = `
+      <div class="card">
+        <h2>SAML IdP not configured</h2>
+        <p class="subtitle">Single sign-on requires a SAML signing key/cert. ${isAdmin ? 'Open <a href="#" data-go="auth">Authentication</a> for setup steps.' : 'Contact your administrator.'}</p>
+      </div>`;
+  } else if (!apps.length) {
+    body = `
+      <div class="card">
+        <h2>No applications yet</h2>
+        <p class="subtitle">${isAdmin ? 'Register applications in <a href="#" data-go="saml-apps">SAML Applications</a>.' : 'Contact your administrator to onboard applications.'}</p>
+      </div>`;
+  } else {
+    body = `<div class="app-grid">
+      ${apps.map((a) => {
+        const fb = a.iconUrl
+          ? `<img class="app-icon" src="${esc(a.iconUrl)}" alt="" />`
+          : `<div class="app-icon app-icon-fallback">${esc((a.name||'?').charAt(0).toUpperCase())}</div>`;
+        return `<a class="app-tile" href="${esc(a.launchUrl)}" target="_blank" rel="noopener">${fb}<span class="app-name">${esc(a.name)}</span></a>`;
+      }).join('')}
+    </div>`;
+  }
+
+  wrap.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1>My Applications</h1>
+        <p class="subtitle">Single sign-on launcher for entitled enterprise apps</p>
+      </div>
+    </div>
+    ${body}
+  `;
+  wrap.querySelectorAll('[data-go]').forEach((a) => {
+    a.addEventListener('click', (e) => { e.preventDefault(); navigate(a.dataset.go); });
+  });
+  setContent(wrap);
+}
+
+async function viewSamlApps() {
+  setPageTitle('SAML Applications');
+  const wrap = el(`<div></div>`);
+  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
+
+  let resp, status;
+  try {
+    [resp, status] = await Promise.all([api.listSamlApps(), api.idpStatus().catch(() => ({}))]);
+  } catch (err) {
+    setContent(el(`<div class="alert alert-error">${esc(err.message)}</div>`));
+    return;
+  }
+
+  const apps = resp.data || [];
+  const isSuper = state.me.employee?.role === 'SUPER_ADMIN';
+
+  const tableBody = apps.length
+    ? apps.map((sp) => `
+        <tr>
+          <td class="cell-strong">${esc(sp.name)}</td>
+          <td><code>${esc(sp.slug)}</code></td>
+          <td class="truncate muted" title="${esc(sp.entity_id)}">${esc(sp.entity_id)}</td>
+          <td class="truncate muted" title="${esc(sp.acs_url)}">${esc(sp.acs_url)}</td>
+          <td>${sp.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Disabled</span>'}</td>
+          <td class="actions">${isSuper && sp.active ? `<button class="btn btn-sm btn-danger" data-sp-id="${esc(sp.id)}">Deactivate</button>` : ''}</td>
+        </tr>`).join('')
+    : `<tr><td colspan="6" class="empty-state"><div class="empty-icon">⛨</div>No SAML applications registered</td></tr>`;
+
+  wrap.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1>SAML Applications</h1>
+        <p class="subtitle">Service Providers registered with this Identity Provider</p>
+      </div>
+    </div>
+
+    ${status.metadataUrl ? `
+      <div class="alert alert-info" style="margin-bottom:1.5rem">
+        <div>
+          <div style="font-weight:500;margin-bottom:0.2rem">IdP metadata for SP onboarding</div>
+          <a href="${esc(status.metadataUrl)}" target="_blank">${esc(status.metadataUrl)}</a>
+        </div>
+      </div>` : ''}
+
+    ${isSuper ? `
+    <details class="card" style="margin-bottom:1rem" open>
+      <summary style="cursor:pointer;font-weight:600">Register new SAML application</summary>
+      <p class="subtitle" style="margin:0.5rem 0 1rem">Add a Service Provider so users can launch it via SSO.</p>
+      <div id="sp-error"></div>
+      <form id="sp-form">
+        <div class="grid-2">
+          <div class="field"><label>Application name</label><input name="name" required placeholder="e.g. Darwinbox HRMS" /></div>
+          <div class="field"><label>Slug (URL-safe)</label><input name="slug" required pattern="[a-z0-9-]+" placeholder="e.g. darwinbox" /></div>
+          <div class="field"><label>SP Entity ID</label><input name="entityId" required placeholder="https://app.example.com/saml/metadata" /></div>
+          <div class="field"><label>ACS URL (Assertion Consumer)</label><input name="acsUrl" type="url" required placeholder="https://app.example.com/saml/acs" /></div>
+          <div class="field"><label>SLO URL (optional)</label><input name="sloUrl" type="url" placeholder="https://app.example.com/saml/slo" /></div>
+          <div class="field"><label>Icon URL (optional)</label><input name="iconUrl" type="url" placeholder="https://..." /></div>
+        </div>
+        <button type="submit" class="btn btn-primary">Register application</button>
+      </form>
+    </details>` : ''}
+
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <strong>Registered applications</strong>
+        <span class="muted">${apps.length} total</span>
+      </div>
+      <table>
+        <thead><tr><th>Name</th><th>Slug</th><th>Entity ID</th><th>ACS URL</th><th>Status</th><th></th></tr></thead>
+        <tbody>${tableBody}</tbody>
+      </table>
+    </div>
+  `;
+
+  if (isSuper) {
+    wrap.querySelector('#sp-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = wrap.querySelector('#sp-error');
+      errEl.innerHTML = '';
+      const body = Object.fromEntries(new FormData(e.target));
+      if (!body.sloUrl) delete body.sloUrl;
+      if (!body.iconUrl) delete body.iconUrl;
+      try {
+        await api.createSamlApp(body);
+        errEl.innerHTML = `<div class="alert alert-success">Application registered.</div>`;
+        e.target.reset();
+        setTimeout(() => viewSamlApps(), 600);
+      } catch (err) {
+        errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    });
+  }
+
+  wrap.querySelectorAll('[data-sp-id]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Deactivate this application?')) return;
+      try { await api.deactivateSamlApp(btn.dataset.spId); viewSamlApps(); }
+      catch (err) { alert(err.message); }
+    });
   });
 
-  async function renderAdminsTab() {
-    content.innerHTML = `
-      ${isSuper ? `
-      <h2 class="section-title">Create local administrator</h2>
-      <div id="create-error"></div>
-      <form id="create-admin-form">
+  setContent(wrap);
+}
+
+async function viewUsers() {
+  setPageTitle('Users');
+  const wrap = el(`<div></div>`);
+  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
+
+  async function load(q = '', stateFilter = '') {
+    let r;
+    try { r = await api.listUsers(q, stateFilter); }
+    catch (err) {
+      wrap.querySelector('#users-table').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      return;
+    }
+    const rows = r.data || [];
+    const html = rows.length ? rows.map((u) => `
+      <tr>
+        <td>
+          <div style="display:flex;align-items:center;gap:0.6rem">
+            <span class="avatar" style="width:30px;height:30px;font-size:0.7rem">${esc(initials(u.full_name))}</span>
+            <div>
+              <div class="cell-strong">${esc(u.full_name)}</div>
+              <div class="muted" style="font-size:0.75rem">${esc(u.emp_id)}</div>
+            </div>
+          </div>
+        </td>
+        <td>${esc(u.email_corp)}</td>
+        <td>${esc(u.dept_id || '—')}</td>
+        <td>${esc(u.employment_type || '—')}</td>
+        <td>${ilgBadge(u.ilg_state)}</td>
+        <td>${u.admin_role ? `<span class="badge badge-info">${esc(u.admin_role)}</span>` : '<span class="muted">—</span>'}</td>
+        <td class="muted">${fmtDate(u.last_login_at)}</td>
+      </tr>
+    `).join('') : `<tr><td colspan="7" class="empty-state"><div class="empty-icon">◍</div>No users found</td></tr>`;
+    wrap.querySelector('#users-table tbody').innerHTML = html;
+    wrap.querySelector('#users-count').textContent = `${r.total} total`;
+  }
+
+  wrap.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1>Users</h1>
+        <p class="subtitle">Employees synced from HRMS, plus local IdP administrators</p>
+      </div>
+    </div>
+    <div class="table-wrap" id="users-table">
+      <div class="table-toolbar">
+        <div class="search-input">
+          <input id="user-search" type="search" placeholder="Search by name, email, employee ID…" />
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center">
+          <select id="state-filter" class="btn btn-secondary" style="padding:0.45rem 0.7rem">
+            <option value="">All states</option>
+            <option value="ACTIVE">Active</option>
+            <option value="REACTIVATED">Reactivated</option>
+            <option value="SUSPENDED_AUTO">Suspended (auto)</option>
+            <option value="PENDING_MGR">Pending manager</option>
+            <option value="ESCALATED_HRBP">Escalated HRBP</option>
+            <option value="DEPARTED">Departed</option>
+            <option value="DEPROVISIONED">Deprovisioned</option>
+          </select>
+          <span id="users-count" class="muted"></span>
+        </div>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Name</th><th>Email</th><th>Department</th><th>Type</th><th>State</th><th>Admin role</th><th>Last login</th>
+        </tr></thead>
+        <tbody><tr><td colspan="7" class="loading-row"><span class="spinner"></span></td></tr></tbody>
+      </table>
+    </div>
+  `;
+
+  let timer;
+  const debounce = (fn) => (...a) => { clearTimeout(timer); timer = setTimeout(() => fn(...a), 250); };
+  const search = wrap.querySelector('#user-search');
+  const filter = wrap.querySelector('#state-filter');
+  const reload = () => load(search.value, filter.value);
+  search.addEventListener('input', debounce(reload));
+  filter.addEventListener('change', reload);
+
+  setContent(wrap);
+  load();
+}
+
+async function viewAdmins() {
+  setPageTitle('Administrators');
+  const wrap = el(`<div></div>`);
+  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
+
+  async function loadTable() {
+    let r;
+    try { r = await api.listLocalAdmins(); }
+    catch (err) {
+      wrap.querySelector('#admins-tbody').innerHTML = `<tr><td colspan="5"><div class="alert alert-error">${esc(err.message)}</div></td></tr>`;
+      return;
+    }
+    const rows = r.data || [];
+    wrap.querySelector('#admins-tbody').innerHTML = rows.length ? rows.map((a) => `
+      <tr>
+        <td class="cell-strong">${esc(a.email)}</td>
+        <td><span class="badge badge-info">${esc(a.role)}</span></td>
+        <td>${a.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
+        <td class="muted">${fmtDate(a.last_login_at)}</td>
+        <td class="actions">${a.active ? `<button class="btn btn-sm btn-danger" data-id="${a.id}">Deactivate</button>` : ''}</td>
+      </tr>
+    `).join('') : `<tr><td colspan="5" class="empty-state">No local administrators</td></tr>`;
+
+    wrap.querySelectorAll('[data-id]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Deactivate this administrator?')) return;
+        try { await api.deactivateAdmin(btn.dataset.id); loadTable(); }
+        catch (err) { alert(err.message); }
+      });
+    });
+  }
+
+  wrap.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1>Administrators</h1>
+        <p class="subtitle">Local accounts that can access this IdP console</p>
+      </div>
+    </div>
+    <details class="card" style="margin-bottom:1rem">
+      <summary style="cursor:pointer;font-weight:600">Create local administrator</summary>
+      <p class="subtitle" style="margin:0.5rem 0 1rem">Use sparingly. Prefer Google/Zoho SSO for employees.</p>
+      <div id="ca-error"></div>
+      <form id="ca-form">
         <div class="grid-2">
           <div class="field"><label>Full name</label><input name="fullName" required /></div>
           <div class="field"><label>Email</label><input name="email" type="email" required /></div>
@@ -290,219 +681,277 @@ function renderAdminPanel(me, tab = 'admins') {
             </select>
           </div>
         </div>
-        <button type="submit" class="btn btn-primary btn-inline">Create administrator</button>
-      </form>` : '<p class="subtitle">Only SUPER_ADMIN can create new administrators.</p>'}
-      <h2 class="section-title">Local administrators</h2>
-      <div id="admin-table">Loading…</div>`;
-
-    async function loadTable() {
-      const tableEl = content.querySelector('#admin-table');
-      try {
-        const { data } = await api.listLocalAdmins();
-        if (!data.length) {
-          tableEl.innerHTML = '<p class="subtitle">No local administrators yet.</p>';
-          return;
-        }
-        tableEl.innerHTML = `
-          <table>
-            <thead><tr><th>Email</th><th>Role</th><th>Status</th><th>Last login</th>${isSuper ? '<th></th>' : ''}</tr></thead>
-            <tbody>
-              ${data.map((a) => `
-                <tr>
-                  <td>${esc(a.email)}</td>
-                  <td><span class="badge">${esc(a.role)}</span></td>
-                  <td>${a.active ? 'Active' : 'Inactive'}</td>
-                  <td>${esc(a.last_login_at || '—')}</td>
-                  ${isSuper ? `<td>${a.active ? `<button class="btn btn-sm" data-id="${a.id}">Deactivate</button>` : ''}</td>` : ''}
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>`;
-        tableEl.querySelectorAll('[data-id]').forEach((btn) => {
-          btn.addEventListener('click', async () => {
-            if (!confirm('Deactivate this administrator?')) return;
-            await api.deactivateAdmin(btn.dataset.id);
-            loadTable();
-          });
-        });
-      } catch (err) {
-        tableEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      }
-    }
-
-    content.querySelector('#create-admin-form')?.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const errEl = content.querySelector('#create-error');
-      errEl.innerHTML = '';
-      try {
-        await api.createLocalAdmin(Object.fromEntries(fd));
-        errEl.innerHTML = `<div class="alert alert-success">Administrator created.</div>`;
-        e.target.reset();
-        loadTable();
-      } catch (err) {
-        errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      }
-    });
-
-    loadTable();
-  }
-
-  async function renderAppsTab() {
-    if (!isSuper) {
-      content.innerHTML = '<p class="subtitle">Only SUPER_ADMIN can manage SAML applications.</p>';
-      return;
-    }
-
-    content.innerHTML = `
-      <h2 class="section-title">Register SAML application</h2>
-      <div id="sp-error"></div>
-      <form id="create-sp-form">
-        <div class="grid-2">
-          <div class="field"><label>Application name</label><input name="name" required placeholder="e.g. Darwinbox HRMS" /></div>
-          <div class="field"><label>Slug (URL-safe)</label><input name="slug" required pattern="[a-z0-9-]+" placeholder="e.g. darwinbox" /></div>
-          <div class="field"><label>SP Entity ID</label><input name="entityId" required placeholder="https://app.example.com/saml/metadata" /></div>
-          <div class="field"><label>ACS URL (Assertion Consumer)</label><input name="acsUrl" type="url" required placeholder="https://app.example.com/saml/acs" /></div>
-          <div class="field"><label>SLO URL (optional)</label><input name="sloUrl" type="url" placeholder="https://app.example.com/saml/slo" /></div>
-          <div class="field"><label>Icon URL (optional)</label><input name="iconUrl" type="url" placeholder="https://..." /></div>
-        </div>
-        <button type="submit" class="btn btn-primary btn-inline">Register application</button>
+        <button type="submit" class="btn btn-primary">Create administrator</button>
       </form>
-      <h2 class="section-title">Registered applications</h2>
-      <div id="sp-table">Loading…</div>`;
+    </details>
+    <div class="table-wrap">
+      <div class="table-toolbar"><strong>Local administrators</strong></div>
+      <table>
+        <thead><tr><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th></th></tr></thead>
+        <tbody id="admins-tbody"><tr><td colspan="5" class="loading-row"><span class="spinner"></span></td></tr></tbody>
+      </table>
+    </div>
+  `;
 
-    async function loadSpTable() {
-      const tableEl = content.querySelector('#sp-table');
-      try {
-        const { data } = await api.listSamlApps();
-        if (!data.length) {
-          tableEl.innerHTML = '<p class="subtitle">No SAML applications registered. Add one above — users will see entitled apps on My Apps.</p>';
-          return;
-        }
-        tableEl.innerHTML = `
-          <table>
-            <thead><tr><th>Name</th><th>Slug</th><th>Entity ID</th><th>ACS URL</th><th>Status</th><th></th></tr></thead>
-            <tbody>
-              ${data.map((sp) => `
-                <tr>
-                  <td>${esc(sp.name)}</td>
-                  <td><code>${esc(sp.slug)}</code></td>
-                  <td class="truncate" title="${esc(sp.entity_id)}">${esc(sp.entity_id)}</td>
-                  <td class="truncate" title="${esc(sp.acs_url)}">${esc(sp.acs_url)}</td>
-                  <td>${sp.active ? '<span class="badge">Active</span>' : 'Inactive'}</td>
-                  <td>${sp.active ? `<button class="btn btn-sm" data-sp-id="${esc(sp.id)}">Deactivate</button>` : ''}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>`;
-        tableEl.querySelectorAll('[data-sp-id]').forEach((btn) => {
-          btn.addEventListener('click', async () => {
-            if (!confirm('Deactivate this application?')) return;
-            await api.deactivateSamlApp(btn.dataset.spId);
-            loadSpTable();
-          });
-        });
-      } catch (err) {
-        tableEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      }
-    }
-
-    content.querySelector('#create-sp-form')?.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const errEl = content.querySelector('#sp-error');
-      errEl.innerHTML = '';
-      const body = Object.fromEntries(fd);
-      if (!body.sloUrl) delete body.sloUrl;
-      if (!body.iconUrl) delete body.iconUrl;
-      try {
-        await api.createSamlApp(body);
-        errEl.innerHTML = `<div class="alert alert-success">Application registered. Users can launch it from My Apps.</div>`;
-        e.target.reset();
-        loadSpTable();
-      } catch (err) {
-        errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      }
-    });
-
-    loadSpTable();
-  }
-
-  async function renderIdpTab() {
-    content.innerHTML = '<p class="subtitle">Loading IdP status…</p>';
+  wrap.querySelector('#ca-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = wrap.querySelector('#ca-error');
+    errEl.innerHTML = '';
     try {
-      const status = await api.idpStatus();
-      content.innerHTML = `
-        <h2 class="section-title">SAML Identity Provider</h2>
-        <div class="status-grid">
-          <div class="status-card">
-            <div class="status-label">SAML IdP</div>
-            <div class="status-value ${status.samlEnabled ? 'ok' : 'warn'}">${status.samlEnabled ? 'Enabled' : 'Not configured'}</div>
-          </div>
-          <div class="status-card">
-            <div class="status-label">Public base URL</div>
-            <div class="status-value">${esc(status.publicBaseUrl || '—')}</div>
-          </div>
-          <div class="status-card">
-            <div class="status-label">Entity ID</div>
-            <div class="status-value truncate">${esc(status.entityId || '—')}</div>
-          </div>
-        </div>
-        ${status.metadataUrl ? `
-          <p class="subtitle idp-meta">
-            IdP metadata (give to every SAML app admin):
-            <a href="${esc(status.metadataUrl)}" target="_blank">${esc(status.metadataUrl)}</a>
-          </p>` : ''}
-        ${!status.samlEnabled ? `
-          <div class="alert alert-error idp-alert">
-            SAML keys missing. Run on server:<br>
-            <code>bash scripts/gen-saml-dev-keys.sh && nano .env</code><br>
-            Set SAML_IDP_PRIVATE_KEY_PEM and SAML_IDP_CERT_PEM, then restart API.
-          </div>` : `
-          <p class="subtitle idp-meta">
-            SSO endpoints: <code>/saml/sso</code> · Launch: <code>/saml/launch/{slug}</code>
-          </p>`}
-        <h2 class="section-title">OAuth / OIDC login</h2>
-        <p class="subtitle">Google: <code>/auth/google</code> · Zoho: <code>/auth/zoho</code></p>
-        <p class="subtitle">Configure GOOGLE_CLIENT_ID / ZOHO_CLIENT_ID in <code>.env</code> for corporate login.</p>`;
+      await api.createLocalAdmin(Object.fromEntries(new FormData(e.target)));
+      errEl.innerHTML = `<div class="alert alert-success">Administrator created.</div>`;
+      e.target.reset();
+      loadTable();
     } catch (err) {
-      content.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
     }
-  }
+  });
 
-  showTab(tab);
-  return root;
+  setContent(wrap);
+  loadTable();
 }
 
-async function main() {
-  const app = document.getElementById('app');
-  const path = route();
+async function viewAuth() {
+  setPageTitle('Authentication');
+  const wrap = el(`<div></div>`);
+  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
 
-  if (path === '/login') {
-    app.replaceChildren(renderLogin());
+  let s;
+  try { s = await api.idpStatus(); }
+  catch (err) {
+    setContent(el(`<div class="alert alert-error">${esc(err.message)}</div>`));
     return;
   }
 
-  let me = null;
+  wrap.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1>Authentication</h1>
+        <p class="subtitle">SAML Identity Provider and OIDC connection status</p>
+      </div>
+    </div>
+
+    <div class="grid-3">
+      <div class="card">
+        <h2>SAML 2.0 Identity Provider</h2>
+        <p class="subtitle" style="margin-bottom:1rem">Issues SAML assertions to registered Service Providers</p>
+        <div class="kv-list">
+          <div class="kv"><div class="k">Status</div><div class="v">${s.samlEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-warning">Not configured</span>'}</div></div>
+          <div class="kv"><div class="k">Public base URL</div><div class="v">${esc(s.publicBaseUrl || '—')}</div></div>
+          <div class="kv"><div class="k">Entity ID</div><div class="v truncate" title="${esc(s.entityId || '')}">${esc(s.entityId || '—')}</div></div>
+          <div class="kv"><div class="k">Metadata</div><div class="v">${s.metadataUrl ? `<a href="${esc(s.metadataUrl)}" target="_blank">${esc(s.metadataUrl)}</a>` : '—'}</div></div>
+        </div>
+        ${!s.samlEnabled ? `
+          <div class="alert alert-warning" style="margin-top:1rem">
+            <div>
+              <div style="font-weight:500;margin-bottom:0.3rem">SAML keys missing</div>
+              On the dev server, run <code>bash scripts/gen-saml-dev-keys.sh</code>, paste <code>SAML_IDP_PRIVATE_KEY_PEM</code> and <code>SAML_IDP_CERT_PEM</code> into <code>.env</code>, then restart the API.
+            </div>
+          </div>` : ''}
+      </div>
+
+      <div class="card">
+        <h2>OIDC providers</h2>
+        <p class="subtitle" style="margin-bottom:1rem">Federated login for end users</p>
+        <div class="kv-list">
+          <div class="kv"><div class="k">Google</div><div class="v"><a href="/auth/google">/auth/google</a></div></div>
+          <div class="kv"><div class="k">Zoho</div><div class="v"><a href="/auth/zoho">/auth/zoho</a></div></div>
+        </div>
+        <p class="subtitle" style="margin-top:1rem">Configure <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>, <code>ZOHO_CLIENT_ID</code> in <code>.env</code>.</p>
+      </div>
+
+      <div class="card">
+        <h2>Local password login</h2>
+        <p class="subtitle" style="margin-bottom:1rem">Email + password administrators</p>
+        <div class="kv-list">
+          <div class="kv"><div class="k">Endpoint</div><div class="v"><code>POST /auth/local/login</code></div></div>
+          <div class="kv"><div class="k">Master admin</div><div class="v">From <code>MASTER_ADMIN_EMAIL</code> in <code>.env</code></div></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  setContent(wrap);
+}
+
+async function viewAudit() {
+  setPageTitle('Audit Logs');
+  const wrap = el(`<div></div>`);
+  wrap.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1>Audit Logs</h1>
+        <p class="subtitle">SSO assertions and tamper-evident system audit trail</p>
+      </div>
+    </div>
+    <div class="tabs">
+      <button class="tab active" data-tab="saml">SSO assertions</button>
+      <button class="tab" data-tab="system">System audit</button>
+    </div>
+    <div id="audit-content"><div class="loading-row"><span class="spinner"></span></div></div>
+  `;
+  setContent(wrap);
+
+  async function loadSaml() {
+    const target = wrap.querySelector('#audit-content');
+    target.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.samlAudit();
+      const rows = r.data || [];
+      const body = rows.length ? rows.map((r) => `
+        <tr>
+          <td class="muted">${fmtDate(r.ts)}</td>
+          <td class="cell-strong">${esc(r.sp_name)}</td>
+          <td>${esc(r.emp_name || r.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(r.emp_email || '')}</span></td>
+          <td><span class="badge badge-info">${esc(r.binding)}</span></td>
+          <td class="muted truncate" title="${esc(r.relay_state || '')}">${esc(r.relay_state || '—')}</td>
+        </tr>`).join('') : `<tr><td colspan="5" class="empty-state"><div class="empty-icon">⌖</div>No SSO activity yet</td></tr>`;
+      target.innerHTML = `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Application</th><th>User</th><th>Binding</th><th>Relay state</th></tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>`;
+    } catch (err) {
+      target.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
+  async function loadSystem() {
+    const target = wrap.querySelector('#audit-content');
+    target.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.systemAudit();
+      const rows = r.data || [];
+      const body = rows.length ? rows.map((r) => `
+        <tr>
+          <td class="muted">${fmtDate(r.ts)}</td>
+          <td class="cell-strong">${esc(r.actor)}</td>
+          <td><code>${esc(r.action)}</code></td>
+          <td>${esc(r.target)}</td>
+        </tr>`).join('') : `<tr><td colspan="4" class="empty-state">No audit entries yet</td></tr>`;
+      target.innerHTML = `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>`;
+    } catch (err) {
+      target.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
+  wrap.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      wrap.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
+      if (tab.dataset.tab === 'saml') loadSaml();
+      else loadSystem();
+    });
+  });
+  loadSaml();
+}
+
+async function viewSettings() {
+  setPageTitle('Settings');
+  const me = state.me;
+  const wrap = el(`
+    <div>
+      <div class="page-header">
+        <div>
+          <h1>Account</h1>
+          <p class="subtitle">Your profile and active session</p>
+        </div>
+      </div>
+      <div class="grid-3">
+        <div class="card">
+          <h2>Profile</h2>
+          <div class="kv-list" style="margin-top:1rem">
+            <div class="kv"><div class="k">Full name</div><div class="v">${esc(me.employee?.full_name || '—')}</div></div>
+            <div class="kv"><div class="k">Email</div><div class="v">${esc(me.session?.email || '—')}</div></div>
+            <div class="kv"><div class="k">Employee ID</div><div class="v"><code>${esc(me.employee?.emp_id || '—')}</code></div></div>
+            <div class="kv"><div class="k">Role</div><div class="v"><span class="badge badge-info">${esc(me.employee?.role || 'USER')}</span></div></div>
+            <div class="kv"><div class="k">Department</div><div class="v">${esc(me.employee?.dept_id || '—')}</div></div>
+            <div class="kv"><div class="k">ILG state</div><div class="v">${ilgBadge(me.employee?.ilg_state)}</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Active session</h2>
+          <div class="kv-list" style="margin-top:1rem">
+            <div class="kv"><div class="k">Session ID</div><div class="v"><code class="truncate" title="${esc(me.session?.sessionId || '')}">${esc(me.session?.sessionId || '—')}</code></div></div>
+            <div class="kv"><div class="k">Issuer</div><div class="v">${esc(me.session?.iss || '—')}</div></div>
+            <div class="kv"><div class="k">Expires</div><div class="v">${fmtDate(me.session?.expiresAt)}</div></div>
+          </div>
+          <button class="btn btn-danger" id="end-session" style="margin-top:1rem">End this session</button>
+        </div>
+        <div class="card">
+          <h2>Capabilities</h2>
+          <div class="kv-list" style="margin-top:1rem">
+            ${Object.entries(me.capabilities || {}).map(([k, v]) => `
+              <div class="kv"><div class="k">${esc(k)}</div><div class="v">${typeof v === 'boolean' ? (v ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-neutral">No</span>') : esc(v ?? '—')}</div></div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  `);
+  wrap.querySelector('#end-session').addEventListener('click', async () => {
+    try { await api.logout(); } catch {}
+    location.href = '/login';
+  });
+  setContent(wrap);
+}
+
+/* ---------- Router ---------- */
+function navigate(view) {
+  state.view = view;
+  document.querySelectorAll('.nav-item').forEach((b) => {
+    b.classList.toggle('active', b.dataset.view === view);
+  });
+  history.replaceState(null, '', view === 'dashboard' ? '/' : `/?v=${view}`);
+
+  switch (view) {
+    case 'dashboard': return viewDashboard();
+    case 'apps':      return viewApps();
+    case 'saml-apps': return viewSamlApps();
+    case 'users':     return viewUsers();
+    case 'admins':    return viewAdmins();
+    case 'auth':      return viewAuth();
+    case 'audit':     return viewAudit();
+    case 'settings':  return viewSettings();
+    default:          return viewDashboard();
+  }
+}
+
+async function main() {
+  const root = document.getElementById('app');
+  const path = location.pathname.replace(/\/$/, '') || '/';
+
+  if (path === '/login') {
+    root.replaceChildren(renderLogin());
+    return;
+  }
+
   try {
-    me = await api.me();
+    state.me = await api.me();
   } catch {
     location.href = '/login';
     return;
   }
 
+  // Default landing: admins → dashboard, regular users → apps
+  const isAdmin = ROLES_ADMIN.includes(state.me.employee?.role);
+  const params = new URLSearchParams(location.search);
+  const initialView = params.get('v') || (isAdmin ? 'dashboard' : 'apps');
+
+  // Restrict admin-central legacy URL
   if (path === '/admin-central') {
-    if (!['ADMIN', 'SUPER_ADMIN'].includes(me.employee?.role)) {
-      location.href = '/';
-      return;
-    }
-    const tab = new URLSearchParams(location.search).get('tab') || 'admins';
-    app.replaceChildren(renderAdminPanel(me, tab));
-    return;
+    if (!isAdmin) { location.href = '/'; return; }
   }
 
-  const home = await renderHome(me);
-  app.replaceChildren(home);
+  root.replaceChildren(buildShell(initialView));
+  navigate(initialView);
 }
 
 main();
