@@ -38,7 +38,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
     queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM local_accounts WHERE active = 1', []).catch(() => ({ n: 0 })),
     queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM saml_service_providers', []).catch(() => ({ n: 0 })),
     queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM saml_service_providers WHERE active = 1', []).catch(() => ({ n: 0 })),
-    queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM lilg_sessions WHERE expires_at > UTC_TIMESTAMP() AND revoked_at IS NULL', []).catch(() => ({ n: 0 })),
+    queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM idp_sessions WHERE expires_at > UTC_TIMESTAMP() AND revoked_at IS NULL', []).catch(() => ({ n: 0 })),
     queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM saml_assertion_log WHERE ts > DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 DAY)', []).catch(() => ({ n: 0 })),
     queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM saml_assertion_log WHERE ts > DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY)', []).catch(() => ({ n: 0 })),
     queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM access_request_approvals WHERE decision = 'PENDING'", []).catch(() => ({ n: 0 })),
@@ -126,15 +126,15 @@ router.get('/timeseries', asyncHandler(async (_req: Request, res: Response) => {
 router.get('/sessions-insight', asyncHandler(async (_req: Request, res: Response) => {
   const [active, expired, revoked] = await Promise.all([
     queryOne<{ n: number }>(
-      'SELECT COUNT(*) AS n FROM lilg_sessions WHERE expires_at > UTC_TIMESTAMP() AND revoked_at IS NULL',
+      'SELECT COUNT(*) AS n FROM idp_sessions WHERE expires_at > UTC_TIMESTAMP() AND revoked_at IS NULL',
       [],
     ).catch(() => ({ n: 0 })),
     queryOne<{ n: number }>(
-      'SELECT COUNT(*) AS n FROM lilg_sessions WHERE expires_at <= UTC_TIMESTAMP() AND revoked_at IS NULL',
+      'SELECT COUNT(*) AS n FROM idp_sessions WHERE expires_at <= UTC_TIMESTAMP() AND revoked_at IS NULL',
       [],
     ).catch(() => ({ n: 0 })),
     queryOne<{ n: number }>(
-      'SELECT COUNT(*) AS n FROM lilg_sessions WHERE revoked_at IS NOT NULL',
+      'SELECT COUNT(*) AS n FROM idp_sessions WHERE revoked_at IS NOT NULL',
       [],
     ).catch(() => ({ n: 0 })),
   ]);

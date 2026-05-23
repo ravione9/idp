@@ -30,6 +30,7 @@ import adminAuditRouter from './api/admin-audit.js';
 import adminUsersRouter from './api/admin-users.js';
 import meActionsRouter from './api/me-actions.js';
 import igaRouter from './api/iga.js';
+import adminLifecycleRouter from './api/admin-lifecycle.js';
 
 // Auth
 import {
@@ -126,6 +127,7 @@ app.use('/api/admin/saml-apps', adminSamlAppsRouter);
 app.use('/api/admin/dashboard', adminDashboardRouter);
 app.use('/api/admin/audit', adminAuditRouter);
 app.use('/api/admin/users', adminUsersRouter);
+app.use('/api/admin/users', adminLifecycleRouter);
 app.use('/api/iga', igaRouter);
 
 // ---------------------------------------------------------------------------
@@ -183,7 +185,7 @@ async function main(): Promise<void> {
   }
 
   const server = app.listen(config.app.port, () => {
-    logger.info({ port: config.app.port, env: config.app.nodeEnv }, 'LILG API server started');
+    logger.info({ port: config.app.port, env: config.app.nodeEnv }, 'IDP API server started');
   });
 
   // ---------------------------------------------------------------------------
@@ -227,6 +229,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  logger.fatal({ err }, 'Failed to start LILG API server');
+  logger.fatal({ err }, 'Failed to start IDP API server');
   process.exit(1);
 });

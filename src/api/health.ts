@@ -132,7 +132,7 @@ router.get('/metrics', async (_req: Request, res: Response): Promise<void> => {
 
   // Active sessions count from Redis
   try {
-    const keys = await redis.keys('lilg:session:*');
+    const keys = await redis.keys('idp:session:*');
     lines.push('# HELP lilg_active_sessions Number of active sessions in Redis');
     lines.push('# TYPE lilg_active_sessions gauge');
     lines.push(`lilg_active_sessions ${keys.length}`);

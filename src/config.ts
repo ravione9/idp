@@ -68,7 +68,7 @@ const ConfigSchema = z.object({
   PORT: envInt.default('8080'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
-  LILG_DETERMINISTIC: envBool.default('false'),
+  IDP_DETERMINISTIC: envBool.default('false'),
 
   // Outbox worker
   OUTBOX_LEADER_TTL_MS: envInt.default('30000'),
@@ -131,12 +131,12 @@ try {
   }
 } catch (err) {
   if (err instanceof z.ZodError) {
-    console.error('[LILG] Configuration validation failed:');
+    console.error('[IDP] Configuration validation failed:');
     for (const issue of err.issues) {
       console.error(`  ${issue.path.join('.')}: ${issue.message}`);
     }
   } else {
-    console.error('[LILG] Unknown configuration error:', err);
+    console.error('[IDP] Unknown configuration error:', err);
   }
   process.exit(1);
 }
@@ -193,7 +193,7 @@ export const config = {
     port: parsed.PORT,
     nodeEnv: parsed.NODE_ENV,
     logLevel: parsed.LOG_LEVEL,
-    deterministic: parsed.LILG_DETERMINISTIC,
+    deterministic: parsed.IDP_DETERMINISTIC,
     outboxLeaderTtlMs: parsed.OUTBOX_LEADER_TTL_MS,
     outboxPollIntervalMs: parsed.OUTBOX_POLL_INTERVAL_MS,
     circuitBreakerErrorThreshold: parsed.CIRCUIT_BREAKER_ERROR_THRESHOLD,

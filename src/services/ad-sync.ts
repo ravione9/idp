@@ -1,0 +1,224 @@
+/**
+ * AD Sync Service
+ * ---------------
+ * Full reconciliation sync between the IDP employee database and Active Directory.
+ * - Provisions new AD users for ACTIVE employees with no AD identity link
+ * - Disables AD accounts for SUSPENDED/TERMINATED employees
+ * - Re-enables AD accounts for ACTIVE employees whose link is DISABLED
+ * - Records all runs in connector_runs table
+ */
+
+import crypto from 'crypto';
+import { ADAdapter } from '../adapters/ad-adapter.js';
+import { query, queryOne, execute } from '../db/connection.js';
+import { config } from '../config.js';
+import { redis } from '../auth/session-store.js';
+import logger from '../utils/logger.js';
+import { v4 as uuidv4 } from 'uuid';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+export interface SyncResult {
+  runId: string;
+  connectorId: string;
+  itemsProcessed: number;
+  itemsSucceeded: number;
+  itemsFailed: number;
+  errors: string[];
+}
+
+interface EmployeeRow {
+  emp_id: string;
+  full_name: string;
+  email_corp: string;
+  department: string | null;
+  title: string | null;
+  role: string;
+  ilg_state: string;
+}
+
+interface IdentityLinkRow {
+  id: number;
+  external_id: string;
+  status: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function generateSamAccountName(fullName: string): string {
+  const parts = fullName.toLowerCase().replace(/[^a-z\s]/g, '').trim().split(/\s+/);
+  const first = parts[0]?.slice(0, 10) ?? 'user';
+  const last = parts[parts.length - 1]?.slice(0, 9) ?? '';
+  return `${first}.${last}`.slice(0, 20);
+}
+
+function generateTempPassword(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
+  let pw = '';
+  const buf = crypto.randomBytes(16);
+  for (let i = 0; i < 16; i++) {
+    pw += chars[buf[i] % chars.length];
+  }
+  return pw;
+}
+
+// ---------------------------------------------------------------------------
+// Main sync function
+// ---------------------------------------------------------------------------
+export async function runAdSync(connectorId: string): Promise<SyncResult> {
+  const runId = uuidv4();
+
+  // Create connector_runs record
+  await execute(
+    `INSERT INTO connector_runs
+       (id, connector_id, run_type, status, started_at, items_processed, items_succeeded, items_failed)
+     VALUES (?, ?, 'INCREMENTAL', 'RUNNING', UTC_TIMESTAMP(), 0, 0, 0)`,
+    [runId, connectorId],
+  );
+
+  const adapter = new ADAdapter(
+    redis,
+    config.ad.url,
+    config.ad.bindDn,
+    config.ad.bindPassword,
+    config.ad.baseDn,
+  );
+
+  let itemsProcessed = 0;
+  let itemsSucceeded = 0;
+  let itemsFailed = 0;
+  const errors: string[] = [];
+
+  try {
+    await adapter.connect();
+
+    // Fetch all employees
+    const employees = await query<EmployeeRow>(
+      `SELECT emp_id, full_name, email_corp, department, title, role, ilg_state
+         FROM employees
+        ORDER BY emp_id`,
+      [],
+    );
+
+    logger.info({ connectorId, runId, count: employees.length }, 'AD sync: processing employees');
+
+    for (const emp of employees) {
+      itemsProcessed++;
+
+      try {
+        // Look up existing identity link
+        const link = await queryOne<IdentityLinkRow>(
+          `SELECT id, external_id, status
+             FROM identity_links
+            WHERE emp_id = ? AND system = 'AD' AND status NOT IN ('DELETED')`,
+          [emp.emp_id],
+        );
+
+        const isActive = emp.ilg_state === 'ACTIVE';
+        const isInactive = emp.ilg_state === 'SUSPENDED' || emp.ilg_state === 'TERMINATED';
+
+        if (isActive && !link) {
+          // Provision new AD user
+          const sAMAccountName = generateSamAccountName(emp.full_name);
+          const tempPass = generateTempPassword();
+
+          const result = await adapter.createUser({
+            empId:          emp.emp_id,
+            fullName:       emp.full_name,
+            emailCorp:      emp.email_corp,
+            sAMAccountName,
+            department:     emp.department ?? '',
+            title:          emp.title ?? '',
+            targetOu:       'OU=Employees',
+            tempPassword:   tempPass,
+          });
+
+          if (result.success) {
+            await execute(
+              `INSERT INTO identity_links (emp_id, system, external_id, status, auth_kind, created_at)
+               VALUES (?, 'AD', ?, 'ACTIVE', 'LDAP', UTC_TIMESTAMP())`,
+              [emp.emp_id, sAMAccountName],
+            );
+            logger.info({ empId: emp.emp_id, sAMAccountName }, 'AD sync: user provisioned');
+            itemsSucceeded++;
+          } else {
+            throw new Error(result.error ?? 'createUser failed');
+          }
+        } else if (isInactive && link && link.status === 'ACTIVE') {
+          // Disable AD account
+          const result = await adapter.disable(link.external_id);
+          if (result.success) {
+            await execute(
+              `UPDATE identity_links SET status = 'DISABLED', updated_at = UTC_TIMESTAMP() WHERE id = ?`,
+              [link.id],
+            );
+            logger.info({ empId: emp.emp_id, externalId: link.external_id }, 'AD sync: user disabled');
+            itemsSucceeded++;
+          } else {
+            throw new Error(result.error ?? 'disable failed');
+          }
+        } else if (isActive && link && link.status === 'DISABLED') {
+          // Re-enable AD account
+          const result = await adapter.enable(link.external_id);
+          if (result.success) {
+            await execute(
+              `UPDATE identity_links SET status = 'ACTIVE', updated_at = UTC_TIMESTAMP() WHERE id = ?`,
+              [link.id],
+            );
+            logger.info({ empId: emp.emp_id, externalId: link.external_id }, 'AD sync: user re-enabled');
+            itemsSucceeded++;
+          } else {
+            throw new Error(result.error ?? 'enable failed');
+          }
+        } else {
+          // No action needed
+          itemsSucceeded++;
+        }
+      } catch (err) {
+        itemsFailed++;
+        const msg = `${emp.emp_id}: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        logger.error({ empId: emp.emp_id, err }, 'AD sync: per-employee error (non-fatal)');
+      }
+    }
+
+    await adapter.disconnect();
+  } catch (fatalErr) {
+    logger.error({ connectorId, runId, err: fatalErr }, 'AD sync: fatal error');
+    await execute(
+      `UPDATE connector_runs
+          SET status = 'FAILED', ended_at = UTC_TIMESTAMP(),
+              items_processed = ?, items_succeeded = ?, items_failed = ?,
+              error_summary = ?
+        WHERE id = ?`,
+      [itemsProcessed, itemsSucceeded, itemsFailed, String(fatalErr), runId],
+    );
+    throw fatalErr;
+  }
+
+  const finalStatus = itemsFailed > 0 ? 'PARTIAL' : 'SUCCESS';
+  const errorSummary = errors.length > 0 ? errors.slice(0, 10).join('; ') : null;
+
+  await execute(
+    `UPDATE connector_runs
+        SET status = ?, ended_at = UTC_TIMESTAMP(),
+            items_processed = ?, items_succeeded = ?, items_failed = ?,
+            error_summary = ?
+      WHERE id = ?`,
+    [finalStatus, itemsProcessed, itemsSucceeded, itemsFailed, errorSummary, runId],
+  );
+
+  await execute(
+    `UPDATE connectors SET last_sync_at = UTC_TIMESTAMP(), last_error = NULL WHERE id = ?`,
+    [connectorId],
+  );
+
+  logger.info(
+    { connectorId, runId, itemsProcessed, itemsSucceeded, itemsFailed, finalStatus },
+    'AD sync completed',
+  );
+
+  return { runId, connectorId, itemsProcessed, itemsSucceeded, itemsFailed, errors };
+}

@@ -10,8 +10,8 @@ import { query } from '../db/connection.js';
 import { redis } from './session-store.js';
 import type { LilgUser } from './types.js';
 
-export const COOKIE_NAME = 'lilg_sid';
-const SESSION_REDIS_PREFIX = 'lilg:session:';
+export const COOKIE_NAME = 'idp_sid';
+const SESSION_REDIS_PREFIX = 'idp:session:';
 
 export function signSessionId(sessionId: string): string {
   const hmac = crypto.createHmac('sha256', config.session.secret);
@@ -58,7 +58,7 @@ export async function createSession(params: {
   const expiresAt  = new Date(Date.now() + params.ttlHours * 3600 * 1000);
 
   await query(
-    `INSERT INTO lilg_sessions
+    `INSERT INTO idp_sessions
        (session_id, emp_id, iss, sub, email, role, created_at, last_active_at, expires_at, ip, user_agent)
      VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), ?, ?, ?)`,
     [sessionId, params.empId, params.iss, params.sub, params.email, params.role,

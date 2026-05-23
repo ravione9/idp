@@ -81,7 +81,7 @@ router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
   const rows = await query<Record<string, unknown>>(
     `SELECT session_id, iss, created_at, last_active_at, expires_at, ip, user_agent, revoked_at
-       FROM lilg_sessions
+       FROM idp_sessions
       WHERE emp_id = ? AND expires_at > UTC_TIMESTAMP() AND revoked_at IS NULL
       ORDER BY last_active_at DESC`,
     [user.empId],
@@ -105,7 +105,7 @@ router.delete('/sessions/:id', async (req: Request, res: Response): Promise<void
   }
 
   const row = await queryOne<{ session_id: string }>(
-    'SELECT session_id FROM lilg_sessions WHERE session_id = ? AND emp_id = ?',
+    'SELECT session_id FROM idp_sessions WHERE session_id = ? AND emp_id = ?',
     [id, user.empId],
   );
   if (!row) {
@@ -114,7 +114,7 @@ router.delete('/sessions/:id', async (req: Request, res: Response): Promise<void
   }
 
   await query(
-    'UPDATE lilg_sessions SET revoked_at = UTC_TIMESTAMP() WHERE session_id = ?',
+    'UPDATE idp_sessions SET revoked_at = UTC_TIMESTAMP() WHERE session_id = ?',
     [id],
   );
   await redis.del(`${SESSION_REDIS_PREFIX}${id}`);

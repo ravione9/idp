@@ -18,6 +18,10 @@ import { execute, queryOne } from '../db/connection.js';
 import { safeQuery } from '../db/safe-query.js';
 import logger from '../utils/logger.js';
 import { asyncHandler } from '../utils/async-handler.js';
+import { triggerConnectorSync } from '../services/connector-dispatcher.js';
+import { submitAccessRequest, processDecision } from '../services/access-request-workflow.js';
+import { createCampaign, submitReviewDecision } from '../services/access-review.js';
+import { evaluateSodForGrant } from '../services/sod-evaluator.js';
 
 const router = Router();
 
@@ -28,13 +32,6 @@ router.use(requireAuth);
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function notImplemented(res: Response, hint?: string): void {
-  res.status(501).json({
-    error: 'Not implemented',
-    hint:  hint ?? 'Service layer is being built; see ARCHITECTURE.md §14 Roadmap',
-  });
-}
-
 function paginate(req: Request, defaultLimit = 50, maxLimit = 200): { limit: number; offset: number } {
   const limit = Math.min(parseInt((req.query['limit'] as string) ?? String(defaultLimit), 10), maxLimit);
   const offset = parseInt((req.query['offset'] as string) ?? '0', 10);
@@ -149,9 +146,55 @@ router.get(
   }),
 );
 
-router.post('/connectors', requireRole('SUPER_ADMIN'), (_req, res) => {
-  notImplemented(res, 'Connector registration runs validation against the target system; service layer pending');
+const connectorSchema = z.object({
+  name:          z.string().min(1).max(150),
+  slug:          z.string().min(1).max(80).regex(/^[a-z0-9-]+$/),
+  connectorType: z.string().min(1).max(50),
+  direction:     z.enum(['INBOUND', 'OUTBOUND', 'BIDIRECTIONAL']).default('BIDIRECTIONAL'),
+  syncMode:      z.enum(['FULL', 'INCREMENTAL', 'RECONCILE']).default('INCREMENTAL'),
+  syncSchedule:  z.string().max(100).optional(),
+  configJson:    z.record(z.unknown()).optional(),
 });
+
+router.post(
+  '/connectors',
+  requireRole('SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = connectorSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const id = uuidv4();
+    try {
+      await execute(
+        `INSERT INTO connectors
+           (id, name, slug, connector_type, direction, sync_mode, sync_schedule,
+            status, config_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())`,
+        [
+          id,
+          parsed.data.name,
+          parsed.data.slug,
+          parsed.data.connectorType,
+          parsed.data.direction,
+          parsed.data.syncMode,
+          parsed.data.syncSchedule ?? null,
+          JSON.stringify(parsed.data.configJson ?? {}),
+        ],
+      );
+      logger.info({ id, slug: parsed.data.slug }, 'Connector registered');
+      res.status(201).json({ id, slug: parsed.data.slug });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Insert failed';
+      if (msg.includes('Duplicate')) {
+        res.status(409).json({ error: 'Slug already in use' });
+        return;
+      }
+      res.status(400).json({ error: msg });
+    }
+  }),
+);
 
 router.get(
   '/connectors/:id/runs',
@@ -174,7 +217,25 @@ router.get(
 router.post(
   '/connectors/:id/sync',
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  (_req, res) => notImplemented(res, 'Connector dispatcher pending — will enqueue an adapter_outbox job'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const connectorId = req.params['id']!;
+    const triggeredBy = req.user!.empId;
+    try {
+      const ref = await triggerConnectorSync(connectorId, triggeredBy);
+      res.json(ref);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === 'Connector not found') {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg === 'Connector is not active') {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      throw err;
+    }
+  }),
 );
 
 // ===========================================================================
@@ -265,13 +326,76 @@ router.get('/access-requests', asyncHandler(async (req: Request, res: Response) 
   res.json({ data: rows, limit, offset });
 }));
 
-router.post('/access-requests', (_req, res) => {
-  notImplemented(res, 'Approval-chain resolver and SoD pre-check pending');
+const accessRequestSchema = z.object({
+  targetEmpId:   z.string().min(1).max(20),
+  itemType:      z.enum(['ENTITLEMENT', 'ROLE', 'APP_ACCESS']),
+  itemIds:       z.array(z.string()).min(1),
+  justification: z.string().min(1).max(2000),
 });
 
-router.post('/access-requests/:id/decision', (_req, res) => {
-  notImplemented(res, 'Approval decision handler pending');
+router.post(
+  '/access-requests',
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = accessRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    try {
+      const reqId = await submitAccessRequest({
+        requesterEmpId: req.user!.empId,
+        targetEmpId:    parsed.data.targetEmpId,
+        itemType:       parsed.data.itemType,
+        itemIds:        parsed.data.itemIds,
+        justification:  parsed.data.justification,
+      });
+      res.status(201).json({ id: reqId });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('not found') || msg.includes('not active')) {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg.includes('SoD')) {
+        res.status(422).json({ error: msg, code: 'SOD_VIOLATION' });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
+
+const decisionSchema = z.object({
+  decision: z.enum(['APPROVE', 'REJECT']),
+  comment:  z.string().max(2000).optional(),
 });
+
+router.post(
+  '/access-requests/:id/decision',
+  asyncHandler(async (req: Request, res: Response) => {
+    const requestId = req.params['id']!;
+    const parsed = decisionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    try {
+      await processDecision(requestId, req.user!.empId, parsed.data.decision, parsed.data.comment);
+      res.json({ success: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('not found')) {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg.includes('not in PENDING_APPROVAL') || msg.includes('No pending approval')) {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
 
 // ===========================================================================
 // /access-reviews — certification campaigns
@@ -316,9 +440,73 @@ router.get('/access-reviews/me', asyncHandler(async (req: Request, res: Response
   res.json({ data: rows });
 }));
 
-router.post('/access-reviews', requireRole('ADMIN', 'SUPER_ADMIN'), (_req, res) => {
-  notImplemented(res, 'Campaign generator pending');
+const campaignSchema = z.object({
+  name:         z.string().min(1).max(200),
+  description:  z.string().max(2000).optional(),
+  scope:        z.enum(['ALL_USERS', 'APP_SPECIFIC', 'ROLE_SPECIFIC', 'HIGH_RISK']),
+  reviewerKind: z.enum(['MANAGER', 'APP_OWNER', 'ROLE_OWNER']),
+  startDate:    z.string().min(1),
+  endDate:      z.string().min(1),
+  appId:        z.string().optional(),
+  roleId:       z.string().optional(),
 });
+
+router.post(
+  '/access-reviews',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = campaignSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const campaignParams = {
+      name:         parsed.data.name,
+      scope:        parsed.data.scope,
+      reviewerKind: parsed.data.reviewerKind,
+      startDate:    parsed.data.startDate,
+      endDate:      parsed.data.endDate,
+      ...(parsed.data.description !== undefined ? { description: parsed.data.description } : {}),
+      ...(parsed.data.appId !== undefined ? { appId: parsed.data.appId } : {}),
+      ...(parsed.data.roleId !== undefined ? { roleId: parsed.data.roleId } : {}),
+    };
+    const campaignId = await createCampaign(campaignParams, req.user!.empId);
+    res.status(201).json({ id: campaignId });
+  }),
+);
+
+// POST /access-reviews/:id/items/:itemId/decision
+const reviewDecisionSchema = z.object({
+  decision: z.enum(['CERTIFY', 'REVOKE', 'EXCEPTION']),
+  comment:  z.string().max(2000).optional(),
+});
+
+router.post(
+  '/access-reviews/:id/items/:itemId/decision',
+  asyncHandler(async (req: Request, res: Response) => {
+    const { itemId } = req.params as { itemId: string };
+    const parsed = reviewDecisionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    try {
+      await submitReviewDecision(itemId, req.user!.empId, parsed.data.decision, parsed.data.comment);
+      res.json({ success: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('not found')) {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg.includes('does not match') || msg.includes('already decided')) {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
 
 // ===========================================================================
 // /sod-policies — Segregation of Duties
@@ -415,8 +603,101 @@ router.get(
   }),
 );
 
-router.post('/reports', requireRole('ADMIN', 'SUPER_ADMIN'), (_req, res) => {
-  notImplemented(res, 'Report generator pending');
+const reportSchema = z.object({
+  name:        z.string().min(1).max(200),
+  framework:   z.string().min(1).max(80),
+  periodStart: z.string().min(1),
+  periodEnd:   z.string().min(1),
 });
+
+router.post(
+  '/reports',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = reportSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const id = uuidv4();
+    await execute(
+      `INSERT INTO compliance_reports
+         (id, name, framework, generated_by, generated_at, period_start, period_end)
+       VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), ?, ?)`,
+      [
+        id,
+        parsed.data.name,
+        parsed.data.framework,
+        req.user!.empId,
+        parsed.data.periodStart,
+        parsed.data.periodEnd,
+      ],
+    );
+    logger.info({ id, framework: parsed.data.framework }, 'Compliance report record created');
+    res.status(201).json({
+      id,
+      hint: 'Report record created. Attach artifact_url via PATCH once the report file is generated.',
+    });
+  }),
+);
+
+// ===========================================================================
+// /entitlements/:entId/grant — direct grant with SoD pre-check
+// ===========================================================================
+const grantSchema = z.object({
+  empId:     z.string().min(1).max(20),
+  grantedBy: z.string().min(1).max(20).optional(),
+});
+
+router.post(
+  '/entitlements/:entId/grant',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { entId } = req.params as { entId: string };
+    const parsed = grantSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+
+    const { empId, grantedBy } = parsed.data;
+
+    // Verify entitlement exists
+    const ent = await queryOne<{ id: string }>(
+      'SELECT id FROM entitlements WHERE id = ? AND active = 1',
+      [entId],
+    );
+    if (!ent) {
+      res.status(404).json({ error: 'Entitlement not found or inactive' });
+      return;
+    }
+
+    // SoD pre-check
+    const sodResult = await evaluateSodForGrant(empId, entId);
+    const blockingViolations = sodResult.violations.filter(
+      (v) => v.severity === 'CRITICAL' || v.severity === 'HIGH',
+    );
+    if (blockingViolations.length > 0) {
+      res.status(422).json({
+        error:      'SoD policy violation blocks this grant',
+        code:       'SOD_VIOLATION',
+        violations: blockingViolations,
+      });
+      return;
+    }
+
+    // Grant
+    const grantId = uuidv4();
+    await execute(
+      `INSERT IGNORE INTO user_entitlements
+         (id, emp_id, entitlement_id, source, granted_by, granted_at)
+       VALUES (?, ?, ?, 'ADMIN_GRANT', ?, UTC_TIMESTAMP())`,
+      [grantId, empId, entId, grantedBy ?? req.user!.empId],
+    );
+
+    logger.info({ grantId, empId, entId, grantedBy: grantedBy ?? req.user!.empId }, 'Entitlement granted directly');
+    res.status(201).json({ id: grantId, empId, entitlementId: entId });
+  }),
+);
 
 export default router;

@@ -7,3 +7,5 @@ export interface LilgUser {
   sub:        string;
   expiresAt:  Date;
 }
+
+export type IdpUser = LilgUser;

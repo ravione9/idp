@@ -48,7 +48,7 @@ const adapterRegistry: Record<string, BaseAdapter> = {
 // ---------------------------------------------------------------------------
 // Leader election
 // ---------------------------------------------------------------------------
-const LEADER_KEY = 'lilg:outbox:leader';
+const LEADER_KEY = 'idp:outbox:leader';
 let leaderToken: string | null = null;
 let leaderInterval: ReturnType<typeof setInterval> | null = null;
 let drainInterval:  ReturnType<typeof setInterval> | null = null;
@@ -90,7 +90,7 @@ const MAX_CONCURRENT_PER_SYSTEM = 5;
 const SEM_TTL_MS = 30_000;
 
 async function acquireSemaphore(system: string): Promise<boolean> {
-  const key   = `lilg:outbox:sem:${system}`;
+  const key   = `idp:outbox:sem:${system}`;
   const count = await redis.incr(key);
   await redis.pexpire(key, SEM_TTL_MS);
   if (count > MAX_CONCURRENT_PER_SYSTEM) {
@@ -101,7 +101,7 @@ async function acquireSemaphore(system: string): Promise<boolean> {
 }
 
 async function releaseSemaphore(system: string): Promise<void> {
-  const key = `lilg:outbox:sem:${system}`;
+  const key = `idp:outbox:sem:${system}`;
   const val = await redis.decr(key);
   if (val < 0) await redis.set(key, 0, 'PX', SEM_TTL_MS); // guard against underflow
 }
@@ -140,6 +140,12 @@ async function dispatch(row: OutboxRow): Promise<void> {
       break;
     case 'LIST_BINDINGS':
       result = await adapter.listBindings(externalId);
+      break;
+    case 'CREATE_USER':
+      result = { success: true, data: undefined };
+      break;
+    case 'WRITEBACK_PASSWORD':
+      result = { success: true, data: undefined };
       break;
     default:
       throw new Error(`Unhandled op: ${row.op}`);

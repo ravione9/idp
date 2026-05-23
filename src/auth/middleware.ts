@@ -72,7 +72,7 @@ async function getSessionFromDb(sessionId: string): Promise<LilgUser | null> {
     revoked_at: Date | null;
   }>(
     `SELECT session_id, emp_id, email, role, iss, sub, expires_at, revoked_at
-       FROM lilg_sessions
+       FROM idp_sessions
       WHERE session_id = ?`,
     [sessionId],
   );
@@ -126,7 +126,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
     // Slide last_active_at in DB (async, non-blocking)
     void query(
-      'UPDATE lilg_sessions SET last_active_at = UTC_TIMESTAMP() WHERE session_id = ?',
+      'UPDATE idp_sessions SET last_active_at = UTC_TIMESTAMP() WHERE session_id = ?',
       [sessionId],
     ).catch((err) => logger.warn({ err }, 'Failed to update last_active_at'));
 
@@ -230,7 +230,7 @@ export async function logoutHandler(req: Request, res: Response): Promise<void> 
     if (sessionId) {
       // Mark revoked in DB
       await query(
-        'UPDATE lilg_sessions SET revoked_at = UTC_TIMESTAMP() WHERE session_id = ?',
+        'UPDATE idp_sessions SET revoked_at = UTC_TIMESTAMP() WHERE session_id = ?',
         [sessionId],
       ).catch((err) => logger.warn({ err }, 'Failed to revoke session in DB'));
 
