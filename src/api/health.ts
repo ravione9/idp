@@ -44,6 +44,41 @@ router.get('/readyz', async (_req: Request, res: Response): Promise<void> => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /diagz — diagnostic helper: which migrations applied, which IGA tables
+// exist. Useful when debugging "why is /api/iga/applications crashing?".
+// ---------------------------------------------------------------------------
+router.get('/diagz', async (_req: Request, res: Response): Promise<void> => {
+  const out: Record<string, unknown> = {};
+  try {
+    const m = await query<{ name: string; applied_at: string }>(
+      'SELECT name, applied_at FROM lilg_schema_migrations ORDER BY name',
+      [],
+    );
+    out['migrations'] = m;
+  } catch (err) {
+    out['migrations_error'] = err instanceof Error ? err.message : String(err);
+  }
+  try {
+    const tables = await query<{ name: string; exists: number }>(
+      `SELECT 'applications' AS name, COUNT(*) AS exists FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'applications'
+       UNION ALL SELECT 'app_protocol_configs', COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'app_protocol_configs'
+       UNION ALL SELECT 'connectors',           COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'connectors'
+       UNION ALL SELECT 'entitlements',         COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'entitlements'
+       UNION ALL SELECT 'user_entitlements',    COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'user_entitlements'
+       UNION ALL SELECT 'access_requests',      COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'access_requests'
+       UNION ALL SELECT 'sod_policies',         COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'sod_policies'
+       UNION ALL SELECT 'risk_scores',          COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'risk_scores'
+       UNION ALL SELECT 'compliance_reports',   COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'compliance_reports'`,
+      [],
+    );
+    out['iga_tables'] = tables;
+  } catch (err) {
+    out['iga_tables_error'] = err instanceof Error ? err.message : String(err);
+  }
+  res.json(out);
+});
+
+// ---------------------------------------------------------------------------
 // GET /metrics — Prometheus exposition format
 // ---------------------------------------------------------------------------
 router.get('/metrics', async (_req: Request, res: Response): Promise<void> => {

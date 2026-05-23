@@ -210,14 +210,19 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
   process.on('SIGINT',  () => { void shutdown('SIGINT'); });
 
+  // Uncaught (synchronous) exceptions usually indicate the process state is
+  // corrupt — exit so the orchestrator restarts us.
   process.on('uncaughtException', (err) => {
     logger.fatal({ err }, 'Uncaught exception');
     process.exit(1);
   });
 
+  // Unhandled promise rejections are typically from one buggy request handler.
+  // Log loudly but DO NOT exit — that would take down the whole web server
+  // because of one bad query. Each route is responsible for its own error
+  // handling via `asyncHandler` (src/utils/async-handler.ts).
   process.on('unhandledRejection', (reason) => {
-    logger.fatal({ reason }, 'Unhandled promise rejection');
-    process.exit(1);
+    logger.error({ reason }, 'Unhandled promise rejection (process kept alive)');
   });
 }
 

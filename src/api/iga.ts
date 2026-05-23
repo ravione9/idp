@@ -16,6 +16,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole } from '../auth/rbac.js';
 import { execute, query, queryOne } from '../db/connection.js';
 import logger from '../utils/logger.js';
+import { asyncHandler } from '../utils/async-handler.js';
 
 const router = Router();
 
@@ -54,7 +55,7 @@ const appSchema = z.object({
   provisioning: z.boolean().default(false),
 });
 
-router.get('/applications', async (req: Request, res: Response): Promise<void> => {
+router.get('/applications', asyncHandler(async (req: Request, res: Response) => {
   const { limit, offset } = paginate(req);
   const rows = await query<Record<string, unknown>>(
     `SELECT a.id, a.slug, a.name, a.description, a.icon_url, a.category,
@@ -67,12 +68,12 @@ router.get('/applications', async (req: Request, res: Response): Promise<void> =
     [limit, offset],
   );
   res.json({ data: rows, total: rows.length, limit, offset });
-});
+}));
 
 router.post(
   '/applications',
   requireRole('SUPER_ADMIN'),
-  async (req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (req: Request, res: Response) => {
     const parsed = appSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -108,10 +109,10 @@ router.post(
       }
       res.status(400).json({ error: msg });
     }
-  },
+  }),
 );
 
-router.get('/applications/:id', async (req: Request, res: Response): Promise<void> => {
+router.get('/applications/:id', asyncHandler(async (req: Request, res: Response) => {
   const app = await queryOne<Record<string, unknown>>(
     `SELECT * FROM applications WHERE id = ? OR slug = ?`,
     [req.params['id'], req.params['id']],
@@ -125,7 +126,7 @@ router.get('/applications/:id', async (req: Request, res: Response): Promise<voi
     [app['id']],
   );
   res.json({ ...app, protocols });
-});
+}));
 
 // ===========================================================================
 // /connectors — pluggable target system adapters
@@ -133,7 +134,7 @@ router.get('/applications/:id', async (req: Request, res: Response): Promise<voi
 router.get(
   '/connectors',
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  async (req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
     const rows = await query<Record<string, unknown>>(
       `SELECT id, name, slug, connector_type, direction, sync_mode, sync_schedule,
@@ -144,7 +145,7 @@ router.get(
       [limit, offset],
     );
     res.json({ data: rows, total: rows.length, limit, offset });
-  },
+  }),
 );
 
 router.post('/connectors', requireRole('SUPER_ADMIN'), (_req, res) => {
@@ -154,7 +155,7 @@ router.post('/connectors', requireRole('SUPER_ADMIN'), (_req, res) => {
 router.get(
   '/connectors/:id/runs',
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  async (req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
     const rows = await query<Record<string, unknown>>(
       `SELECT id, run_type, status, started_at, ended_at,
@@ -166,7 +167,7 @@ router.get(
       [req.params['id'], limit, offset],
     );
     res.json({ data: rows, limit, offset });
-  },
+  }),
 );
 
 router.post(
@@ -181,7 +182,7 @@ router.post(
 router.get(
   '/entitlements',
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  async (req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
     const appId = req.query['appId'] as string | undefined;
     const where: string[] = [];
@@ -199,10 +200,10 @@ router.get(
       [...params, limit, offset],
     );
     res.json({ data: rows, limit, offset });
-  },
+  }),
 );
 
-router.get('/entitlements/me', async (req: Request, res: Response): Promise<void> => {
+router.get('/entitlements/me', asyncHandler(async (req: Request, res: Response) => {
   const empId = req.user!.empId;
   const rows = await query<Record<string, unknown>>(
     `SELECT ue.id, ue.entitlement_id, ue.source, ue.granted_at, ue.expires_at, ue.last_used_at,
@@ -216,12 +217,12 @@ router.get('/entitlements/me', async (req: Request, res: Response): Promise<void
     [empId],
   );
   res.json({ data: rows });
-});
+}));
 
 // ===========================================================================
 // /access-requests — request workflow
 // ===========================================================================
-router.get('/access-requests', async (req: Request, res: Response): Promise<void> => {
+router.get('/access-requests', asyncHandler(async (req: Request, res: Response) => {
   const empId = req.user!.empId;
   const scope = (req.query['scope'] as string) ?? 'mine';
   const { limit, offset } = paginate(req);
@@ -261,7 +262,7 @@ router.get('/access-requests', async (req: Request, res: Response): Promise<void
     [...params, limit, offset],
   );
   res.json({ data: rows, limit, offset });
-});
+}));
 
 router.post('/access-requests', (_req, res) => {
   notImplemented(res, 'Approval-chain resolver and SoD pre-check pending');
@@ -277,7 +278,7 @@ router.post('/access-requests/:id/decision', (_req, res) => {
 router.get(
   '/access-reviews',
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  async (req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
     const rows = await query<Record<string, unknown>>(
       `SELECT id, name, description, scope, reviewer_kind, start_date, end_date,
@@ -290,10 +291,10 @@ router.get(
       [limit, offset],
     );
     res.json({ data: rows, limit, offset });
-  },
+  }),
 );
 
-router.get('/access-reviews/me', async (req: Request, res: Response): Promise<void> => {
+router.get('/access-reviews/me', asyncHandler(async (req: Request, res: Response) => {
   const empId = req.user!.empId;
   const rows = await query<Record<string, unknown>>(
     `SELECT i.id, i.campaign_id, c.name AS campaign_name, c.end_date,
@@ -312,7 +313,7 @@ router.get('/access-reviews/me', async (req: Request, res: Response): Promise<vo
     [empId],
   );
   res.json({ data: rows });
-});
+}));
 
 router.post('/access-reviews', requireRole('ADMIN', 'SUPER_ADMIN'), (_req, res) => {
   notImplemented(res, 'Campaign generator pending');
@@ -324,7 +325,7 @@ router.post('/access-reviews', requireRole('ADMIN', 'SUPER_ADMIN'), (_req, res) 
 router.get(
   '/sod-policies',
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  async (_req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (_req: Request, res: Response) => {
     const rows = await query<Record<string, unknown>>(
       `SELECT id, name, description, severity, enforcement, conflict_groups, active, created_at
          FROM sod_policies
@@ -332,13 +333,13 @@ router.get(
       [],
     );
     res.json({ data: rows });
-  },
+  }),
 );
 
 router.get(
   '/sod-violations',
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  async (req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (req: Request, res: Response) => {
     const status = (req.query['status'] as string) ?? 'OPEN';
     const rows = await query<Record<string, unknown>>(
       `SELECT v.id, v.policy_id, p.name AS policy_name, p.severity,
@@ -352,7 +353,7 @@ router.get(
       [status],
     );
     res.json({ data: rows });
-  },
+  }),
 );
 
 // ===========================================================================
@@ -361,7 +362,7 @@ router.get(
 router.get(
   '/risk/dashboard',
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  async (_req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (_req: Request, res: Response) => {
     const [topRisk, denied24h, mfa24h] = await Promise.all([
       query<Record<string, unknown>>(
         `SELECT r.emp_id, e.full_name, e.email_corp, r.score, r.factors, r.updated_at
@@ -371,7 +372,7 @@ router.get(
           ORDER BY r.score DESC
           LIMIT 25`,
         [],
-      ),
+      ).catch(() => []),
       queryOne<{ n: number }>(
         `SELECT COUNT(*) AS n FROM login_risk_events
           WHERE decision IN ('DENY','BLOCK')
@@ -392,7 +393,7 @@ router.get(
         mfaChallengeLast24h: mfa24h?.n ?? 0,
       },
     });
-  },
+  }),
 );
 
 // ===========================================================================
@@ -401,7 +402,7 @@ router.get(
 router.get(
   '/reports',
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  async (_req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (_req: Request, res: Response) => {
     const rows = await query<Record<string, unknown>>(
       `SELECT id, name, framework, generated_by, generated_at, period_start, period_end, artifact_url
          FROM compliance_reports
@@ -410,7 +411,7 @@ router.get(
       [],
     );
     res.json({ data: rows });
-  },
+  }),
 );
 
 router.post('/reports', requireRole('ADMIN', 'SUPER_ADMIN'), (_req, res) => {
