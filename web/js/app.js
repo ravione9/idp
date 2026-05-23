@@ -1,333 +1,134 @@
 /* ============================================================
-   Lenskart IdP Console — SPA
+   Lenskart IdP Console — SPA entry point
+   Layout: top nav (SailPoint-style) + admin sub-nav + content
    ============================================================ */
-
-const api = {
-  async fetch(path, options = {}) {
-    const res = await fetch(path, {
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-      ...options,
-    });
-    const ct = res.headers.get('content-type') || '';
-    const body = ct.includes('json') ? await res.json() : await res.text();
-    if (!res.ok) {
-      const err = new Error((body && body.error) || res.statusText);
-      err.status = res.status;
-      err.body = body;
-      throw err;
-    }
-    return body;
-  },
-  me:               () => api.fetch('/api/me'),
-  apps:             () => api.fetch('/api/apps'),
-  dashboard:        () => api.fetch('/api/admin/dashboard'),
-  listUsers:        (q = '', state = '') => api.fetch(`/api/admin/users?q=${encodeURIComponent(q)}&state=${encodeURIComponent(state)}&limit=200`),
-  listLocalAdmins:  () => api.fetch('/api/admin/local-users'),
-  createLocalAdmin: (data) => api.fetch('/api/admin/local-users', { method: 'POST', body: JSON.stringify(data) }),
-  bootstrapAdmin:   (data) => api.fetch('/api/admin/local-users/bootstrap', { method: 'POST', body: JSON.stringify(data) }),
-  adminStatus:      () => api.fetch('/api/admin/local-users/status'),
-  deactivateAdmin:  (id) => api.fetch(`/api/admin/local-users/${id}`, { method: 'DELETE' }),
-  idpStatus:        () => api.fetch('/api/admin/saml-apps/status'),
-  listSamlApps:     () => api.fetch('/api/admin/saml-apps'),
-  createSamlApp:    (data) => api.fetch('/api/admin/saml-apps', { method: 'POST', body: JSON.stringify(data) }),
-  deactivateSamlApp:(id) => api.fetch(`/api/admin/saml-apps/${id}`, { method: 'DELETE' }),
-  samlAudit:        () => api.fetch('/api/admin/audit/saml'),
-  systemAudit:      () => api.fetch('/api/admin/audit/system'),
-  localLogin:       (email, password) => api.fetch('/auth/local/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  localLoginMfa:    (challengeId, code) => api.fetch('/auth/local/login/mfa-verify', { method: 'POST', body: JSON.stringify({ challengeId, code }) }),
-  logout:           () => api.fetch('/auth/logout', { method: 'POST' }),
-  changePassword:   (currentPassword, newPassword) => api.fetch('/api/me/password', { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) }),
-  listSessions:     () => api.fetch('/api/me/sessions'),
-  revokeSession:    (id) => api.fetch(`/api/me/sessions/${id}`, { method: 'DELETE' }),
-  mfaStatus:        () => api.fetch('/api/me/mfa'),
-  mfaEnroll:        () => api.fetch('/api/me/mfa/enroll', { method: 'POST' }),
-  mfaConfirm:       (code) => api.fetch('/api/me/mfa/confirm', { method: 'POST', body: JSON.stringify({ code }) }),
-  mfaDisable:       () => api.fetch('/api/me/mfa/disable', { method: 'POST' }),
-  mfaRegenCodes:    () => api.fetch('/api/me/mfa/regenerate-codes', { method: 'POST' }),
-  igaApps:          () => api.fetch('/api/iga/applications'),
-  igaConnectors:    () => api.fetch('/api/iga/connectors'),
-  igaConnectorRuns: (id) => api.fetch(`/api/iga/connectors/${id}/runs`),
-  igaEntitlements:  (appId) => api.fetch(`/api/iga/entitlements${appId ? `?appId=${appId}` : ''}`),
-  igaMyAccess:      () => api.fetch('/api/iga/entitlements/me'),
-  igaAccessReqs:    (scope = 'mine') => api.fetch(`/api/iga/access-requests?scope=${scope}`),
-  igaMyTasks:       () => api.fetch('/api/iga/access-requests?scope=tasks'),
-  igaReviews:       () => api.fetch('/api/iga/access-reviews'),
-  igaMyReviews:     () => api.fetch('/api/iga/access-reviews/me'),
-  igaSodPolicies:   () => api.fetch('/api/iga/sod-policies'),
-  igaSodViolations: (status = 'OPEN') => api.fetch(`/api/iga/sod-violations?status=${status}`),
-  igaRisk:          () => api.fetch('/api/iga/risk/dashboard'),
-  igaReports:       () => api.fetch('/api/iga/reports'),
-};
+import { api } from './api.js';
+import { el, esc, initials } from './ui.js';
+import {
+  renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
+} from './views-end-user.js';
+import {
+  viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
+  viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports,
+} from './views-admin.js';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
-const ICONS = {
-  dashboard:  '◉',
-  apps:       '▦',
-  myaccess:   '◫',
-  request:    '✦',
-  tasks:      '◐',
-  users:      '◍',
-  saml:       '⛨',
-  connectors: '⇄',
-  reviews:    '✓',
-  sod:        '⚠',
-  risk:       '◆',
-  reports:    '☰',
-  auth:       '⚿',
-  audit:      '⌖',
-  settings:   '⚙',
+/* Map of route key → { label, primary, admin?, super?, view } */
+const ROUTES = {
+  /* Primary nav (visible to everyone) */
+  home:      { label: 'Home',           primary: 'home',      end: viewHome },
+  request:   { label: 'Request Center', primary: 'request',   end: viewRequestAccess },
+  tasks:     { label: 'Approvals',      primary: 'tasks',     end: viewMyTasks },
+  myaccess:  { label: 'My Access',      primary: 'myaccess',  end: viewMyAccess },
+  reviews:   { label: 'Certifications', primary: 'reviews',   admin: true, view: viewReviews },
+
+  /* Admin secondary nav */
+  dashboard:    { label: 'Dashboard',         primary: 'admin', subnav: 'dashboard',    admin: true, view: viewDashboard },
+  users:        { label: 'Identity',          primary: 'admin', subnav: 'users',        admin: true, view: viewUsers },
+  admins:       { label: 'Administrators',    primary: 'admin', subnav: 'admins',       admin: true, super: true, view: viewAdmins },
+  myaccessAdmin:{ label: 'Access Model',      primary: 'admin', subnav: 'myaccessAdmin', admin: true, view: (c) => viewMyAccess(c) },
+  'iga-apps':   { label: 'Applications',      primary: 'admin', subnav: 'iga-apps',     admin: true, view: viewIgaApps },
+  'saml-apps':  { label: 'SAML Apps',         primary: 'admin', subnav: 'saml-apps',    admin: true, view: viewSamlApps },
+  connectors:   { label: 'Connections',       primary: 'admin', subnav: 'connectors',   admin: true, view: viewConnectors },
+  'admin-cert': { label: 'Certifications',    primary: 'admin', subnav: 'admin-cert',   admin: true, view: viewReviews },
+  auth:         { label: 'Password Mgmt',     primary: 'admin', subnav: 'auth',         admin: true, view: viewAuth },
+  sod:          { label: 'Workflows',         primary: 'admin', subnav: 'sod',          admin: true, view: viewSod },
+  risk:         { label: 'Risk',              primary: 'admin', subnav: 'risk',         admin: true, view: viewRisk },
+  audit:        { label: 'Audit',             primary: 'admin', subnav: 'audit',        admin: true, view: viewAudit },
+  reports:      { label: 'Reports',           primary: 'admin', subnav: 'reports',      admin: true, view: viewReports },
+
+  /* Account (top-right dropdown) */
+  settings:  { label: 'Account', view: viewSettings },
 };
 
-function el(html) {
-  const t = document.createElement('template');
-  t.innerHTML = html.trim();
-  return t.content.firstChild;
-}
+const PRIMARY_NAV_ORDER = ['home', 'request', 'tasks', 'reviews']; // last is "Admin" (handled separately)
+const ADMIN_SUBNAV_ORDER = [
+  'dashboard', 'users', 'admins', 'iga-apps', 'saml-apps', 'connectors',
+  'admin-cert', 'auth', 'sod', 'risk', 'audit', 'reports',
+];
 
-function esc(v) {
-  return String(v ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+const state = { me: null, current: 'home' };
 
-function fmtDate(s) {
-  if (!s) return '—';
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return esc(s);
-  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-}
+window.LILG_NAV = navigate;
 
-function initials(name = '') {
-  return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '?';
-}
-
-function ilgBadge(state) {
-  const s = (state || '').toUpperCase();
-  if (s === 'ACTIVE' || s === 'REACTIVATED') return `<span class="badge badge-success">${esc(s)}</span>`;
-  if (s.startsWith('SUSPENDED') || s === 'PENDING_MGR' || s === 'ESCALATED_HRBP') return `<span class="badge badge-warning">${esc(s)}</span>`;
-  if (s === 'DEPARTED' || s === 'DEPROVISIONED') return `<span class="badge badge-neutral">${esc(s)}</span>`;
-  return `<span class="badge badge-neutral">${esc(s || '—')}</span>`;
-}
-
-const state = {
-  me: null,
-  view: 'dashboard',
-  query: '',
-};
-
-/* ---------- Login ---------- */
-function renderLogin() {
-  const root = el(`
-    <div class="auth-shell">
-      <aside class="auth-hero">
-        <div class="brand-mark">
-          <span class="brand-logo" style="width:32px;height:32px;background:linear-gradient(135deg,#fff,#dbeafe);border-radius:8px;display:inline-flex;align-items:center;justify-content:center;color:#1e3a8a;font-weight:800">L</span>
-          Lenskart IdP
-        </div>
-        <div>
-          <h1>One identity. Every application.</h1>
-          <p>Enterprise single sign-on, SAML 2.0 identity provider, and identity governance for Lenskart.</p>
-          <ul class="auth-features">
-            <li>SAML 2.0 / OIDC single sign-on</li>
-            <li>Local password &amp; Google SSO, with TOTP MFA</li>
-            <li>Centralized application catalog</li>
-            <li>Audit trail &amp; access governance</li>
-          </ul>
-        </div>
-        <div class="auth-footer">© Lenskart Identity Lifecycle &amp; Governance · idp.lenskart.com</div>
-      </aside>
-      <main class="auth-panel">
-        <div class="auth-card">
-          <h2>Sign in</h2>
-          <p class="muted">Use your administrator account or corporate SSO.</p>
-          <div id="login-error"></div>
-          <form id="local-login-form">
-            <div class="field">
-              <label for="email">Email</label>
-              <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@lenskart.com" />
-            </div>
-            <div class="field">
-              <label for="password">Password</label>
-              <input id="password" name="password" type="password" required autocomplete="current-password" />
-            </div>
-            <button type="submit" class="btn btn-primary btn-block btn-lg">Sign in</button>
-          </form>
-          <div class="divider">or</div>
-          <a href="/auth/google" class="btn btn-secondary btn-block">Continue with Google</a>
-        </div>
-      </main>
-    </div>
-  `);
-
-  const errEl = root.querySelector('#login-error');
-  const panel = root.querySelector('.auth-panel');
-
-  function renderMfaStep(challengeId, email) {
-    const card = el(`
-      <div class="auth-card">
-        <h2>Two-factor authentication</h2>
-        <p class="muted">Enter the 6-digit code from your authenticator app for ${esc(email)}.</p>
-        <div id="mfa-error"></div>
-        <form id="mfa-form">
-          <div class="field">
-            <label>Verification code</label>
-            <input name="code" required pattern="[0-9]{6,8}" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
-            <p class="hint">A backup code (8 hex chars) also works.</p>
-          </div>
-          <button type="submit" class="btn btn-primary btn-block btn-lg">Verify</button>
-        </form>
-      </div>
-    `);
-    panel.replaceChildren(card);
-    const merr = card.querySelector('#mfa-error');
-    card.querySelector('#mfa-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      merr.innerHTML = '';
-      try {
-        await api.localLoginMfa(challengeId, new FormData(e.target).get('code'));
-        location.href = '/';
-      } catch (err) {
-        merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      }
-    });
-  }
-
-  root.querySelector('#local-login-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    errEl.innerHTML = '';
-    const fd = new FormData(e.target);
-    const email = fd.get('email');
-    try {
-      const r = await api.localLogin(email, fd.get('password'));
-      if (r && r.mfaRequired && r.challengeId) {
-        renderMfaStep(r.challengeId, email);
-        return;
-      }
-      location.href = '/';
-    } catch (err) {
-      errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-    }
-  });
-
-  // First-time bootstrap card (only when no admins exist)
-  api.adminStatus().then((s) => {
-    if (!s.bootstrapEnabled) return;
-    const card = el(`
-      <div class="auth-card" style="margin-top:1.5rem">
-        <h2 style="font-size:1.15rem">First-time setup</h2>
-        <p class="muted">Create the first super administrator.</p>
-        <div id="bs-error"></div>
-        <form id="bs-form">
-          <div class="field"><label>Full name</label><input name="fullName" required /></div>
-          <div class="field"><label>Email</label><input name="email" type="email" required /></div>
-          <div class="field"><label>Password (min 10)</label><input name="password" type="password" minlength="10" required /></div>
-          <div class="field"><label>Bootstrap token</label><input name="token" type="password" required /><p class="hint">Value of LOCAL_BOOTSTRAP_TOKEN in .env</p></div>
-          <button type="submit" class="btn btn-primary btn-block">Create super administrator</button>
-        </form>
-      </div>
-    `);
-    root.querySelector('.auth-panel').appendChild(card);
-    card.querySelector('#bs-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const bsErr = card.querySelector('#bs-error');
-      bsErr.innerHTML = '';
-      try {
-        await api.bootstrapAdmin(Object.fromEntries(new FormData(e.target)));
-        bsErr.innerHTML = `<div class="alert alert-success">Created. Sign in above.</div>`;
-        e.target.reset();
-      } catch (err) {
-        bsErr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      }
-    });
-  }).catch(() => {});
-
-  return root;
-}
-
-/* ---------- Shell ---------- */
-function buildShell(activeView) {
+function buildShell() {
   const me = state.me;
-  const isAdmin = me && ROLES_ADMIN.includes(me.employee?.role);
-  const isSuper = me && me.employee?.role === 'SUPER_ADMIN';
+  const isAdmin = ROLES_ADMIN.includes(me.employee?.role);
+  const isSuper = me.employee?.role === 'SUPER_ADMIN';
 
-  const navItem = (key, icon, label, requiresAdmin = false, requiresSuper = false) => {
-    if (requiresAdmin && !isAdmin) return '';
-    if (requiresSuper && !isSuper) return '';
-    return `<button class="nav-item ${activeView === key ? 'active' : ''}" data-view="${key}">
-      <span class="icon">${icon}</span>${label}
-    </button>`;
-  };
+  const primaryButtons = PRIMARY_NAV_ORDER.map((key) => {
+    const r = ROUTES[key];
+    if (r.admin && !isAdmin) return '';
+    return `<button data-key="${key}">${esc(r.label)}</button>`;
+  }).join('');
+
+  const adminButton = isAdmin
+    ? `<button data-key="admin-toggle">Admin</button>`
+    : '';
+
+  const subnavButtons = ADMIN_SUBNAV_ORDER.map((key) => {
+    const r = ROUTES[key];
+    if (!r) return '';
+    if (r.super && !isSuper) return '';
+    return `<button data-key="${key}">${esc(r.label)}</button>`;
+  }).join('');
 
   const root = el(`
     <div class="shell">
-      <aside class="sidebar">
+      <header class="topnav">
         <div class="brand">
           <span class="brand-logo">L</span>
           <span>Lenskart IdP</span>
         </div>
-        <nav>
-          <div class="nav-section">Workspace</div>
-          ${navItem('dashboard', ICONS.dashboard, 'Dashboard', true)}
-          ${navItem('apps',      ICONS.apps,      'My Applications')}
-          ${navItem('myaccess',  ICONS.myaccess,  'My Access')}
-          ${navItem('request',   ICONS.request,   'Request Access')}
-          ${navItem('tasks',     ICONS.tasks,     'My Tasks')}
-
-          ${isAdmin ? `<div class="nav-section">Access Management</div>` : ''}
-          ${navItem('saml-apps',  ICONS.saml,       'SAML Applications', true)}
-          ${navItem('iga-apps',   ICONS.apps,       'Application Catalog', true)}
-          ${navItem('connectors', ICONS.connectors, 'Connectors', true)}
-          ${navItem('auth',       ICONS.auth,       'Authentication', true)}
-
-          ${isAdmin ? `<div class="nav-section">Identity Governance</div>` : ''}
-          ${navItem('users',      ICONS.users,      'Users', true)}
-          ${navItem('admins',     ICONS.users,      'Administrators', false, true)}
-          ${navItem('reviews',    ICONS.reviews,    'Access Reviews', true)}
-          ${navItem('sod',        ICONS.sod,        'Segregation of Duties', true)}
-          ${navItem('risk',       ICONS.risk,       'Risk', true)}
-
-          ${isAdmin ? `<div class="nav-section">Compliance</div>` : ''}
-          ${navItem('audit',      ICONS.audit,      'Audit Logs', true)}
-          ${navItem('reports',    ICONS.reports,    'Reports', true)}
-
-          <div class="nav-section">Account</div>
-          ${navItem('settings',   ICONS.settings,   'Settings')}
+        <nav class="primary-nav" id="primary-nav">
+          ${primaryButtons}
+          ${adminButton}
         </nav>
-        <div class="sidebar-footer">v1.0 · ${esc(me?.session?.iss || 'local')}</div>
-      </aside>
-      <div class="main">
-        <header class="topbar">
-          <div class="page-title" id="page-title">Loading…</div>
-          <div class="topbar-actions">
-            <div class="profile-menu" id="profile-menu">
-              <span class="avatar">${esc(initials(me?.employee?.full_name || me?.session?.email))}</span>
-              <div>
-                <div class="profile-name">${esc(me?.employee?.full_name || me?.session?.email || 'User')}</div>
-                <div class="profile-role">${esc(me?.employee?.role || 'USER')}</div>
-              </div>
-              <div class="profile-dropdown" id="profile-dropdown">
-                <a href="#" data-view-link="settings">Account settings</a>
-                ${isAdmin ? `<a href="#" data-view-link="audit">Audit logs</a>` : ''}
-                ${me?.capabilities?.metadataUrl ? `<a href="${esc(me.capabilities.metadataUrl)}" target="_blank">SAML metadata</a>` : ''}
-                <div class="sep"></div>
-                <button class="danger" id="logout-btn">Sign out</button>
-              </div>
+        <div class="topnav-actions">
+          <div class="search-global">
+            <input type="search" placeholder="Search users, apps…" id="global-search" />
+          </div>
+          <div class="profile-menu" id="profile-menu">
+            <span class="avatar">${esc(initials(me.employee?.full_name || me.session?.email))}</span>
+            <div>
+              <div class="profile-name">${esc(me.employee?.full_name || me.session?.email || 'User')}</div>
+              <div class="profile-role">${esc(me.employee?.role || 'USER')}</div>
+            </div>
+            <div class="profile-dropdown" id="profile-dropdown">
+              <a href="#" data-key="settings">Account settings</a>
+              ${isAdmin ? '<a href="#" data-key="audit">Audit logs</a>' : ''}
+              ${me.capabilities?.metadataUrl ? `<a href="${esc(me.capabilities.metadataUrl)}" target="_blank">SAML metadata</a>` : ''}
+              <div class="sep"></div>
+              <button class="danger" id="logout-btn">Sign out</button>
             </div>
           </div>
-        </header>
-        <main class="content" id="content"><div class="loading-row"><span class="spinner"></span></div></main>
-      </div>
+        </div>
+      </header>
+      <nav class="subnav hidden" id="subnav">${subnavButtons}</nav>
+      <main class="content" id="content"><div class="loading-row"><span class="spinner"></span></div></main>
     </div>
   `);
 
-  // Sidebar nav clicks
-  root.querySelectorAll('[data-view]').forEach((btn) => {
-    btn.addEventListener('click', () => navigate(btn.dataset.view));
+  // Primary nav click
+  root.querySelector('#primary-nav').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-key]');
+    if (!btn) return;
+    const key = btn.dataset.key;
+    if (key === 'admin-toggle') {
+      navigate('dashboard');
+    } else {
+      navigate(key);
+    }
   });
+
+  // Subnav click
+  root.querySelector('#subnav').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-key]');
+    if (!btn) return;
+    navigate(btn.dataset.key);
+  });
+
   // Profile dropdown
   const pm = root.querySelector('#profile-menu');
   const dd = root.querySelector('#profile-dropdown');
@@ -338,8 +139,8 @@ function buildShell(activeView) {
   document.addEventListener('click', (e) => {
     if (!pm.contains(e.target)) dd.classList.remove('open');
   });
-  root.querySelectorAll('[data-view-link]').forEach((a) => {
-    a.addEventListener('click', (e) => { e.preventDefault(); navigate(a.dataset.viewLink); });
+  dd.querySelectorAll('a[data-key]').forEach((a) => {
+    a.addEventListener('click', (e) => { e.preventDefault(); navigate(a.dataset.key); });
   });
   root.querySelector('#logout-btn').addEventListener('click', async () => {
     try { await api.logout(); } catch {}
@@ -349,1254 +150,53 @@ function buildShell(activeView) {
   return root;
 }
 
-function setPageTitle(title) {
-  const t = document.querySelector('#page-title');
-  if (t) t.textContent = title;
-}
-
-function setContent(node) {
-  const c = document.querySelector('#content');
-  if (!c) return;
-  c.replaceChildren(node);
-}
-
-/* ---------- Views ---------- */
-
-async function viewDashboard() {
-  setPageTitle('Dashboard');
-  const wrap = el(`<div></div>`);
-  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
-  let d;
-  try { d = await api.dashboard(); }
-  catch (err) {
-    setContent(el(`<div class="alert alert-error">${esc(err.message)}</div>`));
-    return;
-  }
-
-  const c = d.counts;
-  const sys = d.system;
-
-  const stats = `
-    <section class="stat-grid">
-      <div class="stat-card">
-        <div class="stat-icon primary">◍</div>
-        <div class="stat-label">Total users</div>
-        <div class="stat-value">${c.employees}</div>
-        <div class="stat-sub">${c.activeEmployees} active</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon accent">⛨</div>
-        <div class="stat-label">SAML applications</div>
-        <div class="stat-value">${c.activeSamlApps}</div>
-        <div class="stat-sub">${c.samlApps} total registered</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon success">●</div>
-        <div class="stat-label">Active sessions</div>
-        <div class="stat-value">${c.activeSessions}</div>
-        <div class="stat-sub">across all users</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon info">⌖</div>
-        <div class="stat-label">SSO logins (24h)</div>
-        <div class="stat-value">${c.assertions24h}</div>
-        <div class="stat-sub">${c.assertions7d} in last 7 days</div>
-      </div>
-    </section>
-  `;
-
-  const sysRows = [
-    ['SAML IdP',          sys.samlEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-warning">Not configured</span>'],
-    ['Public base URL',   sys.publicBaseUrl ? esc(sys.publicBaseUrl) : '—'],
-    ['SAML metadata',     sys.metadataUrl ? `<a href="${esc(sys.metadataUrl)}" target="_blank">${esc(sys.metadataUrl)}</a>` : '—'],
-    ['Google OIDC',       sys.googleConfigured ? '<span class="badge badge-success">Configured</span>' : '<span class="badge badge-neutral">Not configured</span>'],
-    ['Zoho Mail SAML SP', sys.zohoSamlConfigured ? '<span class="badge badge-success">Registered</span>' : '<span class="badge badge-neutral">Not registered</span>'],
-    ['Local administrators', `${c.localAdmins}`],
-  ];
-
-  const recent = (d.recentAssertions && d.recentAssertions.length)
-    ? d.recentAssertions.map((r) => `
-        <tr>
-          <td>${fmtDate(r.ts)}</td>
-          <td class="cell-strong">${esc(r.sp_name)}</td>
-          <td>${esc(r.emp_id)}</td>
-          <td><span class="badge badge-info">${esc(r.binding)}</span></td>
-        </tr>`).join('')
-    : `<tr><td colspan="4" class="empty-state">No SSO assertions yet</td></tr>`;
-
-  const ilg = (d.ilgStates || []).map((s) => `
-    <div class="kv">
-      <div class="k">${esc(s.ilg_state)}</div>
-      <div class="v">${s.n}</div>
-    </div>`).join('') || '<div class="empty-state" style="padding:1rem">No data</div>';
-
-  wrap.innerHTML = `
-    <div class="page-header">
-      <div>
-        <h1>Dashboard</h1>
-        <p class="subtitle">Overview of your identity &amp; access management deployment</p>
-      </div>
-    </div>
-    ${stats}
-    <div class="grid-3">
-      <div class="card" style="grid-column: span 2; min-width:0">
-        <h2>Recent SSO activity</h2>
-        <p class="subtitle" style="margin-bottom:1rem">Latest SAML assertions issued by the IdP</p>
-        <table>
-          <thead><tr><th>Time</th><th>Application</th><th>User</th><th>Binding</th></tr></thead>
-          <tbody>${recent}</tbody>
-        </table>
-      </div>
-      <div class="card">
-        <h2>System status</h2>
-        <p class="subtitle" style="margin-bottom:1rem">Identity provider configuration</p>
-        <div class="kv-list">
-          ${sysRows.map(([k, v]) => `<div class="kv"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')}
-        </div>
-      </div>
-      <div class="card">
-        <h2>User lifecycle states</h2>
-        <p class="subtitle" style="margin-bottom:1rem">Distribution of employees by ILG state</p>
-        <div class="kv-list">${ilg}</div>
-      </div>
-    </div>
-  `;
-
-  setContent(wrap);
-}
-
-async function viewApps() {
-  setPageTitle('My Applications');
-  const wrap = el(`<div></div>`);
-  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
-
-  let r;
-  try { r = await api.apps(); }
-  catch (err) {
-    setContent(el(`<div class="alert alert-error">${esc(err.message)}</div>`));
-    return;
-  }
-
-  const isAdmin = ROLES_ADMIN.includes(state.me.employee?.role);
-  const apps = r.data || [];
-
-  let body;
-  if (!r.samlEnabled) {
-    body = `
-      <div class="card">
-        <h2>SAML IdP not configured</h2>
-        <p class="subtitle">Single sign-on requires a SAML signing key/cert. ${isAdmin ? 'Open <a href="#" data-go="auth">Authentication</a> for setup steps.' : 'Contact your administrator.'}</p>
-      </div>`;
-  } else if (!apps.length) {
-    body = `
-      <div class="card">
-        <h2>No applications yet</h2>
-        <p class="subtitle">${isAdmin ? 'Register applications in <a href="#" data-go="saml-apps">SAML Applications</a>.' : 'Contact your administrator to onboard applications.'}</p>
-      </div>`;
+function applyActiveNav() {
+  const route = ROUTES[state.current];
+  if (!route) return;
+  document.querySelectorAll('#primary-nav button').forEach((b) => {
+    const k = b.dataset.key;
+    if (k === 'admin-toggle') {
+      b.classList.toggle('active', route.primary === 'admin');
+    } else {
+      b.classList.toggle('active', k === route.primary);
+    }
+  });
+  const subnav = document.getElementById('subnav');
+  if (route.primary === 'admin') {
+    subnav.classList.remove('hidden');
+    subnav.querySelectorAll('button').forEach((b) => {
+      b.classList.toggle('active', b.dataset.key === route.subnav);
+    });
   } else {
-    body = `<div class="app-grid">
-      ${apps.map((a) => {
-        const fb = a.iconUrl
-          ? `<img class="app-icon" src="${esc(a.iconUrl)}" alt="" />`
-          : `<div class="app-icon app-icon-fallback">${esc((a.name||'?').charAt(0).toUpperCase())}</div>`;
-        return `<a class="app-tile" href="${esc(a.launchUrl)}" target="_blank" rel="noopener">${fb}<span class="app-name">${esc(a.name)}</span></a>`;
-      }).join('')}
-    </div>`;
+    subnav.classList.add('hidden');
   }
-
-  wrap.innerHTML = `
-    <div class="page-header">
-      <div>
-        <h1>My Applications</h1>
-        <p class="subtitle">Single sign-on launcher for entitled enterprise apps</p>
-      </div>
-    </div>
-    ${body}
-  `;
-  wrap.querySelectorAll('[data-go]').forEach((a) => {
-    a.addEventListener('click', (e) => { e.preventDefault(); navigate(a.dataset.go); });
-  });
-  setContent(wrap);
 }
 
-async function viewSamlApps() {
-  setPageTitle('SAML Applications');
-  const wrap = el(`<div></div>`);
-  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
-
-  let resp, status;
-  try {
-    [resp, status] = await Promise.all([api.listSamlApps(), api.idpStatus().catch(() => ({}))]);
-  } catch (err) {
-    setContent(el(`<div class="alert alert-error">${esc(err.message)}</div>`));
-    return;
-  }
-
-  const apps = resp.data || [];
-  const isSuper = state.me.employee?.role === 'SUPER_ADMIN';
-
-  const tableBody = apps.length
-    ? apps.map((sp) => `
-        <tr>
-          <td class="cell-strong">${esc(sp.name)}</td>
-          <td><code>${esc(sp.slug)}</code></td>
-          <td class="truncate muted" title="${esc(sp.entity_id)}">${esc(sp.entity_id)}</td>
-          <td class="truncate muted" title="${esc(sp.acs_url)}">${esc(sp.acs_url)}</td>
-          <td>${sp.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Disabled</span>'}</td>
-          <td class="actions">${isSuper && sp.active ? `<button class="btn btn-sm btn-danger" data-sp-id="${esc(sp.id)}">Deactivate</button>` : ''}</td>
-        </tr>`).join('')
-    : `<tr><td colspan="6" class="empty-state"><div class="empty-icon">⛨</div>No SAML applications registered</td></tr>`;
-
-  wrap.innerHTML = `
-    <div class="page-header">
-      <div>
-        <h1>SAML Applications</h1>
-        <p class="subtitle">Service Providers registered with this Identity Provider</p>
-      </div>
-    </div>
-
-    ${status.metadataUrl ? `
-      <div class="alert alert-info" style="margin-bottom:1.5rem">
-        <div>
-          <div style="font-weight:500;margin-bottom:0.2rem">IdP metadata for SP onboarding</div>
-          <a href="${esc(status.metadataUrl)}" target="_blank">${esc(status.metadataUrl)}</a>
-        </div>
-      </div>` : ''}
-
-    ${isSuper ? `
-    <details class="card" style="margin-bottom:1rem" open>
-      <summary style="cursor:pointer;font-weight:600">Register new SAML application</summary>
-      <p class="subtitle" style="margin:0.5rem 0 1rem">Add a Service Provider so users can launch it via SSO.</p>
-      <div id="sp-error"></div>
-      <form id="sp-form">
-        <div class="grid-2">
-          <div class="field"><label>Application name</label><input name="name" required placeholder="e.g. Darwinbox HRMS" /></div>
-          <div class="field"><label>Slug (URL-safe)</label><input name="slug" required pattern="[a-z0-9-]+" placeholder="e.g. darwinbox" /></div>
-          <div class="field"><label>SP Entity ID</label><input name="entityId" required placeholder="https://app.example.com/saml/metadata" /></div>
-          <div class="field"><label>ACS URL (Assertion Consumer)</label><input name="acsUrl" type="url" required placeholder="https://app.example.com/saml/acs" /></div>
-          <div class="field"><label>SLO URL (optional)</label><input name="sloUrl" type="url" placeholder="https://app.example.com/saml/slo" /></div>
-          <div class="field"><label>Icon URL (optional)</label><input name="iconUrl" type="url" placeholder="https://..." /></div>
-        </div>
-        <button type="submit" class="btn btn-primary">Register application</button>
-      </form>
-    </details>` : ''}
-
-    <div class="table-wrap">
-      <div class="table-toolbar">
-        <strong>Registered applications</strong>
-        <span class="muted">${apps.length} total</span>
-      </div>
-      <table>
-        <thead><tr><th>Name</th><th>Slug</th><th>Entity ID</th><th>ACS URL</th><th>Status</th><th></th></tr></thead>
-        <tbody>${tableBody}</tbody>
-      </table>
-    </div>
-  `;
-
-  if (isSuper) {
-    wrap.querySelector('#sp-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const errEl = wrap.querySelector('#sp-error');
-      errEl.innerHTML = '';
-      const body = Object.fromEntries(new FormData(e.target));
-      if (!body.sloUrl) delete body.sloUrl;
-      if (!body.iconUrl) delete body.iconUrl;
-      try {
-        await api.createSamlApp(body);
-        errEl.innerHTML = `<div class="alert alert-success">Application registered.</div>`;
-        e.target.reset();
-        setTimeout(() => viewSamlApps(), 600);
-      } catch (err) {
-        errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      }
-    });
-  }
-
-  wrap.querySelectorAll('[data-sp-id]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('Deactivate this application?')) return;
-      try { await api.deactivateSamlApp(btn.dataset.spId); viewSamlApps(); }
-      catch (err) { alert(err.message); }
-    });
-  });
-
-  setContent(wrap);
-}
-
-async function viewUsers() {
-  setPageTitle('Users');
-  const wrap = el(`<div></div>`);
-  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
-
-  async function load(q = '', stateFilter = '') {
-    let r;
-    try { r = await api.listUsers(q, stateFilter); }
-    catch (err) {
-      wrap.querySelector('#users-table').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      return;
-    }
-    const rows = r.data || [];
-    const html = rows.length ? rows.map((u) => `
-      <tr>
-        <td>
-          <div style="display:flex;align-items:center;gap:0.6rem">
-            <span class="avatar" style="width:30px;height:30px;font-size:0.7rem">${esc(initials(u.full_name))}</span>
-            <div>
-              <div class="cell-strong">${esc(u.full_name)}</div>
-              <div class="muted" style="font-size:0.75rem">${esc(u.emp_id)}</div>
-            </div>
-          </div>
-        </td>
-        <td>${esc(u.email_corp)}</td>
-        <td>${esc(u.dept_id || '—')}</td>
-        <td>${esc(u.employment_type || '—')}</td>
-        <td>${ilgBadge(u.ilg_state)}</td>
-        <td>${u.admin_role ? `<span class="badge badge-info">${esc(u.admin_role)}</span>` : '<span class="muted">—</span>'}</td>
-        <td class="muted">${fmtDate(u.last_login_at)}</td>
-      </tr>
-    `).join('') : `<tr><td colspan="7" class="empty-state"><div class="empty-icon">◍</div>No users found</td></tr>`;
-    wrap.querySelector('#users-table tbody').innerHTML = html;
-    wrap.querySelector('#users-count').textContent = `${r.total} total`;
-  }
-
-  wrap.innerHTML = `
-    <div class="page-header">
-      <div>
-        <h1>Users</h1>
-        <p class="subtitle">Employees synced from HRMS, plus local IdP administrators</p>
-      </div>
-    </div>
-    <div class="table-wrap" id="users-table">
-      <div class="table-toolbar">
-        <div class="search-input">
-          <input id="user-search" type="search" placeholder="Search by name, email, employee ID…" />
-        </div>
-        <div style="display:flex;gap:0.5rem;align-items:center">
-          <select id="state-filter" class="btn btn-secondary" style="padding:0.45rem 0.7rem">
-            <option value="">All states</option>
-            <option value="ACTIVE">Active</option>
-            <option value="REACTIVATED">Reactivated</option>
-            <option value="SUSPENDED_AUTO">Suspended (auto)</option>
-            <option value="PENDING_MGR">Pending manager</option>
-            <option value="ESCALATED_HRBP">Escalated HRBP</option>
-            <option value="DEPARTED">Departed</option>
-            <option value="DEPROVISIONED">Deprovisioned</option>
-          </select>
-          <span id="users-count" class="muted"></span>
-        </div>
-      </div>
-      <table>
-        <thead><tr>
-          <th>Name</th><th>Email</th><th>Department</th><th>Type</th><th>State</th><th>Admin role</th><th>Last login</th>
-        </tr></thead>
-        <tbody><tr><td colspan="7" class="loading-row"><span class="spinner"></span></td></tr></tbody>
-      </table>
-    </div>
-  `;
-
-  let timer;
-  const debounce = (fn) => (...a) => { clearTimeout(timer); timer = setTimeout(() => fn(...a), 250); };
-  const search = wrap.querySelector('#user-search');
-  const filter = wrap.querySelector('#state-filter');
-  const reload = () => load(search.value, filter.value);
-  search.addEventListener('input', debounce(reload));
-  filter.addEventListener('change', reload);
-
-  setContent(wrap);
-  load();
-}
-
-async function viewAdmins() {
-  setPageTitle('Administrators');
-  const wrap = el(`<div></div>`);
-  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
-
-  async function loadTable() {
-    let r;
-    try { r = await api.listLocalAdmins(); }
-    catch (err) {
-      wrap.querySelector('#admins-tbody').innerHTML = `<tr><td colspan="5"><div class="alert alert-error">${esc(err.message)}</div></td></tr>`;
-      return;
-    }
-    const rows = r.data || [];
-    wrap.querySelector('#admins-tbody').innerHTML = rows.length ? rows.map((a) => `
-      <tr>
-        <td class="cell-strong">${esc(a.email)}</td>
-        <td><span class="badge badge-info">${esc(a.role)}</span></td>
-        <td>${a.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
-        <td class="muted">${fmtDate(a.last_login_at)}</td>
-        <td class="actions">${a.active ? `<button class="btn btn-sm btn-danger" data-id="${a.id}">Deactivate</button>` : ''}</td>
-      </tr>
-    `).join('') : `<tr><td colspan="5" class="empty-state">No local administrators</td></tr>`;
-
-    wrap.querySelectorAll('[data-id]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        if (!confirm('Deactivate this administrator?')) return;
-        try { await api.deactivateAdmin(btn.dataset.id); loadTable(); }
-        catch (err) { alert(err.message); }
-      });
-    });
-  }
-
-  wrap.innerHTML = `
-    <div class="page-header">
-      <div>
-        <h1>Administrators</h1>
-        <p class="subtitle">Local accounts that can access this IdP console</p>
-      </div>
-    </div>
-    <details class="card" style="margin-bottom:1rem">
-      <summary style="cursor:pointer;font-weight:600">Create local administrator</summary>
-      <p class="subtitle" style="margin:0.5rem 0 1rem">Use sparingly. Prefer Google SSO for employees.</p>
-      <div id="ca-error"></div>
-      <form id="ca-form">
-        <div class="grid-2">
-          <div class="field"><label>Full name</label><input name="fullName" required /></div>
-          <div class="field"><label>Email</label><input name="email" type="email" required /></div>
-          <div class="field"><label>Password (min 10)</label><input name="password" type="password" minlength="10" required /></div>
-          <div class="field"><label>Role</label>
-            <select name="role">
-              <option value="ADMIN">ADMIN</option>
-              <option value="SUPER_ADMIN">SUPER_ADMIN</option>
-            </select>
-          </div>
-        </div>
-        <button type="submit" class="btn btn-primary">Create administrator</button>
-      </form>
-    </details>
-    <div class="table-wrap">
-      <div class="table-toolbar"><strong>Local administrators</strong></div>
-      <table>
-        <thead><tr><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th></th></tr></thead>
-        <tbody id="admins-tbody"><tr><td colspan="5" class="loading-row"><span class="spinner"></span></td></tr></tbody>
-      </table>
-    </div>
-  `;
-
-  wrap.querySelector('#ca-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const errEl = wrap.querySelector('#ca-error');
-    errEl.innerHTML = '';
-    try {
-      await api.createLocalAdmin(Object.fromEntries(new FormData(e.target)));
-      errEl.innerHTML = `<div class="alert alert-success">Administrator created.</div>`;
-      e.target.reset();
-      loadTable();
-    } catch (err) {
-      errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-    }
-  });
-
-  setContent(wrap);
-  loadTable();
-}
-
-async function viewAuth() {
-  setPageTitle('Authentication');
-  const wrap = el(`<div></div>`);
-  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
-
-  let s;
-  try { s = await api.idpStatus(); }
-  catch (err) {
-    setContent(el(`<div class="alert alert-error">${esc(err.message)}</div>`));
-    return;
-  }
-
-  wrap.innerHTML = `
-    <div class="page-header">
-      <div>
-        <h1>Authentication</h1>
-        <p class="subtitle">SAML Identity Provider and OIDC connection status</p>
-      </div>
-    </div>
-
-    <div class="grid-3">
-      <div class="card">
-        <h2>SAML 2.0 Identity Provider</h2>
-        <p class="subtitle" style="margin-bottom:1rem">Issues SAML assertions to registered Service Providers</p>
-        <div class="kv-list">
-          <div class="kv"><div class="k">Status</div><div class="v">${s.samlEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-warning">Not configured</span>'}</div></div>
-          <div class="kv"><div class="k">Public base URL</div><div class="v">${esc(s.publicBaseUrl || '—')}</div></div>
-          <div class="kv"><div class="k">Entity ID</div><div class="v truncate" title="${esc(s.entityId || '')}">${esc(s.entityId || '—')}</div></div>
-          <div class="kv"><div class="k">Metadata</div><div class="v">${s.metadataUrl ? `<a href="${esc(s.metadataUrl)}" target="_blank">${esc(s.metadataUrl)}</a>` : '—'}</div></div>
-        </div>
-        ${!s.samlEnabled ? `
-          <div class="alert alert-warning" style="margin-top:1rem">
-            <div>
-              <div style="font-weight:500;margin-bottom:0.3rem">SAML keys missing</div>
-              On the dev server, run <code>bash scripts/gen-saml-dev-keys.sh</code>, paste <code>SAML_IDP_PRIVATE_KEY_PEM</code> and <code>SAML_IDP_CERT_PEM</code> into <code>.env</code>, then restart the API.
-            </div>
-          </div>` : ''}
-      </div>
-
-        <div class="card">
-          <h2>Inbound OIDC providers</h2>
-          <p class="subtitle" style="margin-bottom:1rem">Federated login for end users</p>
-          <div class="kv-list">
-            <div class="kv"><div class="k">Google Workspace</div><div class="v"><a href="/auth/google">/auth/google</a></div></div>
-          </div>
-          <p class="subtitle" style="margin-top:1rem">Configure <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>, <code>GOOGLE_HOSTED_DOMAIN</code> in <code>.env</code>.</p>
-          <p class="subtitle">Zoho Mail is consumed as a <a href="#" data-view-link="saml-apps">SAML application</a>, not a sign-in provider.</p>
-        </div>
-
-      <div class="card">
-        <h2>Local password login</h2>
-        <p class="subtitle" style="margin-bottom:1rem">Email + password administrators</p>
-        <div class="kv-list">
-          <div class="kv"><div class="k">Endpoint</div><div class="v"><code>POST /auth/local/login</code></div></div>
-          <div class="kv"><div class="k">Master admin</div><div class="v">From <code>MASTER_ADMIN_EMAIL</code> in <code>.env</code></div></div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  setContent(wrap);
-}
-
-async function viewAudit() {
-  setPageTitle('Audit Logs');
-  const wrap = el(`<div></div>`);
-  wrap.innerHTML = `
-    <div class="page-header">
-      <div>
-        <h1>Audit Logs</h1>
-        <p class="subtitle">SSO assertions and tamper-evident system audit trail</p>
-      </div>
-    </div>
-    <div class="tabs">
-      <button class="tab active" data-tab="saml">SSO assertions</button>
-      <button class="tab" data-tab="system">System audit</button>
-    </div>
-    <div id="audit-content"><div class="loading-row"><span class="spinner"></span></div></div>
-  `;
-  setContent(wrap);
-
-  async function loadSaml() {
-    const target = wrap.querySelector('#audit-content');
-    target.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
-    try {
-      const r = await api.samlAudit();
-      const rows = r.data || [];
-      const body = rows.length ? rows.map((r) => `
-        <tr>
-          <td class="muted">${fmtDate(r.ts)}</td>
-          <td class="cell-strong">${esc(r.sp_name)}</td>
-          <td>${esc(r.emp_name || r.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(r.emp_email || '')}</span></td>
-          <td><span class="badge badge-info">${esc(r.binding)}</span></td>
-          <td class="muted truncate" title="${esc(r.relay_state || '')}">${esc(r.relay_state || '—')}</td>
-        </tr>`).join('') : `<tr><td colspan="5" class="empty-state"><div class="empty-icon">⌖</div>No SSO activity yet</td></tr>`;
-      target.innerHTML = `
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Time</th><th>Application</th><th>User</th><th>Binding</th><th>Relay state</th></tr></thead>
-            <tbody>${body}</tbody>
-          </table>
-        </div>`;
-    } catch (err) {
-      target.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-    }
-  }
-
-  async function loadSystem() {
-    const target = wrap.querySelector('#audit-content');
-    target.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
-    try {
-      const r = await api.systemAudit();
-      const rows = r.data || [];
-      const body = rows.length ? rows.map((r) => `
-        <tr>
-          <td class="muted">${fmtDate(r.ts)}</td>
-          <td class="cell-strong">${esc(r.actor)}</td>
-          <td><code>${esc(r.action)}</code></td>
-          <td>${esc(r.target)}</td>
-        </tr>`).join('') : `<tr><td colspan="4" class="empty-state">No audit entries yet</td></tr>`;
-      target.innerHTML = `
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead>
-            <tbody>${body}</tbody>
-          </table>
-        </div>`;
-    } catch (err) {
-      target.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-    }
-  }
-
-  wrap.querySelectorAll('.tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      wrap.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
-      if (tab.dataset.tab === 'saml') loadSaml();
-      else loadSystem();
-    });
-  });
-  loadSaml();
-}
-
-async function viewSettings() {
-  setPageTitle('Account');
+async function navigate(key) {
   const me = state.me;
-  const isLocal = me.session?.iss === 'local';
+  const route = ROUTES[key];
+  if (!route) return;
+  if (route.admin && !ROLES_ADMIN.includes(me.employee?.role)) return;
+  if (route.super && me.employee?.role !== 'SUPER_ADMIN') return;
 
-  const wrap = el(`
-    <div>
-      <div class="page-header">
-        <div>
-          <h1>Account</h1>
-          <p class="subtitle">Profile, security, sessions and capabilities</p>
-        </div>
-      </div>
-      <div class="tabs">
-        <button class="tab active" data-tab="profile">Profile</button>
-        ${isLocal ? '<button class="tab" data-tab="security">Security</button>' : ''}
-        <button class="tab" data-tab="sessions">Sessions</button>
-        <button class="tab" data-tab="mfa">Two-factor</button>
-      </div>
-      <div id="settings-content"><div class="loading-row"><span class="spinner"></span></div></div>
-    </div>
-  `);
-  setContent(wrap);
+  state.current = key;
+  history.replaceState(null, '', key === 'home' ? '/' : `/?v=${key}`);
+  applyActiveNav();
 
-  const target = wrap.querySelector('#settings-content');
-
-  function renderProfile() {
-    target.innerHTML = `
-      <div class="grid-3">
-        <div class="card">
-          <h2>Profile</h2>
-          <div class="kv-list" style="margin-top:1rem">
-            <div class="kv"><div class="k">Full name</div><div class="v">${esc(me.employee?.full_name || '—')}</div></div>
-            <div class="kv"><div class="k">Email</div><div class="v">${esc(me.session?.email || '—')}</div></div>
-            <div class="kv"><div class="k">Employee ID</div><div class="v"><code>${esc(me.employee?.emp_id || '—')}</code></div></div>
-            <div class="kv"><div class="k">Role</div><div class="v"><span class="badge badge-info">${esc(me.employee?.role || 'USER')}</span></div></div>
-            <div class="kv"><div class="k">Department</div><div class="v">${esc(me.employee?.dept_id || '—')}</div></div>
-            <div class="kv"><div class="k">ILG state</div><div class="v">${ilgBadge(me.employee?.ilg_state)}</div></div>
-          </div>
-        </div>
-        <div class="card">
-          <h2>Sign-in method</h2>
-          <div class="kv-list" style="margin-top:1rem">
-            <div class="kv"><div class="k">Issuer</div><div class="v"><span class="badge badge-info">${esc(me.session?.iss || '—')}</span></div></div>
-            <div class="kv"><div class="k">Subject</div><div class="v"><code class="truncate" title="${esc(me.session?.sub || '')}">${esc(me.session?.sub || '—')}</code></div></div>
-            <div class="kv"><div class="k">Session expires</div><div class="v">${fmtDate(me.session?.expiresAt)}</div></div>
-          </div>
-        </div>
-        <div class="card">
-          <h2>Capabilities</h2>
-          <div class="kv-list" style="margin-top:1rem">
-            ${Object.entries(me.capabilities || {}).map(([k, v]) => `
-              <div class="kv"><div class="k">${esc(k)}</div><div class="v">${typeof v === 'boolean' ? (v ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-neutral">No</span>') : esc(v ?? '—')}</div></div>
-            `).join('')}
-          </div>
-        </div>
-      </div>
-    `;
+  const content = document.getElementById('content');
+  if (route.end) {
+    // end-user view; signature is (me, content) or (content)
+    if (route.end.length >= 2) await route.end(me, content);
+    else await route.end(content);
+    return;
   }
-
-  function renderSecurity() {
-    if (!isLocal) {
-      target.innerHTML = `<div class="alert alert-info">Password change is only available for local accounts. You signed in via <code>${esc(me.session?.iss || '')}</code>.</div>`;
-      return;
-    }
-    target.innerHTML = `
-      <div class="card" style="max-width:520px">
-        <h2>Change password</h2>
-        <p class="subtitle" style="margin-bottom:1rem">Minimum 10 characters. After change, other sessions remain active until you sign them out.</p>
-        <div id="cp-error"></div>
-        <form id="cp-form">
-          <div class="field">
-            <label>Current password</label>
-            <input name="currentPassword" type="password" required autocomplete="current-password" />
-          </div>
-          <div class="field">
-            <label>New password</label>
-            <input name="newPassword" type="password" minlength="10" required autocomplete="new-password" />
-          </div>
-          <div class="field">
-            <label>Confirm new password</label>
-            <input name="confirm" type="password" minlength="10" required autocomplete="new-password" />
-          </div>
-          <button type="submit" class="btn btn-primary">Update password</button>
-        </form>
-      </div>
-    `;
-    target.querySelector('#cp-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const errEl = target.querySelector('#cp-error');
-      errEl.innerHTML = '';
-      const fd = new FormData(e.target);
-      if (fd.get('newPassword') !== fd.get('confirm')) {
-        errEl.innerHTML = `<div class="alert alert-error">New passwords do not match</div>`;
-        return;
-      }
-      try {
-        await api.changePassword(fd.get('currentPassword'), fd.get('newPassword'));
-        errEl.innerHTML = `<div class="alert alert-success">Password updated.</div>`;
-        e.target.reset();
-      } catch (err) {
-        errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      }
-    });
-  }
-
-  async function renderSessions() {
-    target.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
-    try {
-      const r = await api.listSessions();
-      const rows = r.data || [];
-      const body = rows.length ? rows.map((s) => `
-        <tr>
-          <td><code class="truncate" title="${esc(s.session_id)}">${esc(s.session_id.slice(0, 8))}…</code> ${s.isCurrent ? '<span class="badge badge-success">Current</span>' : ''}</td>
-          <td><span class="badge badge-info">${esc(s.iss)}</span></td>
-          <td class="muted">${fmtDate(s.last_active_at)}</td>
-          <td class="muted">${fmtDate(s.expires_at)}</td>
-          <td class="muted truncate" title="${esc(s.user_agent || '')}">${esc(s.ip || '—')}</td>
-          <td class="actions"><button class="btn btn-sm btn-danger" data-revoke="${esc(s.session_id)}">${s.isCurrent ? 'Sign out' : 'Revoke'}</button></td>
-        </tr>`).join('') : `<tr><td colspan="6" class="empty-state">No active sessions</td></tr>`;
-      target.innerHTML = `
-        <div class="table-wrap">
-          <div class="table-toolbar"><strong>Active sessions</strong><span class="muted">${rows.length} session${rows.length === 1 ? '' : 's'}</span></div>
-          <table>
-            <thead><tr><th>Session</th><th>Issuer</th><th>Last active</th><th>Expires</th><th>IP</th><th></th></tr></thead>
-            <tbody>${body}</tbody>
-          </table>
-        </div>
-      `;
-      target.querySelectorAll('[data-revoke]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const id = btn.dataset.revoke;
-          if (!confirm('Revoke this session?')) return;
-          try {
-            await api.revokeSession(id);
-            if (id === me.session?.sessionId) { location.href = '/login'; return; }
-            renderSessions();
-          } catch (err) { alert(err.message); }
-        });
-      });
-    } catch (err) {
-      target.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+  if (route.view) {
+    if (route.view === viewSamlApps || route.view === viewSettings) {
+      await route.view(me, content);
+    } else {
+      await route.view(content);
     }
   }
-
-  async function renderMfa() {
-    target.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
-    let s;
-    try { s = await api.mfaStatus(); }
-    catch (err) {
-      target.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      return;
-    }
-    if (s.enabled) {
-      target.innerHTML = `
-        <div class="card" style="max-width:560px">
-          <h2>Two-factor authentication</h2>
-          <p class="subtitle" style="margin-bottom:1rem"><span class="badge badge-success">Enabled</span> Last used ${fmtDate(s.lastUsedAt)} · ${s.remainingBackupCodes} backup codes left</p>
-          <button class="btn btn-secondary" id="mfa-regen">Regenerate backup codes</button>
-          <button class="btn btn-danger" id="mfa-disable" style="margin-left:0.5rem">Disable two-factor</button>
-          <div id="mfa-action-result" style="margin-top:1rem"></div>
-        </div>
-      `;
-      target.querySelector('#mfa-disable').addEventListener('click', async () => {
-        if (!confirm('Disable two-factor authentication? Your account will be less secure.')) return;
-        await api.mfaDisable(); renderMfa();
-      });
-      target.querySelector('#mfa-regen').addEventListener('click', async () => {
-        if (!confirm('Replace all backup codes? Old codes will stop working.')) return;
-        try {
-          const r = await api.mfaRegenCodes();
-          target.querySelector('#mfa-action-result').innerHTML = `
-            <div class="alert alert-warning">
-              <div>
-                <div style="font-weight:600;margin-bottom:0.5rem">Save these backup codes — shown only once</div>
-                <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.4rem;font-family:var(--font-mono);font-size:0.9rem">
-                  ${r.backupCodes.map((c) => `<div>${esc(c)}</div>`).join('')}
-                </div>
-              </div>
-            </div>`;
-        } catch (err) { alert(err.message); }
-      });
-      return;
-    }
-
-    target.innerHTML = `
-      <div class="card" style="max-width:560px">
-        <h2>Two-factor authentication</h2>
-        <p class="subtitle" style="margin-bottom:1rem"><span class="badge badge-warning">Disabled</span> Adds a 6-digit code on every sign-in.</p>
-        <button class="btn btn-primary" id="mfa-start">Enable two-factor</button>
-        <div id="mfa-enroll-area"></div>
-      </div>
-    `;
-    target.querySelector('#mfa-start').addEventListener('click', async () => {
-      const area = target.querySelector('#mfa-enroll-area');
-      try {
-        const r = await api.mfaEnroll();
-        area.innerHTML = `
-          <div style="margin-top:1.25rem;padding-top:1.25rem;border-top:1px solid var(--border)">
-            <p class="subtitle" style="margin-bottom:0.75rem">Scan the QR code with Google Authenticator, Authy, 1Password, etc.</p>
-            <img src="${esc(r.qrDataUrl)}" alt="MFA QR code" style="background:white;padding:0.5rem;border-radius:8px" />
-            <p class="subtitle" style="margin-top:0.75rem">Or enter this secret manually: <code>${esc(r.secret)}</code></p>
-            <form id="mfa-confirm" style="margin-top:1rem">
-              <div class="field">
-                <label>Enter the 6-digit code from your app</label>
-                <input name="code" required pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" />
-              </div>
-              <button class="btn btn-primary" type="submit">Verify and enable</button>
-            </form>
-            <div id="mfa-confirm-result"></div>
-          </div>
-        `;
-        area.querySelector('#mfa-confirm').addEventListener('submit', async (e) => {
-          e.preventDefault();
-          const out = area.querySelector('#mfa-confirm-result');
-          out.innerHTML = '';
-          try {
-            const code = new FormData(e.target).get('code');
-            const r2 = await api.mfaConfirm(code);
-            out.innerHTML = `
-              <div class="alert alert-success" style="margin-top:1rem">Two-factor enabled.</div>
-              <div class="alert alert-warning" style="margin-top:0.5rem">
-                <div>
-                  <div style="font-weight:600;margin-bottom:0.5rem">Save these backup codes — shown only once</div>
-                  <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.4rem;font-family:var(--font-mono);font-size:0.9rem">
-                    ${r2.backupCodes.map((c) => `<div>${esc(c)}</div>`).join('')}
-                  </div>
-                </div>
-              </div>
-              <button class="btn btn-secondary" id="mfa-done" style="margin-top:0.75rem">Done</button>
-            `;
-            out.querySelector('#mfa-done').addEventListener('click', () => renderMfa());
-          } catch (err) {
-            out.innerHTML = `<div class="alert alert-error" style="margin-top:1rem">${esc(err.message)}</div>`;
-          }
-        });
-      } catch (err) {
-        area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-      }
-    });
-  }
-
-  function showTab(name) {
-    wrap.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-    if (name === 'profile')  renderProfile();
-    else if (name === 'security') renderSecurity();
-    else if (name === 'sessions') renderSessions();
-    else if (name === 'mfa')  renderMfa();
-  }
-
-  wrap.querySelectorAll('.tab').forEach((tab) => {
-    tab.addEventListener('click', () => showTab(tab.dataset.tab));
-  });
-
-  renderProfile();
-}
-
-/* ---------- Router ---------- */
-function navigate(view) {
-  state.view = view;
-  document.querySelectorAll('.nav-item').forEach((b) => {
-    b.classList.toggle('active', b.dataset.view === view);
-  });
-  history.replaceState(null, '', view === 'dashboard' ? '/' : `/?v=${view}`);
-
-  switch (view) {
-    case 'dashboard':  return viewDashboard();
-    case 'apps':       return viewApps();
-    case 'myaccess':   return viewMyAccess();
-    case 'request':    return viewRequestAccess();
-    case 'tasks':      return viewMyTasks();
-    case 'saml-apps':  return viewSamlApps();
-    case 'iga-apps':   return viewIgaApps();
-    case 'connectors': return viewConnectors();
-    case 'users':      return viewUsers();
-    case 'admins':     return viewAdmins();
-    case 'reviews':    return viewReviews();
-    case 'sod':        return viewSod();
-    case 'risk':       return viewRisk();
-    case 'auth':       return viewAuth();
-    case 'audit':      return viewAudit();
-    case 'reports':    return viewReports();
-    case 'settings':   return viewSettings();
-    default:           return viewDashboard();
-  }
-}
-
-/* ---------- Helpers for placeholder/foundation views ---------- */
-function comingSoonView(title, subtitle, body = '') {
-  setPageTitle(title);
-  const wrap = el(`
-    <div>
-      <div class="page-header">
-        <div>
-          <h1>${esc(title)}</h1>
-          <p class="subtitle">${esc(subtitle)}</p>
-        </div>
-      </div>
-      ${body || `
-        <div class="card">
-          <h2>Foundation in place</h2>
-          <p class="subtitle" style="margin-top:0.5rem">
-            Schema and read APIs are live. The interactive workflow
-            (forms, approvals, notifications, fulfillment) ships in a
-            follow-up commit. See <code>ARCHITECTURE.md §15 Roadmap</code>.
-          </p>
-        </div>`}
-    </div>
-  `);
-  setContent(wrap);
-}
-
-async function loadAndRenderTable(opts) {
-  const { fetchFn, columns, render, emptyText, emptyIcon = '◌' } = opts;
-  const wrap = el(`<div></div>`);
-  setContent(el(`<div class="loading-row"><span class="spinner"></span></div>`));
-  try {
-    const r = await fetchFn();
-    const rows = r.data || [];
-    const head = `<thead><tr>${columns.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>`;
-    const body = rows.length
-      ? rows.map((row) => `<tr>${render(row)}</tr>`).join('')
-      : `<tr><td colspan="${columns.length}" class="empty-state"><div class="empty-icon">${emptyIcon}</div>${esc(emptyText)}</td></tr>`;
-    wrap.innerHTML = `<div class="table-wrap"><table>${head}<tbody>${body}</tbody></table></div>`;
-    return wrap;
-  } catch (err) {
-    wrap.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-    return wrap;
-  }
-}
-
-/* ---------- IGA / AM Views ---------- */
-async function viewMyAccess() {
-  setPageTitle('My Access');
-  const header = `
-    <div class="page-header">
-      <div>
-        <h1>My Access</h1>
-        <p class="subtitle">Entitlements and roles currently assigned to you</p>
-      </div>
-      <a href="#" data-view-link="request" class="btn btn-primary">Request access</a>
-    </div>`;
-  const wrap = el(`<div>${header}</div>`);
-  setContent(wrap);
-  wrap.querySelector('[data-view-link]')?.addEventListener('click', (e) => {
-    e.preventDefault(); navigate('request');
-  });
-  const tableNode = await loadAndRenderTable({
-    fetchFn:   () => api.igaMyAccess(),
-    columns:   ['Application', 'Entitlement', 'Type', 'Source', 'Granted', 'Expires'],
-    emptyText: 'You have no managed entitlements yet',
-    emptyIcon: '◫',
-    render: (r) => `
-      <td class="cell-strong">${esc(r.app_name || '—')}</td>
-      <td>${esc(r.entitlement_name)}</td>
-      <td><span class="badge badge-info">${esc(r.type)}</span></td>
-      <td><span class="badge badge-neutral">${esc(r.source)}</span></td>
-      <td class="muted">${fmtDate(r.granted_at)}</td>
-      <td class="muted">${fmtDate(r.expires_at) || 'Never'}</td>`,
-  });
-  wrap.appendChild(tableNode);
-}
-
-async function viewRequestAccess() {
-  comingSoonView(
-    'Request Access',
-    'Browse the application and entitlement catalog and submit access requests',
-    `
-    <div class="card">
-      <h2>Catalog browser</h2>
-      <p class="subtitle" style="margin-top:0.5rem">
-        End-user catalog with one-click request, justification, validity period,
-        and pre-flight SoD check ships next. The
-        <code>POST /api/iga/access-requests</code> endpoint is scaffolded
-        and returns 501 until the approval-chain resolver lands.
-      </p>
-    </div>`,
-  );
-}
-
-async function viewMyTasks() {
-  setPageTitle('My Tasks');
-  const wrap = el(`
-    <div>
-      <div class="page-header">
-        <div>
-          <h1>My Tasks</h1>
-          <p class="subtitle">Pending approvals and access reviews assigned to you</p>
-        </div>
-      </div>
-      <h3 class="section-title">Access request approvals</h3>
-      <div id="tasks-approvals"></div>
-      <h3 class="section-title">Access review items</h3>
-      <div id="tasks-reviews"></div>
-    </div>
-  `);
-  setContent(wrap);
-
-  try {
-    const r = await api.igaMyTasks();
-    const rows = r.data || [];
-    wrap.querySelector('#tasks-approvals').appendChild(
-      rows.length
-        ? el(`<div class="table-wrap"><table>
-            <thead><tr><th>Request</th><th>Requester</th><th>For</th><th>Type</th><th>Submitted</th></tr></thead>
-            <tbody>${rows.map((r) => `<tr>
-              <td><code>${esc(String(r.id).slice(0, 8))}</code></td>
-              <td>${esc(r.requester_name || r.requester_emp_id)}</td>
-              <td>${esc(r.target_name || r.target_emp_id)}</td>
-              <td><span class="badge badge-info">${esc(r.item_type)}</span></td>
-              <td class="muted">${fmtDate(r.created_at)}</td>
-            </tr>`).join('')}</tbody></table></div>`)
-        : el(`<div class="card"><p class="subtitle">No pending approvals.</p></div>`),
-    );
-  } catch (err) {
-    wrap.querySelector('#tasks-approvals').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-  }
-
-  try {
-    const r = await api.igaMyReviews();
-    const rows = r.data || [];
-    wrap.querySelector('#tasks-reviews').appendChild(
-      rows.length
-        ? el(`<div class="table-wrap"><table>
-            <thead><tr><th>Campaign</th><th>Subject</th><th>Item</th><th>Due</th></tr></thead>
-            <tbody>${rows.map((r) => `<tr>
-              <td>${esc(r.campaign_name)}</td>
-              <td>${esc(r.subject_name || r.emp_id)}</td>
-              <td>${esc(r.entitlement_name || r.role_name || '—')}</td>
-              <td class="muted">${fmtDate(r.end_date)}</td>
-            </tr>`).join('')}</tbody></table></div>`)
-        : el(`<div class="card"><p class="subtitle">No active review items.</p></div>`),
-    );
-  } catch (err) {
-    wrap.querySelector('#tasks-reviews').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-  }
-}
-
-async function viewIgaApps() {
-  setPageTitle('Application Catalog');
-  const header = `
-    <div class="page-header">
-      <div>
-        <h1>Application Catalog</h1>
-        <p class="subtitle">Protocol-agnostic registry. Each app may have one or more SAML / OIDC / SCIM bindings.</p>
-      </div>
-    </div>`;
-  const wrap = el(`<div>${header}</div>`);
-  setContent(wrap);
-  const node = await loadAndRenderTable({
-    fetchFn:   () => api.igaApps(),
-    columns:   ['Name', 'Slug', 'Category', 'Visibility', 'SSO', 'Provisioning', 'Protocols', 'Status'],
-    emptyText: 'No applications registered. SAML SPs from /admin/saml-apps will be migrated to this catalog in the next release.',
-    emptyIcon: '▦',
-    render: (a) => `
-      <td class="cell-strong">${esc(a.name)}</td>
-      <td><code>${esc(a.slug)}</code></td>
-      <td>${esc(a.category || '—')}</td>
-      <td><span class="badge badge-neutral">${esc(a.visibility)}</span></td>
-      <td>${a.sso_enabled ? '<span class="badge badge-success">On</span>' : '—'}</td>
-      <td>${a.provisioning ? '<span class="badge badge-info">On</span>' : '—'}</td>
-      <td>${a.protocol_count}</td>
-      <td>${a.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>`,
-  });
-  wrap.appendChild(node);
-}
-
-async function viewConnectors() {
-  setPageTitle('Connectors');
-  const header = `
-    <div class="page-header">
-      <div>
-        <h1>Connectors</h1>
-        <p class="subtitle">Pluggable adapters to target systems (HRMS, AD, Google, Slack, AWS IAM, …)</p>
-      </div>
-    </div>`;
-  const wrap = el(`<div>${header}</div>`);
-  setContent(wrap);
-  const node = await loadAndRenderTable({
-    fetchFn:   () => api.igaConnectors(),
-    columns:   ['Name', 'Type', 'Direction', 'Sync mode', 'Status', 'Last sync'],
-    emptyText: 'No connectors registered. The connector framework runs adapter_outbox jobs once the dispatcher is wired.',
-    emptyIcon: '⇄',
-    render: (c) => `
-      <td class="cell-strong">${esc(c.name)}</td>
-      <td><span class="badge badge-info">${esc(c.connector_type)}</span></td>
-      <td>${esc(c.direction)}</td>
-      <td>${esc(c.sync_mode)}</td>
-      <td>${{
-        CONFIGURED: '<span class="badge badge-neutral">Configured</span>',
-        CONNECTED:  '<span class="badge badge-success">Connected</span>',
-        ERROR:      '<span class="badge badge-danger">Error</span>',
-        DISABLED:   '<span class="badge badge-neutral">Disabled</span>',
-      }[c.status] || esc(c.status)}</td>
-      <td class="muted">${fmtDate(c.last_sync_at)}</td>`,
-  });
-  wrap.appendChild(node);
-}
-
-async function viewReviews() {
-  setPageTitle('Access Reviews');
-  const header = `
-    <div class="page-header">
-      <div>
-        <h1>Access Reviews</h1>
-        <p class="subtitle">Quarterly certification campaigns — managers and app owners certify or revoke access</p>
-      </div>
-    </div>`;
-  const wrap = el(`<div>${header}</div>`);
-  setContent(wrap);
-  const node = await loadAndRenderTable({
-    fetchFn:   () => api.igaReviews(),
-    columns:   ['Name', 'Reviewer kind', 'Period', 'Status', 'Items', 'Pending'],
-    emptyText: 'No campaigns yet. Create one in the next release.',
-    emptyIcon: '✓',
-    render: (c) => `
-      <td class="cell-strong">${esc(c.name)}</td>
-      <td>${esc(c.reviewer_kind)}</td>
-      <td class="muted">${fmtDate(c.start_date)} → ${fmtDate(c.end_date)}</td>
-      <td>${{
-        DRAFT:     '<span class="badge badge-neutral">Draft</span>',
-        ACTIVE:    '<span class="badge badge-success">Active</span>',
-        COMPLETED: '<span class="badge badge-info">Completed</span>',
-        CANCELLED: '<span class="badge badge-danger">Cancelled</span>',
-      }[c.status] || esc(c.status)}</td>
-      <td>${c.item_count}</td>
-      <td>${c.pending_count}</td>`,
-  });
-  wrap.appendChild(node);
-}
-
-async function viewSod() {
-  setPageTitle('Segregation of Duties');
-  const wrap = el(`
-    <div>
-      <div class="page-header">
-        <div>
-          <h1>Segregation of Duties</h1>
-          <p class="subtitle">Toxic combinations and policy violations</p>
-        </div>
-      </div>
-      <h3 class="section-title">Open violations</h3>
-      <div id="sod-violations"></div>
-      <h3 class="section-title">Active policies</h3>
-      <div id="sod-policies"></div>
-    </div>
-  `);
-  setContent(wrap);
-
-  try {
-    const v = await api.igaSodViolations();
-    const rows = v.data || [];
-    wrap.querySelector('#sod-violations').appendChild(
-      rows.length
-        ? el(`<div class="table-wrap"><table>
-            <thead><tr><th>Severity</th><th>Policy</th><th>Employee</th><th>Detected</th></tr></thead>
-            <tbody>${rows.map((r) => `<tr>
-              <td>${{LOW:'<span class="badge badge-neutral">Low</span>',MEDIUM:'<span class="badge badge-info">Medium</span>',HIGH:'<span class="badge badge-warning">High</span>',CRITICAL:'<span class="badge badge-danger">Critical</span>'}[r.severity] || esc(r.severity)}</td>
-              <td>${esc(r.policy_name)}</td>
-              <td>${esc(r.emp_name || r.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(r.email_corp || '')}</span></td>
-              <td class="muted">${fmtDate(r.detected_at)}</td>
-            </tr>`).join('')}</tbody></table></div>`)
-        : el(`<div class="card"><p class="subtitle">No open violations. (Policies are scaffolded; the detection job runs in the next release.)</p></div>`),
-    );
-  } catch (err) {
-    wrap.querySelector('#sod-violations').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-  }
-
-  try {
-    const p = await api.igaSodPolicies();
-    const rows = p.data || [];
-    wrap.querySelector('#sod-policies').appendChild(
-      rows.length
-        ? el(`<div class="table-wrap"><table>
-            <thead><tr><th>Name</th><th>Severity</th><th>Enforcement</th><th>Active</th></tr></thead>
-            <tbody>${rows.map((r) => `<tr>
-              <td class="cell-strong">${esc(r.name)}</td>
-              <td>${esc(r.severity)}</td>
-              <td><span class="badge badge-neutral">${esc(r.enforcement)}</span></td>
-              <td>${r.active ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-neutral">No</span>'}</td>
-            </tr>`).join('')}</tbody></table></div>`)
-        : el(`<div class="card"><p class="subtitle">No policies defined. SoD authoring UI ships next release.</p></div>`),
-    );
-  } catch (err) {
-    wrap.querySelector('#sod-policies').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-  }
-}
-
-async function viewRisk() {
-  setPageTitle('Risk');
-  const wrap = el(`
-    <div>
-      <div class="page-header">
-        <div>
-          <h1>Risk Dashboard</h1>
-          <p class="subtitle">Login risk events and identities scoring above threshold</p>
-        </div>
-      </div>
-      <div id="risk-content"><div class="loading-row"><span class="spinner"></span></div></div>
-    </div>`);
-  setContent(wrap);
-  try {
-    const r = await api.igaRisk();
-    const stats = `
-      <section class="stat-grid">
-        <div class="stat-card">
-          <div class="stat-icon warning">◆</div>
-          <div class="stat-label">Identities at risk</div>
-          <div class="stat-value">${(r.topRisk || []).length}</div>
-          <div class="stat-sub">score ≥ 50</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon info">◐</div>
-          <div class="stat-label">MFA challenged (24h)</div>
-          <div class="stat-value">${r.counters?.mfaChallengeLast24h ?? 0}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon primary">⊘</div>
-          <div class="stat-label">Logins denied (24h)</div>
-          <div class="stat-value">${r.counters?.deniedLast24h ?? 0}</div>
-        </div>
-      </section>
-      <h3 class="section-title">High-risk identities</h3>
-      ${(r.topRisk || []).length
-        ? `<div class="table-wrap"><table>
-            <thead><tr><th>Identity</th><th>Email</th><th>Score</th><th>Last evaluated</th></tr></thead>
-            <tbody>${r.topRisk.map((u) => `<tr>
-              <td class="cell-strong">${esc(u.full_name || u.emp_id)}</td>
-              <td>${esc(u.email_corp || '')}</td>
-              <td><span class="badge ${u.score >= 80 ? 'badge-danger' : (u.score >= 60 ? 'badge-warning' : 'badge-info')}">${u.score}</span></td>
-              <td class="muted">${fmtDate(u.updated_at)}</td>
-            </tr>`).join('')}</tbody></table></div>`
-        : `<div class="card"><p class="subtitle">No risk scores computed yet. Risk engine runs once configured.</p></div>`}
-    `;
-    wrap.querySelector('#risk-content').innerHTML = stats;
-  } catch (err) {
-    wrap.querySelector('#risk-content').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-  }
-}
-
-async function viewReports() {
-  setPageTitle('Compliance Reports');
-  const header = `
-    <div class="page-header">
-      <div>
-        <h1>Compliance Reports</h1>
-        <p class="subtitle">SOX, GDPR, HIPAA evidence — generated snapshots</p>
-      </div>
-    </div>`;
-  const wrap = el(`<div>${header}</div>`);
-  setContent(wrap);
-  const node = await loadAndRenderTable({
-    fetchFn:   () => api.igaReports(),
-    columns:   ['Name', 'Framework', 'Period', 'Generated', 'Artifact'],
-    emptyText: 'No reports generated yet. Report generator ships in the next release.',
-    emptyIcon: '☰',
-    render: (r) => `
-      <td class="cell-strong">${esc(r.name)}</td>
-      <td><span class="badge badge-info">${esc(r.framework)}</span></td>
-      <td class="muted">${fmtDate(r.period_start)} → ${fmtDate(r.period_end)}</td>
-      <td class="muted">${fmtDate(r.generated_at)}</td>
-      <td>${r.artifact_url ? `<a href="${esc(r.artifact_url)}" target="_blank">Download</a>` : '—'}</td>`,
-  });
-  wrap.appendChild(node);
 }
 
 async function main() {
@@ -1615,18 +215,16 @@ async function main() {
     return;
   }
 
-  // Default landing: admins → dashboard, regular users → apps
+  // Default landing
   const isAdmin = ROLES_ADMIN.includes(state.me.employee?.role);
   const params = new URLSearchParams(location.search);
-  const initialView = params.get('v') || (isAdmin ? 'dashboard' : 'apps');
+  const initial = params.get('v') || 'home';
+  // Translate legacy /admin-central
+  if (path === '/admin-central') { if (!isAdmin) { location.href = '/'; return; } }
 
-  // Restrict admin-central legacy URL
-  if (path === '/admin-central') {
-    if (!isAdmin) { location.href = '/'; return; }
-  }
-
-  root.replaceChildren(buildShell(initialView));
-  navigate(initialView);
+  state.current = ROUTES[initial] ? initial : 'home';
+  root.replaceChildren(buildShell());
+  navigate(state.current);
 }
 
 main();

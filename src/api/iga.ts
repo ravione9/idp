@@ -14,7 +14,8 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { requireAuth } from '../auth/middleware.js';
 import { requireRole } from '../auth/rbac.js';
-import { execute, query, queryOne } from '../db/connection.js';
+import { execute, queryOne } from '../db/connection.js';
+import { safeQuery } from '../db/safe-query.js';
 import logger from '../utils/logger.js';
 import { asyncHandler } from '../utils/async-handler.js';
 
@@ -57,7 +58,7 @@ const appSchema = z.object({
 
 router.get('/applications', asyncHandler(async (req: Request, res: Response) => {
   const { limit, offset } = paginate(req);
-  const rows = await query<Record<string, unknown>>(
+  const rows = await safeQuery<Record<string, unknown>>(
     `SELECT a.id, a.slug, a.name, a.description, a.icon_url, a.category,
             a.owner_emp_id, a.visibility, a.sso_enabled, a.provisioning,
             a.risk_score, a.active, a.created_at, a.updated_at,
@@ -121,7 +122,7 @@ router.get('/applications/:id', asyncHandler(async (req: Request, res: Response)
     res.status(404).json({ error: 'Application not found' });
     return;
   }
-  const protocols = await query<Record<string, unknown>>(
+  const protocols = await safeQuery<Record<string, unknown>>(
     `SELECT id, protocol, active, created_at FROM app_protocol_configs WHERE app_id = ?`,
     [app['id']],
   );
@@ -136,7 +137,7 @@ router.get(
   requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
-    const rows = await query<Record<string, unknown>>(
+    const rows = await safeQuery<Record<string, unknown>>(
       `SELECT id, name, slug, connector_type, direction, sync_mode, sync_schedule,
               status, last_sync_at, last_error, created_at, updated_at
          FROM connectors
@@ -157,7 +158,7 @@ router.get(
   requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
-    const rows = await query<Record<string, unknown>>(
+    const rows = await safeQuery<Record<string, unknown>>(
       `SELECT id, run_type, status, started_at, ended_at,
               items_processed, items_succeeded, items_failed, error_summary
          FROM connector_runs
@@ -188,7 +189,7 @@ router.get(
     const where: string[] = [];
     const params: unknown[] = [];
     if (appId) { where.push('e.app_id = ?'); params.push(appId); }
-    const rows = await query<Record<string, unknown>>(
+    const rows = await safeQuery<Record<string, unknown>>(
       `SELECT e.id, e.app_id, e.connector_id, e.name, e.slug, e.type,
               e.risk_score, e.is_birthright, e.requires_review, e.active, e.created_at,
               a.name AS app_name
@@ -205,7 +206,7 @@ router.get(
 
 router.get('/entitlements/me', asyncHandler(async (req: Request, res: Response) => {
   const empId = req.user!.empId;
-  const rows = await query<Record<string, unknown>>(
+  const rows = await safeQuery<Record<string, unknown>>(
     `SELECT ue.id, ue.entitlement_id, ue.source, ue.granted_at, ue.expires_at, ue.last_used_at,
             e.name AS entitlement_name, e.type, e.risk_score,
             a.name AS app_name, a.slug AS app_slug, a.icon_url
@@ -248,7 +249,7 @@ router.get('/access-requests', asyncHandler(async (req: Request, res: Response) 
     }
   }
 
-  const rows = await query<Record<string, unknown>>(
+  const rows = await safeQuery<Record<string, unknown>>(
     `SELECT ar.id, ar.requester_emp_id, ar.target_emp_id, ar.item_type,
             ar.item_ids, ar.justification, ar.status, ar.created_at,
             ar.decided_at, ar.fulfilled_at, ar.sla_due_at,
@@ -280,7 +281,7 @@ router.get(
   requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
-    const rows = await query<Record<string, unknown>>(
+    const rows = await safeQuery<Record<string, unknown>>(
       `SELECT id, name, description, scope, reviewer_kind, start_date, end_date,
               status, created_by, created_at,
               (SELECT COUNT(*) FROM access_review_items i WHERE i.campaign_id = c.id) AS item_count,
@@ -296,7 +297,7 @@ router.get(
 
 router.get('/access-reviews/me', asyncHandler(async (req: Request, res: Response) => {
   const empId = req.user!.empId;
-  const rows = await query<Record<string, unknown>>(
+  const rows = await safeQuery<Record<string, unknown>>(
     `SELECT i.id, i.campaign_id, c.name AS campaign_name, c.end_date,
             i.emp_id, e.full_name AS subject_name,
             i.entitlement_id, ent.name AS entitlement_name,
@@ -326,7 +327,7 @@ router.get(
   '/sod-policies',
   requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (_req: Request, res: Response) => {
-    const rows = await query<Record<string, unknown>>(
+    const rows = await safeQuery<Record<string, unknown>>(
       `SELECT id, name, description, severity, enforcement, conflict_groups, active, created_at
          FROM sod_policies
         ORDER BY severity DESC, name ASC`,
@@ -341,7 +342,7 @@ router.get(
   requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const status = (req.query['status'] as string) ?? 'OPEN';
-    const rows = await query<Record<string, unknown>>(
+    const rows = await safeQuery<Record<string, unknown>>(
       `SELECT v.id, v.policy_id, p.name AS policy_name, p.severity,
               v.emp_id, e.full_name AS emp_name, e.email_corp,
               v.conflicting_ents, v.detected_at, v.status, v.exception_until
@@ -364,7 +365,7 @@ router.get(
   requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (_req: Request, res: Response) => {
     const [topRisk, denied24h, mfa24h] = await Promise.all([
-      query<Record<string, unknown>>(
+      safeQuery<Record<string, unknown>>(
         `SELECT r.emp_id, e.full_name, e.email_corp, r.score, r.factors, r.updated_at
            FROM risk_scores r
            JOIN employees e ON e.emp_id = r.emp_id
@@ -372,7 +373,7 @@ router.get(
           ORDER BY r.score DESC
           LIMIT 25`,
         [],
-      ).catch(() => []),
+      ),
       queryOne<{ n: number }>(
         `SELECT COUNT(*) AS n FROM login_risk_events
           WHERE decision IN ('DENY','BLOCK')
@@ -403,7 +404,7 @@ router.get(
   '/reports',
   requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (_req: Request, res: Response) => {
-    const rows = await query<Record<string, unknown>>(
+    const rows = await safeQuery<Record<string, unknown>>(
       `SELECT id, name, framework, generated_by, generated_at, period_start, period_end, artifact_url
          FROM compliance_reports
         ORDER BY generated_at DESC
