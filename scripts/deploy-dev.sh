@@ -15,6 +15,20 @@ INSTALL_DIR="${IDP_INSTALL_DIR:-/opt/idp}"
 DEV_IP="${IDP_DEV_IP:-192.168.24.254}"
 COMPOSE_FILE="docker-compose.dev.yml"
 
+# Docker Compose v2 plugin OR legacy docker-compose v1 binary
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE=(docker-compose)
+else
+  echo "ERROR: Neither 'docker compose' (plugin) nor 'docker-compose' found."
+  echo "Install one of:"
+  echo "  sudo apt install docker-compose-plugin   # recommended"
+  echo "  sudo apt install docker-compose            # legacy v1"
+  exit 1
+fi
+
+echo "==> Using: ${COMPOSE[*]}"
 echo "==> LILG IdP dev deploy (single tier)"
 echo "    Repo:  ${REPO_URL}"
 echo "    Dir:   ${INSTALL_DIR}"
@@ -22,11 +36,6 @@ echo "    URL:   http://${DEV_IP}:8080"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: Docker is not installed. Install Docker Engine first."
-  exit 1
-fi
-
-if ! docker compose version >/dev/null 2>&1; then
-  echo "ERROR: docker compose plugin is required."
   exit 1
 fi
 
@@ -56,7 +65,7 @@ if [[ ! -f .env ]]; then
 fi
 
 echo "==> Building and starting containers..."
-docker compose -f "${COMPOSE_FILE}" up -d --build
+"${COMPOSE[@]}" -f "${COMPOSE_FILE}" up -d --build
 
 echo "==> Waiting for LocalStack..."
 for i in $(seq 1 30); do
