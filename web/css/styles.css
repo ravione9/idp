@@ -545,23 +545,48 @@ button { font-family: inherit; cursor: pointer; }
 
 /* ============================================================
    ADMIN SIDEBAR (visible only when in Admin)
+   Independent scroll — sidebar never pushes page
    ============================================================ */
+
+/* Shell must be a fixed-height container so children can scroll */
+.shell {
+  display: grid;
+  grid-template-rows: 56px 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+
 .shell.admin-mode {
   grid-template-rows: 56px 1fr;
 }
+
+/* admin-body fills the remaining row and splits into sidebar + content */
 .shell.admin-mode .admin-body {
   display: grid;
   grid-template-columns: 240px 1fr;
-  min-height: 0;
+  min-height: 0;      /* allow grid children to shrink below content size */
+  overflow: hidden;   /* children scroll independently */
 }
+
+/* Non-admin fallback: admin-body is invisible wrapper */
 .admin-body { display: contents; }
 
 .admin-sidebar {
   background: var(--surface);
   border-right: 1px solid var(--border);
-  overflow-y: auto;
+  overflow-y: auto;   /* sidebar scrolls on its own */
+  overflow-x: hidden;
   padding: 0.75rem 0;
+  /* Crucial: fill the grid cell height exactly */
+  height: 100%;
+  /* Prevent scrollbar from causing layout shifts */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.admin-sidebar::-webkit-scrollbar { width: 4px; }
+.admin-sidebar::-webkit-scrollbar-track { background: transparent; }
+.admin-sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
 .admin-sidebar.hidden { display: none; }
 
 .admin-sidebar .nav-section {
@@ -601,18 +626,24 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--primary);
 }
 
-.shell.admin-mode .content {
-  /* content auto-sized to admin-body second column */
-}
-
 /* ============================================================
-   CONTENT
+   CONTENT  — scrolls independently of sidebar
    ============================================================ */
 .content {
   padding: 1.5rem 2rem;
-  overflow-y: auto;
+  overflow-y: auto;   /* content scrolls on its own */
+  overflow-x: hidden;
   background: var(--bg);
+  height: 100%;       /* fill grid cell */
+  /* Smooth scroll */
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.content::-webkit-scrollbar { width: 6px; }
+.content::-webkit-scrollbar-track { background: transparent; }
+.content::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
+.content::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
 .page-header {
   display: flex; justify-content: space-between; align-items: flex-end;

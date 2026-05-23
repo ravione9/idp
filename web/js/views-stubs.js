@@ -420,26 +420,114 @@ export async function viewLoginCustomization(content) {
 }
 
 // ─── 8. OIDC Apps ─────────────────────────────────────────────────────────────
+// ─── Pre-built SSO Integration Catalog ───────────────────────────────────────
+const SSO_CATALOG = [
+  // Productivity & Collaboration
+  { id:'slack',      name:'Slack',              icon:'https://cdn.brandfetch.io/idmFGMCpgF/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Collaboration',   protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code'], setupUrl:'https://api.slack.com/authentication/sign-in-with-slack', hint:'Use Slack\'s OIDC integration for workspace SSO.' },
+  { id:'teams',      name:'Microsoft Teams',    icon:'https://cdn.brandfetch.io/idchmboHEZ/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Collaboration',   protocol:'SAML', hint:'Configure via Microsoft Entra ID (Azure AD) app gallery.' },
+  { id:'zoom',       name:'Zoom',               icon:'https://cdn.brandfetch.io/idPJzRyTFr/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Collaboration',   protocol:'SAML', hint:'Zoom supports SAML 2.0 SSO via the SSO tab in Zoom Admin.' },
+  { id:'notion',     name:'Notion',             icon:'https://cdn.brandfetch.io/idoHnTEJFz/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Collaboration',   protocol:'SAML', hint:'Notion Enterprise supports SAML 2.0. Configure in Settings → Identity & Provisioning.' },
+  { id:'miro',       name:'Miro',               icon:'https://cdn.brandfetch.io/idAnDmwDVl/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Collaboration',   protocol:'SAML', hint:'Miro supports SAML 2.0 SSO for Enterprise plans.' },
+  // Dev Tools
+  { id:'github',     name:'GitHub Enterprise',  icon:'https://cdn.brandfetch.io/idZAyF9zcg/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'SAML', hint:'GitHub Enterprise Cloud supports SAML 2.0 SSO at the organisation level.' },
+  { id:'gitlab',     name:'GitLab',             icon:'https://cdn.brandfetch.io/idgPFp_k7R/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'SAML', hint:'GitLab supports SAML 2.0 for self-managed and GitLab.com groups.' },
+  { id:'jira',       name:'Jira / Confluence',  icon:'https://cdn.brandfetch.io/idg6A4H3BO/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'SAML', hint:'Atlassian Access enables SAML 2.0 SSO for Jira and Confluence Cloud.' },
+  { id:'jenkins',    name:'Jenkins',            icon:'https://cdn.brandfetch.io/idFCMjIcFj/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code'], hint:'Use the OpenID Connect Authentication Plugin for Jenkins SSO.' },
+  { id:'sonarqube',  name:'SonarQube',          icon:'https://cdn.brandfetch.io/idE1RNF9Fg/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code'], hint:'SonarQube supports SAML 2.0 and OIDC. Configure in Administration → Security → Authentication.' },
+  { id:'argocd',     name:'Argo CD',            icon:'https://cdn.brandfetch.io/idqxjS-Lgf/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'OIDC', scopes:['openid','email','groups'], grants:['authorization_code'], hint:'Argo CD supports OIDC via dex or direct OIDC provider config in argocd-cm.' },
+  // Cloud & Infrastructure
+  { id:'aws',        name:'AWS (IAM Identity)',  icon:'https://cdn.brandfetch.io/idHpBVQh7T/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Cloud',          protocol:'SAML', hint:'AWS IAM Identity Center (SSO) accepts SAML 2.0 from external IdPs. ACS URL: https://signin.aws.amazon.com/saml.' },
+  { id:'gcp',        name:'Google Cloud',        icon:'https://cdn.brandfetch.io/idoHnTEJFz/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Cloud',          protocol:'SAML', hint:'Google Workspace / Cloud Identity supports SAML 2.0 external IdP federation.' },
+  { id:'azure',      name:'Azure / Entra ID',    icon:'https://cdn.brandfetch.io/idchmboHEZ/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Cloud',          protocol:'SAML', hint:'Azure federated identity supports SAML 2.0 and OIDC from external IdPs.' },
+  { id:'datadog',    name:'Datadog',             icon:'https://cdn.brandfetch.io/idWnZ2IOXT/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Cloud',          protocol:'SAML', hint:'Datadog supports SAML 2.0 in Organisation Settings → SAML.' },
+  { id:'pagerduty',  name:'PagerDuty',           icon:'https://cdn.brandfetch.io/idoJiE2gqt/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Cloud',          protocol:'SAML', hint:'PagerDuty supports SAML 2.0 SSO in Account Settings → SSO.' },
+  // Business Apps
+  { id:'salesforce', name:'Salesforce',          icon:'https://cdn.brandfetch.io/id6H4MeNHm/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'CRM',            protocol:'SAML', hint:'Salesforce supports SAML 2.0 and can be configured as SP in Setup → Single Sign-On Settings.' },
+  { id:'hubspot',    name:'HubSpot',             icon:'https://cdn.brandfetch.io/idVfY5YB3d/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'CRM',            protocol:'SAML', hint:'HubSpot Enterprise supports SAML 2.0 SSO via Security → Single Sign-On.' },
+  { id:'zendesk',    name:'Zendesk',             icon:'https://cdn.brandfetch.io/idXJeVJAz2/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Support',        protocol:'SAML', hint:'Zendesk supports SAML 2.0 in Admin → Security → Single Sign-On.' },
+  { id:'freshdesk',  name:'Freshdesk',           icon:'https://cdn.brandfetch.io/idpw09B7q5/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Support',        protocol:'SAML', hint:'Freshdesk supports SAML 2.0 via Admin → Security → Single Sign-On.' },
+  { id:'servicenow', name:'ServiceNow',          icon:'https://cdn.brandfetch.io/idPjDwVY0z/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'ITSM',           protocol:'SAML', hint:'ServiceNow supports SAML 2.0 via System Security → SSO Properties.' },
+  { id:'workday',    name:'Workday',             icon:'https://cdn.brandfetch.io/id6nDjnGVK/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'HR',             protocol:'SAML', hint:'Workday supports SAML 2.0 SSO. Workday acts as SP; configure in Edit Tenant Setup → Security.' },
+  { id:'bamboohr',   name:'BambooHR',            icon:'https://cdn.brandfetch.io/idV79BaEsJ/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'HR',             protocol:'SAML', hint:'BambooHR supports SAML 2.0 SSO. Configure under Settings → SSO.' },
+  { id:'gusto',      name:'Gusto',               icon:'https://cdn.brandfetch.io/idkiTADKT9/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'HR',             protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code'], hint:'Gusto supports OAuth 2.0 / OIDC for partner integrations.' },
+  // Storage & Docs
+  { id:'gsuite',     name:'Google Workspace',    icon:'https://cdn.brandfetch.io/idoHnTEJFz/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Productivity',   protocol:'SAML', hint:'Google Workspace supports SAML 2.0. Configure in Admin Console → Security → SSO with third-party IdP.' },
+  { id:'office365',  name:'Microsoft 365',       icon:'https://cdn.brandfetch.io/idchmboHEZ/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Productivity',   protocol:'SAML', hint:'Microsoft 365 federated authentication with SAML 2.0 via Azure AD federation.' },
+  { id:'box',        name:'Box',                 icon:'https://cdn.brandfetch.io/idEnXxBhPr/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Storage',        protocol:'SAML', hint:'Box supports SAML 2.0 SSO. Configure in Admin Console → Enterprise Settings → User Settings.' },
+  { id:'dropbox',    name:'Dropbox Business',    icon:'https://cdn.brandfetch.io/idl-wKFkJt/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Storage',        protocol:'SAML', hint:'Dropbox Business supports SAML 2.0 in Admin Console → Settings → Single Sign-On.' },
+  // Design & Media
+  { id:'figma',      name:'Figma',               icon:'https://cdn.brandfetch.io/idZfZEO_0x/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Design',         protocol:'SAML', hint:'Figma Organization supports SAML 2.0 SSO via Organization Settings → Security.' },
+  { id:'canva',      name:'Canva',               icon:'https://cdn.brandfetch.io/idJERK4uq6/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Design',         protocol:'SAML', hint:'Canva for Enterprise supports SAML 2.0 SSO.' },
+  // Finance
+  { id:'quickbooks', name:'QuickBooks',          icon:'https://cdn.brandfetch.io/idqmVyUheS/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Finance',        protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code'], hint:'QuickBooks Online supports OpenID Connect for accounting integrations.' },
+  // Security & IAM
+  { id:'okta',       name:'Okta (SP-initiated)', icon:'https://cdn.brandfetch.io/idpPMCJaSN/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'IAM',            protocol:'SAML', hint:'Use when Lenskart IdP federates INTO an Okta org. Okta acts as SP.' },
+  { id:'cyberark',   name:'CyberArk',            icon:'https://cdn.brandfetch.io/idPJBtxYOh/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'PAM',            protocol:'SAML', hint:'CyberArk Privileged Access Manager supports SAML 2.0 SSO for web access.' },
+  // Analytics
+  { id:'tableau',    name:'Tableau',             icon:'https://cdn.brandfetch.io/idnRpjVP9q/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Analytics',      protocol:'SAML', hint:'Tableau Online and Server support SAML 2.0 SSO.' },
+  { id:'looker',     name:'Looker / Looker Studio',icon:'https://cdn.brandfetch.io/idoHnTEJFz/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Analytics',    protocol:'SAML', hint:'Looker supports SAML 2.0 for enterprise SSO.' },
+  { id:'metabase',   name:'Metabase',            icon:'https://cdn.brandfetch.io/id3vLq9Qiv/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Analytics',      protocol:'SAML', hint:'Metabase Enterprise supports SAML 2.0 SSO.' },
+  // Custom
+  { id:'custom',     name:'Custom OIDC App',     icon:null, cat:'Custom',        protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code','refresh_token'], hint:'Register any application that supports OpenID Connect / OAuth 2.0.' },
+];
+
+const CATALOG_CATS = ['All', ...new Set(SSO_CATALOG.map(a => a.cat))];
+
+// ─── 8. OIDC / OAuth Applications ────────────────────────────────────────────
 export async function viewOidcApps(content) {
-  content.replaceChildren(el(`<div>${header('OIDC Applications', 'OAuth 2.0 / OpenID Connect client registrations', `<button class="btn btn-primary" id="new-oidc-btn">+ Register App</button>`)}<div id="list-area">${loading()}</div></div>`));
+  content.replaceChildren(el(`<div>
+    ${header('OIDC / OAuth Applications', 'OAuth 2.0 and OpenID Connect client registrations')}
+    <div class="inline-tabs" id="oidc-tabs">
+      <button class="inline-tab active" data-tab="my-apps">My Applications</button>
+      <button class="inline-tab" data-tab="catalog">Pre-built Integrations</button>
+    </div>
+    <div id="tab-my-apps"><div id="list-area">${loading()}</div></div>
+    <div id="tab-catalog" style="display:none"></div>
+  </div>`));
   const wrap = content.firstChild;
 
+  // ── tab switching ──────────────────────────────────────────────────────────
+  wrap.querySelectorAll('.inline-tab').forEach(t => {
+    t.addEventListener('click', () => {
+      wrap.querySelectorAll('.inline-tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      wrap.querySelector('#tab-my-apps').style.display  = t.dataset.tab === 'my-apps'  ? '' : 'none';
+      wrap.querySelector('#tab-catalog').style.display  = t.dataset.tab === 'catalog'  ? '' : 'none';
+      if (t.dataset.tab === 'catalog') renderCatalog();
+    });
+  });
+
+  // ── My Applications tab ────────────────────────────────────────────────────
   async function load() {
     try {
-      const clients = await api.listOidcClients();
+      const r = await api.listOidcClients();
+      // Backend returns { data: [...] } — normalise
+      const clients = Array.isArray(r) ? r : (r && r.data ? r.data : []);
       const rows = clients.length ? clients.map(c => `
         <tr>
-          <td class="cell-strong">${esc(c.client_name)}</td>
-          <td><code style="font-size:0.8rem">${esc(c.client_id)}</code></td>
-          <td class="muted" style="font-size:0.8rem">${esc((c.grant_types||[]).join(', '))}</td>
-          <td class="muted" style="font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc((c.redirect_uris||[]).join(', '))}</td>
+          <td class="cell-strong">${esc(c.name || c.client_name || '—')}</td>
+          <td><code style="font-size:0.78rem;user-select:all">${esc(c.client_id)}</code></td>
+          <td class="muted" style="font-size:0.8rem">${esc(parseJsonArr(c.grant_types).join(', ') || '—')}</td>
+          <td class="muted" style="font-size:0.75rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(parseJsonArr(c.redirect_uris).join(', '))}">${esc(parseJsonArr(c.redirect_uris).join(', ') || '—')}</td>
           <td>${c.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
-          <td>
-            <button class="btn btn-sm btn-secondary rotate-oidc" data-id="${esc(String(c.id))}" data-name="${esc(c.client_name)}">Rotate Secret</button>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary rotate-oidc" data-id="${esc(String(c.id))}" data-name="${esc(c.name||c.client_name||'')}">↻ Rotate Secret</button>
             <button class="btn btn-sm btn-danger del-oidc" data-id="${esc(String(c.id))}">Delete</button>
           </td>
-        </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No OIDC applications registered.</p></div></td></tr>`;
-      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>App Name</th><th>Client ID</th><th>Grant Types</th><th>Redirect URIs</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        </tr>`).join('')
+        : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No OIDC applications yet. Register one above or pick a pre-built integration.</p></div></td></tr>`;
+
+      wrap.querySelector('#list-area').innerHTML = `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
+          <button class="btn btn-primary" id="new-oidc-btn">+ Register Custom App</button>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>App Name</th><th>Client ID</th><th>Grant Types</th><th>Redirect URIs</th><th>Status</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+
+      wrap.querySelector('#new-oidc-btn').addEventListener('click', () => openRegisterModal());
+
       wrap.querySelectorAll('.del-oidc').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Delete this OIDC client?')) return;
@@ -448,57 +536,183 @@ export async function viewOidcApps(content) {
       });
       wrap.querySelectorAll('.rotate-oidc').forEach(btn => {
         btn.addEventListener('click', async () => {
-          if (!confirm(`Rotate secret for ${btn.dataset.name}? The current secret will be invalidated.`)) return;
+          if (!confirm(`Rotate secret for "${btn.dataset.name}"? The current secret will stop working immediately.`)) return;
           try {
             const result = await api.rotateOidcSecret(btn.dataset.id);
-            openModal(`<div class="modal"><div class="modal-header"><h2>New Client Secret</h2></div><div class="modal-body">
-              <p class="muted">Copy this secret now — it will not be shown again.</p>
-              <input class="form-input" value="${esc(result.client_secret||'(see response)')}" readonly onclick="this.select()">
-            </div><div class="modal-footer"><button class="btn btn-primary" id="rs-close">Done</button></div></div>`).querySelector('#rs-close').addEventListener('click', e => e.target.closest('.modal-backdrop').remove());
+            showSecretModal(null, result.client_secret, async () => await load());
           } catch(e) { alert(e.message); }
         });
       });
     } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
   }
 
-  wrap.querySelector('#new-oidc-btn').addEventListener('click', () => {
-    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Register OIDC Application</h2></div><div class="modal-body">
-      <div class="form-group"><label class="form-label">App Name</label><input class="form-input" id="oidc-name"></div>
-      <div class="form-group"><label class="form-label">Redirect URIs (one per line)</label><textarea class="form-textarea" id="oidc-uris" rows="3" placeholder="https://app.example.com/callback"></textarea></div>
-      <div class="form-group"><label class="form-label">Grant Types</label>
-        <label class="form-check"><input type="checkbox" id="gt-code" checked> authorization_code</label>
-        <label class="form-check"><input type="checkbox" id="gt-refresh"> refresh_token</label>
-        <label class="form-check"><input type="checkbox" id="gt-creds"> client_credentials</label>
+  // ── parse JSON-stored arrays (DB stores as JSON strings) ────────────────────
+  function parseJsonArr(v) {
+    if (!v) return [];
+    if (Array.isArray(v)) return v;
+    try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; }
+  }
+
+  // ── register modal (custom or from catalog) ─────────────────────────────────
+  function openRegisterModal(prefill = {}) {
+    const bd = openModal(`<div class="modal" style="width:580px;max-width:96vw">
+      <div class="modal-header"><h2>${prefill.name ? 'Add — ' + esc(prefill.name) : 'Register OIDC Application'}</h2></div>
+      <div class="modal-body">
+        ${prefill.hint ? `<div class="info-box" style="margin-bottom:1rem">ℹ️ ${esc(prefill.hint)}</div>` : ''}
+        <div class="form-2col">
+          <div class="form-group span2">
+            <label class="form-label">Application Name <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="oidc-name" value="${esc(prefill.name||'')}" placeholder="e.g. Slack">
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">Redirect URIs <span class="muted" style="font-weight:400">(one per line)</span></label>
+            <textarea class="form-textarea" id="oidc-uris" rows="3" placeholder="https://app.example.com/callback&#10;https://app.example.com/auth/callback">${esc((prefill.redirect_uris||[]).join('\n'))}</textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Grant Types</label>
+            <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-code" ${(prefill.grants||['authorization_code']).includes('authorization_code')?'checked':''}><label for="gt-code">authorization_code</label></div>
+            <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-refresh" ${(prefill.grants||[]).includes('refresh_token')?'checked':''}><label for="gt-refresh">refresh_token</label></div>
+            <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-creds" ${(prefill.grants||[]).includes('client_credentials')?'checked':''}><label for="gt-creds">client_credentials</label></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Scopes</label>
+            ${['openid','email','profile','groups','roles'].map(s => `
+            <div class="form-check-row"><input type="checkbox" class="form-check" id="sc-${s}" ${(prefill.scopes||['openid','email','profile']).includes(s)?'checked':''}><label for="sc-${s}">${esc(s)}</label></div>`).join('')}
+          </div>
+        </div>
+        <div id="oidc-err"></div>
       </div>
-      <div id="oidc-err"></div>
-    </div><div class="modal-footer"><button class="btn btn-primary" id="oidc-save">Register</button><button class="btn btn-secondary" id="oidc-cancel">Cancel</button></div></div>`);
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="oidc-save">Register Application</button>
+        <button class="btn btn-secondary" id="oidc-cancel">Cancel</button>
+      </div>
+    </div>`);
+
     bd.querySelector('#oidc-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#oidc-save').addEventListener('click', async () => {
+      const saveBtn = bd.querySelector('#oidc-save');
+      saveBtn.disabled = true; saveBtn.textContent = 'Registering…';
       const grants = [];
-      if (bd.querySelector('#gt-code').checked) grants.push('authorization_code');
+      if (bd.querySelector('#gt-code').checked)    grants.push('authorization_code');
       if (bd.querySelector('#gt-refresh').checked) grants.push('refresh_token');
-      if (bd.querySelector('#gt-creds').checked) grants.push('client_credentials');
+      if (bd.querySelector('#gt-creds').checked)   grants.push('client_credentials');
+      const scopes = ['openid','email','profile','groups','roles'].filter(s => bd.querySelector(`#sc-${s}`)?.checked);
       const urisRaw = bd.querySelector('#oidc-uris').value;
       const data = {
-        client_name: bd.querySelector('#oidc-name').value,
+        name: bd.querySelector('#oidc-name').value.trim(),     // backend expects 'name' not 'client_name'
         redirect_uris: urisRaw.split('\n').map(s => s.trim()).filter(Boolean),
         grant_types: grants,
+        scopes,
         response_types: ['code'],
+        token_endpoint_auth_method: 'client_secret_basic',
       };
-      if (!data.client_name) { bd.querySelector('#oidc-err').innerHTML = errHtml('App name required'); return; }
+      if (!data.name) { bd.querySelector('#oidc-err').innerHTML = errHtml('Application name is required'); saveBtn.disabled=false; saveBtn.textContent='Register Application'; return; }
       try {
         const result = await api.createOidcClient(data);
         bd.remove();
-        if (result.client_secret) {
-          openModal(`<div class="modal"><div class="modal-header"><h2>Client Created</h2></div><div class="modal-body">
-            <p><strong>Client ID:</strong> <code>${esc(result.client_id)}</code></p>
-            <p class="muted">Copy the secret now — it will not be shown again.</p>
-            <div class="form-group"><label class="form-label">Client Secret</label><input class="form-input" value="${esc(result.client_secret)}" readonly onclick="this.select()"></div>
-          </div><div class="modal-footer"><button class="btn btn-primary" id="cs-done">Done</button></div></div>`).querySelector('#cs-done').addEventListener('click', async e => { e.target.closest('.modal-backdrop').remove(); await load(); });
-        } else { await load(); }
-      } catch(e) { bd.querySelector('#oidc-err').innerHTML = errHtml(e.message); }
+        showSecretModal(result.client_id, result.client_secret, async () => {
+          // Switch to My Applications tab and reload
+          wrap.querySelectorAll('.inline-tab')[0].click();
+          await load();
+        });
+      } catch(e) {
+        bd.querySelector('#oidc-err').innerHTML = errHtml(e.message);
+        saveBtn.disabled=false; saveBtn.textContent='Register Application';
+      }
     });
-  });
+  }
+
+  // ── show secret in modal ────────────────────────────────────────────────────
+  function showSecretModal(clientId, secret, onDone) {
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>🔑 Save Your Client Secret</h2></div>
+      <div class="modal-body">
+        <div class="info-box">This secret will <strong>not</strong> be shown again. Copy it now and store it securely.</div>
+        ${clientId ? `<div class="form-group"><label class="form-label">Client ID</label><input class="form-input" value="${esc(clientId)}" readonly onclick="this.select()"></div>` : ''}
+        <div class="form-group"><label class="form-label">Client Secret</label><input class="form-input" id="secret-val" value="${esc(secret||'')}" readonly onclick="this.select()" style="font-family:var(--font-mono);letter-spacing:0.04em"></div>
+        <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard?.writeText(document.querySelector('#secret-val').value).then(()=>this.textContent='✓ Copied!');this.textContent='✓ Copied!'">Copy to Clipboard</button>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" id="sec-done">Done — I've saved the secret</button></div>
+    </div>`);
+    bd.querySelector('#sec-done').addEventListener('click', () => { bd.remove(); if (onDone) onDone(); });
+  }
+
+  // ── Pre-built Integrations catalog ─────────────────────────────────────────
+  let activeCat = 'All';
+  let searchQ   = '';
+
+  function renderCatalog() {
+    const area = wrap.querySelector('#tab-catalog');
+    area.innerHTML = `
+      <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin-bottom:1.25rem">
+        <input class="form-input" id="cat-search" placeholder="Search integrations…" style="max-width:260px;flex:1" value="${esc(searchQ)}">
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap" id="cat-filters">
+          ${CATALOG_CATS.map(cat => `<button class="btn btn-sm ${activeCat===cat?'btn-primary':'btn-secondary'} cat-filter" data-cat="${esc(cat)}">${esc(cat)}</button>`).join('')}
+        </div>
+      </div>
+      <div id="cat-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem"></div>`;
+
+    function renderGrid() {
+      const q = searchQ.toLowerCase();
+      const visible = SSO_CATALOG.filter(a =>
+        (activeCat === 'All' || a.cat === activeCat) &&
+        (!q || a.name.toLowerCase().includes(q) || a.cat.toLowerCase().includes(q))
+      );
+      area.querySelector('#cat-grid').innerHTML = visible.map(app => `
+        <div class="card" style="padding:1.25rem;cursor:default;position:relative">
+          <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem">
+            ${app.icon
+              ? `<img src="${esc(app.icon)}" width="36" height="36" style="border-radius:8px;object-fit:contain;background:var(--surface-3);padding:4px" onerror="this.style.display='none';this.nextSibling.style.display='flex'">`
+              : ''
+            }
+            <div class="app-icon-fallback" style="width:36px;height:36px;border-radius:8px;font-size:1.1rem;${app.icon?'display:none':'display:flex'}">${esc(app.name[0])}</div>
+            <div>
+              <div style="font-weight:600;font-size:0.9rem">${esc(app.name)}</div>
+              <div><span class="badge ${app.protocol==='OIDC'?'badge-info':'badge-warning'}" style="font-size:0.65rem">${esc(app.protocol)}</span></div>
+            </div>
+          </div>
+          <div class="muted" style="font-size:0.75rem;margin-bottom:0.75rem;line-height:1.5">${esc(app.hint || '')}</div>
+          <button class="btn btn-primary btn-sm" style="width:100%" data-app="${esc(app.id)}">+ Add Integration</button>
+        </div>`).join('') || `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">🔍</div><p>No integrations match "${esc(q)}"</p></div>`;
+
+      area.querySelectorAll('[data-app]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const app = SSO_CATALOG.find(a => a.id === btn.dataset.app);
+          if (!app) return;
+          if (app.protocol === 'SAML') {
+            // Redirect to SAML apps page with pre-fill info
+            openModal(`<div class="modal"><div class="modal-header"><h2>${esc(app.name)} — SAML 2.0 Integration</h2></div>
+              <div class="modal-body">
+                <div class="info-box">ℹ️ ${esc(app.name)} uses <strong>SAML 2.0</strong>. Configure it as a SAML SP in the <strong>SAML Applications</strong> section, then paste the IdP metadata URL into ${esc(app.name)}'s SSO settings.<br><br>${esc(app.hint)}</div>
+                <div class="form-group"><label class="form-label">IdP Metadata URL (paste into ${esc(app.name)})</label>
+                  <input class="form-input" value="${esc(window.location.origin)}/auth/saml/metadata" readonly onclick="this.select()"></div>
+                <div class="form-group"><label class="form-label">IdP SSO URL</label>
+                  <input class="form-input" value="${esc(window.location.origin)}/auth/saml/sso" readonly onclick="this.select()"></div>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-primary" onclick="window.location.hash=''; document.querySelector('[data-v=samlApps]')?.click(); this.closest('.modal-backdrop').remove();">Go to SAML Apps →</button>
+                <button class="btn btn-secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button>
+              </div>
+            </div>`);
+          } else {
+            wrap.querySelectorAll('.inline-tab')[0].click();
+            openRegisterModal({ name: app.name, scopes: app.scopes, grants: app.grants, hint: app.hint });
+          }
+        });
+      });
+    }
+
+    area.querySelector('#cat-search').addEventListener('input', e => { searchQ = e.target.value; renderGrid(); });
+    area.querySelectorAll('.cat-filter').forEach(btn => {
+      btn.addEventListener('click', () => {
+        activeCat = btn.dataset.cat;
+        area.querySelectorAll('.cat-filter').forEach(b => b.classList.toggle('btn-primary', b.dataset.cat === activeCat));
+        area.querySelectorAll('.cat-filter').forEach(b => b.classList.toggle('btn-secondary', b.dataset.cat !== activeCat));
+        renderGrid();
+      });
+    });
+
+    renderGrid();
+  }
 
   await load();
 }
@@ -508,24 +722,29 @@ export async function viewAppDiscovery(content) {
   content.replaceChildren(el(`<div>${header('App Discovery', 'Shadow IT and application usage discovery')}<div id="disc-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
   try {
-    const connectors = await api.igaConnectors();
-    const disc = (connectors || []).filter(c => c.type === 'DISCOVERY' || c.connector_type === 'DISCOVERY');
+    const r = await api.igaConnectors();
+    // igaConnectors returns { data: [...] } — normalise to array
+    const allConnectors = Array.isArray(r) ? r : (r && r.data ? r.data : []);
+    const disc = allConnectors.filter(c => (c.connector_type || c.type || '') === 'DISCOVERY');
     wrap.querySelector('#disc-area').innerHTML = `
       <div class="card" style="margin-bottom:1rem;display:flex;gap:1rem;align-items:flex-start">
         <div style="font-size:2rem">🔭</div>
         <div>
           <strong>Shadow IT Discovery</strong>
-          <p class="muted" style="margin-top:0.25rem">Automatic application discovery by analysing SSO logs and network connectors is planned for Phase 5. Currently, connectors of type DISCOVERY can be registered below.</p>
+          <p class="muted" style="margin-top:0.25rem">Automatic discovery by analysing SSO logs, Google Workspace audit trails, and proxy logs surfaces unsanctioned SaaS in use across your organisation. Currently, register connectors of type DISCOVERY below; full log-ingestion ships in Phase 5.</p>
         </div>
       </div>
-      ${disc.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Last Run</th></tr></thead><tbody>
-        ${disc.map(c => `<tr>
-          <td class="cell-strong">${esc(c.name)}</td>
-          <td><span class="badge badge-info">${esc(c.type||c.connector_type||'DISCOVERY')}</span></td>
-          <td>${c.status === 'ACTIVE' ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">'+esc(c.status||'Unknown')+'</span>'}</td>
-          <td class="muted">${c.last_run_at ? fmtDate(c.last_run_at) : '—'}</td>
-        </tr>`).join('')}
-      </tbody></table></div>` : `<div class="empty-state"><div class="empty-icon">🔍</div><p>No discovery connectors configured.</p></div>`}`;
+      ${disc.length
+        ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Last Run</th></tr></thead><tbody>
+            ${disc.map(c => `<tr>
+              <td class="cell-strong">${esc(c.name)}</td>
+              <td><span class="badge badge-info">${esc(c.connector_type||c.type||'DISCOVERY')}</span></td>
+              <td>${['ACTIVE','CONNECTED'].includes(c.status) ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">'+esc(c.status||'Unknown')+'</span>'}</td>
+              <td class="muted">${c.last_sync_at ? fmtDate(c.last_sync_at) : '—'}</td>
+            </tr>`).join('')}
+          </tbody></table></div>`
+        : `<div class="empty-state"><div class="empty-icon">🔍</div><p>No discovery connectors configured yet.</p><p class="muted" style="font-size:0.8rem;margin-top:0.5rem">Go to <strong>Directory Sync → Add Directory Source</strong> and choose a type to begin.</p></div>`
+      }`;
   } catch(e) { wrap.querySelector('#disc-area').innerHTML = errHtml(e.message); }
 }
 
