@@ -1,6 +1,7 @@
 /* ============================================================
-   Lenskart IdP Console — SPA entry point
-   Layout: top nav (SailPoint-style) + admin sub-nav + content
+   Lenskart IdP Console — SPA entry point.
+   Top nav (workspace) + admin sidebar (when in Admin).
+   Layout: SailPoint top nav + miniOrange-style admin sidebar.
    ============================================================ */
 import { api } from './api.js';
 import { el, esc, initials } from './ui.js';
@@ -11,47 +12,111 @@ import {
   viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
   viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports,
 } from './views-admin.js';
+import {
+  viewGroups, viewSystemUsers, viewIdentityProfiles,
+  viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,
+  viewOidcApps, viewAppDiscovery,
+  viewDirectorySync,
+  viewRoles, viewBirthright,
+  viewPamResources, viewPamSessions, viewPamVault,
+  viewWorkflowLibrary, viewEventTriggers, viewNotifications,
+  viewSsoReports,
+  viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
+} from './views-stubs.js';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
-/* Map of route key → { label, primary, admin?, super?, view } */
+/* ----------------------------------------------------------------
+   ROUTES — every navigable destination, indexed by key.
+   key             → { primary, group?, label, admin?, super?, view }
+   primary         workspace section (home/request/tasks/reviews/admin/settings)
+   group           heading inside the admin sidebar (only when primary === 'admin')
+   ---------------------------------------------------------------- */
 const ROUTES = {
-  /* Primary nav (visible to everyone) */
-  home:      { label: 'Home',           primary: 'home',      end: viewHome },
-  request:   { label: 'Request Center', primary: 'request',   end: viewRequestAccess },
-  tasks:     { label: 'Approvals',      primary: 'tasks',     end: viewMyTasks },
-  myaccess:  { label: 'My Access',      primary: 'myaccess',  end: viewMyAccess },
-  reviews:   { label: 'Certifications', primary: 'reviews',   admin: true, view: viewReviews },
+  /* ── Workspace (top primary nav) ── */
+  home:     { primary: 'home',     label: 'Home',           view: viewHome },
+  request:  { primary: 'request',  label: 'Request Center', view: viewRequestAccess },
+  tasks:    { primary: 'tasks',    label: 'Approvals',      view: viewMyTasks },
+  myaccess: { primary: 'myaccess', label: 'My Access',      view: viewMyAccess },
 
-  /* Admin secondary nav */
-  dashboard:    { label: 'Dashboard',         primary: 'admin', subnav: 'dashboard',    admin: true, view: viewDashboard },
-  users:        { label: 'Identity',          primary: 'admin', subnav: 'users',        admin: true, view: viewUsers },
-  admins:       { label: 'Administrators',    primary: 'admin', subnav: 'admins',       admin: true, super: true, view: viewAdmins },
-  myaccessAdmin:{ label: 'Access Model',      primary: 'admin', subnav: 'myaccessAdmin', admin: true, view: (c) => viewMyAccess(c) },
-  'iga-apps':   { label: 'Applications',      primary: 'admin', subnav: 'iga-apps',     admin: true, view: viewIgaApps },
-  'saml-apps':  { label: 'SAML Apps',         primary: 'admin', subnav: 'saml-apps',    admin: true, view: viewSamlApps },
-  connectors:   { label: 'Connections',       primary: 'admin', subnav: 'connectors',   admin: true, view: viewConnectors },
-  'admin-cert': { label: 'Certifications',    primary: 'admin', subnav: 'admin-cert',   admin: true, view: viewReviews },
-  auth:         { label: 'Password Mgmt',     primary: 'admin', subnav: 'auth',         admin: true, view: viewAuth },
-  sod:          { label: 'Workflows',         primary: 'admin', subnav: 'sod',          admin: true, view: viewSod },
-  risk:         { label: 'Risk',              primary: 'admin', subnav: 'risk',         admin: true, view: viewRisk },
-  audit:        { label: 'Audit',             primary: 'admin', subnav: 'audit',        admin: true, view: viewAudit },
-  reports:      { label: 'Reports',           primary: 'admin', subnav: 'reports',      admin: true, view: viewReports },
+  /* ── Account ── */
+  settings: { primary: 'settings', label: 'Account', view: viewSettings },
 
-  /* Account (top-right dropdown) */
-  settings:  { label: 'Account', view: viewSettings },
+  /* ── Admin > Dashboard ── */
+  dashboard: { primary: 'admin', group: 'Overview', label: 'Dashboard', admin: true, view: viewDashboard },
+
+  /* ── Admin > Identity ── */
+  users:            { primary: 'admin', group: 'Identity', label: 'Users / Identities',     admin: true, view: viewUsers },
+  groups:           { primary: 'admin', group: 'Identity', label: 'Groups',                 admin: true, view: viewGroups },
+  admins:           { primary: 'admin', group: 'Identity', label: 'Administrators',         super: true, view: viewAdmins },
+  systemUsers:      { primary: 'admin', group: 'Identity', label: 'System / Privileged',    admin: true, view: viewSystemUsers },
+  identityProfiles: { primary: 'admin', group: 'Identity', label: 'Identity Profiles',      admin: true, view: viewIdentityProfiles },
+
+  /* ── Admin > Authentication ── */
+  ssoConfig:          { primary: 'admin', group: 'Authentication', label: 'SSO Configuration',   admin: true, view: viewAuth },
+  mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', admin: true, view: viewMfaMethods },
+  adaptiveAuth:       { primary: 'admin', group: 'Authentication', label: 'Adaptive Auth',       admin: true, view: viewAdaptiveAuth },
+  passwordPolicies:   { primary: 'admin', group: 'Authentication', label: 'Password Policies',   admin: true, view: viewPasswordPolicies },
+  loginCustomization: { primary: 'admin', group: 'Authentication', label: 'Login Customization', admin: true, view: viewLoginCustomization },
+
+  /* ── Admin > Applications ── */
+  'iga-apps':   { primary: 'admin', group: 'Applications', label: 'Application Catalog', admin: true, view: viewIgaApps },
+  'saml-apps':  { primary: 'admin', group: 'Applications', label: 'SAML Applications',   admin: true, view: viewSamlApps },
+  oidcApps:     { primary: 'admin', group: 'Applications', label: 'OIDC / OAuth',        admin: true, view: viewOidcApps },
+  appDiscovery: { primary: 'admin', group: 'Applications', label: 'App Discovery',       admin: true, view: viewAppDiscovery },
+
+  /* ── Admin > Connections ── */
+  connectors:    { primary: 'admin', group: 'Connections', label: 'Connectors / Sources', admin: true, view: viewConnectors },
+  directorySync: { primary: 'admin', group: 'Connections', label: 'Directory Sync',       admin: true, view: viewDirectorySync },
+
+  /* ── Admin > Access Model ── */
+  roles:        { primary: 'admin', group: 'Access Model', label: 'Business Roles',  admin: true, view: viewRoles },
+  birthright:   { primary: 'admin', group: 'Access Model', label: 'Birthright Rules', admin: true, view: viewBirthright },
+
+  /* ── Admin > Privileged Access ── */
+  pamResources: { primary: 'admin', group: 'Privileged Access', label: 'Privileged Resources', admin: true, view: viewPamResources },
+  pamSessions:  { primary: 'admin', group: 'Privileged Access', label: 'Privileged Sessions',  admin: true, view: viewPamSessions },
+  pamVault:     { primary: 'admin', group: 'Privileged Access', label: 'Credential Vault',     admin: true, view: viewPamVault },
+
+  /* ── Admin > Identity Governance ── */
+  reviews: { primary: 'admin', group: 'Identity Governance', label: 'Certifications',           admin: true, view: viewReviews },
+  sod:     { primary: 'admin', group: 'Identity Governance', label: 'Segregation of Duties',    admin: true, view: viewSod },
+  risk:    { primary: 'admin', group: 'Identity Governance', label: 'Risk',                     admin: true, view: viewRisk },
+
+  /* ── Admin > Workflows & Automation ── */
+  workflowLibrary: { primary: 'admin', group: 'Workflows', label: 'Workflow Library', admin: true, view: viewWorkflowLibrary },
+  eventTriggers:   { primary: 'admin', group: 'Workflows', label: 'Event Triggers',   admin: true, view: viewEventTriggers },
+  notifications:   { primary: 'admin', group: 'Workflows', label: 'Notifications',    admin: true, view: viewNotifications },
+
+  /* ── Admin > Reports ── */
+  audit:      { primary: 'admin', group: 'Reports', label: 'Audit Log',          admin: true, view: viewAudit },
+  ssoReports: { primary: 'admin', group: 'Reports', label: 'SSO Reports',        admin: true, view: viewSsoReports },
+  reports:    { primary: 'admin', group: 'Reports', label: 'Compliance Reports', admin: true, view: viewReports },
+
+  /* ── Admin > Settings ── */
+  generalSettings:  { primary: 'admin', group: 'Settings', label: 'General',         admin: true, view: viewGeneralSettings },
+  branding:         { primary: 'admin', group: 'Settings', label: 'Branding',        admin: true, view: viewBranding },
+  license:          { primary: 'admin', group: 'Settings', label: 'License',         super: true, view: viewLicense },
+  tickets:          { primary: 'admin', group: 'Settings', label: 'Tickets',         admin: true, view: viewTickets },
+  systemHealth:     { primary: 'admin', group: 'Settings', label: 'System Health',   admin: true, view: viewSystemHealth },
 };
 
-const PRIMARY_NAV_ORDER = ['home', 'request', 'tasks', 'reviews']; // last is "Admin" (handled separately)
-const ADMIN_SUBNAV_ORDER = [
-  'dashboard', 'users', 'admins', 'iga-apps', 'saml-apps', 'connectors',
-  'admin-cert', 'auth', 'sod', 'risk', 'audit', 'reports',
+/* Order of groups in the admin sidebar */
+const ADMIN_GROUP_ORDER = [
+  'Overview', 'Identity', 'Authentication', 'Applications', 'Connections',
+  'Access Model', 'Privileged Access', 'Identity Governance', 'Workflows',
+  'Reports', 'Settings',
 ];
 
-const state = { me: null, current: 'home' };
+/* Order of items in the primary top nav */
+const PRIMARY_NAV_ORDER = ['home', 'request', 'tasks', 'myaccess'];
 
+const state = { me: null, current: 'home' };
 window.LILG_NAV = navigate;
 
+/* ----------------------------------------------------------------
+   SHELL
+   ---------------------------------------------------------------- */
 function buildShell() {
   const me = state.me;
   const isAdmin = ROLES_ADMIN.includes(me.employee?.role);
@@ -63,15 +128,21 @@ function buildShell() {
     return `<button data-key="${key}">${esc(r.label)}</button>`;
   }).join('');
 
-  const adminButton = isAdmin
-    ? `<button data-key="admin-toggle">Admin</button>`
-    : '';
+  const adminButton = isAdmin ? `<button data-key="dashboard">Admin</button>` : '';
 
-  const subnavButtons = ADMIN_SUBNAV_ORDER.map((key) => {
-    const r = ROUTES[key];
-    if (!r) return '';
-    if (r.super && !isSuper) return '';
-    return `<button data-key="${key}">${esc(r.label)}</button>`;
+  /* Build admin sidebar grouped */
+  const groups = new Map();
+  for (const [key, r] of Object.entries(ROUTES)) {
+    if (r.primary !== 'admin') continue;
+    if (r.super && !isSuper) continue;
+    if (!groups.has(r.group)) groups.set(r.group, []);
+    groups.get(r.group).push({ key, ...r });
+  }
+  const sidebarHtml = ADMIN_GROUP_ORDER.map((g) => {
+    const items = groups.get(g);
+    if (!items) return '';
+    return `<div class="nav-section">${esc(g)}</div>` +
+      items.map((i) => `<button data-key="${esc(i.key)}">${esc(i.label)}</button>`).join('');
   }).join('');
 
   const root = el(`
@@ -105,31 +176,26 @@ function buildShell() {
           </div>
         </div>
       </header>
-      <nav class="subnav hidden" id="subnav">${subnavButtons}</nav>
-      <main class="content" id="content"><div class="loading-row"><span class="spinner"></span></div></main>
+      <div class="admin-body">
+        <aside class="admin-sidebar hidden" id="admin-sidebar">${sidebarHtml}</aside>
+        <main class="content" id="content"><div class="loading-row"><span class="spinner"></span></div></main>
+      </div>
     </div>
   `);
 
-  // Primary nav click
+  /* Top nav click */
   root.querySelector('#primary-nav').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-key]');
-    if (!btn) return;
-    const key = btn.dataset.key;
-    if (key === 'admin-toggle') {
-      navigate('dashboard');
-    } else {
-      navigate(key);
-    }
+    if (btn) navigate(btn.dataset.key);
   });
 
-  // Subnav click
-  root.querySelector('#subnav').addEventListener('click', (e) => {
+  /* Sidebar click */
+  root.querySelector('#admin-sidebar').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-key]');
-    if (!btn) return;
-    navigate(btn.dataset.key);
+    if (btn) navigate(btn.dataset.key);
   });
 
-  // Profile dropdown
+  /* Profile dropdown */
   const pm = root.querySelector('#profile-menu');
   const dd = root.querySelector('#profile-dropdown');
   pm.addEventListener('click', (e) => {
@@ -150,28 +216,42 @@ function buildShell() {
   return root;
 }
 
+/* ----------------------------------------------------------------
+   ACTIVE NAV STATE
+   ---------------------------------------------------------------- */
 function applyActiveNav() {
   const route = ROUTES[state.current];
   if (!route) return;
+
+  /* Top nav */
   document.querySelectorAll('#primary-nav button').forEach((b) => {
     const k = b.dataset.key;
-    if (k === 'admin-toggle') {
+    /* "Admin" pseudo-button has key 'dashboard' so it lights up for any admin page */
+    if (k === 'dashboard') {
       b.classList.toggle('active', route.primary === 'admin');
     } else {
-      b.classList.toggle('active', k === route.primary);
+      b.classList.toggle('active', k === state.current);
     }
   });
-  const subnav = document.getElementById('subnav');
+
+  /* Admin sidebar (visible only when in Admin) */
+  const shell = document.querySelector('.shell');
+  const sidebar = document.getElementById('admin-sidebar');
   if (route.primary === 'admin') {
-    subnav.classList.remove('hidden');
-    subnav.querySelectorAll('button').forEach((b) => {
-      b.classList.toggle('active', b.dataset.key === route.subnav);
+    shell.classList.add('admin-mode');
+    sidebar.classList.remove('hidden');
+    sidebar.querySelectorAll('button').forEach((b) => {
+      b.classList.toggle('active', b.dataset.key === state.current);
     });
   } else {
-    subnav.classList.add('hidden');
+    shell.classList.remove('admin-mode');
+    sidebar.classList.add('hidden');
   }
 }
 
+/* ----------------------------------------------------------------
+   ROUTER
+   ---------------------------------------------------------------- */
 async function navigate(key) {
   const me = state.me;
   const route = ROUTES[key];
@@ -184,21 +264,19 @@ async function navigate(key) {
   applyActiveNav();
 
   const content = document.getElementById('content');
-  if (route.end) {
-    // end-user view; signature is (me, content) or (content)
-    if (route.end.length >= 2) await route.end(me, content);
-    else await route.end(content);
-    return;
-  }
-  if (route.view) {
-    if (route.view === viewSamlApps || route.view === viewSettings) {
-      await route.view(me, content);
-    } else {
-      await route.view(content);
-    }
+
+  /* Views with a (me, content) signature; everything else is (content). */
+  const needsMe = new Set(['home', 'settings', 'saml-apps']);
+  if (needsMe.has(key)) {
+    await route.view(me, content);
+  } else {
+    await route.view(content);
   }
 }
 
+/* ----------------------------------------------------------------
+   ENTRY
+   ---------------------------------------------------------------- */
 async function main() {
   const root = document.getElementById('app');
   const path = location.pathname.replace(/\/$/, '') || '/';
@@ -215,14 +293,10 @@ async function main() {
     return;
   }
 
-  // Default landing
-  const isAdmin = ROLES_ADMIN.includes(state.me.employee?.role);
   const params = new URLSearchParams(location.search);
   const initial = params.get('v') || 'home';
-  // Translate legacy /admin-central
-  if (path === '/admin-central') { if (!isAdmin) { location.href = '/'; return; } }
-
   state.current = ROUTES[initial] ? initial : 'home';
+
   root.replaceChildren(buildShell());
   navigate(state.current);
 }

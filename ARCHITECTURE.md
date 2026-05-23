@@ -31,28 +31,40 @@ This document is the **living source of truth** for the system. It is updated on
 
 ## 1. Mission
 
-Lenskart IdP is a single platform that combines two product surfaces, modelled on best-of-breed enterprise IAM:
+Lenskart IdP is a unified platform that delivers **enterprise SSO + Identity Governance + Privileged Access**, modelled on best-of-breed commercial products. The feature catalogue below is the contract — the live admin sidebar mirrors it.
 
-**Access Management (compare: OneLogin, miniOrange, Entrust Identity)**
-- Multi-protocol SSO: SAML 2.0 (live), OIDC OP, WS-Federation, header-based (planned)
-- Inbound federation: Google Workspace OIDC (live)
-- Local password + TOTP MFA (live), WebAuthn / passkeys (planned)
-- Adaptive / risk-based authentication
-- Application launcher portal for end users
+**Access Management** *(modelled on miniOrange, OneLogin, Entrust Identity, Okta, Auth0)*
+- Multi-protocol SSO: SAML 2.0, OIDC / OAuth 2.0, WS-Federation, JWT, header-based (legacy proxy)
+- Inbound federation: Google Workspace OIDC, future LDAP/AD bind
+- Strong authentication: TOTP, WebAuthn / passkeys, Email/SMS OTP, push, hardware tokens, PKI, magic-link, security questions
+- Adaptive / risk-based authentication: geo-velocity, IP rules, device fingerprint, behavioural baseline → ALLOW / MFA / DENY / BLOCK
+- Application launcher portal (miniOrange-style tile grid) and admin SP registry
+- Login customization (logo, theme, copy, per-tenant branding)
+- Application discovery (find unsanctioned SaaS via Workspace logs / browser proxy)
 
-**Identity Governance & Administration (compare: Saviynt, SailPoint IdentityIQ, RSA IGA)**
-- Joiner / Mover / Leaver lifecycle (driven by HRMS feed)
-- Application catalog with entitlements and birthright access
-- Pluggable connector framework for target system provisioning / reconciliation
-- Self-service access request → multi-level approval → automated fulfillment
-- Periodic access review / certification campaigns
+**Identity Governance & Administration** *(modelled on SailPoint IdentityNow / IdentityIQ, Saviynt, RSA IGA, Oracle Identity Governance)*
+- Joiner / Mover / Leaver lifecycle (driven by HRMS feed) with state machine
+- Identity profiles per population (employees, contractors, partners, customers)
+- Application catalogue with entitlements, business roles and birthright access
+- Pluggable connector framework: SCIM, REST, LDAP, JDBC, Google, Slack, GitHub, AD, AWS IAM, Azure AD, Okta, Salesforce
+- Self-service access request → multi-level approval → automated fulfilment
+- Periodic access review / certification campaigns (manager / app owner / role owner)
 - Segregation-of-Duties policies and violation detection
 - Risk scoring (per-identity and per-login)
-- Tamper-evident audit trail and compliance reports (SOX / GDPR / etc.)
+- Workflow library + event triggers + notification dispatcher
+- Compliance reports (SOX, GDPR, HIPAA, PCI-DSS) with evidence retention
+- Tamper-evident hash-chained audit trail
 
-> **Deliberate non-goals (for now):** privileged-access vaulting, session recording, mobile push-MFA — see [Roadmap §14](#14-roadmap).
+**Privileged Access Management** *(modelled on miniOrange PAM, CyberArk, BeyondTrust)*
+- Privileged resources (SSH / RDP / DB / web admin consoles)
+- Just-in-time elevation with auto-expiry
+- Credential vault (KMS-rooted, auto-rotation)
+- Session recording (terminal + screen) with playback
+- Service / system account inventory and certification
 
 > **Authentication note (May 2026):** Zoho is **not** a sign-in provider for this portal. Zoho Mail is consumed as a **SAML application** (this IdP issues assertions to `zoho.com`). End users sign in with local password or Google Workspace OIDC, then click the Zoho Mail tile in *My Applications*.
+
+> **Implementation status:** see §15 Roadmap and the per-page status badges in the admin console (Live / Schema+Read API / Scaffolded / Planned). The schema is intentionally ahead of the service code so each phase only needs to flip features on.
 
 ---
 
@@ -399,34 +411,36 @@ web/
 - **Login screen** — split: brand hero (gradient) + sign-in card. MFA challenge step renders inline when needed.
 - **Console** — fixed dark sidebar + topbar + content area.
 
-Sidebar layout:
+Layout: a fixed dark **top primary nav** (workspace) + a **left admin sidebar** that appears only when "Admin" is the active section.
 
-**Workspace** (every user)
-- Dashboard *(admin only)* — stat cards, recent SSO, system status
-- My Applications — SAML launcher tiles
-- My Access — current entitlements / roles
-- Request Access — catalog browser (foundation; UI ships next)
-- My Tasks — pending approvals + review items
+**Top primary nav** (always visible, modelled on SailPoint IdentityNow)
+- **Home** — miniOrange-style tile launcher (My favourite cloud apps + catalog browser)
+- **Request Center** — browse the catalogue, raise an access request
+- **Approvals** — pending approvals + access-review items routed to the user
+- **My Access** — current entitlements & roles
+- **Admin** — opens admin sidebar (admin / super-admin only)
 
-**Access Management** (admin only)
-- SAML Applications
-- Application Catalog *(generic registry)*
-- Connectors *(target-system adapters)*
-- Authentication *(IdP & inbound providers)*
+**Admin sidebar** (modelled on miniOrange PAM admin) — every group is collapsible per-tenant in a future release; today every entry is a feature page with status, summary and capability list.
 
-**Identity Governance** (admin only)
-- Users
-- Administrators *(super admin only)*
-- Access Reviews
-- Segregation of Duties
-- Risk
+| Group | Sidebar items |
+|---|---|
+| **Overview** | Dashboard |
+| **Identity** | Users / Identities · Groups · Administrators · System / Privileged Users · Identity Profiles |
+| **Authentication** | SSO Configuration · Strong Auth Methods · Adaptive Auth · Password Policies · Login Customization |
+| **Applications** | Application Catalog · SAML Applications · OIDC / OAuth · App Discovery |
+| **Connections** | Connectors / Sources · Directory Sync |
+| **Access Model** | Business Roles · Birthright Rules |
+| **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault |
+| **Identity Governance** | Certifications · Segregation of Duties · Risk |
+| **Workflows** | Workflow Library · Event Triggers · Notifications |
+| **Reports** | Audit Log · SSO Reports · Compliance Reports |
+| **Settings** | General · Branding · License · Tickets · System Health |
 
-**Compliance** (admin only)
-- Audit Logs *(SSO + system audit tabs)*
-- Reports
-
-**Account** (every user)
-- Settings — Profile / Security / Sessions / Two-factor
+**Account** (everyone) — top-right profile dropdown
+- Account settings (Profile / Security / Sessions / Two-factor)
+- Audit logs (admins)
+- SAML metadata link
+- Sign out
 
 ### 9.3 Routing
 
@@ -617,7 +631,27 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-23 — DB: switch from `pool.execute()` to `pool.query()` to fix MySQL 8 `LIMIT ? OFFSET ?` (ER_WRONG_ARGUMENTS)
+### *(this commit)* — 2026-05-23 — Feature catalogue rewrite: miniOrange + SailPoint feature parity (admin sidebar)
+
+**Why** — earlier admin nav was a thin slice; the user requested a faithful feature mapping prioritising miniOrange (Strong Auth, Apps, Resources, System Users, Discovery, Tickets, Customization) and SailPoint (Identity Profiles, Access Model, Certifications, Workflows, Event Triggers).
+
+- **Layout** — top primary nav (`Home / Request Center / Approvals / My Access / Admin`) plus a **left sidebar inside Admin** with grouped sections, mirroring miniOrange. The sidebar groups are:
+  1. **Overview** — Dashboard
+  2. **Identity** — Users / Identities, Groups, Administrators, System / Privileged Users, Identity Profiles
+  3. **Authentication** — SSO Configuration, Strong Auth Methods, Adaptive Auth, Password Policies, Login Customization
+  4. **Applications** — Application Catalog, SAML Applications, OIDC / OAuth, App Discovery
+  5. **Connections** — Connectors / Sources, Directory Sync
+  6. **Access Model** — Business Roles, Birthright Rules
+  7. **Privileged Access** — Privileged Resources, Privileged Sessions, Credential Vault
+  8. **Identity Governance** — Certifications, Segregation of Duties, Risk
+  9. **Workflows** — Workflow Library, Event Triggers, Notifications
+  10. **Reports** — Audit Log, SSO Reports, Compliance Reports
+  11. **Settings** — General, Branding, License, Tickets, System Health
+- **`web/js/views-stubs.js`** — every newly-added admin section has a feature page with status badge (Live / Schema+Read API / Scaffolded / Planned), short description, capability list, and "modelled after" attribution to the originating product (miniOrange / SailPoint / Okta / CyberArk / etc.). This makes the platform's feature set explicit and discoverable instead of being a list of empty tables.
+- **CSS** — admin sidebar with grouped section headings (`.nav-section`) and active-row indicator stripe.
+- All existing functional admin pages (Dashboard, Users, SAML Apps, Connectors, Access Reviews, SoD, Risk, Audit, Reports) are reachable from their new sidebar location and still work end-to-end.
+
+### `a060f86` — 2026-05-23 — DB: switch from `pool.execute()` to `pool.query()` to fix MySQL 8 `LIMIT ? OFFSET ?` (ER_WRONG_ARGUMENTS)
 
 - `src/db/connection.ts` — `query()` and `execute()` now use `pool.query()` (text protocol with inline-escaped values) instead of `pool.execute()` (server-side prepared statements). MySQL 8 rejects integer placeholders in `LIMIT ? OFFSET ?` over the prepared-statement protocol with `ER_WRONG_ARGUMENTS` (errno 1210). The text protocol works for every query in this codebase and is still SQL-injection-safe because mysql2 escapes every `?` value.
 - This fixes 500s on `/api/iga/applications`, `/api/iga/connectors`, `/api/iga/access-reviews`, `/api/iga/access-requests`, and `/api/admin/users` — all of which use `LIMIT ? OFFSET ?`.
