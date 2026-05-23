@@ -22,6 +22,7 @@ import samlRouter from './api/saml.js';
 import appsRouter from './api/apps.js';
 import meRouter from './api/me.js';
 import adminLocalUsersRouter from './api/admin-local-users.js';
+import adminSamlAppsRouter from './api/admin-saml-apps.js';
 
 // Auth
 import {
@@ -106,6 +107,7 @@ app.use('/api/apps',      appsRouter);
 app.use('/api/employees', employeeRouter);
 app.use('/api/manager',   managerRouter);
 app.use('/api/admin/local-users', adminLocalUsersRouter);
+app.use('/api/admin/saml-apps', adminSamlAppsRouter);
 
 // ---------------------------------------------------------------------------
 // Internal routes (internal token gated — no session cookie required)

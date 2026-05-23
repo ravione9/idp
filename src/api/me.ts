@@ -5,7 +5,7 @@
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
 import { queryOne } from '../db/connection.js';
-import { isSamlEnabled } from '../config.js';
+import { config, isSamlEnabled } from '../config.js';
 import { ROLES } from '../auth/rbac.js';
 
 const router = Router();
@@ -27,6 +27,7 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
 
   const role = user.role;
   const roleIndex = ROLES.indexOf(role as (typeof ROLES)[number]);
+  const base = config.app.publicBaseUrl ?? config.saml?.baseUrl;
 
   res.json({
     session: {
@@ -38,6 +39,7 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
     employee: emp,
     capabilities: {
       samlEnabled:     isSamlEnabled(),
+      metadataUrl:     base ? `${base}/saml/metadata` : null,
       canLaunchApps:   isSamlEnabled() && ['ACTIVE', 'REACTIVATED'].includes(emp['ilg_state'] as string),
       canViewTeam:     roleIndex >= ROLES.indexOf('MANAGER'),
       canViewDirectory: roleIndex >= ROLES.indexOf('MANAGER'),
