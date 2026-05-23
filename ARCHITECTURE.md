@@ -1,0 +1,600 @@
+# Lenskart IdP — Architecture & Change Log
+
+> Identity Provider, Single Sign-On, and Identity Governance platform for Lenskart.
+> **Repository:** [github.com/ravione9/idp](https://github.com/ravione9/idp)
+> **Production hostname (target):** `idp.lenskart.com`
+> **Dev server:** `http://192.168.24.254:8080` (host `pam-2`, install dir `/opt/idp`)
+
+This document is the **living source of truth** for the system. It is updated on every architectural change. The most recent change is at the top of [§ Change Log](#change-log).
+
+---
+
+## Table of contents
+
+1. [Mission](#1-mission)
+2. [High-level architecture](#2-high-level-architecture)
+3. [Tech stack](#3-tech-stack)
+4. [Service topology](#4-service-topology-dev)
+5. [Authentication & sessions](#5-authentication--sessions)
+6. [SAML 2.0 IdP](#6-saml-20-idp)
+7. [Database & migrations](#7-database--migrations)
+8. [API surface](#8-api-surface)
+9. [Frontend (web console)](#9-frontend-web-console)
+10. [Configuration (env vars)](#10-configuration-env-vars)
+11. [Deployment](#11-deployment)
+12. [Operations runbook](#12-operations-runbook)
+13. [Security model](#13-security-model)
+14. [Roadmap](#14-roadmap)
+15. [Change log](#15-change-log)
+
+---
+
+## 1. Mission
+
+Lenskart IdP is a single platform that provides:
+
+- **SAML 2.0 Identity Provider** — issues signed assertions to enterprise applications (Darwinbox, ServiceNow, internal apps, etc.).
+- **OIDC login** — Google Workspace and Zoho federated login for employees.
+- **Local administrator accounts** — fallback authentication for IdP operators.
+- **Identity Lifecycle & Governance (ILG)** — sync from HRMS, lifecycle states (`ACTIVE`, `SUSPENDED_AUTO`, `DEPARTED`, etc.), and adapter outbox for downstream systems.
+- **Self-service** — change password, list/revoke sessions, enroll TOTP MFA.
+- **Admin console** — manage SAML applications, users, administrators, and audit logs.
+
+---
+
+## 2. High-level architecture
+
+```
+                   ┌──────────────────────────────────────────────┐
+                   │                  Browser                     │
+                   │  Vanilla-JS SPA  (web/index.html + app.js)   │
+                   └──────────┬─────────────────────────┬─────────┘
+                              │ session cookie          │ /saml/sso
+                              ▼                         ▼
+   ┌──────────────────────────────────────────────────────────────────┐
+   │                     LILG API (Node 22, Express)                  │
+   │                                                                  │
+   │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────────────┐ │
+   │  │  /auth/*    │  │  /api/*      │  │  /saml/*                 │ │
+   │  │  Local +    │  │  me, apps,   │  │  IdP metadata,           │ │
+   │  │  Google +   │  │  admin/*,    │  │  SP-init SSO,            │ │
+   │  │  Zoho +     │  │  audit, ...  │  │  IdP-init launch         │ │
+   │  │  MFA        │  │              │  │                          │ │
+   │  └─────────────┘  └──────────────┘  └──────────────────────────┘ │
+   │                                                                  │
+   │  Migrations runner ── Rate limiter ── Pino logger                │
+   └──────────┬─────────────────────────┬─────────────────────────────┘
+              │                         │
+              ▼                         ▼
+   ┌──────────────────┐         ┌──────────────────┐
+   │  MySQL 8         │         │  Redis 7         │
+   │  - employees     │         │  - sessions      │
+   │  - lilg_sessions │         │  - mfa challenges│
+   │  - saml_*        │         │  - rate limit    │
+   │  - mfa_secrets   │         │    (future)      │
+   │  - audit_log     │         └──────────────────┘
+   │  - ...           │
+   └──────────────────┘
+              │
+              ▼
+   ┌──────────────────┐         ┌──────────────────┐
+   │  Outbox worker   │ ──SQS── │  Adapters:       │
+   │  (Node)          │         │  Google, Zoho,   │
+   │                  │         │  AD, Slack, ...  │
+   └──────────────────┘         └──────────────────┘
+```
+
+---
+
+## 3. Tech stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| Runtime | Node.js 22 (Alpine) | Modern, ESM-native, long-term support |
+| Language | TypeScript 5 (strict) | Type safety; compiles to ESM |
+| HTTP | Express 4 | Battle-tested, simple, well-supported |
+| DB | MySQL 8 (`mysql2/promise`) | Enterprise standard at Lenskart |
+| Cache / sessions | Redis 7 (`ioredis`) | Hot session lookup, MFA challenges |
+| SAML | `samlify` | SAML 2.0 IdP/SP with signing/validation |
+| OIDC verification | `jose` | JWKS-based JWT verification |
+| Password | `bcryptjs` | Salted bcrypt at rest |
+| MFA | `otplib` v12 + `qrcode` | RFC 6238 TOTP, QR enrollment |
+| Validation | `zod` | Runtime schema validation for env + request bodies |
+| Logging | `pino` + `pino-http` | Structured JSON logs |
+| Frontend | Vanilla JS modules + custom CSS | Single static file, no build step |
+| Container | Docker (multi-stage) + docker-compose v1 | Single-tier dev deploy |
+| Local AWS | LocalStack | SQS for the outbox in dev |
+
+> **Why no React (yet)?** The dev environment (docker-compose v1.29) is fragile; a build pipeline adds risk. Vanilla JS is intentional until we move past dev. See [Roadmap](#14-roadmap).
+
+---
+
+## 4. Service topology (dev)
+
+`docker-compose.dev.yml` defines a single-tier stack on port **8080**:
+
+| Container | Image | Port | Purpose |
+|---|---|---|---|
+| `idp-api` | built from `Dockerfile` | 8080 → host | Express app + static SPA |
+| `idp-worker` | same image, different command | — | Outbox poller (Adapter dispatcher) |
+| `idp-mysql` | `mysql:8.0` | internal 3306 | DB |
+| `idp-redis` | `redis:7-alpine` | internal 6379 | Sessions, MFA challenges |
+| `idp-localstack` | `localstack/localstack:3` | internal 4566 | SQS in dev |
+
+Only `idp-api:8080` is exposed to the host network.
+
+---
+
+## 5. Authentication & sessions
+
+### 5.1 Sign-in methods
+
+| Method | Endpoint | Status |
+|---|---|---|
+| Local password | `POST /auth/local/login` | ✅ |
+| Local password + TOTP | `POST /auth/local/login` then `POST /auth/local/login/mfa-verify` | ✅ |
+| Google OIDC | `GET /auth/google` → `GET /auth/google/callback` | ✅ (requires `GOOGLE_CLIENT_ID`) |
+| Zoho OIDC | `GET /auth/zoho` → `GET /auth/zoho/callback` | ✅ (requires `ZOHO_CLIENT_ID`) |
+| WebAuthn / passkeys | — | Roadmap |
+
+### 5.2 Session model
+
+- Sessions are stored in **MySQL** (`lilg_sessions`) and cached in **Redis** (`lilg:session:<id>`).
+- Session ID = `uuid v4`. Cookie value is `<id>.<HMAC-SHA256(SESSION_SECRET, id)>` (base64url).
+- TTL: 8 hours (corporate) / 12 hours (store) — configurable via env.
+- Cookie flags: `HttpOnly`, `SameSite=Lax`. `Secure` is on in production but **off** when `COOKIE_SECURE=false` (dev plain HTTP).
+
+### 5.3 Master administrator
+
+A bootstrap account is provisioned from `MASTER_ADMIN_EMAIL` + `MASTER_ADMIN_PASSWORD` on every startup. Password is synced (re-hashed) when the env value changes.
+
+### 5.4 MFA (TOTP)
+
+- Per-user secret in `mfa_secrets` (Base32, 160-bit).
+- 8 single-use **backup codes** (8 hex chars), bcrypt-hashed at rest.
+- Login flow when MFA is enabled:
+  1. `POST /auth/local/login {email, password}` → returns `{mfaRequired:true, challengeId}`.
+  2. UI prompts for 6-digit code (or backup code).
+  3. `POST /auth/local/login/mfa-verify {challengeId, code}` → session issued.
+- Challenge lives in Redis with 5-minute TTL.
+
+### 5.5 Rate limiting
+
+`/auth/local/login` and `/auth/local/login/mfa-verify` are rate limited at **10 requests / minute / (IP+email)** via in-process sliding window (`src/auth/rate-limit.ts`).
+Every attempt (success or failure) is logged to `auth_attempts` for forensics.
+
+---
+
+## 6. SAML 2.0 IdP
+
+### 6.1 Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET  /saml/metadata` | IdP metadata XML (give to every SP admin) |
+| `GET/POST /saml/sso` | SP-initiated SSO (`AuthnRequest` via Redirect or POST binding) |
+| `GET  /saml/launch/:slug` | IdP-initiated launch (browser → app tile click) |
+
+### 6.2 Service Provider registry
+
+Each SAML application is registered in `saml_service_providers`:
+
+| Field | Description |
+|---|---|
+| `slug` | URL-safe identifier (`darwinbox`, `servicenow`, …) |
+| `entity_id` | SP's SAML EntityID |
+| `acs_url` | SP's Assertion Consumer Service URL |
+| `slo_url` | (optional) Single Logout URL |
+| `nameid_format` | Default: `urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress` |
+| `attribute_map` | JSON map of SAML attribute → employee field |
+| `entitlement_rule` | JSON ABAC rule (`all_active`, `roles`, `dept_ids`, `deny_ilg_states`) |
+
+Apps can be registered:
+- Via UI: **Admin Central → SAML Applications → Register new SAML application** (super admin only)
+- Via internal API: `POST /api/internal/saml` with `X-Internal-Token`
+
+### 6.3 Assertion log
+
+Every assertion issued is recorded in `saml_assertion_log` (sp_id, emp_id, binding, ts). Used by **Audit Logs → SSO assertions**.
+
+---
+
+## 7. Database & migrations
+
+### 7.1 Migration system
+
+- Folder: `migrations/NNN_name.sql`
+- Runner: `src/db/migrate.ts` — runs on startup before listening.
+- Tracking: `lilg_schema_migrations(name, checksum, applied_at, duration_ms)`.
+- Each file is executed as a single multi-statement batch (the runner opens a connection with `multipleStatements: true`).
+- Files are applied in lexicographic order; already-applied files are skipped.
+- A checksum mismatch (file was edited after apply) logs a warning but does **not** fail startup.
+- A failed migration aborts startup (`process.exit(1)`).
+
+To add a new migration:
+
+```bash
+# 1. Add migrations/003_my_change.sql with idempotent DDL
+# 2. Pull on the server, restart the API; migration applies automatically
+```
+
+### 7.2 Tables (current)
+
+| Table | Purpose |
+|---|---|
+| `employees` | Master record from HRMS — primary identity |
+| `local_accounts` | Email/password admin accounts |
+| `local_password_history` | Password change history |
+| `mfa_secrets` | TOTP secret + hashed backup codes |
+| `auth_attempts` | Every login attempt (forensics) |
+| `lilg_sessions` | Issued sessions |
+| `saml_service_providers` | Registered SAML applications |
+| `saml_assertion_log` | Issued assertions audit |
+| `audit_log` | Tamper-evident hash-chained audit trail |
+| `adapter_outbox` | Outbox pattern for downstream sync |
+| `identity_links` | External system → employee mapping |
+| `attendance_events`, `leave_records` | HRMS-driven lifecycle inputs |
+| `abac_policies`, `role_bindings` | Authorization model |
+| `workflow_definitions`, `workflow_runs` | Approval workflows |
+| `lilg_schema_migrations` | Migration tracking |
+
+> The legacy `src/db/schema.sql` is **still present** for reference; it is NOT applied automatically — the migrations folder is authoritative.
+
+---
+
+## 8. API surface
+
+### 8.1 Public (no auth)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/healthz` | Liveness |
+| `GET` | `/readyz` | Readiness (DB + Redis) |
+| `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/saml/metadata` | IdP metadata XML |
+
+### 8.2 Auth
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/auth/local/login` | Local password (returns session OR MFA challenge) |
+| `POST` | `/auth/local/login/mfa-verify` | Submit TOTP / backup code |
+| `GET`  | `/auth/google` `/auth/google/callback` | Google OIDC |
+| `GET`  | `/auth/zoho` `/auth/zoho/callback` | Zoho OIDC |
+| `POST` | `/auth/logout` | End current session |
+
+### 8.3 Self-service (auth required)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/me` | Current user + capabilities |
+| `PUT` | `/api/me/password` | Change own password |
+| `GET` | `/api/me/sessions` | List own active sessions |
+| `DELETE` | `/api/me/sessions/:id` | Revoke a session |
+| `GET` | `/api/me/mfa` | MFA status |
+| `POST` | `/api/me/mfa/enroll` | Start TOTP enrollment (returns QR) |
+| `POST` | `/api/me/mfa/confirm` | Verify code → enable MFA |
+| `POST` | `/api/me/mfa/disable` | Disable MFA |
+| `POST` | `/api/me/mfa/regenerate-codes` | New backup codes |
+| `GET` | `/api/apps` | SAML apps the user is entitled to |
+
+### 8.4 Admin (ADMIN / SUPER_ADMIN)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/admin/dashboard` | Aggregate stats |
+| `GET` | `/api/admin/users` | Employee + admin list (search, filter) |
+| `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD |
+| `GET`/`POST`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry |
+| `GET` | `/api/admin/audit/saml` | SAML assertions log |
+| `GET` | `/api/admin/audit/system` | `audit_log` rows |
+
+### 8.5 Internal (X-Internal-Token gated)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/internal/saml` | Programmatic SP registration |
+| Various | `/api/internal/*` | Airflow / automation hooks |
+
+---
+
+## 9. Frontend (web console)
+
+### 9.1 Files
+
+```
+web/
+├── index.html        ← single page, loads app.js as ES module
+├── css/styles.css    ← enterprise theme (light, sidebar, cards)
+└── js/app.js         ← SPA: router, views, API client
+```
+
+### 9.2 Layout
+
+- **Login screen** — split: brand hero (gradient) + sign-in card. MFA challenge step renders inline when needed.
+- **Console** — fixed dark sidebar + topbar + content area.
+
+Sidebar items:
+
+| Item | Visible to | View |
+|---|---|---|
+| Dashboard | Admin | Stat cards + recent SSO + system status |
+| My Applications | Everyone | App launcher tiles |
+| SAML Applications | Admin | SP registry CRUD |
+| Users | Admin | Searchable employee table |
+| Administrators | Super admin | Local admin CRUD |
+| Authentication | Admin | SAML / OIDC / local config status |
+| Audit Logs | Admin | Tabs: SSO assertions / system audit |
+| Account (Settings) | Everyone | Tabs: Profile / Security (password) / Sessions / Two-factor |
+
+### 9.3 Routing
+
+- `/login` — login form (no auth)
+- `/` — console (default landing: admins → Dashboard, others → My Apps)
+- `/?v=<view>` — direct deep link to any view
+
+---
+
+## 10. Configuration (env vars)
+
+| Env var | Required | Default | Purpose |
+|---|---|---|---|
+| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | yes | — | MySQL |
+| `REDIS_URL` | yes | — | Sessions + MFA challenges |
+| `SESSION_SECRET` | yes (≥32 chars) | — | HMAC for cookie signing |
+| `SESSION_TTL_CORPORATE_HOURS` | no | `8` | Corporate session TTL |
+| `SESSION_TTL_STORE_HOURS` | no | `12` | Store session TTL |
+| `COOKIE_SECURE` | no | `true` if `NODE_ENV=production`, else `false` | Force secure cookie. **Set `false` for plain-HTTP dev.** |
+| `INTERNAL_TOKEN` | yes (≥16) | — | `X-Internal-Token` for `/api/internal/*` |
+| `LOCAL_BOOTSTRAP_TOKEN` | no | — | First-time admin bootstrap (disable after) |
+| `MASTER_ADMIN_EMAIL` | recommended | — | Master admin auto-provisioned on startup |
+| `MASTER_ADMIN_PASSWORD` | recommended | — | (≥10 chars) |
+| `MASTER_ADMIN_FULL_NAME` | no | `Master Administrator` | |
+| `PUBLIC_BASE_URL` | yes | — | `http://192.168.24.254:8080` (dev) / `https://idp.lenskart.com` (prod) |
+| `SAML_IDP_BASE_URL` | yes for SAML | — | Same as above |
+| `SAML_IDP_ENTITY_ID` | no | `<base>/saml/metadata` | IdP entity ID |
+| `SAML_IDP_PRIVATE_KEY_PEM` | yes for SAML | — | PEM (escape `\n` as literal `\n`) |
+| `SAML_IDP_CERT_PEM` | yes for SAML | — | PEM |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_HOSTED_DOMAIN` | yes for Google | — | Google OIDC |
+| `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` / `ZOHO_SCIM_BASE_URL` | yes for Zoho | — | Zoho OIDC |
+| `AWS_REGION`, `AWS_ENDPOINT_URL`, `SQS_*` | yes | — | LocalStack URLs in dev |
+
+---
+
+## 11. Deployment
+
+### 11.1 Dev (single-tier docker-compose on `pam-2`)
+
+```bash
+ssh pam-2
+cd /opt/idp
+git pull
+sudo bash scripts/fix-and-start.sh
+```
+
+`fix-and-start.sh` handles:
+1. `.env` bootstrap from `env.dev.example` if missing.
+2. Master admin block in `.env` if missing.
+3. `down` + remove stale containers (works around docker-compose v1.29 `KeyError: ContainerConfig`).
+4. `up -d --build`.
+5. Migrations apply automatically on API startup — **no manual SQL**.
+6. Wait for `/healthz`, print login info.
+
+### 11.2 Production (target: `idp.lenskart.com`)
+
+Not yet deployed. See [Roadmap §14.A](#14-roadmap).
+
+### 11.3 Docker image
+
+Multi-stage build (`Dockerfile`):
+
+1. `builder` — `npm ci` + `npm run build` + `npm prune --production`.
+2. `runner` — Alpine + non-root user + `dumb-init` + healthcheck.
+3. Copies: `dist/`, `node_modules/`, `package.json`, `web/`, `migrations/`.
+
+---
+
+## 12. Operations runbook
+
+### 12.1 Common commands (on `pam-2`)
+
+```bash
+# Status
+docker ps --filter name=idp-
+
+# Logs
+docker logs idp-api --tail 100 -f
+docker logs idp-worker --tail 100 -f
+
+# Restart only the API after pulling new code
+docker-compose -f docker-compose.dev.yml stop lilg-api
+docker rm -f idp-api
+docker-compose -f docker-compose.dev.yml up -d --build --no-deps lilg-api
+
+# Diagnostics
+bash scripts/diagnose.sh
+
+# DB shell
+docker exec -it idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg
+
+# Apply migrations manually (normally automatic on startup)
+docker exec -i idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg < migrations/<file>.sql
+```
+
+### 12.2 Known issues
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `KeyError: 'ContainerConfig'` on `up -d` | docker-compose 1.29 + new Docker Engine | `docker rm -f idp-api` then `up -d` again, or run `scripts/fix-and-start.sh`, or install Compose v2 (`scripts/install-compose-v2.sh`) |
+| Browser login appears to fail (no redirect) | `Secure` cookie flag rejected over HTTP | `COOKIE_SECURE=false` in `.env` |
+| `Table 'lilg.lilg_sessions' doesn't exist` | Pre-migration MySQL volume | Restart API — migrations apply automatically |
+| `Configuration validation failed` at boot | Missing/invalid env var | Read message; `SESSION_SECRET` must be ≥32 chars, `INTERNAL_TOKEN` ≥16 |
+
+---
+
+## 13. Security model
+
+| Surface | Control |
+|---|---|
+| Local password | `bcryptjs` cost 12, ≥10 chars on change, history retained |
+| Session cookie | HMAC-signed, `HttpOnly`, `SameSite=Lax`, `Secure` (configurable for dev) |
+| MFA | TOTP RFC 6238, 30-second window, ±1 step skew tolerance, hashed backup codes |
+| Rate limiting | 10 req / minute / (IP + email) on auth endpoints |
+| Forensics | `auth_attempts` table records every attempt with reason + IP |
+| Internal API | `X-Internal-Token` shared secret (`INTERNAL_TOKEN`) |
+| Audit | Hash-chained `audit_log` (tamper-evident) |
+| RBAC | Role hierarchy: `EMPLOYEE < MANAGER < HRBP < ADMIN < SUPER_ADMIN` |
+| ABAC | `policy-engine.ts` evaluates rules on resource access |
+| Headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` |
+
+---
+
+## 14. Roadmap
+
+### A. Productionize for `idp.lenskart.com`
+
+- TLS termination (Caddy or Nginx with cert-manager / Let's Encrypt)
+- Real DNS, replace `192.168.24.254:8080`
+- HA: 2× API replicas behind LB, MySQL primary+replica, Redis Sentinel
+- Secrets in AWS Secrets Manager (already wired via `@aws-sdk/client-secrets-manager`)
+- Backup strategy for MySQL
+
+### B. Modern frontend
+
+- Migrate `web/` to **React + Vite + TypeScript**
+- Component library; properly typed API client
+- Add to Dockerfile as a build stage
+
+### C. OIDC issuer
+
+- `/.well-known/openid-configuration`
+- `/oauth/authorize`, `/oauth/token`, `/oauth/userinfo`
+- OIDC client registry alongside SAML SP registry
+- JWT signing keys (RS256)
+
+### D. WebAuthn / passkeys
+
+- Phishing-resistant alternative to TOTP
+- `@simplewebauthn/server`
+
+### E. Account lockout
+
+- Auto-lock after N failed attempts in window (data already in `auth_attempts`)
+- Admin unlock UI
+
+### F. Redis-backed rate limit + per-route policies
+
+- Replace in-process limiter for multi-instance deploys
+
+### G. SCIM 2.0 endpoints
+
+- Inbound provisioning from Zoho People / Workday → `employees`
+
+### H. Real SAML SP onboardings
+
+- Darwinbox HRMS
+- ServiceNow
+- Google Workspace (already federated for login)
+- Internal apps
+
+---
+
+## 15. Change log
+
+> **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### `c90a7a2` — 2026-05-23 — Architecture upgrade: migrations, MFA, password change, sessions, rate limit
+
+- Database migration runner (`src/db/migrate.ts`) auto-applies `migrations/*.sql` files in order on startup; tracked in `lilg_schema_migrations`. **Eliminates manual schema fixes.**
+- Migration `001` ports the original schema (idempotent).
+- Migration `002` adds `mfa_secrets`, `local_password_history`, `auth_attempts`.
+- TOTP MFA (otplib v12, RFC 6238) — `src/auth/mfa.ts`: enrollment, QR, 6-digit verify, hashed backup codes, regen.
+- Local login two-step flow when MFA enabled (Redis-backed challenge, 5-minute TTL).
+- Self-service endpoints in `src/api/me-actions.ts`: change password, list/revoke sessions, MFA management.
+- Per-IP+email rate limit (10 req/min) on `/auth` endpoints — `src/auth/rate-limit.ts`.
+- All auth attempts logged to `auth_attempts`.
+- Settings page redesigned with Profile / Security / Sessions / Two-factor tabs.
+- Login screen handles MFA challenge step inline.
+- Dockerfile copies `migrations/` folder into runtime image.
+
+### `d228354` — 2026-05-23 — Enterprise IdP console UI
+
+- New layout: dark sidebar + topbar + content area, modeled after OneLogin / miniOrange / Entrust.
+- New views: Dashboard (stats + recent SSO + system status), Users (search/filter), Administrators, SAML Applications, Authentication, Audit Logs (SSO + system tabs), Account.
+- New admin endpoints: `/api/admin/dashboard`, `/api/admin/users`, `/api/admin/audit/{saml,system}`.
+- Inter font; light enterprise theme; tables with toolbar, badges (success/warn/danger/info/neutral), avatars.
+- Login screen redesigned: split brand hero + sign-in card.
+
+### `b1f745b` — 2026-05-23 — SSO portal: My Apps launcher + SAML app admin
+
+- `web/js/app.js` rewritten with My Apps grid + Admin Central tabs (Administrators / SAML Applications / IdP Setup).
+- New `src/api/admin-saml-apps.ts` endpoint for SP registration via web UI (super admin).
+- `/api/me` now returns IdP metadata URL.
+
+### `80c3b93` — 2026-05-23 — `COOKIE_SECURE` override for plain-HTTP dev
+
+- Cookie `Secure` flag is now driven by `COOKIE_SECURE` env (defaults to `true` in production).
+- Fixes browser dropping session cookie on `http://192.168.24.254:8080`.
+
+### `40cd8af` — 2026-05-23 — MySQL 8 reserved-word fix
+
+- Backticked `system` column in `identity_links`, `adapter_outbox`, `role_bindings`.
+
+### `cf2df69` — 2026-05-23 — `fix-and-start.sh` applies full schema
+
+- Script now runs `src/db/schema.sql` (idempotent) so missing tables are created on existing MySQL volumes.
+
+### `6110111` — 2026-05-23 — Master admin from env + dev startup hardening
+
+- New `MASTER_ADMIN_EMAIL` / `MASTER_ADMIN_PASSWORD` / `MASTER_ADMIN_FULL_NAME` env vars.
+- API auto-provisions or syncs the master `SUPER_ADMIN` on every startup.
+- Local login falls back to ensure-from-env when account is missing but credentials match.
+- New scripts: `fix-and-start.sh`, `restart-api.sh`.
+- `deploy-dev.sh` now removes stale containers before `up`, working around docker-compose v1.29 `KeyError: ContainerConfig`.
+- `diagnose.sh` reports port 8080 listener and `MASTER_ADMIN_*` presence.
+
+### `2a188d0` — 2026-05-23 — Dev env URL validation relaxed; ContainerConfig workaround scripts
+
+- Relaxed `PUBLIC_BASE_URL` and SQS URL validation for dev IPs and LocalStack URLs.
+- New `scripts/reset-and-up.sh` and `scripts/install-compose-v2.sh`.
+
+### `bf6554b` — 2026-05-23 — Dev compose health & dependency fixes
+
+- Longer API healthcheck `start_period`.
+- Worker no longer waits on API health.
+
+### `b028c2d` — 2026-05-23 — TypeScript build fixes for Docker image
+
+- Strict-mode fixes (~15 issues) so `npm run build` succeeds in the multi-stage Docker build.
+
+### `21bca00` — 2026-05-22 — Initial repository
+
+- Full project bootstrap: SAML IdP, OIDC login (Google + Zoho), local administrator accounts, web UI scaffold, ILG state machine, adapter outbox, ABAC policy engine.
+
+---
+
+## Updating this document
+
+**Every architectural change must update this file in the same commit.**
+
+What counts as an architectural change:
+
+- New table / migration
+- New auth method or significant change to login flow
+- New API surface area (endpoints, headers, tokens)
+- New env var
+- Breaking change to schema, API, or frontend routing
+- New external dependency (DB, message queue, etc.)
+- Security control changes (rate limits, password policy, MFA flow)
+- Deployment topology changes
+- New scripts in `scripts/`
+
+What goes where:
+
+- §3–§13 — describe the **current state** (replace, don't append)
+- §15 Change log — append a **new entry at the top** with commit hash, date, summary
+- §14 Roadmap — move items to §15 once shipped, or refine
+
+---
+
+*Document maintained alongside the code. If the doc and the code disagree, the code wins — and the doc is wrong, fix it.*
