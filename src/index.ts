@@ -11,6 +11,8 @@ import { config } from './config.js';
 import logger from './utils/logger.js';
 import { closePool } from './db/connection.js';
 import { redis as sessionRedis } from './auth/session-store.js';
+import { runMigrations } from './db/migrate.js';
+import { rateLimit } from './auth/rate-limit.js';
 
 // Routes
 import healthRouter   from './api/health.js';
@@ -26,6 +28,7 @@ import adminSamlAppsRouter from './api/admin-saml-apps.js';
 import adminDashboardRouter from './api/admin-dashboard.js';
 import adminAuditRouter from './api/admin-audit.js';
 import adminUsersRouter from './api/admin-users.js';
+import meActionsRouter from './api/me-actions.js';
 
 // Auth
 import {
@@ -35,7 +38,7 @@ import {
   requireAuth,
 } from './auth/middleware.js';
 import { googleLoginHandler, zohoLoginHandler } from './auth/login-routes.js';
-import { localLoginHandler } from './auth/local-auth.js';
+import { localLoginHandler, localLoginMfaVerifyHandler } from './auth/local-auth.js';
 import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
 const WEB_ROOT = path.join(process.cwd(), 'web');
@@ -95,7 +98,13 @@ app.get('/auth/google/callback', (req, res) => { void googleCallbackHandler(req,
 app.get('/auth/zoho',            zohoLoginHandler);
 app.get('/auth/zoho/callback',   (req, res) => { void zohoCallbackHandler(req, res); });
 app.post('/auth/logout',         requireAuth, (req, res) => { void logoutHandler(req, res); });
-app.post('/auth/local/login',    (req, res) => { void localLoginHandler(req, res); });
+const loginRateLimiter = rateLimit({
+  max:      10,
+  windowMs: 60_000,
+  keyFn:    (req) => `${req.ip}:${(req.body && req.body.email) || 'unknown'}`,
+});
+app.post('/auth/local/login',            loginRateLimiter, (req, res) => { void localLoginHandler(req, res); });
+app.post('/auth/local/login/mfa-verify', loginRateLimiter, (req, res) => { void localLoginMfaVerifyHandler(req, res); });
 
 // ---------------------------------------------------------------------------
 // SAML IdP (enterprise application SSO)
@@ -106,6 +115,7 @@ app.use('/saml', samlRouter);
 // Public API routes (auth required)
 // ---------------------------------------------------------------------------
 app.use('/api/me',        meRouter);
+app.use('/api/me',        meActionsRouter);
 app.use('/api/apps',      appsRouter);
 app.use('/api/employees', employeeRouter);
 app.use('/api/manager',   managerRouter);
@@ -153,7 +163,13 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 // Start
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
-  // Connect Redis
+  try {
+    await runMigrations();
+  } catch (err) {
+    logger.fatal({ err }, 'Database migrations failed — refusing to start');
+    process.exit(1);
+  }
+
   await sessionRedis.connect();
   logger.info('Redis connected');
 

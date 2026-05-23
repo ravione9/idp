@@ -35,7 +35,16 @@ const api = {
   samlAudit:        () => api.fetch('/api/admin/audit/saml'),
   systemAudit:      () => api.fetch('/api/admin/audit/system'),
   localLogin:       (email, password) => api.fetch('/auth/local/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  localLoginMfa:    (challengeId, code) => api.fetch('/auth/local/login/mfa-verify', { method: 'POST', body: JSON.stringify({ challengeId, code }) }),
   logout:           () => api.fetch('/auth/logout', { method: 'POST' }),
+  changePassword:   (currentPassword, newPassword) => api.fetch('/api/me/password', { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) }),
+  listSessions:     () => api.fetch('/api/me/sessions'),
+  revokeSession:    (id) => api.fetch(`/api/me/sessions/${id}`, { method: 'DELETE' }),
+  mfaStatus:        () => api.fetch('/api/me/mfa'),
+  mfaEnroll:        () => api.fetch('/api/me/mfa/enroll', { method: 'POST' }),
+  mfaConfirm:       (code) => api.fetch('/api/me/mfa/confirm', { method: 'POST', body: JSON.stringify({ code }) }),
+  mfaDisable:       () => api.fetch('/api/me/mfa/disable', { method: 'POST' }),
+  mfaRegenCodes:    () => api.fetch('/api/me/mfa/regenerate-codes', { method: 'POST' }),
 };
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
@@ -137,12 +146,49 @@ function renderLogin() {
   `);
 
   const errEl = root.querySelector('#login-error');
+  const panel = root.querySelector('.auth-panel');
+
+  function renderMfaStep(challengeId, email) {
+    const card = el(`
+      <div class="auth-card">
+        <h2>Two-factor authentication</h2>
+        <p class="muted">Enter the 6-digit code from your authenticator app for ${esc(email)}.</p>
+        <div id="mfa-error"></div>
+        <form id="mfa-form">
+          <div class="field">
+            <label>Verification code</label>
+            <input name="code" required pattern="[0-9]{6,8}" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
+            <p class="hint">A backup code (8 hex chars) also works.</p>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg">Verify</button>
+        </form>
+      </div>
+    `);
+    panel.replaceChildren(card);
+    const merr = card.querySelector('#mfa-error');
+    card.querySelector('#mfa-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      merr.innerHTML = '';
+      try {
+        await api.localLoginMfa(challengeId, new FormData(e.target).get('code'));
+        location.href = '/';
+      } catch (err) {
+        merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    });
+  }
+
   root.querySelector('#local-login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     errEl.innerHTML = '';
     const fd = new FormData(e.target);
+    const email = fd.get('email');
     try {
-      await api.localLogin(fd.get('email'), fd.get('password'));
+      const r = await api.localLogin(email, fd.get('password'));
+      if (r && r.mfaRequired && r.challengeId) {
+        renderMfaStep(r.challengeId, email);
+        return;
+      }
       location.href = '/';
     } catch (err) {
       errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
@@ -854,16 +900,33 @@ async function viewAudit() {
 }
 
 async function viewSettings() {
-  setPageTitle('Settings');
+  setPageTitle('Account');
   const me = state.me;
+  const isLocal = me.session?.iss === 'local';
+
   const wrap = el(`
     <div>
       <div class="page-header">
         <div>
           <h1>Account</h1>
-          <p class="subtitle">Your profile and active session</p>
+          <p class="subtitle">Profile, security, sessions and capabilities</p>
         </div>
       </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="profile">Profile</button>
+        ${isLocal ? '<button class="tab" data-tab="security">Security</button>' : ''}
+        <button class="tab" data-tab="sessions">Sessions</button>
+        <button class="tab" data-tab="mfa">Two-factor</button>
+      </div>
+      <div id="settings-content"><div class="loading-row"><span class="spinner"></span></div></div>
+    </div>
+  `);
+  setContent(wrap);
+
+  const target = wrap.querySelector('#settings-content');
+
+  function renderProfile() {
+    target.innerHTML = `
       <div class="grid-3">
         <div class="card">
           <h2>Profile</h2>
@@ -877,13 +940,12 @@ async function viewSettings() {
           </div>
         </div>
         <div class="card">
-          <h2>Active session</h2>
+          <h2>Sign-in method</h2>
           <div class="kv-list" style="margin-top:1rem">
-            <div class="kv"><div class="k">Session ID</div><div class="v"><code class="truncate" title="${esc(me.session?.sessionId || '')}">${esc(me.session?.sessionId || '—')}</code></div></div>
-            <div class="kv"><div class="k">Issuer</div><div class="v">${esc(me.session?.iss || '—')}</div></div>
-            <div class="kv"><div class="k">Expires</div><div class="v">${fmtDate(me.session?.expiresAt)}</div></div>
+            <div class="kv"><div class="k">Issuer</div><div class="v"><span class="badge badge-info">${esc(me.session?.iss || '—')}</span></div></div>
+            <div class="kv"><div class="k">Subject</div><div class="v"><code class="truncate" title="${esc(me.session?.sub || '')}">${esc(me.session?.sub || '—')}</code></div></div>
+            <div class="kv"><div class="k">Session expires</div><div class="v">${fmtDate(me.session?.expiresAt)}</div></div>
           </div>
-          <button class="btn btn-danger" id="end-session" style="margin-top:1rem">End this session</button>
         </div>
         <div class="card">
           <h2>Capabilities</h2>
@@ -894,13 +956,204 @@ async function viewSettings() {
           </div>
         </div>
       </div>
-    </div>
-  `);
-  wrap.querySelector('#end-session').addEventListener('click', async () => {
-    try { await api.logout(); } catch {}
-    location.href = '/login';
+    `;
+  }
+
+  function renderSecurity() {
+    if (!isLocal) {
+      target.innerHTML = `<div class="alert alert-info">Password change is only available for local accounts. You signed in via <code>${esc(me.session?.iss || '')}</code>.</div>`;
+      return;
+    }
+    target.innerHTML = `
+      <div class="card" style="max-width:520px">
+        <h2>Change password</h2>
+        <p class="subtitle" style="margin-bottom:1rem">Minimum 10 characters. After change, other sessions remain active until you sign them out.</p>
+        <div id="cp-error"></div>
+        <form id="cp-form">
+          <div class="field">
+            <label>Current password</label>
+            <input name="currentPassword" type="password" required autocomplete="current-password" />
+          </div>
+          <div class="field">
+            <label>New password</label>
+            <input name="newPassword" type="password" minlength="10" required autocomplete="new-password" />
+          </div>
+          <div class="field">
+            <label>Confirm new password</label>
+            <input name="confirm" type="password" minlength="10" required autocomplete="new-password" />
+          </div>
+          <button type="submit" class="btn btn-primary">Update password</button>
+        </form>
+      </div>
+    `;
+    target.querySelector('#cp-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = target.querySelector('#cp-error');
+      errEl.innerHTML = '';
+      const fd = new FormData(e.target);
+      if (fd.get('newPassword') !== fd.get('confirm')) {
+        errEl.innerHTML = `<div class="alert alert-error">New passwords do not match</div>`;
+        return;
+      }
+      try {
+        await api.changePassword(fd.get('currentPassword'), fd.get('newPassword'));
+        errEl.innerHTML = `<div class="alert alert-success">Password updated.</div>`;
+        e.target.reset();
+      } catch (err) {
+        errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    });
+  }
+
+  async function renderSessions() {
+    target.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.listSessions();
+      const rows = r.data || [];
+      const body = rows.length ? rows.map((s) => `
+        <tr>
+          <td><code class="truncate" title="${esc(s.session_id)}">${esc(s.session_id.slice(0, 8))}…</code> ${s.isCurrent ? '<span class="badge badge-success">Current</span>' : ''}</td>
+          <td><span class="badge badge-info">${esc(s.iss)}</span></td>
+          <td class="muted">${fmtDate(s.last_active_at)}</td>
+          <td class="muted">${fmtDate(s.expires_at)}</td>
+          <td class="muted truncate" title="${esc(s.user_agent || '')}">${esc(s.ip || '—')}</td>
+          <td class="actions"><button class="btn btn-sm btn-danger" data-revoke="${esc(s.session_id)}">${s.isCurrent ? 'Sign out' : 'Revoke'}</button></td>
+        </tr>`).join('') : `<tr><td colspan="6" class="empty-state">No active sessions</td></tr>`;
+      target.innerHTML = `
+        <div class="table-wrap">
+          <div class="table-toolbar"><strong>Active sessions</strong><span class="muted">${rows.length} session${rows.length === 1 ? '' : 's'}</span></div>
+          <table>
+            <thead><tr><th>Session</th><th>Issuer</th><th>Last active</th><th>Expires</th><th>IP</th><th></th></tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      `;
+      target.querySelectorAll('[data-revoke]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const id = btn.dataset.revoke;
+          if (!confirm('Revoke this session?')) return;
+          try {
+            await api.revokeSession(id);
+            if (id === me.session?.sessionId) { location.href = '/login'; return; }
+            renderSessions();
+          } catch (err) { alert(err.message); }
+        });
+      });
+    } catch (err) {
+      target.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
+  async function renderMfa() {
+    target.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    let s;
+    try { s = await api.mfaStatus(); }
+    catch (err) {
+      target.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      return;
+    }
+    if (s.enabled) {
+      target.innerHTML = `
+        <div class="card" style="max-width:560px">
+          <h2>Two-factor authentication</h2>
+          <p class="subtitle" style="margin-bottom:1rem"><span class="badge badge-success">Enabled</span> Last used ${fmtDate(s.lastUsedAt)} · ${s.remainingBackupCodes} backup codes left</p>
+          <button class="btn btn-secondary" id="mfa-regen">Regenerate backup codes</button>
+          <button class="btn btn-danger" id="mfa-disable" style="margin-left:0.5rem">Disable two-factor</button>
+          <div id="mfa-action-result" style="margin-top:1rem"></div>
+        </div>
+      `;
+      target.querySelector('#mfa-disable').addEventListener('click', async () => {
+        if (!confirm('Disable two-factor authentication? Your account will be less secure.')) return;
+        await api.mfaDisable(); renderMfa();
+      });
+      target.querySelector('#mfa-regen').addEventListener('click', async () => {
+        if (!confirm('Replace all backup codes? Old codes will stop working.')) return;
+        try {
+          const r = await api.mfaRegenCodes();
+          target.querySelector('#mfa-action-result').innerHTML = `
+            <div class="alert alert-warning">
+              <div>
+                <div style="font-weight:600;margin-bottom:0.5rem">Save these backup codes — shown only once</div>
+                <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.4rem;font-family:var(--font-mono);font-size:0.9rem">
+                  ${r.backupCodes.map((c) => `<div>${esc(c)}</div>`).join('')}
+                </div>
+              </div>
+            </div>`;
+        } catch (err) { alert(err.message); }
+      });
+      return;
+    }
+
+    target.innerHTML = `
+      <div class="card" style="max-width:560px">
+        <h2>Two-factor authentication</h2>
+        <p class="subtitle" style="margin-bottom:1rem"><span class="badge badge-warning">Disabled</span> Adds a 6-digit code on every sign-in.</p>
+        <button class="btn btn-primary" id="mfa-start">Enable two-factor</button>
+        <div id="mfa-enroll-area"></div>
+      </div>
+    `;
+    target.querySelector('#mfa-start').addEventListener('click', async () => {
+      const area = target.querySelector('#mfa-enroll-area');
+      try {
+        const r = await api.mfaEnroll();
+        area.innerHTML = `
+          <div style="margin-top:1.25rem;padding-top:1.25rem;border-top:1px solid var(--border)">
+            <p class="subtitle" style="margin-bottom:0.75rem">Scan the QR code with Google Authenticator, Authy, 1Password, etc.</p>
+            <img src="${esc(r.qrDataUrl)}" alt="MFA QR code" style="background:white;padding:0.5rem;border-radius:8px" />
+            <p class="subtitle" style="margin-top:0.75rem">Or enter this secret manually: <code>${esc(r.secret)}</code></p>
+            <form id="mfa-confirm" style="margin-top:1rem">
+              <div class="field">
+                <label>Enter the 6-digit code from your app</label>
+                <input name="code" required pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" />
+              </div>
+              <button class="btn btn-primary" type="submit">Verify and enable</button>
+            </form>
+            <div id="mfa-confirm-result"></div>
+          </div>
+        `;
+        area.querySelector('#mfa-confirm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const out = area.querySelector('#mfa-confirm-result');
+          out.innerHTML = '';
+          try {
+            const code = new FormData(e.target).get('code');
+            const r2 = await api.mfaConfirm(code);
+            out.innerHTML = `
+              <div class="alert alert-success" style="margin-top:1rem">Two-factor enabled.</div>
+              <div class="alert alert-warning" style="margin-top:0.5rem">
+                <div>
+                  <div style="font-weight:600;margin-bottom:0.5rem">Save these backup codes — shown only once</div>
+                  <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.4rem;font-family:var(--font-mono);font-size:0.9rem">
+                    ${r2.backupCodes.map((c) => `<div>${esc(c)}</div>`).join('')}
+                  </div>
+                </div>
+              </div>
+              <button class="btn btn-secondary" id="mfa-done" style="margin-top:0.75rem">Done</button>
+            `;
+            out.querySelector('#mfa-done').addEventListener('click', () => renderMfa());
+          } catch (err) {
+            out.innerHTML = `<div class="alert alert-error" style="margin-top:1rem">${esc(err.message)}</div>`;
+          }
+        });
+      } catch (err) {
+        area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    });
+  }
+
+  function showTab(name) {
+    wrap.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+    if (name === 'profile')  renderProfile();
+    else if (name === 'security') renderSecurity();
+    else if (name === 'sessions') renderSessions();
+    else if (name === 'mfa')  renderMfa();
+  }
+
+  wrap.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => showTab(tab.dataset.tab));
   });
-  setContent(wrap);
+
+  renderProfile();
 }
 
 /* ---------- Router ---------- */

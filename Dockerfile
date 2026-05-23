@@ -36,6 +36,7 @@ COPY --from=builder --chown=lilg:lilg /app/dist ./dist
 COPY --from=builder --chown=lilg:lilg /app/node_modules ./node_modules
 COPY --from=builder --chown=lilg:lilg /app/package.json ./package.json
 COPY --chown=lilg:lilg web ./web
+COPY --chown=lilg:lilg migrations ./migrations
 
 # Expose HTTP port
 EXPOSE 8080
