@@ -1,12 +1,13 @@
-# =============================================================================
-# LILG IdP — Single-tier DEV server (e.g. 192.168.24.254)
+# -----------------------------------------------------------------------------
+# Dev server (192.168.24.254) — requires docker-compose v1 (hyphen), NOT "docker compose"
 #
-# Usage on server:
-#   cp env.dev.example .env   # edit secrets
-#   docker compose -f docker-compose.dev.yml up -d --build
+#   cp env.dev.example .env && nano .env
+#   chmod +x dev-up.sh
+#   ./dev-up.sh up -d --build
 #
-# Only port 8080 is exposed on the host LAN.
-# =============================================================================
+# Or directly:
+#   docker-compose -f docker-compose.dev.yml up -d --build
+# -----------------------------------------------------------------------------
 
 services:
   mysql:
