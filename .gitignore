@@ -12,3 +12,5 @@ idp-dev.crt
 coverage/
 .idea/
 .vscode/
+
+COMMIT_MSG.txt
