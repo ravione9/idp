@@ -74,7 +74,7 @@ export async function viewSystemUsers(content) {
       const users = await api.listSystemUsers();
       const rows = users.length ? users.map(u => `
         <tr>
-          <td class="cell-strong">${esc(u.username)}</td>
+          <td class="cell-strong">${esc(u.name || u.username || '—')}</td>
           <td><span class="badge badge-info">${esc(u.type || 'SERVICE')}</span></td>
           <td class="muted">${esc(u.resource_id || '—')}</td>
           <td class="muted">${u.created_at ? fmtDate(u.created_at) : '—'}</td>
@@ -99,8 +99,8 @@ export async function viewSystemUsers(content) {
     </div><div class="modal-footer"><button class="btn btn-primary" id="su-save">Create</button><button class="btn btn-secondary" id="su-cancel">Cancel</button></div></div>`);
     bd.querySelector('#su-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#su-save').addEventListener('click', async () => {
-      const data = { username: bd.querySelector('#su-user').value, type: bd.querySelector('#su-type').value, resource_id: bd.querySelector('#su-res').value };
-      if (!data.username) { bd.querySelector('#su-err').innerHTML = errHtml('Username required'); return; }
+      const data = { name: bd.querySelector('#su-user').value, type: bd.querySelector('#su-type').value, resource_id: bd.querySelector('#su-res').value };
+      if (!data.name) { bd.querySelector('#su-err').innerHTML = errHtml('Username required'); return; }
       try { await api.createSystemUser(data); bd.remove(); await load(); } catch(e) { bd.querySelector('#su-err').innerHTML = errHtml(e.message); }
     });
   });
@@ -119,11 +119,11 @@ export async function viewIdentityProfiles(content) {
       const rows = profiles.length ? profiles.map(p => `
         <tr>
           <td class="cell-strong">${esc(p.name)}</td>
-          <td><span class="badge badge-info">${esc(p.source_type || '—')}</span></td>
+          <td><span class="badge badge-info">${esc(p.population || p.source_type || '—')}</span></td>
           <td>${p.priority ?? '—'}</td>
           <td>${p.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary edit-ip" data-id="${esc(String(p.id))}" data-name="${esc(p.name)}" data-desc="${esc(p.description||'')}" data-src="${esc(p.source_type||'')}" data-pri="${esc(String(p.priority||0))}">Edit</button>
+            <button class="btn btn-sm btn-secondary edit-ip" data-id="${esc(String(p.id))}" data-name="${esc(p.name)}" data-desc="${esc(p.description||'')}" data-src="${esc(p.population||p.source_type||'')}" data-pri="${esc(String(p.priority||0))}">Edit</button>
             <button class="btn btn-sm btn-danger del-ip" data-id="${esc(String(p.id))}">Delete</button>
           </td>
         </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No identity profiles.</p></div></td></tr>`;
@@ -136,7 +136,7 @@ export async function viewIdentityProfiles(content) {
         });
       });
       wrap.querySelectorAll('.edit-ip').forEach(btn => {
-        btn.addEventListener('click', () => openIpModal(btn.dataset.id, { name: btn.dataset.name, description: btn.dataset.desc, source_type: btn.dataset.src, priority: btn.dataset.pri }));
+        btn.addEventListener('click', () => openIpModal(btn.dataset.id, { name: btn.dataset.name, description: btn.dataset.desc, population: btn.dataset.src, priority: btn.dataset.pri }));
       });
     } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
   }
@@ -146,18 +146,19 @@ export async function viewIdentityProfiles(content) {
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${isEdit ? 'Edit' : 'New'} Identity Profile</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="ip-name" value="${esc(defaults.name||'')}"></div>
       <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="ip-desc" value="${esc(defaults.description||'')}"></div>
-      <div class="form-group"><label class="form-label">Source Type</label><select class="form-select" id="ip-src">
-        <option ${defaults.source_type==='LDAP'?'selected':''}>LDAP</option>
-        <option ${defaults.source_type==='SCIM'?'selected':''}>SCIM</option>
-        <option ${defaults.source_type==='CSV'?'selected':''}>CSV</option>
-        <option ${defaults.source_type==='MANUAL'?'selected':''}>MANUAL</option>
+      <div class="form-group"><label class="form-label">Population</label><select class="form-select" id="ip-src">
+        <option value="EMPLOYEE" ${(defaults.population||defaults.source_type)==='EMPLOYEE'?'selected':''}>Employee</option>
+        <option value="CONTRACTOR" ${(defaults.population||defaults.source_type)==='CONTRACTOR'?'selected':''}>Contractor</option>
+        <option value="PARTNER" ${(defaults.population||defaults.source_type)==='PARTNER'?'selected':''}>Partner</option>
+        <option value="CUSTOMER" ${(defaults.population||defaults.source_type)==='CUSTOMER'?'selected':''}>Customer</option>
+        <option value="SERVICE" ${(defaults.population||defaults.source_type)==='SERVICE'?'selected':''}>Service Account</option>
       </select></div>
       <div class="form-group"><label class="form-label">Priority</label><input class="form-input" id="ip-pri" type="number" value="${esc(String(defaults.priority||1))}"></div>
       <div id="ip-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="ip-save">${isEdit ? 'Update' : 'Create'}</button><button class="btn btn-secondary" id="ip-cancel">Cancel</button></div></div>`);
     bd.querySelector('#ip-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#ip-save').addEventListener('click', async () => {
-      const data = { name: bd.querySelector('#ip-name').value, description: bd.querySelector('#ip-desc').value, source_type: bd.querySelector('#ip-src').value, priority: parseInt(bd.querySelector('#ip-pri').value) || 1 };
+      const data = { name: bd.querySelector('#ip-name').value, description: bd.querySelector('#ip-desc').value, population: bd.querySelector('#ip-src').value, priority: parseInt(bd.querySelector('#ip-pri').value) || 1 };
       if (!data.name) { bd.querySelector('#ip-err').innerHTML = errHtml('Name required'); return; }
       try {
         if (isEdit) await api.updateIdentityProfile(id, data); else await api.createIdentityProfile(data);
@@ -420,55 +421,378 @@ export async function viewLoginCustomization(content) {
 }
 
 // ─── 8. OIDC Apps ─────────────────────────────────────────────────────────────
-// ─── Pre-built SSO Integration Catalog ───────────────────────────────────────
+// ─── Pre-built SSO Integration Catalog (350+) ────────────────────────────────
+function _app(id, name, domain, cat, proto, hint, scopes, grants) {
+  return {
+    id, name,
+    icon: domain ? `https://logo.clearbit.com/${domain}` : null,
+    cat, protocol: proto,
+    hint: hint || `${name} supports ${proto} for enterprise SSO.`,
+    scopes: scopes || ['openid','email','profile'],
+    grants: grants || ['authorization_code'],
+  };
+}
+const _S = 'SAML', _O = 'OIDC';
 const SSO_CATALOG = [
-  // Productivity & Collaboration
-  { id:'slack',      name:'Slack',              icon:'https://cdn.brandfetch.io/idmFGMCpgF/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Collaboration',   protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code'], setupUrl:'https://api.slack.com/authentication/sign-in-with-slack', hint:'Use Slack\'s OIDC integration for workspace SSO.' },
-  { id:'teams',      name:'Microsoft Teams',    icon:'https://cdn.brandfetch.io/idchmboHEZ/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Collaboration',   protocol:'SAML', hint:'Configure via Microsoft Entra ID (Azure AD) app gallery.' },
-  { id:'zoom',       name:'Zoom',               icon:'https://cdn.brandfetch.io/idPJzRyTFr/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Collaboration',   protocol:'SAML', hint:'Zoom supports SAML 2.0 SSO via the SSO tab in Zoom Admin.' },
-  { id:'notion',     name:'Notion',             icon:'https://cdn.brandfetch.io/idoHnTEJFz/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Collaboration',   protocol:'SAML', hint:'Notion Enterprise supports SAML 2.0. Configure in Settings → Identity & Provisioning.' },
-  { id:'miro',       name:'Miro',               icon:'https://cdn.brandfetch.io/idAnDmwDVl/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Collaboration',   protocol:'SAML', hint:'Miro supports SAML 2.0 SSO for Enterprise plans.' },
-  // Dev Tools
-  { id:'github',     name:'GitHub Enterprise',  icon:'https://cdn.brandfetch.io/idZAyF9zcg/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'SAML', hint:'GitHub Enterprise Cloud supports SAML 2.0 SSO at the organisation level.' },
-  { id:'gitlab',     name:'GitLab',             icon:'https://cdn.brandfetch.io/idgPFp_k7R/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'SAML', hint:'GitLab supports SAML 2.0 for self-managed and GitLab.com groups.' },
-  { id:'jira',       name:'Jira / Confluence',  icon:'https://cdn.brandfetch.io/idg6A4H3BO/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'SAML', hint:'Atlassian Access enables SAML 2.0 SSO for Jira and Confluence Cloud.' },
-  { id:'jenkins',    name:'Jenkins',            icon:'https://cdn.brandfetch.io/idFCMjIcFj/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code'], hint:'Use the OpenID Connect Authentication Plugin for Jenkins SSO.' },
-  { id:'sonarqube',  name:'SonarQube',          icon:'https://cdn.brandfetch.io/idE1RNF9Fg/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code'], hint:'SonarQube supports SAML 2.0 and OIDC. Configure in Administration → Security → Authentication.' },
-  { id:'argocd',     name:'Argo CD',            icon:'https://cdn.brandfetch.io/idqxjS-Lgf/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Development',    protocol:'OIDC', scopes:['openid','email','groups'], grants:['authorization_code'], hint:'Argo CD supports OIDC via dex or direct OIDC provider config in argocd-cm.' },
-  // Cloud & Infrastructure
-  { id:'aws',        name:'AWS (IAM Identity)',  icon:'https://cdn.brandfetch.io/idHpBVQh7T/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Cloud',          protocol:'SAML', hint:'AWS IAM Identity Center (SSO) accepts SAML 2.0 from external IdPs. ACS URL: https://signin.aws.amazon.com/saml.' },
-  { id:'gcp',        name:'Google Cloud',        icon:'https://cdn.brandfetch.io/idoHnTEJFz/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Cloud',          protocol:'SAML', hint:'Google Workspace / Cloud Identity supports SAML 2.0 external IdP federation.' },
-  { id:'azure',      name:'Azure / Entra ID',    icon:'https://cdn.brandfetch.io/idchmboHEZ/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Cloud',          protocol:'SAML', hint:'Azure federated identity supports SAML 2.0 and OIDC from external IdPs.' },
-  { id:'datadog',    name:'Datadog',             icon:'https://cdn.brandfetch.io/idWnZ2IOXT/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Cloud',          protocol:'SAML', hint:'Datadog supports SAML 2.0 in Organisation Settings → SAML.' },
-  { id:'pagerduty',  name:'PagerDuty',           icon:'https://cdn.brandfetch.io/idoJiE2gqt/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Cloud',          protocol:'SAML', hint:'PagerDuty supports SAML 2.0 SSO in Account Settings → SSO.' },
-  // Business Apps
-  { id:'salesforce', name:'Salesforce',          icon:'https://cdn.brandfetch.io/id6H4MeNHm/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'CRM',            protocol:'SAML', hint:'Salesforce supports SAML 2.0 and can be configured as SP in Setup → Single Sign-On Settings.' },
-  { id:'hubspot',    name:'HubSpot',             icon:'https://cdn.brandfetch.io/idVfY5YB3d/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'CRM',            protocol:'SAML', hint:'HubSpot Enterprise supports SAML 2.0 SSO via Security → Single Sign-On.' },
-  { id:'zendesk',    name:'Zendesk',             icon:'https://cdn.brandfetch.io/idXJeVJAz2/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Support',        protocol:'SAML', hint:'Zendesk supports SAML 2.0 in Admin → Security → Single Sign-On.' },
-  { id:'freshdesk',  name:'Freshdesk',           icon:'https://cdn.brandfetch.io/idpw09B7q5/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Support',        protocol:'SAML', hint:'Freshdesk supports SAML 2.0 via Admin → Security → Single Sign-On.' },
-  { id:'servicenow', name:'ServiceNow',          icon:'https://cdn.brandfetch.io/idPjDwVY0z/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'ITSM',           protocol:'SAML', hint:'ServiceNow supports SAML 2.0 via System Security → SSO Properties.' },
-  { id:'workday',    name:'Workday',             icon:'https://cdn.brandfetch.io/id6nDjnGVK/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'HR',             protocol:'SAML', hint:'Workday supports SAML 2.0 SSO. Workday acts as SP; configure in Edit Tenant Setup → Security.' },
-  { id:'bamboohr',   name:'BambooHR',            icon:'https://cdn.brandfetch.io/idV79BaEsJ/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'HR',             protocol:'SAML', hint:'BambooHR supports SAML 2.0 SSO. Configure under Settings → SSO.' },
-  { id:'gusto',      name:'Gusto',               icon:'https://cdn.brandfetch.io/idkiTADKT9/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'HR',             protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code'], hint:'Gusto supports OAuth 2.0 / OIDC for partner integrations.' },
-  // Storage & Docs
-  { id:'gsuite',     name:'Google Workspace',    icon:'https://cdn.brandfetch.io/idoHnTEJFz/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Productivity',   protocol:'SAML', hint:'Google Workspace supports SAML 2.0. Configure in Admin Console → Security → SSO with third-party IdP.' },
-  { id:'office365',  name:'Microsoft 365',       icon:'https://cdn.brandfetch.io/idchmboHEZ/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Productivity',   protocol:'SAML', hint:'Microsoft 365 federated authentication with SAML 2.0 via Azure AD federation.' },
-  { id:'box',        name:'Box',                 icon:'https://cdn.brandfetch.io/idEnXxBhPr/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Storage',        protocol:'SAML', hint:'Box supports SAML 2.0 SSO. Configure in Admin Console → Enterprise Settings → User Settings.' },
-  { id:'dropbox',    name:'Dropbox Business',    icon:'https://cdn.brandfetch.io/idl-wKFkJt/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Storage',        protocol:'SAML', hint:'Dropbox Business supports SAML 2.0 in Admin Console → Settings → Single Sign-On.' },
-  // Design & Media
-  { id:'figma',      name:'Figma',               icon:'https://cdn.brandfetch.io/idZfZEO_0x/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Design',         protocol:'SAML', hint:'Figma Organization supports SAML 2.0 SSO via Organization Settings → Security.' },
-  { id:'canva',      name:'Canva',               icon:'https://cdn.brandfetch.io/idJERK4uq6/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Design',         protocol:'SAML', hint:'Canva for Enterprise supports SAML 2.0 SSO.' },
-  // Finance
-  { id:'quickbooks', name:'QuickBooks',          icon:'https://cdn.brandfetch.io/idqmVyUheS/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Finance',        protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code'], hint:'QuickBooks Online supports OpenID Connect for accounting integrations.' },
-  // Security & IAM
-  { id:'okta',       name:'Okta (SP-initiated)', icon:'https://cdn.brandfetch.io/idpPMCJaSN/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'IAM',            protocol:'SAML', hint:'Use when Lenskart IdP federates INTO an Okta org. Okta acts as SP.' },
-  { id:'cyberark',   name:'CyberArk',            icon:'https://cdn.brandfetch.io/idPJBtxYOh/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'PAM',            protocol:'SAML', hint:'CyberArk Privileged Access Manager supports SAML 2.0 SSO for web access.' },
-  // Analytics
-  { id:'tableau',    name:'Tableau',             icon:'https://cdn.brandfetch.io/idnRpjVP9q/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Analytics',      protocol:'SAML', hint:'Tableau Online and Server support SAML 2.0 SSO.' },
-  { id:'looker',     name:'Looker / Looker Studio',icon:'https://cdn.brandfetch.io/idoHnTEJFz/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Analytics',    protocol:'SAML', hint:'Looker supports SAML 2.0 for enterprise SSO.' },
-  { id:'metabase',   name:'Metabase',            icon:'https://cdn.brandfetch.io/id3vLq9Qiv/w/400/h/400/theme/dark/icon.png?k=bfHSJFAPEG', cat:'Analytics',      protocol:'SAML', hint:'Metabase Enterprise supports SAML 2.0 SSO.' },
-  // Custom
-  { id:'custom',     name:'Custom OIDC App',     icon:null, cat:'Custom',        protocol:'OIDC', scopes:['openid','email','profile'], grants:['authorization_code','refresh_token'], hint:'Register any application that supports OpenID Connect / OAuth 2.0.' },
+  // ── Collaboration ──────────────────────────────────────────────────────────
+  _app('slack',          'Slack',                  'slack.com',           'Collaboration',   _O, 'Use Slack OIDC integration for workspace SSO via OAuth 2.0.'),
+  _app('teams',          'Microsoft Teams',        'microsoft.com',       'Collaboration',   _S, 'Configure via Microsoft Entra ID app gallery. ACS URL provided after SP setup.'),
+  _app('zoom',           'Zoom',                   'zoom.us',             'Collaboration',   _S, 'Zoom supports SAML 2.0 SSO. Configure in Zoom Admin → Advanced → Single Sign-On.'),
+  _app('webex',          'Cisco Webex',            'webex.com',           'Collaboration',   _S, 'Webex supports SAML 2.0. Configure in Control Hub → Settings → SSO.'),
+  _app('google-chat',    'Google Chat',            'google.com',          'Collaboration',   _S, 'Google Chat SSO is managed through Google Workspace SAML federation.'),
+  _app('discord',        'Discord',                'discord.com',         'Collaboration',   _O, 'Discord supports OAuth 2.0 / OIDC for server authentication flows.'),
+  _app('mattermost',     'Mattermost',             'mattermost.com',      'Collaboration',   _S, 'Mattermost supports SAML 2.0 in System Console → Authentication → SAML 2.0.'),
+  _app('lark',           'Lark / Feishu',          'larksuite.com',       'Collaboration',   _S, 'Lark Enterprise supports SAML 2.0 SSO via Admin → Security → SSO.'),
+  _app('ringcentral',    'RingCentral',            'ringcentral.com',     'Collaboration',   _S, 'RingCentral supports SAML 2.0 SSO in Admin Portal → Security → SSO.'),
+  _app('gotomeeting',    'GoTo Meeting',           'goto.com',            'Collaboration',   _S, 'GoTo Meeting supports SAML 2.0 for enterprise authentication.'),
+  _app('chanty',         'Chanty',                 'chanty.com',          'Collaboration',   _O, 'Chanty supports OAuth 2.0 / OIDC for team chat SSO.'),
+  _app('flock',          'Flock',                  'flock.com',           'Collaboration',   _S, 'Flock for Business supports SAML 2.0 SSO via Admin Settings.'),
+  _app('twist',          'Twist',                  'twist.com',           'Collaboration',   _S, 'Twist supports SAML 2.0 for async team communication.'),
+  _app('pumble',         'Pumble',                 'pumble.com',          'Collaboration',   _S, 'Pumble supports SAML 2.0 for enterprise teams.'),
+  _app('elements',       'Rocket.Chat',            'rocket.chat',         'Collaboration',   _S, 'Rocket.Chat supports SAML 2.0 in Administration → SAML.'),
+  _app('bluejeans',      'BlueJeans',              'bluejeans.com',       'Collaboration',   _S, 'BlueJeans supports SAML 2.0 SSO for video meetings.'),
+  // ── Project Management ─────────────────────────────────────────────────────
+  _app('jira',           'Jira / Confluence',      'atlassian.com',       'Project Mgmt',    _S, 'Atlassian Access enables SAML 2.0 SSO for all Atlassian Cloud products.'),
+  _app('asana',          'Asana',                  'asana.com',           'Project Mgmt',    _S, 'Asana Business/Enterprise supports SAML 2.0 via Admin Console → Security → SAML.'),
+  _app('monday',         'Monday.com',             'monday.com',          'Project Mgmt',    _S, 'Monday.com Enterprise supports SAML 2.0 in Admin → Security → SAML.'),
+  _app('linear',         'Linear',                 'linear.app',          'Project Mgmt',    _O, 'Linear supports OIDC-based SSO for workspace authentication.'),
+  _app('trello',         'Trello',                 'trello.com',          'Project Mgmt',    _S, 'Trello (via Atlassian Access) supports SAML 2.0 SSO.'),
+  _app('clickup',        'ClickUp',                'clickup.com',         'Project Mgmt',    _S, 'ClickUp Enterprise supports SAML 2.0 in Settings → Security → SSO.'),
+  _app('wrike',          'Wrike',                  'wrike.com',           'Project Mgmt',    _S, 'Wrike supports SAML 2.0 for enterprise plans via Admin → Security.'),
+  _app('smartsheet',     'Smartsheet',             'smartsheet.com',      'Project Mgmt',    _S, 'Smartsheet supports SAML 2.0 SSO in Account Admin → Security.'),
+  _app('notion',         'Notion',                 'notion.so',           'Project Mgmt',    _S, 'Notion Enterprise supports SAML 2.0 in Settings → Identity & Provisioning.'),
+  _app('basecamp',       'Basecamp',               'basecamp.com',        'Project Mgmt',    _O, 'Basecamp supports OAuth 2.0 for third-party app integrations.'),
+  _app('airtable',       'Airtable',               'airtable.com',        'Project Mgmt',    _S, 'Airtable Enterprise supports SAML 2.0 SSO via Admin panel.'),
+  _app('height',         'Height',                 'height.app',          'Project Mgmt',    _O, 'Height supports OIDC-based SSO for team project management.'),
+  _app('shortcut',       'Shortcut',               'shortcut.com',        'Project Mgmt',    _S, 'Shortcut (formerly Clubhouse) supports SAML 2.0 for engineering teams.'),
+  _app('productboard',   'Productboard',           'productboard.com',    'Project Mgmt',    _S, 'Productboard supports SAML 2.0 SSO for product management teams.'),
+  _app('teamwork',       'Teamwork',               'teamwork.com',        'Project Mgmt',    _S, 'Teamwork supports SAML 2.0 SSO in Site Settings → Security.'),
+  _app('nifty',          'Nifty',                  'niftypm.com',         'Project Mgmt',    _S, 'Nifty supports SAML 2.0 SSO for enterprise project teams.'),
+  _app('plane',          'Plane',                  'plane.so',            'Project Mgmt',    _O, 'Plane (open-source) supports OIDC for self-hosted authentication.'),
+  // ── Development Tools ──────────────────────────────────────────────────────
+  _app('github',         'GitHub Enterprise',      'github.com',          'Development',     _S, 'GitHub Enterprise Cloud SAML SSO at organisation level. ACS: https://github.com/orgs/{org}/saml/consume.'),
+  _app('gitlab',         'GitLab',                 'gitlab.com',          'Development',     _S, 'GitLab supports SAML 2.0 for self-managed (Admin → SAML) and GitLab.com groups.'),
+  _app('bitbucket',      'Bitbucket',              'atlassian.com',       'Development',     _S, 'Bitbucket Cloud (via Atlassian Access) supports SAML 2.0 SSO.'),
+  _app('jenkins',        'Jenkins',                'jenkins.io',          'Development',     _O, 'Use the OpenID Connect Authentication Plugin for Jenkins SSO.'),
+  _app('circleci',       'CircleCI',               'circleci.com',        'Development',     _S, 'CircleCI supports SAML 2.0 SSO for organisation authentication.'),
+  _app('sonarqube',      'SonarQube',              'sonarsource.com',     'Development',     _O, 'SonarQube supports SAML 2.0 and OIDC via Administration → Security → Authentication.'),
+  _app('argocd',         'Argo CD',                'argoproj.github.io',  'Development',     _O, 'Argo CD supports OIDC via dex connector or direct OIDC config in argocd-cm ConfigMap.', ['openid','email','groups']),
+  _app('snyk',           'Snyk',                   'snyk.io',             'Development',     _S, 'Snyk Business/Enterprise supports SAML 2.0 SSO via Organisation Settings → SSO.'),
+  _app('jfrog',          'JFrog Artifactory',      'jfrog.com',           'Development',     _S, 'JFrog Artifactory supports SAML 2.0 via Admin → Authentication → SAML.'),
+  _app('harbor',         'Harbor Registry',        'goharbor.io',         'Development',     _O, 'Harbor supports OIDC authentication via Administration → Configuration → Authentication.'),
+  _app('buildkite',      'Buildkite',              'buildkite.com',       'Development',     _S, 'Buildkite supports SAML 2.0 SSO for organisation authentication.'),
+  _app('harness',        'Harness',                'harness.io',          'Development',     _S, 'Harness supports SAML 2.0 SSO via Account Settings → Access Control → Authentication.'),
+  _app('octopus',        'Octopus Deploy',         'octopus.com',         'Development',     _O, 'Octopus Deploy Cloud supports OpenID Connect for team authentication.'),
+  _app('drone',          'Drone CI',               'drone.io',            'Development',     _O, 'Drone CI supports OAuth 2.0 / OIDC for source control-based auth.'),
+  _app('sonarcloud',     'SonarCloud',             'sonarcloud.io',       'Development',     _S, 'SonarCloud supports SAML 2.0 SSO for organization authentication.'),
+  _app('nexus',          'Nexus Repository',       'sonatype.com',        'Development',     _S, 'Sonatype Nexus Repository Pro supports SAML 2.0 for enterprise SSO.'),
+  _app('gitea',          'Gitea',                  'gitea.io',            'Development',     _O, 'Gitea supports OAuth 2.0 / OIDC for self-hosted Git SSO.'),
+  _app('confluence',     'Confluence',             'atlassian.com',       'Development',     _S, 'Confluence Cloud supports SAML 2.0 SSO via Atlassian Access.'),
+  _app('semaphore',      'Semaphore CI',           'semaphoreci.com',     'Development',     _O, 'Semaphore supports OIDC-based SSO for CI/CD pipeline access.'),
+  // ── Monitoring & Observability ─────────────────────────────────────────────
+  _app('datadog',        'Datadog',                'datadog.com',         'Monitoring',      _S, 'Datadog supports SAML 2.0 in Organisation Settings → SAML.'),
+  _app('newrelic',       'New Relic',              'newrelic.com',        'Monitoring',      _S, 'New Relic supports SAML 2.0 SSO via Admin → Authentication → SAML.'),
+  _app('dynatrace',      'Dynatrace',              'dynatrace.com',       'Monitoring',      _S, 'Dynatrace supports SAML 2.0 SSO via Settings → People & Groups → SSO.'),
+  _app('splunk',         'Splunk',                 'splunk.com',          'Monitoring',      _S, 'Splunk supports SAML 2.0 via Settings → Authentication → SAML.'),
+  _app('pagerduty',      'PagerDuty',              'pagerduty.com',       'Monitoring',      _S, 'PagerDuty supports SAML 2.0 SSO in Account Settings → Single Sign-On.'),
+  _app('opsgenie',       'Opsgenie',               'atlassian.com',       'Monitoring',      _S, 'Opsgenie supports SAML 2.0 SSO via Admin → Settings → SSO.'),
+  _app('grafana',        'Grafana Cloud',          'grafana.com',         'Monitoring',      _O, 'Grafana supports OAuth 2.0 / OIDC via grafana.ini [auth.generic_oauth].'),
+  _app('appdynamics',    'AppDynamics',            'appdynamics.com',     'Monitoring',      _S, 'AppDynamics (Cisco) supports SAML 2.0 SSO for enterprise accounts.'),
+  _app('sentry',         'Sentry',                 'sentry.io',           'Monitoring',      _S, 'Sentry supports SAML 2.0 SSO via Organisation Settings → Auth.'),
+  _app('rollbar',        'Rollbar',                'rollbar.com',         'Monitoring',      _S, 'Rollbar supports SAML 2.0 SSO for team authentication.'),
+  _app('lightstep',      'Lightstep',              'lightstep.com',       'Monitoring',      _O, 'Lightstep supports OIDC-based SSO for observability platform access.'),
+  _app('honeycomb',      'Honeycomb',              'honeycomb.io',        'Monitoring',      _S, 'Honeycomb supports SAML 2.0 SSO via Team Settings → Authentication.'),
+  _app('elastic',        'Elastic / Kibana',       'elastic.co',          'Monitoring',      _S, 'Elastic Stack supports SAML 2.0 via security.yml and Kibana SSO.'),
+  _app('statuspage',     'Atlassian Statuspage',   'atlassian.com',       'Monitoring',      _S, 'Statuspage supports SAML 2.0 SSO for team authentication.'),
+  _app('victorops',      'VictorOps / Splunk On-Call','victorops.com',    'Monitoring',      _S, 'VictorOps supports SAML 2.0 SSO for on-call management.'),
+  // ── Cloud & Infrastructure ─────────────────────────────────────────────────
+  _app('aws',            'AWS IAM Identity Center','amazon.com',          'Cloud',           _S, 'AWS IAM Identity Center accepts SAML 2.0 from external IdPs. ACS URL: https://signin.aws.amazon.com/saml.'),
+  _app('gcp',            'Google Cloud Platform',  'cloud.google.com',    'Cloud',           _S, 'Google Cloud supports SAML 2.0 federated identity via Cloud Identity.'),
+  _app('azure',          'Azure / Entra ID',       'microsoft.com',       'Cloud',           _S, 'Azure AD supports SAML 2.0 and OIDC federation from external IdPs.'),
+  _app('digitalocean',   'DigitalOcean',           'digitalocean.com',    'Cloud',           _O, 'DigitalOcean supports OAuth 2.0 / OIDC for team member authentication.'),
+  _app('heroku',         'Heroku',                 'heroku.com',          'Cloud',           _S, 'Heroku Enterprise supports SAML 2.0 SSO via Dashboard → Access.'),
+  _app('cloudflare',     'Cloudflare Access',      'cloudflare.com',      'Cloud',           _S, 'Cloudflare Access supports SAML 2.0 as an identity provider for Zero Trust.'),
+  _app('vercel',         'Vercel',                 'vercel.com',          'Cloud',           _S, 'Vercel Enterprise supports SAML 2.0 SSO via Team Settings → Security.'),
+  _app('netlify',        'Netlify',                'netlify.com',         'Cloud',           _O, 'Netlify supports OAuth 2.0 for team and identity-based access.'),
+  _app('ibmcloud',       'IBM Cloud',              'ibm.com',             'Cloud',           _S, 'IBM Cloud supports SAML 2.0 federated enterprise SSO via IBMid.'),
+  _app('oracle-cloud',   'Oracle Cloud',           'oracle.com',          'Cloud',           _S, 'Oracle Cloud Infrastructure (OCI) supports SAML 2.0 for federated identity.'),
+  _app('terraform',      'Terraform Cloud',        'hashicorp.com',       'Cloud',           _S, 'HashiCorp Terraform Cloud supports SAML 2.0 SSO for organisation access.'),
+  _app('rancher',        'Rancher',                'rancher.com',         'Cloud',           _S, 'Rancher supports SAML 2.0 (Shibboleth, Ping, ADFS) for cluster authentication.'),
+  _app('openshift',      'Red Hat OpenShift',      'redhat.com',          'Cloud',           _O, 'OpenShift supports OIDC via OAuth Identity Providers in cluster configuration.'),
+  _app('linode',         'Akamai / Linode',        'linode.com',          'Cloud',           _O, 'Linode supports OAuth 2.0 for programmatic and SSO-based access.'),
+  // ── HR & People ────────────────────────────────────────────────────────────
+  _app('workday',        'Workday',                'workday.com',         'HR',              _S, 'Workday acts as SP; configure SAML 2.0 in Edit Tenant Setup → Security.'),
+  _app('bamboohr',       'BambooHR',               'bamboohr.com',        'HR',              _S, 'BambooHR supports SAML 2.0 SSO under Settings → Single Sign-On.'),
+  _app('gusto',          'Gusto',                  'gusto.com',           'HR',              _O, 'Gusto supports OAuth 2.0 / OIDC for payroll partner integrations.'),
+  _app('rippling',       'Rippling',               'rippling.com',        'HR',              _S, 'Rippling supports SAML 2.0 SSO via IT Management → Single Sign-On.'),
+  _app('hibob',          'HiBob',                  'hibob.com',           'HR',              _S, 'HiBob supports SAML 2.0 SSO via Admin Settings → Integrations → SSO.'),
+  _app('personio',       'Personio',               'personio.com',        'HR',              _S, 'Personio supports SAML 2.0 SSO under Admin → Settings → Single Sign-On.'),
+  _app('lattice',        'Lattice',                'lattice.com',         'HR',              _S, 'Lattice supports SAML 2.0 SSO via Admin → Security → SAML.'),
+  _app('cultureamp',     'Culture Amp',            'cultureamp.com',      'HR',              _S, 'Culture Amp supports SAML 2.0 SSO for enterprise authentication.'),
+  _app('adp',            'ADP Workforce Now',      'adp.com',             'HR',              _S, 'ADP supports SAML 2.0 federated SSO for payroll and HR access.'),
+  _app('ukg',            'UKG Pro / Ready',        'ukg.com',             'HR',              _S, 'UKG supports SAML 2.0 SSO via Admin → Security → SSO Configuration.'),
+  _app('successfactors', 'SAP SuccessFactors',     'sap.com',             'HR',              _S, 'SAP SuccessFactors supports SAML 2.0 via Provisioning → SAML Setup.'),
+  _app('greenhouse',     'Greenhouse',             'greenhouse.io',       'HR',              _S, 'Greenhouse ATS supports SAML 2.0 SSO via Dev Center → SSO.'),
+  _app('lever',          'Lever',                  'lever.co',            'HR',              _S, 'Lever supports SAML 2.0 SSO for recruiting platform access.'),
+  _app('workable',       'Workable',               'workable.com',        'HR',              _S, 'Workable supports SAML 2.0 SSO for hiring team authentication.'),
+  _app('icims',          'iCIMS',                  'icims.com',           'HR',              _S, 'iCIMS supports SAML 2.0 SSO via Platform Configuration → Security.'),
+  _app('smartrecruiters','SmartRecruiters',        'smartrecruiters.com', 'HR',              _S, 'SmartRecruiters Enterprise supports SAML 2.0 SSO.'),
+  _app('dayforce',       'Ceridian Dayforce',      'dayforce.com',        'HR',              _S, 'Ceridian Dayforce supports SAML 2.0 SSO via Application Configuration.'),
+  _app('paylocity',      'Paylocity',              'paylocity.com',       'HR',              _S, 'Paylocity supports SAML 2.0 SSO for HR and payroll access.'),
+  _app('namely',         'Namely',                 'namely.com',          'HR',              _S, 'Namely supports SAML 2.0 SSO via Admin → Integrations → SSO.'),
+  _app('15five',         '15Five',                 '15five.com',          'HR',              _S, '15Five supports SAML 2.0 SSO for performance management.'),
+  _app('officevibe',     'Officevibe',             'officevibe.com',      'HR',              _S, 'Officevibe supports SAML 2.0 SSO for employee engagement.'),
+  // ── CRM & Sales ────────────────────────────────────────────────────────────
+  _app('salesforce',     'Salesforce',             'salesforce.com',      'CRM',             _S, 'Salesforce supports SAML 2.0. Configure in Setup → Single Sign-On Settings.'),
+  _app('hubspot',        'HubSpot',                'hubspot.com',         'CRM',             _S, 'HubSpot Enterprise supports SAML 2.0 SSO via Security → Single Sign-On.'),
+  _app('zohocrm',        'Zoho CRM',               'zoho.com',            'CRM',             _S, 'Zoho CRM supports SAML 2.0 SSO via Zoho Directory or direct SAML setup.'),
+  _app('pipedrive',      'Pipedrive',              'pipedrive.com',       'CRM',             _S, 'Pipedrive supports SAML 2.0 SSO for enterprise sales teams.'),
+  _app('freshsales',     'Freshsales',             'freshworks.com',      'CRM',             _S, 'Freshsales supports SAML 2.0 SSO via Admin Settings → Security → SSO.'),
+  _app('msdynamics',     'Microsoft Dynamics 365', 'microsoft.com',       'CRM',             _S, 'Dynamics 365 federated authentication via Azure AD SAML 2.0.'),
+  _app('sugarcrm',       'SugarCRM',               'sugarcrm.com',        'CRM',             _S, 'SugarCRM supports SAML 2.0 SSO via Admin → Password Management → SAML.'),
+  _app('copper',         'Copper CRM',             'copper.com',          'CRM',             _O, 'Copper CRM supports OAuth 2.0 / OIDC for Google Workspace-based SSO.'),
+  _app('outreach',       'Outreach',               'outreach.io',         'CRM',             _S, 'Outreach supports SAML 2.0 SSO via Admin Settings → Security → SSO.'),
+  _app('salesloft',      'Salesloft',              'salesloft.com',       'CRM',             _S, 'Salesloft supports SAML 2.0 SSO for sales engagement authentication.'),
+  _app('gong',           'Gong',                   'gong.io',             'CRM',             _S, 'Gong supports SAML 2.0 SSO via Company Settings → Single Sign-On.'),
+  _app('apollo',         'Apollo.io',              'apollo.io',           'CRM',             _O, 'Apollo.io supports OAuth 2.0 / OIDC for sales intelligence access.'),
+  _app('insightly',      'Insightly',              'insightly.com',       'CRM',             _S, 'Insightly supports SAML 2.0 SSO for enterprise CRM access.'),
+  // ── ITSM & Support ─────────────────────────────────────────────────────────
+  _app('servicenow',     'ServiceNow',             'servicenow.com',      'ITSM',            _S, 'ServiceNow supports SAML 2.0 via System Security → High Security Plugin → SSO.'),
+  _app('zendesk',        'Zendesk',                'zendesk.com',         'ITSM',            _S, 'Zendesk supports SAML 2.0 in Admin → Security → Single Sign-On.'),
+  _app('freshdesk',      'Freshdesk',              'freshworks.com',      'ITSM',            _S, 'Freshdesk supports SAML 2.0 SSO via Admin → Security → Single Sign-On.'),
+  _app('jiraservice',    'Jira Service Management','atlassian.com',       'ITSM',            _S, 'Jira Service Management (via Atlassian Access) supports SAML 2.0 SSO.'),
+  _app('ivanti',         'Ivanti',                 'ivanti.com',          'ITSM',            _S, 'Ivanti Service Manager supports SAML 2.0 for enterprise SSO.'),
+  _app('cherwell',       'Cherwell',               'cherwell.com',        'ITSM',            _S, 'Cherwell Service Management supports SAML 2.0 SSO integration.'),
+  _app('bmc',            'BMC Helix',              'bmc.com',             'ITSM',            _S, 'BMC Helix ITSM supports SAML 2.0 for enterprise service management.'),
+  _app('topdesk',        'TOPdesk',                'topdesk.com',         'ITSM',            _S, 'TOPdesk supports SAML 2.0 SSO via functional settings.'),
+  _app('manageengine',   'ManageEngine ServiceDesk','manageengine.com',   'ITSM',            _S, 'ManageEngine ServiceDesk Plus supports SAML 2.0 SSO.'),
+  _app('helpscout',      'Help Scout',             'helpscout.com',       'ITSM',            _S, 'Help Scout supports SAML 2.0 SSO for enterprise customer support teams.'),
+  _app('intercom',       'Intercom',               'intercom.com',        'ITSM',            _S, 'Intercom supports SAML 2.0 SSO via Settings → Security → SSO.'),
+  _app('drift',          'Drift / Salesloft',      'drift.com',           'ITSM',            _S, 'Drift supports SAML 2.0 SSO for enterprise customer engagement.'),
+  _app('freshservice',   'Freshservice',           'freshworks.com',      'ITSM',            _S, 'Freshservice IT service management supports SAML 2.0 SSO.'),
+  _app('spiceworks',     'Spiceworks Cloud Help Desk','spiceworks.com',   'ITSM',            _O, 'Spiceworks supports OAuth 2.0 for cloud help desk authentication.'),
+  // ── Finance & Accounting ───────────────────────────────────────────────────
+  _app('quickbooks',     'QuickBooks Online',      'intuit.com',          'Finance',         _O, 'QuickBooks Online supports OAuth 2.0 / OIDC for accounting integrations.'),
+  _app('xero',           'Xero',                   'xero.com',            'Finance',         _O, 'Xero supports OAuth 2.0 / OIDC for accounting app partner authentication.'),
+  _app('netsuite',       'Oracle NetSuite',        'netsuite.com',        'Finance',         _S, 'NetSuite supports SAML 2.0 SSO via Setup → Integrations → SAML SSO.'),
+  _app('sap',            'SAP ERP / S/4HANA',      'sap.com',             'Finance',         _S, 'SAP supports SAML 2.0 via Trust Configuration in SAP Cloud Identity Services.'),
+  _app('sage',           'Sage Intacct',           'sage.com',            'Finance',         _S, 'Sage Intacct supports SAML 2.0 SSO via Company → Security → SSO.'),
+  _app('freshbooks',     'FreshBooks',             'freshbooks.com',      'Finance',         _O, 'FreshBooks supports OAuth 2.0 / OIDC for partner integrations.'),
+  _app('expensify',      'Expensify',              'expensify.com',       'Finance',         _S, 'Expensify supports SAML 2.0 SSO via Domain Control settings.'),
+  _app('concur',         'SAP Concur',             'concur.com',          'Finance',         _S, 'SAP Concur supports SAML 2.0 SSO via Administration → Authentication Admin.'),
+  _app('coupa',          'Coupa',                  'coupa.com',           'Finance',         _S, 'Coupa supports SAML 2.0 SSO via Setup → Security Controls → SSO.'),
+  _app('tipalti',        'Tipalti',                'tipalti.com',         'Finance',         _S, 'Tipalti supports SAML 2.0 SSO for enterprise AP automation.'),
+  _app('bill',           'Bill.com',               'bill.com',            'Finance',         _S, 'Bill.com supports SAML 2.0 SSO for AP/AR automation.'),
+  _app('brex',           'Brex',                   'brex.com',            'Finance',         _O, 'Brex supports OAuth 2.0 / OIDC for corporate card authentication.'),
+  _app('ramp',           'Ramp',                   'ramp.com',            'Finance',         _S, 'Ramp supports SAML 2.0 SSO via Settings → Security → Single Sign-On.'),
+  _app('recurly',        'Recurly',                'recurly.com',         'Finance',         _S, 'Recurly supports SAML 2.0 SSO for subscription billing platform access.'),
+  _app('chargebee',      'Chargebee',              'chargebee.com',       'Finance',         _O, 'Chargebee supports OAuth 2.0 / OIDC for subscription management.'),
+  _app('zuora',          'Zuora',                  'zuora.com',           'Finance',         _S, 'Zuora supports SAML 2.0 SSO via Manage → Manage Users → SAML.'),
+  // ── Security & IAM ─────────────────────────────────────────────────────────
+  _app('okta',           'Okta (SP-initiated)',     'okta.com',            'IAM',             _S, 'Use when Lenskart IdP federates INTO an Okta org. Okta acts as SP.'),
+  _app('cyberark',       'CyberArk PAM',           'cyberark.com',        'IAM',             _S, 'CyberArk Privileged Access Manager supports SAML 2.0 SSO for web access.'),
+  _app('ping',           'Ping Identity',          'pingidentity.com',    'IAM',             _S, 'PingFederate supports SAML 2.0 federation as SP from external IdPs.'),
+  _app('forgerock',      'ForgeRock / PingAM',     'forgerock.com',       'IAM',             _S, 'ForgeRock Access Management supports SAML 2.0 SP federation.'),
+  _app('sailpoint',      'SailPoint IIQ',          'sailpoint.com',       'IAM',             _S, 'SailPoint IdentityIQ supports SAML 2.0 for IdP-initiated and SP-initiated SSO.'),
+  _app('saviynt',        'Saviynt',                'saviynt.com',         'IAM',             _S, 'Saviynt supports SAML 2.0 SSO for IGA platform access.'),
+  _app('beyondtrust',    'BeyondTrust',            'beyondtrust.com',     'IAM',             _S, 'BeyondTrust Privileged Remote Access supports SAML 2.0 SSO.'),
+  _app('onepassword',    '1Password Business',     '1password.com',       'IAM',             _S, '1Password Business supports SAML 2.0 SSO via Settings → Single Sign-On.'),
+  _app('lastpass',       'LastPass',               'lastpass.com',        'IAM',             _S, 'LastPass supports SAML 2.0 SSO via Admin Console → Enterprise SSO.'),
+  _app('delinea',        'Delinea / Thycotic',     'delinea.com',         'IAM',             _S, 'Delinea Secret Server supports SAML 2.0 SSO for PAM access.'),
+  _app('oneidentity',    'One Identity',           'oneidentity.com',     'IAM',             _S, 'One Identity Safeguard supports SAML 2.0 SSO for privileged access.'),
+  _app('jumpcloud',      'JumpCloud',              'jumpcloud.com',       'IAM',             _S, 'JumpCloud supports SAML 2.0 SSO for cloud directory services.'),
+  _app('auth0',          'Auth0',                  'auth0.com',           'IAM',             _S, 'Auth0 supports SAML 2.0 as SP; use Lenskart IdP as an enterprise connection.'),
+  _app('keeper',         'Keeper Security',        'keepersecurity.com',  'IAM',             _S, 'Keeper Business supports SAML 2.0 SSO via Admin Console → SSO Cloud.'),
+  _app('bitwarden',      'Bitwarden',              'bitwarden.com',       'IAM',             _S, 'Bitwarden supports SAML 2.0 SSO for enterprise password management.'),
+  // ── Analytics & BI ─────────────────────────────────────────────────────────
+  _app('tableau',        'Tableau',                'tableau.com',         'Analytics',       _S, 'Tableau Online and Server support SAML 2.0 SSO via Site Settings → Authentication.'),
+  _app('looker',         'Looker',                 'looker.com',          'Analytics',       _S, 'Looker supports SAML 2.0 for enterprise SSO via Admin → Authentication → SAML.'),
+  _app('powerbi',        'Power BI',               'microsoft.com',       'Analytics',       _S, 'Power BI (via Azure AD) supports SAML 2.0 federated SSO.'),
+  _app('metabase',       'Metabase',               'metabase.com',        'Analytics',       _S, 'Metabase Enterprise supports SAML 2.0 SSO via Admin → Authentication.'),
+  _app('sisense',        'Sisense',                'sisense.com',         'Analytics',       _S, 'Sisense supports SAML 2.0 SSO via Admin → Security → Single Sign-On.'),
+  _app('domo',           'Domo',                   'domo.com',            'Analytics',       _S, 'Domo supports SAML 2.0 SSO via Admin Settings → Authentication → SSO.'),
+  _app('thoughtspot',    'ThoughtSpot',            'thoughtspot.com',     'Analytics',       _S, 'ThoughtSpot supports SAML 2.0 SSO via Security Settings → SSO.'),
+  _app('amplitude',      'Amplitude',              'amplitude.com',       'Analytics',       _S, 'Amplitude supports SAML 2.0 SSO via Settings → SSO.'),
+  _app('mixpanel',       'Mixpanel',               'mixpanel.com',        'Analytics',       _S, 'Mixpanel Enterprise supports SAML 2.0 SSO via Organization Settings → Access Control.'),
+  _app('heap',           'Heap',                   'heap.io',             'Analytics',       _S, 'Heap supports SAML 2.0 SSO via Account → Security → Single Sign-On.'),
+  _app('segment',        'Segment',                'segment.com',         'Analytics',       _S, 'Segment supports SAML 2.0 SSO via Workspace Settings → Authentication.'),
+  _app('pendo',          'Pendo',                  'pendo.io',            'Analytics',       _S, 'Pendo supports SAML 2.0 SSO via Admin → Integrations → SSO.'),
+  _app('fullstory',      'FullStory',              'fullstory.com',       'Analytics',       _S, 'FullStory supports SAML 2.0 SSO via Settings → Security.'),
+  _app('posthog',        'PostHog',                'posthog.com',         'Analytics',       _S, 'PostHog Cloud supports SAML 2.0 SSO via Settings → Authentication.'),
+  _app('hotjar',         'Hotjar',                 'hotjar.com',          'Analytics',       _S, 'Hotjar Business supports SAML 2.0 SSO via Organisation Settings.'),
+  _app('matomo',         'Matomo',                 'matomo.org',          'Analytics',       _O, 'Matomo supports OIDC / OAuth 2.0 via Login OIDC plugin for self-hosted.'),
+  _app('mode',           'Mode Analytics',         'mode.com',            'Analytics',       _S, 'Mode supports SAML 2.0 SSO via Organization Settings → Security.'),
+  _app('superset',       'Apache Superset',        'superset.apache.org', 'Analytics',       _O, 'Apache Superset supports OIDC via Flask-OIDC; configure in superset_config.py.'),
+  // ── Productivity & Storage ─────────────────────────────────────────────────
+  _app('gsuite',         'Google Workspace',       'workspace.google.com','Productivity',    _S, 'Google Workspace supports SAML 2.0. Configure in Admin Console → Security → SSO with third-party IdP.'),
+  _app('office365',      'Microsoft 365',          'microsoft.com',       'Productivity',    _S, 'Microsoft 365 federated authentication with SAML 2.0 via Entra ID.'),
+  _app('box',            'Box',                    'box.com',             'Productivity',    _S, 'Box supports SAML 2.0 SSO in Admin Console → Enterprise Settings → User Settings.'),
+  _app('dropbox',        'Dropbox Business',       'dropbox.com',         'Productivity',    _S, 'Dropbox Business supports SAML 2.0 in Admin Console → Settings → Single Sign-On.'),
+  _app('sharepoint',     'SharePoint Online',      'microsoft.com',       'Productivity',    _S, 'SharePoint Online SSO via Azure AD SAML 2.0 federation.'),
+  _app('gdrive',         'Google Drive',           'google.com',          'Productivity',    _S, 'Google Drive SSO managed through Google Workspace SAML federation.'),
+  _app('onedrive',       'OneDrive for Business',  'microsoft.com',       'Productivity',    _S, 'OneDrive SSO via Azure AD / Entra ID SAML 2.0.'),
+  _app('docusign',       'DocuSign',               'docusign.com',        'Productivity',    _S, 'DocuSign supports SAML 2.0 SSO via Admin → Identity Providers.'),
+  _app('adobesign',      'Adobe Acrobat Sign',     'adobe.com',           'Productivity',    _S, 'Adobe Acrobat Sign supports SAML 2.0 SSO via Account Setup → Security Settings.'),
+  _app('pandadoc',       'PandaDoc',               'pandadoc.com',        'Productivity',    _S, 'PandaDoc supports SAML 2.0 SSO via Workspace Settings → Security.'),
+  _app('coda',           'Coda',                   'coda.io',             'Productivity',    _S, 'Coda supports SAML 2.0 SSO for enterprise workspace access.'),
+  _app('gitbook',        'GitBook',                'gitbook.com',         'Productivity',    _S, 'GitBook supports SAML 2.0 SSO via Organisation Settings → SSO.'),
+  _app('slab',           'Slab',                   'slab.com',            'Productivity',    _S, 'Slab supports SAML 2.0 SSO for team documentation access.'),
+  _app('guru',           'Guru',                   'getguru.com',         'Productivity',    _S, 'Guru supports SAML 2.0 SSO via Admin → Security → Single Sign-On.'),
+  _app('outline',        'Outline',                'getoutline.com',      'Productivity',    _O, 'Outline (open-source) supports OIDC via oidc_* environment variables.'),
+  _app('tettra',         'Tettra',                 'tettra.com',          'Productivity',    _S, 'Tettra supports SAML 2.0 SSO for knowledge base authentication.'),
+  // ── Design & Creative ──────────────────────────────────────────────────────
+  _app('figma',          'Figma',                  'figma.com',           'Design',          _S, 'Figma Organization supports SAML 2.0 SSO via Organization Settings → Security.'),
+  _app('canva',          'Canva',                  'canva.com',           'Design',          _S, 'Canva for Teams supports SAML 2.0 SSO for enterprise design workflows.'),
+  _app('adobe',          'Adobe Creative Cloud',   'adobe.com',           'Design',          _S, 'Adobe Creative Cloud supports SAML 2.0 via Admin Console → Settings → Identity.'),
+  _app('sketch',         'Sketch',                 'sketch.com',          'Design',          _S, 'Sketch Business supports SAML 2.0 SSO via Workspace Settings.'),
+  _app('invision',       'InVision',               'invisionapp.com',     'Design',          _S, 'InVision Enterprise supports SAML 2.0 SSO via Account Settings.'),
+  _app('miro2',          'Miro',                   'miro.com',            'Design',          _S, 'Miro supports SAML 2.0 SSO for Enterprise plans via Company Settings.'),
+  _app('lucidchart',     'Lucidchart',             'lucid.app',           'Design',          _S, 'Lucidchart supports SAML 2.0 SSO via Admin Panel → App Management → SSO.'),
+  _app('whimsical',      'Whimsical',              'whimsical.com',       'Design',          _S, 'Whimsical Business supports SAML 2.0 SSO for design teams.'),
+  _app('mural',          'MURAL',                  'mural.co',            'Design',          _S, 'MURAL supports SAML 2.0 SSO via Company Dashboard → Security → SSO.'),
+  _app('zeplin',         'Zeplin',                 'zeplin.io',           'Design',          _S, 'Zeplin Enterprise supports SAML 2.0 SSO via Organization Settings.'),
+  _app('framer',         'Framer',                 'framer.com',          'Design',          _O, 'Framer supports OIDC-based SSO for enterprise design platform access.'),
+  _app('webflow',        'Webflow',                'webflow.com',         'Design',          _S, 'Webflow Enterprise supports SAML 2.0 SSO via Workspace Settings → Security.'),
+  _app('abstract',       'Abstract',               'abstract.com',        'Design',          _S, 'Abstract supports SAML 2.0 SSO for enterprise design version control.'),
+  // ── Marketing & Email ──────────────────────────────────────────────────────
+  _app('mailchimp',      'Mailchimp',              'mailchimp.com',       'Marketing',       _O, 'Mailchimp supports OAuth 2.0 / OIDC for marketing automation integrations.'),
+  _app('marketo',        'Marketo (Adobe)',         'marketo.com',         'Marketing',       _S, 'Marketo supports SAML 2.0 SSO via Admin → Security → Single Sign-On.'),
+  _app('pardot',         'Salesforce Pardot',      'salesforce.com',      'Marketing',       _S, 'Pardot supports SAML 2.0 SSO (via Salesforce) for marketing automation.'),
+  _app('activecampaign', 'ActiveCampaign',         'activecampaign.com',  'Marketing',       _S, 'ActiveCampaign supports SAML 2.0 SSO via Settings → Security → SSO.'),
+  _app('klaviyo',        'Klaviyo',                'klaviyo.com',         'Marketing',       _S, 'Klaviyo supports SAML 2.0 SSO via Organisation Settings → Security.'),
+  _app('braze',          'Braze',                  'braze.com',           'Marketing',       _S, 'Braze supports SAML 2.0 SSO via Company Settings → Security Settings.'),
+  _app('iterable',       'Iterable',               'iterable.com',        'Marketing',       _S, 'Iterable supports SAML 2.0 SSO via Settings → Team → SSO.'),
+  _app('sfmc',           'Salesforce Marketing Cloud','salesforce.com',    'Marketing',       _S, 'SFMC supports SAML 2.0 SSO via Administration → SSO Settings.'),
+  _app('sendgrid',       'Twilio SendGrid',         'sendgrid.com',       'Marketing',       _O, 'Twilio SendGrid supports OAuth 2.0 for transactional email API access.'),
+  _app('mailgun',        'Mailgun',                'mailgun.com',         'Marketing',       _O, 'Mailgun supports OAuth 2.0 for email API authentication.'),
+  _app('customerio',     'Customer.io',            'customer.io',         'Marketing',       _S, 'Customer.io supports SAML 2.0 SSO for marketing automation teams.'),
+  _app('drip',           'Drip',                   'drip.com',            'Marketing',       _O, 'Drip supports OAuth 2.0 for e-commerce marketing automation.'),
+  _app('convertkit',     'ConvertKit',             'convertkit.com',      'Marketing',       _O, 'ConvertKit supports OAuth 2.0 for creator email platform integrations.'),
+  _app('moosend',        'Moosend',                'moosend.com',         'Marketing',       _O, 'Moosend supports OAuth 2.0 for email marketing integrations.'),
+  _app('campaign-monitor','Campaign Monitor',      'campaignmonitor.com', 'Marketing',       _O, 'Campaign Monitor supports OAuth 2.0 for email marketing platform access.'),
+  // ── Learning & Training ────────────────────────────────────────────────────
+  _app('coursera',       'Coursera for Teams',     'coursera.org',        'Learning',        _S, 'Coursera for Enterprise supports SAML 2.0 SSO via Admin Settings.'),
+  _app('udemy',          'Udemy Business',         'udemy.com',           'Learning',        _S, 'Udemy Business supports SAML 2.0 SSO via Admin → Settings → SSO.'),
+  _app('linkedin-learn', 'LinkedIn Learning',      'linkedin.com',        'Learning',        _S, 'LinkedIn Learning (via LinkedIn Enterprise) supports SAML 2.0 SSO.'),
+  _app('docebo',         'Docebo LMS',             'docebo.com',          'Learning',        _S, 'Docebo supports SAML 2.0 SSO via Admin Menu → E-Learning → SSO.'),
+  _app('absorb',         'Absorb LMS',             'absorblms.com',       'Learning',        _S, 'Absorb LMS supports SAML 2.0 SSO for enterprise learning management.'),
+  _app('cornerstone',    'Cornerstone OnDemand',   'cornerstoneondemand.com','Learning',      _S, 'Cornerstone supports SAML 2.0 SSO via Administration → Security → SSO.'),
+  _app('moodle',         'Moodle',                 'moodle.org',          'Learning',        _S, 'Moodle supports SAML 2.0 via the SAML2 Authentication Plugin (mdlauth_saml2).'),
+  _app('canvas',         'Canvas LMS',             'instructure.com',     'Learning',        _S, 'Canvas supports SAML 2.0 SSO via Admin → Authentication Providers.'),
+  _app('degreed',        'Degreed',                'degreed.com',         'Learning',        _S, 'Degreed supports SAML 2.0 SSO for learning experience platform access.'),
+  _app('360learning',    '360Learning',            '360learning.com',     'Learning',        _S, '360Learning supports SAML 2.0 SSO via Admin Settings → Integrations → SSO.'),
+  _app('learnupon',      'LearnUpon',              'learnupon.com',       'Learning',        _S, 'LearnUpon supports SAML 2.0 SSO via Portal Settings → SSO.'),
+  _app('litmos',         'SAP Litmos',             'litmos.com',          'Learning',        _S, 'SAP Litmos supports SAML 2.0 SSO via Admin → Integrations → SSO.'),
+  _app('talentlms',      'TalentLMS',              'talentlms.com',       'Learning',        _S, 'TalentLMS supports SAML 2.0 SSO via Account & Settings → Security.'),
+  _app('skillsoft',      'Skillsoft / Percipio',   'skillsoft.com',       'Learning',        _S, 'Skillsoft Percipio supports SAML 2.0 SSO for enterprise L&D.'),
+  // ── E-commerce & Payments ──────────────────────────────────────────────────
+  _app('shopify',        'Shopify Plus',           'shopify.com',         'E-commerce',      _S, 'Shopify Plus supports SAML 2.0 SSO via Settings → Users and Permissions.'),
+  _app('bigcommerce',    'BigCommerce',            'bigcommerce.com',     'E-commerce',      _S, 'BigCommerce Enterprise supports SAML 2.0 SSO via Store Setup → Single Sign-On.'),
+  _app('stripe',         'Stripe Dashboard',       'stripe.com',          'E-commerce',      _S, 'Stripe Dashboard supports SAML 2.0 SSO for team member authentication.'),
+  _app('paypal',         'PayPal Business',        'paypal.com',          'E-commerce',      _O, 'PayPal Business supports OAuth 2.0 for payment API authentication.'),
+  _app('square',         'Square',                 'squareup.com',        'E-commerce',      _O, 'Square supports OAuth 2.0 for POS and payment platform integrations.'),
+  _app('adyen',          'Adyen',                  'adyen.com',           'E-commerce',      _S, 'Adyen supports SAML 2.0 SSO for Customer Area authentication.'),
+  _app('magento',        'Adobe Commerce (Magento)','adobe.com',          'E-commerce',      _S, 'Adobe Commerce supports SAML 2.0 SSO via Security → Identity and Access Management.'),
+  _app('woocommerce',    'WooCommerce',            'woocommerce.com',     'E-commerce',      _O, 'WooCommerce supports OAuth 2.0 for REST API authentication.'),
+  // ── Data & Integration ─────────────────────────────────────────────────────
+  _app('snowflake',      'Snowflake',              'snowflake.com',       'Data',            _S, 'Snowflake supports SAML 2.0 SSO via Security → Identity Providers.'),
+  _app('databricks',     'Databricks',             'databricks.com',      'Data',            _S, 'Databricks supports SAML 2.0 SSO via Admin Console → Authentication.'),
+  _app('dbt',            'dbt Cloud',              'getdbt.com',          'Data',            _O, 'dbt Cloud supports OIDC SSO via Account Settings → Single Sign-On.'),
+  _app('fivetran',       'Fivetran',               'fivetran.com',        'Data',            _S, 'Fivetran supports SAML 2.0 SSO via Manage Account → Security.'),
+  _app('airbyte',        'Airbyte',                'airbyte.com',         'Data',            _O, 'Airbyte Cloud supports OIDC-based SSO for data integration access.'),
+  _app('mulesoft',       'MuleSoft Anypoint',      'mulesoft.com',        'Data',            _S, 'MuleSoft Anypoint Platform supports SAML 2.0 via Access Management → Identity Management.'),
+  _app('boomi',          'Boomi',                  'boomi.com',           'Data',            _S, 'Boomi AtomSphere supports SAML 2.0 SSO via Settings → Account → Identity Provider.'),
+  _app('informatica',    'Informatica',            'informatica.com',     'Data',            _S, 'Informatica Intelligent Data Management Cloud supports SAML 2.0 SSO.'),
+  _app('workato',        'Workato',                'workato.com',         'Data',            _S, 'Workato supports SAML 2.0 SSO via Settings → Access → Single Sign-On.'),
+  _app('zapier',         'Zapier',                 'zapier.com',          'Data',            _S, 'Zapier supports SAML 2.0 SSO for enterprise team authentication.'),
+  _app('make',           'Make (Integromat)',       'make.com',            'Data',            _S, 'Make (formerly Integromat) supports SAML 2.0 SSO for enterprise plans.'),
+  _app('tray',           'Tray.io',                'tray.io',             'Data',            _S, 'Tray.io supports SAML 2.0 SSO for enterprise integration access.'),
+  _app('celigo',         'Celigo',                 'celigo.com',          'Data',            _S, 'Celigo Integration Cloud supports SAML 2.0 SSO via Account Settings.'),
+  _app('stitch',         'Stitch Data',            'stitchdata.com',      'Data',            _O, 'Stitch Data supports OAuth 2.0 for data pipeline authentication.'),
+  _app('talend',         'Talend Cloud',           'talend.com',          'Data',            _S, 'Talend Cloud supports SAML 2.0 SSO for data integration platform access.'),
+  // ── Customer Success ───────────────────────────────────────────────────────
+  _app('gainsight',      'Gainsight',              'gainsight.com',       'Customer Success',_S, 'Gainsight supports SAML 2.0 SSO via Administration → SSO.'),
+  _app('churnzero',      'ChurnZero',              'churnzero.com',       'Customer Success',_S, 'ChurnZero supports SAML 2.0 SSO for customer success platform access.'),
+  _app('totango',        'Totango',                'totango.com',         'Customer Success',_S, 'Totango supports SAML 2.0 SSO via Admin → Settings → SSO.'),
+  _app('planhat',        'Planhat',                'planhat.com',         'Customer Success',_S, 'Planhat supports SAML 2.0 SSO for customer intelligence platform.'),
+  _app('vitally',        'Vitally',                'vitally.io',          'Customer Success',_S, 'Vitally supports SAML 2.0 SSO for customer success teams.'),
+  _app('catalyst',       'Catalyst',               'catalyst.io',         'Customer Success',_S, 'Catalyst supports SAML 2.0 SSO for CS platform access.'),
+  _app('clientsuccess',  'ClientSuccess',          'clientsuccess.com',   'Customer Success',_S, 'ClientSuccess supports SAML 2.0 SSO for CSM platform authentication.'),
+  _app('useriq',         'UserIQ',                 'useriq.com',          'Customer Success',_S, 'UserIQ supports SAML 2.0 SSO for customer success analytics.'),
+  // ── Legal & Compliance ─────────────────────────────────────────────────────
+  _app('contractpodai',  'ContractPodAi',          'contractpodai.com',   'Legal',           _S, 'ContractPodAi supports SAML 2.0 SSO for legal AI platform access.'),
+  _app('ironclad',       'Ironclad',               'ironcladapp.com',     'Legal',           _S, 'Ironclad supports SAML 2.0 SSO via Company Settings → Security → SSO.'),
+  _app('conga',          'Conga Contracts',        'conga.com',           'Legal',           _S, 'Conga Contracts supports SAML 2.0 SSO for contract lifecycle management.'),
+  _app('onetrust',       'OneTrust',               'onetrust.com',        'Legal',           _S, 'OneTrust supports SAML 2.0 SSO via Platform Administration → SSO.'),
+  _app('trustarc',       'TrustArc',               'trustarc.com',        'Legal',           _S, 'TrustArc supports SAML 2.0 SSO for privacy compliance platform.'),
+  _app('osano',          'Osano',                  'osano.com',           'Legal',           _O, 'Osano supports OIDC for cookie consent management platform authentication.'),
+  _app('vaultworks',     'Vault Works',            'vaultworks.com',      'Legal',           _S, 'Vault Works supports SAML 2.0 SSO for legal matter management.'),
+  _app('legalzoom',      'LegalZoom Enterprise',   'legalzoom.com',       'Legal',           _O, 'LegalZoom Enterprise supports OAuth 2.0 for legal services access.'),
+  // ── Video & Media ──────────────────────────────────────────────────────────
+  _app('vimeo',          'Vimeo Business',         'vimeo.com',           'Media',           _S, 'Vimeo supports SAML 2.0 SSO for Business and Enterprise plans.'),
+  _app('wistia',         'Wistia',                 'wistia.com',          'Media',           _O, 'Wistia supports OAuth 2.0 / OIDC for video hosting platform access.'),
+  _app('panopto',        'Panopto',                'panopto.com',         'Media',           _S, 'Panopto supports SAML 2.0 SSO via System → Identity Providers.'),
+  _app('kaltura',        'Kaltura',                'kaltura.com',         'Media',           _S, 'Kaltura supports SAML 2.0 SSO for enterprise video platform.'),
+  _app('brightcove',     'Brightcove',             'brightcove.com',      'Media',           _S, 'Brightcove supports SAML 2.0 SSO for video cloud platform access.'),
+  _app('vidyard',        'Vidyard',                'vidyard.com',         'Media',           _S, 'Vidyard supports SAML 2.0 SSO for video messaging platform.'),
+  _app('loom',           'Loom',                   'loom.com',            'Media',           _S, 'Loom Enterprise supports SAML 2.0 SSO via Settings → Security.'),
+  // ── DevSecOps & Scanning ───────────────────────────────────────────────────
+  _app('veracode',       'Veracode',               'veracode.com',        'Security',        _S, 'Veracode supports SAML 2.0 SSO for application security platform access.'),
+  _app('checkmarx',      'Checkmarx',              'checkmarx.com',       'Security',        _S, 'Checkmarx supports SAML 2.0 SSO for SAST/SCA platform authentication.'),
+  _app('qualys',         'Qualys',                 'qualys.com',          'Security',        _S, 'Qualys supports SAML 2.0 SSO for vulnerability management platform.'),
+  _app('crowdstrike',    'CrowdStrike Falcon',     'crowdstrike.com',     'Security',        _S, 'CrowdStrike Falcon supports SAML 2.0 SSO via Settings → Identity Provider.'),
+  _app('sentinelone',    'SentinelOne',            'sentinelone.com',     'Security',        _S, 'SentinelOne supports SAML 2.0 SSO via Settings → SSO.'),
+  _app('lacework',       'Lacework',               'lacework.com',        'Security',        _S, 'Lacework supports SAML 2.0 SSO for cloud security platform.'),
+  _app('prismacloud',    'Prisma Cloud (Palo Alto)','paloaltonetworks.com','Security',        _S, 'Prisma Cloud supports SAML 2.0 SSO via Settings → Access Control → SSO.'),
+  _app('wiz',            'Wiz',                    'wiz.io',              'Security',        _S, 'Wiz supports SAML 2.0 SSO via Settings → General → Single Sign-On.'),
+  _app('orca',           'Orca Security',          'orca.security',       'Security',        _S, 'Orca Security supports SAML 2.0 SSO for cloud security platform.'),
+  _app('tenable',        'Tenable.io',             'tenable.com',         'Security',        _S, 'Tenable.io supports SAML 2.0 SSO via Settings → Single Sign-On.'),
+  _app('rapid7',         'Rapid7 Insight',         'rapid7.com',          'Security',        _S, 'Rapid7 InsightVM/InsightIDR supports SAML 2.0 SSO via Platform Administration.'),
+  // ── ERP & Operations ──────────────────────────────────────────────────────
+  _app('sap-erp',        'SAP ERP / Fiori',        'sap.com',             'ERP',             _S, 'SAP Fiori apps support SAML 2.0 via Cloud Identity Services (IAS) federation.'),
+  _app('oracle-erp',     'Oracle Fusion ERP',      'oracle.com',          'ERP',             _S, 'Oracle Fusion Cloud supports SAML 2.0 SSO via Security Console → Identity Providers.'),
+  _app('dynamics-erp',   'Microsoft Dynamics 365 ERP','microsoft.com',    'ERP',             _S, 'Dynamics 365 ERP supports SAML 2.0 SSO via Azure AD federation.'),
+  _app('odoo',           'Odoo',                   'odoo.com',            'ERP',             _O, 'Odoo supports OIDC via oauth_provider module for enterprise SSO.'),
+  _app('epicor',         'Epicor Kinetic',         'epicor.com',          'ERP',             _S, 'Epicor Kinetic supports SAML 2.0 SSO for enterprise resource planning.'),
+  _app('infor',          'Infor CloudSuite',       'infor.com',           'ERP',             _S, 'Infor CloudSuite supports SAML 2.0 SSO via Infor OS Security Administration.'),
+  _app('netsuite-erp',   'NetSuite ERP',           'netsuite.com',        'ERP',             _S, 'NetSuite ERP supports SAML 2.0 SSO via Setup → Integrations → SSO.'),
+  // ── Supply Chain & Procurement ─────────────────────────────────────────────
+  _app('sap-ariba',      'SAP Ariba',              'ariba.com',           'Procurement',     _S, 'SAP Ariba supports SAML 2.0 SSO via SSP module configuration.'),
+  _app('jaggaer',        'Jaggaer',                'jaggaer.com',         'Procurement',     _S, 'Jaggaer supports SAML 2.0 SSO for procurement platform access.'),
+  _app('ivalua',         'Ivalua',                 'ivalua.com',          'Procurement',     _S, 'Ivalua supports SAML 2.0 SSO for source-to-pay platform.'),
+  _app('tradogram',      'Tradogram',              'tradogram.com',       'Procurement',     _O, 'Tradogram supports OAuth 2.0 for procurement management SSO.'),
+  // ── Hospitality & Retail ───────────────────────────────────────────────────
+  _app('oracle-hospitality','Oracle OPERA Cloud', 'oracle.com',           'Hospitality',     _S, 'Oracle OPERA Cloud supports SAML 2.0 SSO via Identity Cloud Service.'),
+  _app('lightspeed',     'Lightspeed Retail',      'lightspeedhq.com',    'Retail',          _O, 'Lightspeed Retail supports OAuth 2.0 for POS platform access.'),
+  _app('vend',           'Lightspeed (Vend)',      'vendhq.com',          'Retail',          _O, 'Vend by Lightspeed supports OAuth 2.0 / OIDC for retail management.'),
+  _app('revel',          'Revel Systems',          'revelsystems.com',    'Retail',          _O, 'Revel POS supports OAuth 2.0 for restaurant and retail platform.'),
+  // ── Real Estate & Facilities ───────────────────────────────────────────────
+  _app('procore',        'Procore',                'procore.com',         'Construction',    _S, 'Procore supports SAML 2.0 SSO via Company Settings → Single Sign-On.'),
+  _app('autodesk',       'Autodesk BIM 360',       'autodesk.com',        'Construction',    _S, 'Autodesk Construction Cloud supports SAML 2.0 SSO via Identity Management.'),
+  _app('planon',         'Planon IWMS',            'planonsoftware.com',  'Facilities',      _S, 'Planon supports SAML 2.0 SSO for integrated workplace management.'),
+  // ── Healthcare (if applicable) ─────────────────────────────────────────────
+  _app('epic',           'Epic MyChart',           'epic.com',            'Healthcare',      _S, 'Epic supports SAML 2.0 SSO via Security Configuration for healthcare enterprises.'),
+  _app('salesforce-health','Salesforce Health Cloud','salesforce.com',    'Healthcare',      _S, 'Salesforce Health Cloud uses standard SAML 2.0 SSO from Salesforce Setup.'),
+  _app('workiva',        'Workiva',                'workiva.com',         'Healthcare',      _S, 'Workiva supports SAML 2.0 SSO via My Account → Security → SSO.'),
+  // ── Telecom & Communication ────────────────────────────────────────────────
+  _app('twilio',         'Twilio Console',         'twilio.com',          'Telecom',         _S, 'Twilio supports SAML 2.0 SSO for organisation member authentication.'),
+  _app('vonage',         'Vonage / Nexmo',         'vonage.com',          'Telecom',         _O, 'Vonage supports OAuth 2.0 / OIDC for communications API platform access.'),
+  _app('ringcentral2',   'RingCentral Office',     'ringcentral.com',     'Telecom',         _O, 'RingCentral supports OAuth 2.0 / OIDC for UCaaS integrations.'),
+  _app('8x8',            '8×8',                    '8x8.com',             'Telecom',         _S, '8×8 Work supports SAML 2.0 SSO for cloud communications.'),
+  _app('dialpad',        'Dialpad',                'dialpad.com',         'Telecom',         _S, 'Dialpad supports SAML 2.0 SSO via Settings → Security.'),
+  _app('aircall',        'Aircall',                'aircall.io',          'Telecom',         _S, 'Aircall supports SAML 2.0 SSO for cloud call centre access.'),
+  _app('cloudtalk',      'CloudTalk',              'cloudtalk.io',        'Telecom',         _O, 'CloudTalk supports OIDC-based SSO for VoIP platform.'),
+  _app('five9',          'Five9',                  'five9.com',           'Telecom',         _S, 'Five9 supports SAML 2.0 SSO for contact centre platform access.'),
+  _app('genesys',        'Genesys Cloud',          'genesys.com',         'Telecom',         _O, 'Genesys Cloud CX supports OAuth 2.0 / OIDC for contact centre authentication.'),
+  // ── Travel & Expense ──────────────────────────────────────────────────────
+  _app('concur-travel',  'SAP Concur Travel',      'concur.com',          'Travel',          _S, 'SAP Concur Travel supports SAML 2.0 SSO via Administration → Authentication Admin.'),
+  _app('egencia',        'Egencia (Amex GBT)',     'egencia.com',         'Travel',          _S, 'Egencia supports SAML 2.0 SSO for corporate travel management.'),
+  _app('navan',          'Navan (TripActions)',     'navan.com',           'Travel',          _S, 'Navan supports SAML 2.0 SSO via Company Settings → Security → SSO.'),
+  _app('sap-travex',     'SAP Travel Expense',     'sap.com',             'Travel',          _S, 'SAP Travel & Expense supports SAML 2.0 SSO via Cloud Identity Services.'),
+  // ── Custom & Generic ──────────────────────────────────────────────────────
+  _app('custom-saml',    'Custom SAML App',        null,                  'Custom',          _S, 'Register any application that supports SAML 2.0 Service Provider SSO.'),
+  _app('custom-oidc',    'Custom OIDC App',        null,                  'Custom',          _O, 'Register any application that supports OpenID Connect / OAuth 2.0.', ['openid','email','profile'], ['authorization_code','refresh_token']),
+  _app('custom-legacy',  'Legacy App (Header)',    null,                  'Custom',          _S, 'Use header-based or reverse-proxy SSO for applications that cannot do SAML/OIDC natively.'),
 ];
 
 const CATALOG_CATS = ['All', ...new Set(SSO_CATALOG.map(a => a.cat))];
@@ -689,7 +1013,7 @@ export async function viewOidcApps(content) {
                   <input class="form-input" value="${esc(window.location.origin)}/auth/saml/sso" readonly onclick="this.select()"></div>
               </div>
               <div class="modal-footer">
-                <button class="btn btn-primary" onclick="window.location.hash=''; document.querySelector('[data-v=samlApps]')?.click(); this.closest('.modal-backdrop').remove();">Go to SAML Apps →</button>
+                <button class="btn btn-primary" onclick="this.closest('.modal-backdrop').remove(); window.LILG_NAV && window.LILG_NAV('samlApps');">Go to SAML Apps →</button>
                 <button class="btn btn-secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button>
               </div>
             </div>`);
@@ -1310,16 +1634,16 @@ export async function viewPamResources(content) {
   async function load() {
     try {
       const resources = await api.listPamResources();
-      const typeBadge = t => ({ SSH: 'badge-success', RDP: 'badge-info', DB: 'badge-warning', WEB: 'badge-neutral' }[t] || 'badge-neutral');
+      const typeBadge = t => ({ SSH: 'badge-success', RDP: 'badge-info', DATABASE: 'badge-warning', DB: 'badge-warning', WEB: 'badge-neutral', WINDOWS: 'badge-neutral' }[t] || 'badge-neutral');
       const rows = resources.length ? resources.map(r => `
         <tr>
           <td class="cell-strong">${esc(r.name)}</td>
-          <td><span class="badge ${typeBadge(r.resource_type)}">${esc(r.resource_type||'—')}</span></td>
+          <td><span class="badge ${typeBadge(r.type||r.resource_type)}">${esc(r.type||r.resource_type||'—')}</span></td>
           <td class="muted">${esc(r.hostname||'—')}</td>
           <td class="muted">${r.port ?? '—'}</td>
           <td>${r.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary edit-pam" data-p='${JSON.stringify({id:r.id,name:r.name,resource_type:r.resource_type,hostname:r.hostname,port:r.port,description:r.description||""})}'>Edit</button>
+            <button class="btn btn-sm btn-secondary edit-pam" data-p='${JSON.stringify({id:r.id,name:r.name,type:r.type||r.resource_type,hostname:r.hostname,port:r.port,description:r.description||""})}'>Edit</button>
             <button class="btn btn-sm btn-danger del-pam" data-id="${esc(String(r.id))}">Delete</button>
           </td>
         </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No PAM resources.</p></div></td></tr>`;
@@ -1341,10 +1665,11 @@ export async function viewPamResources(content) {
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${isEdit ? 'Edit' : 'Add'} PAM Resource</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="pam-name" value="${esc(d.name||'')}"></div>
       <div class="form-group"><label class="form-label">Resource Type</label><select class="form-select" id="pam-type">
-        <option ${d.resource_type==='SSH'?'selected':''}>SSH</option>
-        <option ${d.resource_type==='RDP'?'selected':''}>RDP</option>
-        <option ${d.resource_type==='DB'?'selected':''}>DB</option>
-        <option ${d.resource_type==='WEB'?'selected':''}>WEB</option>
+        <option value="SSH" ${(d.type||d.resource_type)==='SSH'?'selected':''}>SSH</option>
+        <option value="RDP" ${(d.type||d.resource_type)==='RDP'?'selected':''}>RDP</option>
+        <option value="DATABASE" ${(d.type||d.resource_type)==='DATABASE'?'selected':''}>Database</option>
+        <option value="WEB" ${(d.type||d.resource_type)==='WEB'?'selected':''}>Web App</option>
+        <option value="WINDOWS" ${(d.type||d.resource_type)==='WINDOWS'?'selected':''}>Windows</option>
       </select></div>
       <div class="form-group"><label class="form-label">Hostname</label><input class="form-input" id="pam-host" value="${esc(d.hostname||'')}"></div>
       <div class="form-group"><label class="form-label">Port</label><input class="form-input" id="pam-port" type="number" value="${esc(String(d.port||22))}"></div>
@@ -1353,7 +1678,7 @@ export async function viewPamResources(content) {
     </div><div class="modal-footer"><button class="btn btn-primary" id="pam-save">${isEdit ? 'Update' : 'Add'}</button><button class="btn btn-secondary" id="pam-cancel">Cancel</button></div></div>`);
     bd.querySelector('#pam-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#pam-save').addEventListener('click', async () => {
-      const data = { name: bd.querySelector('#pam-name').value, resource_type: bd.querySelector('#pam-type').value, hostname: bd.querySelector('#pam-host').value, port: parseInt(bd.querySelector('#pam-port').value)||22, description: bd.querySelector('#pam-desc').value };
+      const data = { name: bd.querySelector('#pam-name').value, type: bd.querySelector('#pam-type').value, hostname: bd.querySelector('#pam-host').value, port: parseInt(bd.querySelector('#pam-port').value)||22, description: bd.querySelector('#pam-desc').value };
       if (!data.name || !data.hostname) { bd.querySelector('#pam-err').innerHTML = errHtml('Name and hostname are required'); return; }
       try {
         if (isEdit) await api.updatePamResource(id, data); else await api.createPamResource(data);

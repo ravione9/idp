@@ -277,7 +277,7 @@ To add a new migration:
 | `saml_assertion_log` | Issued SAML assertions audit (live) |
 | `applications` | **(003)** Protocol-agnostic application catalog |
 | `app_protocol_configs` | **(003)** Per-application protocol bindings (SAML / OIDC / SCIM …) |
-| `oidc_clients` | **(003)** Registered OIDC RP clients (issuer endpoints pending) |
+| `oidc_clients` | **(003, 007)** Registered OIDC RP clients — `name`, `token_endpoint_auth_method` (007 aligns column names with `config-oidc-clients.ts`; issuer endpoints pending) |
 | `oauth_tokens` | **(003)** Refresh / authorization-code token store |
 | `webauthn_credentials` | **(003)** Passkeys (routes pending) |
 
@@ -309,7 +309,8 @@ To add a new migration:
 | `adapter_outbox` | Outbox pattern for downstream sync |
 | `attendance_events`, `leave_records` | HRMS-driven lifecycle inputs |
 | `abac_policies`, `role_bindings` | Legacy authorization model (will fold into `business_roles` + `entitlements`) |
-| `workflow_definitions`, `workflow_runs` | Generic workflow runs |
+| `workflow_definitions` | **(007)** Workflow library definitions (`steps_json`, `trigger_event`) — backs `/api/admin/workflows` |
+| `workflow_runs` | Generic workflow run history |
 | `compliance_reports` | **(003)** Generated SOX / GDPR / HIPAA reports |
 | `notifications` | **(003)** Email / Slack / Teams notification outbox |
 
@@ -639,6 +640,31 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### *(this commit)* — 2026-05-24 — Migration 007 (OIDC schema fix + workflows) + expanded SSO catalogue + config UI field alignment
+
+**Why** — OIDC client CRUD and workflow admin pages were failing against a partially mismatched schema from migration 003; the SSO catalogue and a few config forms sent field names the API does not accept.
+
+**What changed:**
+
+- **Migration `007_fix_oidc_workflows.sql`** —
+  - Adds `name` column to `oidc_clients` (backfilled from `client_id`).
+  - Renames `token_endpoint_auth` → `token_endpoint_auth_method` to match `config-oidc-clients.ts`.
+  - Creates `workflow_definitions` table (queried by `config-workflows.ts` but never created in earlier migrations).
+- **`web/js/views-stubs.js`** —
+  - Expands pre-built SSO integration catalogue from ~30 to **350+** apps (Collaboration, Dev, Cloud, CRM, HR, Finance, Security, Analytics, etc.) using a compact `_app()` helper and Clearbit logo URLs.
+  - Fixes **System Users** form to POST `name` (not `username`) matching `system_users.name`.
+  - Fixes **Identity Profiles** form to use `population` (EMPLOYEE / CONTRACTOR / PARTNER / CUSTOMER / SERVICE) instead of legacy `source_type` values.
+
+### `f4eaec3` — 2026-05-24 — doc: log b19d194 in change log
+
+### `b19d194` — 2026-05-24 — Pre-built SSO integration catalogue + OIDC client management UI
+
+- **`web/js/views-stubs.js`** (+317 lines) — two big additions to the admin console:
+  - **Pre-built SSO integration catalogue** — curated list of apps grouped by category (Productivity & Collaboration, Dev Tools, Cloud & Infrastructure, Business Apps, Storage & Docs, Design & Media, Finance, Security & IAM, Analytics, Custom). Each entry is a one-click "register as SAML / OIDC" hand-off into the existing register flow with the SP fields pre-filled. Pattern matches miniOrange's "Configure your cloud apps" tile grid and Okta's Application Catalog.
+  - **OIDC / OAuth Applications page** is now a real workbench: tabs for *My Applications* (registered clients) and *Pre-built Integrations* (catalogue), a `Register` modal (custom or pre-filled from a catalogue tile), and a one-time `Show client secret` modal that surfaces the secret to the operator immediately after registration (the API never returns it again — only the bcrypt hash is stored).
+- **`web/css/styles.css`** (+49 lines) — small additions backing the new catalogue tiles, secret-display modal and tab switcher.
+- No backend / schema changes in that commit — both flows use existing `/api/admin/oidc-clients` and `/api/admin/saml-apps` endpoints.
+
 ### *(this commit)* — 2026-05-23 — Phase 2 IGA complete: AD/Google sync, password writeback, lifecycle, SoD, access requests, notifications
 
 **Why** — Phase 2 service layer was scaffolded with 501 stubs; this commit ships all write endpoints and enterprise governance modules as production-quality TypeScript.
@@ -659,14 +685,6 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/services/access-request-workflow.ts`** — `submitAccessRequest` (SoD pre-check, multi-level approval chain, 3-day SLA, notifies approvers); `processDecision` (approve/reject, auto-fulfil on final approval, notifies requester).
 - **`src/services/access-review.ts`** — `createCampaign` (scopes: ALL_USERS/APP_SPECIFIC/HIGH_RISK, batch inserts review items, notifies reviewers); `submitReviewDecision` (CERTIFY/REVOKE/EXCEPTION, revokes entitlement on REVOKE, auto-closes campaign).
 - **`src/api/iga.ts`** — all 501 stubs replaced with real service-layer wiring; added `POST /access-reviews/:id/items/:itemId/decision` and `POST /entitlements/:entId/grant`.
-
-### *(this commit)* — 2026-05-24 — Pre-built SSO integration catalogue + OIDC client management UI
-
-- **`web/js/views-stubs.js`** (+317 lines) — two big additions to the admin console:
-  - **Pre-built SSO integration catalogue** — curated list of apps grouped by category (Productivity & Collaboration, Dev Tools, Cloud & Infrastructure, Business Apps, Storage & Docs, Design & Media, Finance, Security & IAM, Analytics, Custom). Each entry is a one-click "register as SAML / OIDC" hand-off into the existing register flow with the SP fields pre-filled. Pattern matches miniOrange's "Configure your cloud apps" tile grid and Okta's Application Catalog.
-  - **OIDC / OAuth Applications page** is now a real workbench: tabs for *My Applications* (registered clients) and *Pre-built Integrations* (catalogue), a `Register` modal (custom or pre-filled from a catalogue tile), and a one-time `Show client secret` modal that surfaces the secret to the operator immediately after registration (the API never returns it again — only the bcrypt hash is stored).
-- **`web/css/styles.css`** (+49 lines) — small additions backing the new catalogue tiles, secret-display modal and tab switcher.
-- No backend / schema changes — both flows use existing `/api/admin/oidc-clients` and `/api/admin/saml-apps` endpoints.
 
 ### `fad1184` — 2026-05-24 — doc: log b81af22 in change log
 
