@@ -53,15 +53,15 @@ CREATE TABLE IF NOT EXISTS employees (
 CREATE TABLE IF NOT EXISTS identity_links (
     id              BIGINT          NOT NULL AUTO_INCREMENT,
     emp_id          VARCHAR(20)     NOT NULL,
-    system          ENUM('GOOGLE','ZOHO','SLACK','GITHUB','AD','HRMS','NEXSID','SALESMAN_OTP','BIGQUERY','AWS_IDC') NOT NULL,
+    `system`        ENUM('GOOGLE','ZOHO','SLACK','GITHUB','AD','HRMS','NEXSID','SALESMAN_OTP','BIGQUERY','AWS_IDC') NOT NULL,
     external_id     VARCHAR(255)    NOT NULL,
     status          ENUM('ACTIVE','DISABLED','DELETED','ORPHAN') NOT NULL DEFAULT 'ACTIVE',
     last_synced_at  DATETIME        DEFAULT NULL,
     drift_flag      BOOL            NOT NULL DEFAULT 0,
     auth_kind       ENUM('OIDC','SAML','LDAP','OTP','BIOMETRIC') NOT NULL,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_system_external (system, external_id),
-    KEY idx_emp_system (emp_id, system),
+    UNIQUE KEY uk_system_external (`system`, external_id),
+    KEY idx_emp_system (emp_id, `system`),
     CONSTRAINT fk_il_emp FOREIGN KEY (emp_id) REFERENCES employees (emp_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS state_transitions (
 CREATE TABLE IF NOT EXISTS adapter_outbox (
     id              BIGINT          NOT NULL AUTO_INCREMENT,
     emp_id          VARCHAR(20)     NOT NULL,
-    system          VARCHAR(30)     NOT NULL,
+    `system`        VARCHAR(30)     NOT NULL,
     op              ENUM(
                       'DISABLE','ENABLE','DELETE',
                       'REVOKE_TOKENS','REVOKE_BINDINGS','LIST_BINDINGS',
@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS adapter_outbox (
     created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     INDEX idx_poll (status, next_run_at),
-    INDEX idx_emp_system (emp_id, system)
+    INDEX idx_emp_system (emp_id, `system`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
@@ -249,14 +249,14 @@ CREATE TABLE IF NOT EXISTS abac_policies (
 CREATE TABLE IF NOT EXISTS role_bindings (
     id              BIGINT          NOT NULL AUTO_INCREMENT,
     emp_id          VARCHAR(20)     NOT NULL,
-    system          VARCHAR(30)     NOT NULL,
+    `system`        VARCHAR(30)     NOT NULL,
     scope           VARCHAR(255)    NOT NULL,
     role_name       VARCHAR(100)    NOT NULL,
     granted_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     revoked_at      DATETIME        DEFAULT NULL,
     snapshot_ts     DATETIME        DEFAULT NULL,
     PRIMARY KEY (id),
-    INDEX idx_emp_system (emp_id, system),
+    INDEX idx_emp_system (emp_id, `system`),
     CONSTRAINT fk_rb_emp FOREIGN KEY (emp_id) REFERENCES employees (emp_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
