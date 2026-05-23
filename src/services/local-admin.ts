@@ -4,7 +4,9 @@
 
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
+import { config } from '../config.js';
 import { query, queryOne, transaction } from '../db/connection.js';
+import logger from '../utils/logger.js';
 import type { Role } from '../auth/rbac.js';
 
 const BCRYPT_ROUNDS = 12;
@@ -115,6 +117,54 @@ export async function createLocalAdministrator(params: {
   });
 
   return { empId, email, role: params.role };
+}
+
+export function isMasterAdminCredentials(email: string, password: string): boolean {
+  const master = config.app.masterAdmin;
+  if (!master) return false;
+  return email.toLowerCase().trim() === master.email && password === master.password;
+}
+
+/** Create or sync password for the env-configured master SUPER_ADMIN on every startup. */
+export async function ensureMasterAdminFromEnv(): Promise<void> {
+  const master = config.app.masterAdmin;
+  if (!master) return;
+
+  const existing = await queryOne<{ id: number; password_hash: string; emp_id: string }>(
+    'SELECT id, password_hash, emp_id FROM local_accounts WHERE email = ?',
+    [master.email],
+  );
+
+  if (!existing) {
+    await createLocalAdministrator({
+      fullName:  master.fullName,
+      email:     master.email,
+      password:  master.password,
+      role:      'SUPER_ADMIN',
+      createdBy: 'ENV',
+    });
+    logger.info({ email: master.email }, 'Master admin created from env');
+    return;
+  }
+
+  const passwordMatches = await verifyLocalPassword(master.password, existing.password_hash);
+  if (!passwordMatches) {
+    const passwordHash = await hashPassword(master.password);
+    await query(
+      `UPDATE local_accounts
+          SET password_hash = ?, role = 'SUPER_ADMIN', active = 1
+        WHERE id = ?`,
+      [passwordHash, existing.id],
+    );
+    logger.info({ email: master.email }, 'Master admin password synced from env');
+  }
+
+  await query(
+    `UPDATE employees
+        SET full_name = ?, role = 'SUPER_ADMIN', hrms_status = 'ACTIVE', ilg_state = 'ACTIVE'
+      WHERE emp_id = ?`,
+    [master.fullName, existing.emp_id],
+  );
 }
 
 export async function deactivateLocalAdmin(accountId: number, actorEmpId: string): Promise<void> {

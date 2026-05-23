@@ -26,3 +26,15 @@ curl -sf http://127.0.0.1:8080/healthz && echo || echo "healthz FAILED"
 echo ""
 echo "=== curl readyz ==="
 curl -sf http://127.0.0.1:8080/readyz && echo || echo "readyz FAILED (DB/Redis may still be starting)"
+
+echo ""
+echo "=== Port 8080 listening? ==="
+ss -tlnp 2>/dev/null | grep ':8080' || netstat -tlnp 2>/dev/null | grep ':8080' || echo "nothing on 8080"
+
+echo ""
+echo "=== MASTER_ADMIN in .env? ==="
+grep -E '^MASTER_ADMIN_' .env 2>/dev/null | sed 's/PASSWORD=.*/PASSWORD=***/' || echo "not set"
+
+echo ""
+echo "=== If idp-api missing or restarting, run: ==="
+echo "  sudo bash scripts/fix-and-start.sh"

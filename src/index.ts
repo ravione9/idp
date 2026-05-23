@@ -32,6 +32,7 @@ import {
 } from './auth/middleware.js';
 import { googleLoginHandler, zohoLoginHandler } from './auth/login-routes.js';
 import { localLoginHandler } from './auth/local-auth.js';
+import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
 const WEB_ROOT = path.join(process.cwd(), 'web');
 
@@ -147,6 +148,12 @@ async function main(): Promise<void> {
   // Connect Redis
   await sessionRedis.connect();
   logger.info('Redis connected');
+
+  try {
+    await ensureMasterAdminFromEnv();
+  } catch (err) {
+    logger.error({ err }, 'Master admin provisioning failed — local login may not work');
+  }
 
   const server = app.listen(config.app.port, () => {
     logger.info({ port: config.app.port, env: config.app.nodeEnv }, 'LILG API server started');

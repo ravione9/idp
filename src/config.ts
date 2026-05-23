@@ -7,6 +7,12 @@ const envInt = z.string().transform((v) => parseInt(v, 10)).pipe(z.number().int(
 const envFloat = z.string().transform((v) => parseFloat(v)).pipe(z.number());
 const envBool = z.enum(['true', 'false']).transform((v) => v === 'true');
 
+/** Treat blank env vars as unset (common in .env files). */
+function emptyToUndefined(val: unknown): unknown {
+  if (typeof val === 'string' && val.trim() === '') return undefined;
+  return val;
+}
+
 // ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------
@@ -69,7 +75,21 @@ const ConfigSchema = z.object({
   INTERNAL_TOKEN: z.string().min(16),
 
   // One-time bootstrap token for first local super admin (dev only — unset in prod after bootstrap)
-  LOCAL_BOOTSTRAP_TOKEN: z.string().min(16).optional(),
+  LOCAL_BOOTSTRAP_TOKEN: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
+
+  // Master administrator — always provisioned from env on startup (SSO/IGA portal admin)
+  MASTER_ADMIN_EMAIL: z.preprocess(
+    emptyToUndefined,
+    z.string().email().optional(),
+  ),
+  MASTER_ADMIN_PASSWORD: z.preprocess(
+    emptyToUndefined,
+    z.string().min(10).max(128).optional(),
+  ),
+  MASTER_ADMIN_FULL_NAME: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().min(1).max(255).default('Master Administrator'),
+  ),
 
   // Public URL — relaxed for dev IPs (e.g. http://192.168.24.254:8080)
   PUBLIC_BASE_URL: z.string().min(1).optional(),
@@ -96,6 +116,13 @@ type ParsedConfig = z.output<typeof ConfigSchema>;
 let parsed: ParsedConfig;
 try {
   parsed = ConfigSchema.parse(process.env as unknown as RawConfig);
+  const hasMasterEmail = Boolean(parsed.MASTER_ADMIN_EMAIL);
+  const hasMasterPass  = Boolean(parsed.MASTER_ADMIN_PASSWORD);
+  if (hasMasterEmail !== hasMasterPass) {
+    throw new Error(
+      'MASTER_ADMIN_EMAIL and MASTER_ADMIN_PASSWORD must both be set or both omitted',
+    );
+  }
 } catch (err) {
   if (err instanceof z.ZodError) {
     console.error('[LILG] Configuration validation failed:');
@@ -163,6 +190,14 @@ export const config = {
     circuitBreakerErrorThreshold: parsed.CIRCUIT_BREAKER_ERROR_THRESHOLD,
     internalToken: parsed.INTERNAL_TOKEN,
     localBootstrapToken: parsed.LOCAL_BOOTSTRAP_TOKEN,
+    masterAdmin:
+      parsed.MASTER_ADMIN_EMAIL && parsed.MASTER_ADMIN_PASSWORD
+        ? {
+            email:    parsed.MASTER_ADMIN_EMAIL.toLowerCase().trim(),
+            password: parsed.MASTER_ADMIN_PASSWORD,
+            fullName: parsed.MASTER_ADMIN_FULL_NAME,
+          }
+        : undefined,
     /** Canonical public origin (e.g. https://idp.lenskart.com). Falls back to request Host when unset. */
     publicBaseUrl: (parsed.PUBLIC_BASE_URL ?? parsed.SAML_IDP_BASE_URL)?.replace(/\/$/, ''),
   },

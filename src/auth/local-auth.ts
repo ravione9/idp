@@ -8,7 +8,9 @@ import { config } from '../config.js';
 import logger from '../utils/logger.js';
 import { createSession, setSessionCookie } from './session.js';
 import {
+  ensureMasterAdminFromEnv,
   findLocalAccountByEmail,
+  isMasterAdminCredentials,
   touchLocalLogin,
   verifyLocalPassword,
 } from '../services/local-admin.js';
@@ -28,7 +30,13 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
   const { email, password } = parsed.data;
 
   try {
-    const account = await findLocalAccountByEmail(email);
+    let account = await findLocalAccountByEmail(email);
+
+    if (!account && isMasterAdminCredentials(email, password)) {
+      await ensureMasterAdminFromEnv();
+      account = await findLocalAccountByEmail(email);
+    }
+
     if (!account) {
       res.status(401).json({ error: 'Invalid email or password' });
       return;

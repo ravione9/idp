@@ -65,6 +65,9 @@ if [[ ! -f .env ]]; then
 fi
 
 echo "==> Building and starting containers..."
+# docker-compose v1.29 crashes on recreate (KeyError: ContainerConfig) — remove stale containers first
+"${COMPOSE[@]}" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
+docker rm -f idp-api idp-worker idp-mysql idp-redis idp-localstack 2>/dev/null || true
 "${COMPOSE[@]}" -f "${COMPOSE_FILE}" up -d --build
 
 echo "==> Waiting for LocalStack..."

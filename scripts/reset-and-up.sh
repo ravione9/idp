@@ -20,7 +20,7 @@ if [[ ! -f .env ]]; then
 fi
 
 echo "==> Starting stack (force recreate)..."
-"${COMPOSE[@]}" up -d --force-recreate --remove-orphans
+"${COMPOSE[@]}" up -d --build --force-recreate --remove-orphans
 
 echo "==> Waiting for API (up to 2 min)..."
 for i in $(seq 1 24); do
