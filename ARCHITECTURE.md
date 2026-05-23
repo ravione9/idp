@@ -660,7 +660,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/services/access-review.ts`** — `createCampaign` (scopes: ALL_USERS/APP_SPECIFIC/HIGH_RISK, batch inserts review items, notifies reviewers); `submitReviewDecision` (CERTIFY/REVOKE/EXCEPTION, revokes entitlement on REVOKE, auto-closes campaign).
 - **`src/api/iga.ts`** — all 501 stubs replaced with real service-layer wiring; added `POST /access-reviews/:id/items/:itemId/decision` and `POST /entitlements/:entId/grant`.
 
-### *(this commit)* — 2026-05-24 — UI polish: modal, form-component and utility CSS
+### *(this commit)* — 2026-05-24 — Pre-built SSO integration catalogue + OIDC client management UI
+
+- **`web/js/views-stubs.js`** (+317 lines) — two big additions to the admin console:
+  - **Pre-built SSO integration catalogue** — curated list of apps grouped by category (Productivity & Collaboration, Dev Tools, Cloud & Infrastructure, Business Apps, Storage & Docs, Design & Media, Finance, Security & IAM, Analytics, Custom). Each entry is a one-click "register as SAML / OIDC" hand-off into the existing register flow with the SP fields pre-filled. Pattern matches miniOrange's "Configure your cloud apps" tile grid and Okta's Application Catalog.
+  - **OIDC / OAuth Applications page** is now a real workbench: tabs for *My Applications* (registered clients) and *Pre-built Integrations* (catalogue), a `Register` modal (custom or pre-filled from a catalogue tile), and a one-time `Show client secret` modal that surfaces the secret to the operator immediately after registration (the API never returns it again — only the bcrypt hash is stored).
+- **`web/css/styles.css`** (+49 lines) — small additions backing the new catalogue tiles, secret-display modal and tab switcher.
+- No backend / schema changes — both flows use existing `/api/admin/oidc-clients` and `/api/admin/saml-apps` endpoints.
+
+### `fad1184` — 2026-05-24 — doc: log b81af22 in change log
+
+### `b81af22` — 2026-05-24 — UI polish: modal + form-component + utility CSS for IGA admin pages
 
 - `web/css/styles.css` (+317 lines) — new shared component classes consumed by the IGA / config admin pages: `.modal*` (backdrop / header / body / footer), `.form-group / .form-label / .form-input / .form-select / .form-textarea / .form-check / .form-check-row`, `.filter-bar`, `.tag / .tag-list / .tag-remove`, `.detail-panel`, `.inline-tabs / .inline-tab`, `.form-2col`, `.display-field`, `.info-box`, `.table-actions`, `.step-indicator / .step-dot / .step-line`, `.row-detail`, `.card-loading`, `.health-row`, plus text-color and flex-utility helpers.
 - Existing pages (Connectors editor modal, SoD policy form, group editor, password-policy form, branding, PAM, etc.) now share a consistent visual language.
