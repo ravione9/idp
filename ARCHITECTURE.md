@@ -640,7 +640,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — Migration 007 (OIDC schema fix + workflows) + expanded SSO catalogue + config UI field alignment
+### `706d66d` — 2026-05-24 — Migration 007 (OIDC schema fix + workflows) + expanded SSO catalogue + config UI field alignment
 
 **Why** — OIDC client CRUD and workflow admin pages were failing against a partially mismatched schema from migration 003; the SSO catalogue and a few config forms sent field names the API does not accept.
 
