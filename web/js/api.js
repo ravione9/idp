@@ -121,6 +121,12 @@ Object.assign(api, {
   getGeneralSettings:  () => f('/api/admin/general-settings'),
   saveGeneralSettings: (data) => f('/api/admin/general-settings', { method: 'PUT', body: JSON.stringify(data) }),
 
+  // Portal SSL
+  getPortalSsl:        () => f('/api/admin/portal-ssl'),
+  uploadPortalSsl:     (data) => f('/api/admin/portal-ssl', { method: 'POST', body: JSON.stringify(data) }),
+  deletePortalSsl:     () => f('/api/admin/portal-ssl', { method: 'DELETE' }),
+  savePortalConnection:(data) => f('/api/admin/portal-ssl/connection', { method: 'PUT', body: JSON.stringify(data) }),
+
   // OIDC Clients
   listOidcClients:    () => f('/api/admin/oidc-clients'),
   createOidcClient:   (data) => f('/api/admin/oidc-clients', { method: 'POST', body: JSON.stringify(data) }),

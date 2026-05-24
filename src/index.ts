@@ -4,15 +4,17 @@
  */
 
 import path from 'path';
+import https from 'node:https';
 import express, { Request, Response, NextFunction } from 'express';
 import { pinoHttp } from 'pino-http';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from './config.js';
 import logger from './utils/logger.js';
-import { closePool } from './db/connection.js';
+import { closePool, queryOne } from './db/connection.js';
 import { redis as sessionRedis } from './auth/session-store.js';
 import { runMigrations } from './db/migrate.js';
 import { rateLimit } from './auth/rate-limit.js';
+import { registerHttpsServer, getPortalTlsState } from './services/portal-tls.js';
 
 // Routes
 import healthRouter   from './api/health.js';
@@ -46,6 +48,7 @@ import configSsoReportsRouter from './api/config-sso-reports.js';
 import configBusinessRolesRouter from './api/config-business-roles.js';
 import configBirthrightRouter from './api/config-birthright.js';
 import configNotificationsRouter from './api/config-notifications.js';
+import configPortalSslRouter from './api/config-portal-ssl.js';
 
 // Auth
 import {
@@ -89,6 +92,18 @@ app.use(
 // ---------------------------------------------------------------------------
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+
+// ---------------------------------------------------------------------------
+// HTTP → HTTPS redirect (when portal_allow_http = 0 and HTTPS is running)
+// ---------------------------------------------------------------------------
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const tls = getPortalTlsState();
+  if (tls.httpsEnabled && !tls.allowHttp && !req.secure) {
+    const host = (req.headers['host'] ?? '').replace(/:\d+$/, '');
+    return res.redirect(301, `https://${host}:${tls.httpsPort}${req.url}`);
+  }
+  next();
+});
 
 // ---------------------------------------------------------------------------
 // Security headers (no helmet dep — manual)
@@ -159,6 +174,7 @@ app.use('/api/admin/sso-reports', configSsoReportsRouter);
 app.use('/api/admin/business-roles', configBusinessRolesRouter);
 app.use('/api/admin/birthright', configBirthrightRouter);
 app.use('/api/admin/notifications', configNotificationsRouter);
+app.use('/api/admin/portal-ssl',   configPortalSslRouter);
 
 // ---------------------------------------------------------------------------
 // Internal routes (internal token gated — no session cookie required)
@@ -233,11 +249,57 @@ async function main(): Promise<void> {
     logger.info({ port: config.app.port, env: config.app.nodeEnv }, 'IDP API server started');
   });
 
+  // ── HTTPS server (if portal SSL cert is stored and enabled in DB) ──────────
+  try {
+    const sslRow = await queryOne<{
+      portal_ssl_cert:      string | null;
+      portal_ssl_key:       string | null;
+      portal_ssl_ca:        string | null;
+      portal_https_enabled: number;
+      portal_allow_http:    number;
+    }>(
+      `SELECT portal_ssl_cert, portal_ssl_key, portal_ssl_ca,
+              portal_https_enabled, portal_allow_http
+         FROM general_settings WHERE id = 1`,
+      [],
+    );
+
+    if (sslRow?.portal_https_enabled && sslRow.portal_ssl_cert && sslRow.portal_ssl_key) {
+      const httpsPort = parseInt(process.env['HTTPS_PORT'] ?? '8443', 10);
+      const httpsServer = https.createServer(
+        {
+          cert: sslRow.portal_ssl_cert,
+          key:  sslRow.portal_ssl_key,
+          ca:   sslRow.portal_ssl_ca ?? undefined,
+        },
+        app,
+      );
+      httpsServer.listen(httpsPort, () => {
+        logger.info({ port: httpsPort }, 'Portal HTTPS server started');
+      });
+      registerHttpsServer(httpsServer, httpsPort);
+
+      // Propagate shutdown to HTTPS server
+      const origShutdown = shutdown;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (globalThis as any).__httpsServer = httpsServer;
+    } else {
+      logger.info('Portal HTTPS not configured — running HTTP only');
+    }
+  } catch (err) {
+    logger.error({ err }, 'Failed to start HTTPS server — continuing with HTTP only');
+  }
+
   // ---------------------------------------------------------------------------
   // Graceful shutdown
   // ---------------------------------------------------------------------------
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+
+    // Close HTTPS server first if running
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const httpsServer = (globalThis as any).__httpsServer as https.Server | undefined;
+    if (httpsServer) httpsServer.close(() => logger.info('HTTPS server closed'));
 
     server.close(async () => {
       logger.info('HTTP server closed');

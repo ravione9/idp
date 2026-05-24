@@ -3441,30 +3441,122 @@ export async function viewGeneralSettings(content) {
   content.replaceChildren(el(`<div>${header('General Settings', 'Organisation-wide configuration')}<div id="gs-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
   try {
-    const s = await api.getGeneralSettings();
+    const [s, ssl] = await Promise.all([api.getGeneralSettings(), api.getPortalSsl().catch(() => ({}))]);
     const chk = v => v ? 'checked' : '';
+
+    // ── cert status badge ────────────────────────────────────────────────────
+    const certBadge = ssl.has_cert
+      ? (() => {
+          const exp   = ssl.portal_ssl_expiry ? new Date(ssl.portal_ssl_expiry) : null;
+          const days  = exp ? Math.floor((exp - Date.now()) / 86400000) : null;
+          const color = days === null ? '#94a3b8' : days < 14 ? '#ef4444' : days < 30 ? '#f59e0b' : '#22c55e';
+          const label = days === null ? 'Installed' : days < 0 ? 'EXPIRED' : `Expires in ${days}d`;
+          return `<span style="background:${color};color:#fff;padding:2px 8px;border-radius:99px;font-size:0.75rem;font-weight:600">${label}</span>`;
+        })()
+      : `<span style="background:#94a3b8;color:#fff;padding:2px 8px;border-radius:99px;font-size:0.75rem">Not installed</span>`;
+
     wrap.querySelector('#gs-area').innerHTML = `
-      <div class="card" style="max-width:640px">
-        <h2>Organisation</h2>
-        <div class="form-group"><label class="form-label">Org Name</label><input class="form-input" id="gs-org" value="${esc(s.org_name||'')}"></div>
-        <div class="form-group"><label class="form-label">Support Email</label><input class="form-input" id="gs-email" value="${esc(s.support_email||'')}"></div>
-        <h2 style="margin-top:1.5rem">Session</h2>
-        <div class="form-group"><label class="form-label">Session TTL (hours)</label><input class="form-input" id="gs-ttl" type="number" value="${s.session_ttl_hours??8}"></div>
-        <div class="form-group"><label class="form-label">Cookie Domain</label><input class="form-input" id="gs-domain" value="${esc(s.cookie_domain||'')}"></div>
-        <h2 style="margin-top:1.5rem">Authentication</h2>
-        <div class="form-group">
-          <label class="form-check"><input type="checkbox" id="gs-mfa" ${chk(s.mfa_required)}> MFA Required</label>
-          <label class="form-check"><input type="checkbox" id="gs-local" ${chk(s.allow_local_login)}> Allow Local Login</label>
+      <div style="display:flex;flex-direction:column;gap:1.5rem;max-width:700px">
+
+        <!-- ── General ──────────────────────────────────────────────────── -->
+        <div class="card">
+          <h2>Organisation</h2>
+          <div class="form-group"><label class="form-label">Org Name</label><input class="form-input" id="gs-org" value="${esc(s.org_name||'')}"></div>
+          <div class="form-group"><label class="form-label">Support Email</label><input class="form-input" id="gs-email" value="${esc(s.support_email||'')}"></div>
+          <h2 style="margin-top:1.5rem">Session</h2>
+          <div class="form-group"><label class="form-label">Session TTL (hours)</label><input class="form-input" id="gs-ttl" type="number" value="${s.session_ttl_hours??8}"></div>
+          <div class="form-group"><label class="form-label">Cookie Domain</label><input class="form-input" id="gs-domain" value="${esc(s.cookie_domain||'')}"></div>
+          <h2 style="margin-top:1.5rem">Authentication</h2>
+          <div class="form-group">
+            <label class="form-check"><input type="checkbox" id="gs-mfa" ${chk(s.mfa_required)}> MFA Required</label>
+            <label class="form-check"><input type="checkbox" id="gs-local" ${chk(s.allow_local_login)}> Allow Local Login</label>
+          </div>
+          <div class="form-group"><label class="form-label">Max Failed Attempts</label><input class="form-input" id="gs-maxfail" type="number" value="${s.max_failed_attempts??5}"></div>
+          <div class="form-group"><label class="form-label">Lockout Duration (min)</label><input class="form-input" id="gs-lockdur" type="number" value="${s.lockout_duration_minutes??15}"></div>
+          <h2 style="margin-top:1.5rem">SMTP</h2>
+          <div class="form-group"><label class="form-label">SMTP Host</label><input class="form-input" id="gs-shost" value="${esc(s.smtp_host||'')}"></div>
+          <div class="form-group"><label class="form-label">SMTP Port</label><input class="form-input" id="gs-sport" type="number" value="${s.smtp_port||587}"></div>
+          <div class="form-group"><label class="form-label">SMTP User</label><input class="form-input" id="gs-suser" value="${esc(s.smtp_user||'')}"></div>
+          <div id="gs-msg" style="margin-top:1rem"></div>
+          <button class="btn btn-primary" id="gs-save" style="margin-top:0.5rem">Save Settings</button>
         </div>
-        <div class="form-group"><label class="form-label">Max Failed Attempts</label><input class="form-input" id="gs-maxfail" type="number" value="${s.max_failed_attempts??5}"></div>
-        <div class="form-group"><label class="form-label">Lockout Duration (min)</label><input class="form-input" id="gs-lockdur" type="number" value="${s.lockout_duration_minutes??15}"></div>
-        <h2 style="margin-top:1.5rem">SMTP</h2>
-        <div class="form-group"><label class="form-label">SMTP Host</label><input class="form-input" id="gs-shost" value="${esc(s.smtp_host||'')}"></div>
-        <div class="form-group"><label class="form-label">SMTP Port</label><input class="form-input" id="gs-sport" type="number" value="${s.smtp_port||587}"></div>
-        <div class="form-group"><label class="form-label">SMTP User</label><input class="form-input" id="gs-suser" value="${esc(s.smtp_user||'')}"></div>
-        <div id="gs-msg" style="margin-top:1rem"></div>
-        <button class="btn btn-primary" id="gs-save" style="margin-top:0.5rem">Save Settings</button>
+
+        <!-- ── Portal SSL Certificate ────────────────────────────────────── -->
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
+            <h2 style="margin:0">Portal SSL Certificate</h2>
+            ${certBadge}
+          </div>
+          ${ssl.has_cert ? `
+          <div style="background:var(--surface,#f8fafc);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:0.75rem 1rem;margin-top:1rem;font-size:0.85rem;display:flex;flex-direction:column;gap:0.25rem">
+            <div><strong>Common Name:</strong> ${esc(ssl.portal_ssl_cn||'—')}</div>
+            <div><strong>Expires:</strong> ${ssl.portal_ssl_expiry ? new Date(ssl.portal_ssl_expiry).toUTCString() : '—'}</div>
+            <div style="word-break:break-all"><strong>SANs:</strong> ${esc(ssl.portal_ssl_sans||'—')}</div>
+          </div>` : `
+          <p style="color:var(--muted);font-size:0.875rem;margin-top:0.75rem">
+            No certificate installed. Upload a certificate and private key to enable HTTPS on this portal.
+          </p>`}
+
+          <div id="gs-ssl-upload" style="margin-top:1.25rem">
+            <div class="form-group">
+              <label class="form-label">Certificate PEM <span style="color:var(--muted);font-weight:400">(paste full chain incl. -----BEGIN CERTIFICATE-----)</span></label>
+              <textarea class="form-textarea" id="gs-ssl-cert" rows="6" placeholder="-----BEGIN CERTIFICATE-----&#10;MIIDxTCCAq2gAwIBAgI...&#10;-----END CERTIFICATE-----"></textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Private Key PEM <span style="color:var(--muted);font-weight:400">(RSA or EC — never leaves this server)</span></label>
+              <textarea class="form-textarea" id="gs-ssl-key" rows="6" placeholder="-----BEGIN PRIVATE KEY-----&#10;MIIEvQIBADANBgkq...&#10;-----END PRIVATE KEY-----"></textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">CA / Intermediate Chain PEM <span style="color:var(--muted);font-weight:400">(optional — include if using an intermediate CA)</span></label>
+              <textarea class="form-textarea" id="gs-ssl-ca" rows="4" placeholder="-----BEGIN CERTIFICATE-----&#10;(intermediate / root CA)&#10;-----END CERTIFICATE-----"></textarea>
+            </div>
+            <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap">
+              <button class="btn btn-primary" id="gs-ssl-upload-btn">Upload &amp; Activate Certificate</button>
+              ${ssl.has_cert ? `<button class="btn btn-danger" id="gs-ssl-remove-btn" style="background:transparent;border:1px solid #ef4444;color:#ef4444">Remove Certificate</button>` : ''}
+            </div>
+          </div>
+          <div id="gs-ssl-msg" style="margin-top:0.75rem"></div>
+
+          <!-- File upload helper -->
+          <details style="margin-top:1rem;font-size:0.8rem;color:var(--muted)">
+            <summary style="cursor:pointer">Prefer to upload files instead?</summary>
+            <div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.5rem">
+              <label>Certificate file (.crt / .pem): <input type="file" id="gs-ssl-cert-file" accept=".crt,.pem,.cer"></label>
+              <label>Key file (.key / .pem): <input type="file" id="gs-ssl-key-file" accept=".key,.pem"></label>
+              <label>CA chain file (optional): <input type="file" id="gs-ssl-ca-file" accept=".crt,.pem,.cer"></label>
+            </div>
+          </details>
+        </div>
+
+        <!-- ── Connection Settings ───────────────────────────────────────── -->
+        <div class="card">
+          <h2>Portal Connection</h2>
+          <p style="color:var(--muted);font-size:0.875rem;margin-top:0.25rem">
+            Control whether this portal accepts HTTP, HTTPS, or both. Disabling HTTP requires a valid SSL certificate.
+          </p>
+          <div style="display:flex;flex-direction:column;gap:1rem;margin-top:1.25rem">
+            <label style="display:flex;align-items:flex-start;gap:0.75rem;cursor:pointer">
+              <input type="checkbox" id="gs-https-enabled" ${chk(ssl.portal_https_enabled)} style="margin-top:3px">
+              <div>
+                <div style="font-weight:600">Enable HTTPS (port 8443)</div>
+                <div style="font-size:0.8rem;color:var(--muted)">Starts the HTTPS listener using the uploaded certificate. Requires a valid cert to be installed.</div>
+              </div>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:0.75rem;cursor:pointer">
+              <input type="checkbox" id="gs-allow-http" ${chk(ssl.portal_allow_http ?? 1)} style="margin-top:3px">
+              <div>
+                <div style="font-weight:600">Allow plain HTTP</div>
+                <div style="font-size:0.8rem;color:var(--muted)">When unchecked, all HTTP requests are automatically redirected to HTTPS (301). Only uncheck this when HTTPS is active.</div>
+              </div>
+            </label>
+          </div>
+          <div id="gs-conn-msg" style="margin-top:1rem"></div>
+          <button class="btn btn-primary" id="gs-conn-save" style="margin-top:0.75rem">Save Connection Settings</button>
+        </div>
+
       </div>`;
+
+    // ── General Settings save ─────────────────────────────────────────────────
     wrap.querySelector('#gs-save').addEventListener('click', async () => {
       const data = {
         org_name: wrap.querySelector('#gs-org').value,
@@ -3485,6 +3577,88 @@ export async function viewGeneralSettings(content) {
         setTimeout(() => { if (wrap.querySelector('#gs-msg')) wrap.querySelector('#gs-msg').innerHTML = ''; }, 3000);
       } catch(e) { wrap.querySelector('#gs-msg').innerHTML = errHtml(e.message); }
     });
+
+    // ── File-picker → textarea helpers ───────────────────────────────────────
+    const readFileToTextarea = (inputId, textareaId) => {
+      const inp = wrap.querySelector(inputId);
+      if (!inp) return;
+      inp.addEventListener('change', () => {
+        const f = inp.files[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = e => { wrap.querySelector(textareaId).value = e.target.result.trim(); };
+        reader.readAsText(f);
+      });
+    };
+    readFileToTextarea('#gs-ssl-cert-file', '#gs-ssl-cert');
+    readFileToTextarea('#gs-ssl-key-file',  '#gs-ssl-key');
+    readFileToTextarea('#gs-ssl-ca-file',   '#gs-ssl-ca');
+
+    // ── SSL upload ────────────────────────────────────────────────────────────
+    wrap.querySelector('#gs-ssl-upload-btn').addEventListener('click', async () => {
+      const btn  = wrap.querySelector('#gs-ssl-upload-btn');
+      const msg  = wrap.querySelector('#gs-ssl-msg');
+      const cert = wrap.querySelector('#gs-ssl-cert').value.trim();
+      const key  = wrap.querySelector('#gs-ssl-key').value.trim();
+      const ca   = wrap.querySelector('#gs-ssl-ca').value.trim();
+      if (!cert || !key) { msg.innerHTML = errHtml('Certificate PEM and Private Key PEM are both required.'); return; }
+      btn.disabled = true; btn.textContent = '⟳ Uploading…';
+      try {
+        const r = await api.uploadPortalSsl({ cert_pem: cert, key_pem: key, ca_pem: ca || undefined });
+        msg.innerHTML = `<div class="alert alert-success">
+          ✓ Certificate installed — <strong>${esc(r.cn)}</strong><br>
+          Expires: ${new Date(r.expiry).toUTCString()}${r.warning ? `<br><span style="color:#f59e0b">⚠ ${esc(r.warning)}</span>` : ''}
+          <br><small style="color:var(--muted)">HTTPS will hot-reload immediately if the HTTPS server is already running. Otherwise enable it below and restart.</small>
+        </div>`;
+        wrap.querySelector('#gs-ssl-cert').value = '';
+        wrap.querySelector('#gs-ssl-key').value  = '';
+        wrap.querySelector('#gs-ssl-ca').value   = '';
+      } catch(e) {
+        msg.innerHTML = errHtml(e.message);
+      }
+      btn.disabled = false; btn.textContent = 'Upload & Activate Certificate';
+    });
+
+    // ── SSL remove ────────────────────────────────────────────────────────────
+    const removeBtn = wrap.querySelector('#gs-ssl-remove-btn');
+    if (removeBtn) {
+      removeBtn.addEventListener('click', async () => {
+        if (!confirm('Remove the SSL certificate? This will disable HTTPS on the portal.')) return;
+        try {
+          await api.deletePortalSsl();
+          showToast('SSL certificate removed — portal will use HTTP only');
+          viewGeneralSettings(content);
+        } catch(e) { wrap.querySelector('#gs-ssl-msg').innerHTML = errHtml(e.message); }
+      });
+    }
+
+    // ── Connection settings save ──────────────────────────────────────────────
+    wrap.querySelector('#gs-conn-save').addEventListener('click', async () => {
+      const btn         = wrap.querySelector('#gs-conn-save');
+      const msg         = wrap.querySelector('#gs-conn-msg');
+      const httpsOn     = wrap.querySelector('#gs-https-enabled').checked;
+      const allowHttp   = wrap.querySelector('#gs-allow-http').checked;
+      if (httpsOn && !allowHttp && !ssl.has_cert) {
+        msg.innerHTML = errHtml('You must upload an SSL certificate before enabling HTTPS-only mode.');
+        return;
+      }
+      if (!httpsOn && !allowHttp) {
+        msg.innerHTML = errHtml('Cannot disable both HTTP and HTTPS — the portal would become unreachable.');
+        return;
+      }
+      btn.disabled = true; btn.textContent = '⟳ Saving…';
+      try {
+        await api.savePortalConnection({ portal_https_enabled: httpsOn, portal_allow_http: allowHttp });
+        msg.innerHTML = `<div class="alert alert-success">
+          Connection settings saved.
+          ${httpsOn && !allowHttp ? '<br><strong>HTTP→HTTPS redirect is now active.</strong>' : ''}
+          ${httpsOn ? '<br>HTTPS server will be available on port 8443.' : ''}
+        </div>`;
+        setTimeout(() => { if (wrap.querySelector('#gs-conn-msg')) wrap.querySelector('#gs-conn-msg').innerHTML = ''; }, 5000);
+      } catch(e) { msg.innerHTML = errHtml(e.message); }
+      btn.disabled = false; btn.textContent = 'Save Connection Settings';
+    });
+
   } catch(e) { wrap.querySelector('#gs-area').innerHTML = errHtml(e.message); }
 }
 
