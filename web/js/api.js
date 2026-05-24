@@ -9,9 +9,11 @@ export const api = {
     const ct = res.headers.get('content-type') || '';
     const body = ct.includes('json') ? await res.json() : await res.text();
     if (!res.ok) {
-      const err = new Error((body && body.error) || res.statusText);
+      // Prefer body.message (used by connector test + most IGA endpoints),
+      // then body.error (used by validation errors), then HTTP status text.
+      const err = new Error((body && (body.message || body.error)) || res.statusText);
       err.status = res.status;
-      err.body = body;
+      err.body   = body;
       throw err;
     }
     return body;

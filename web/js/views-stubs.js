@@ -1913,7 +1913,10 @@ function initSourcesTab(panel) {
         try {
           const r = await api.testConnector(btn.dataset.id);
           showToast(r.message || (r.success ? '✓ Connection successful' : '✗ Test failed'));
-        } catch(e) { showToast('✗ ' + e.message, true); }
+        } catch(e) {
+          const detail = e.body && e.body.detail ? `\n${e.body.detail}` : '';
+          showToast('✗ ' + e.message + detail, true);
+        }
         btn.disabled = false; btn.textContent = '✓ Test Connection';
       });
     });
@@ -2085,7 +2088,10 @@ function initSourcesTab(panel) {
         } else {
           bd.querySelector('#cfg-err').innerHTML = `<div class="alert alert-info">Save the connector first, then use "Test Connection" from the directory list.</div>`;
         }
-      } catch(e) { bd.querySelector('#cfg-err').innerHTML = errHtml(e.message); }
+      } catch(e) {
+        const detail = e.body && e.body.detail ? `<br><small>${esc(e.body.detail)}</small>` : '';
+        bd.querySelector('#cfg-err').innerHTML = errHtml(e.message) + detail;
+      }
       testBtn.disabled = false; testBtn.textContent = '✓ Test Connection';
     });
 
