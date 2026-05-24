@@ -683,6 +683,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### *(this commit)* — 2026-05-24 — Admin GUI fix: hidden user sidebar + MFA boolean stat
+
+**Why** — In admin mode both the user sidebar (`#user-sidebar`) and admin sidebar were rendering side-by-side because `.user-sidebar.hidden` had no CSS rule, breaking the 240/1fr admin grid into a 3-cell layout (user nav top-left, admin nav top-right, content below). Separately, the MFA Methods page rendered the literal string `false` because `status?.enrolled ?? 0` does not coerce a boolean.
+
+**What changed:**
+
+- **`web/css/styles.css`** — add `.user-sidebar.hidden { display: none; }` (parity with `.admin-sidebar.hidden`).
+- **`web/js/views-stubs.js`** (`viewMfaMethods`) — derive enrolled count from `status.methods.length`, render an explicit Active/Pending/Not enrolled badge, never display `status.enrolled` directly as a number.
+
 ### `ded9501` — 2026-05-24 — pam-2 deploy model: sync-repo.sh + deploy.sh (no local edits on server)
 
 **Why** — Repeated `git pull` failures on pam-2 (`local changes would be overwritten`) from manual script patches; deploy workflow was undefined.

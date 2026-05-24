@@ -197,10 +197,17 @@ export async function viewMfaMethods(content) {
         <p class="muted" style="font-size:0.875rem;margin-bottom:0.75rem">${esc(m.desc)}</p>
         ${enrolled.includes(m.key) ? '<span class="badge badge-success">Enrolled</span>' : '<span class="badge badge-neutral">Not enrolled</span>'}
       </div>`).join('');
+    const liveOrSchemaCount = methods.filter(m=>['badge-success','badge-info'].includes(m.badge)).length;
+    const enrolledCount = enrolled.length;
+    const enrollmentBadge = status?.enabled
+      ? '<span class="badge badge-success">Active</span>'
+      : status?.enrolled
+        ? '<span class="badge badge-warning">Pending</span>'
+        : '<span class="badge badge-neutral">Not enrolled</span>';
     wrap.querySelector('#mfa-area').innerHTML = `
       <div class="stat-grid" style="margin-bottom:1.5rem">
-        <div class="stat-card"><div class="stat-value">${status?.enrolled ?? 0}</div><div class="stat-label">Methods Enrolled</div></div>
-        <div class="stat-card"><div class="stat-value">${methods.filter(m=>['badge-success','badge-info'].includes(m.badge)).length}</div><div class="stat-label">Live / Schema</div></div>
+        <div class="stat-card"><div class="stat-value">${enrolledCount}</div><div class="stat-label">Methods Enrolled</div><div class="stat-sub">${enrollmentBadge}</div></div>
+        <div class="stat-card"><div class="stat-value">${liveOrSchemaCount}</div><div class="stat-label">Live / Schema</div></div>
         <div class="stat-card"><div class="stat-value">2</div><div class="stat-label">Planned</div></div>
       </div>
       <div class="grid-3">${cards}</div>
