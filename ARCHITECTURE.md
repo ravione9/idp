@@ -683,7 +683,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — Admin GUI fix: hidden user sidebar + MFA boolean stat
+### `841dfab` — 2026-05-24 — Admin GUI fix: hidden user sidebar + MFA boolean stat
 
 **Why** — In admin mode both the user sidebar (`#user-sidebar`) and admin sidebar were rendering side-by-side because `.user-sidebar.hidden` had no CSS rule, breaking the 240/1fr admin grid into a 3-cell layout (user nav top-left, admin nav top-right, content below). Separately, the MFA Methods page rendered the literal string `false` because `status?.enrolled ?? 0` does not coerce a boolean.
 
