@@ -25,10 +25,23 @@ function genSecret(len = 32): string {
 
 // GET /
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {
+  // Determine which columns actually exist (schema may be at different migration levels)
+  const colRows = await query<{ COLUMN_NAME: string }>(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'oidc_clients'`,
+    [],
+  );
+  const cols = new Set(colRows.map(r => r.COLUMN_NAME));
+
+  const nameCol   = cols.has('name')                     ? 'name'                     : 'client_id AS name';
+  const authCol   = cols.has('token_endpoint_auth_method') ? 'token_endpoint_auth_method'
+                  : cols.has('token_endpoint_auth')        ? 'token_endpoint_auth AS token_endpoint_auth_method'
+                  : "'client_secret_basic' AS token_endpoint_auth_method";
+
   const rows = await query(
-    `SELECT id, client_id, name, redirect_uris, scopes, grant_types,
-            token_endpoint_auth_method, active, created_at
-     FROM oidc_clients ORDER BY name`,
+    `SELECT id, client_id, ${nameCol}, redirect_uris, scopes, grant_types,
+            ${authCol}, active, created_at
+     FROM oidc_clients ORDER BY ${cols.has('name') ? 'name' : 'client_id'}`,
     [],
   );
   res.json({ data: rows });
@@ -46,15 +59,46 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const secret = genSecret();
   const hash = await bcrypt.hash(secret, 10);
 
-  await execute(
-    `INSERT INTO oidc_clients
-       (id, client_id, client_secret_hash, name, redirect_uris, scopes,
-        grant_types, token_endpoint_auth_method, active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    [id, clientId, hash, name,
-     JSON.stringify(redirect_uris), JSON.stringify(scopes),
-     JSON.stringify(grant_types), token_endpoint_auth_method],
+  // Check which columns exist before inserting (schema may lag behind)
+  const colRows2 = await query<{ COLUMN_NAME: string }>(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'oidc_clients'`,
+    [],
   );
+  const existCols = new Set(colRows2.map(r => r.COLUMN_NAME));
+
+  if (existCols.has('name') && existCols.has('token_endpoint_auth_method')) {
+    await execute(
+      `INSERT INTO oidc_clients
+         (id, client_id, client_secret_hash, name, redirect_uris, scopes,
+          grant_types, token_endpoint_auth_method, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      [id, clientId, hash, name,
+       JSON.stringify(redirect_uris), JSON.stringify(scopes),
+       JSON.stringify(grant_types), token_endpoint_auth_method],
+    );
+  } else if (existCols.has('token_endpoint_auth')) {
+    // Pre-migration 007 schema
+    await execute(
+      `INSERT INTO oidc_clients
+         (id, client_id, client_secret_hash, redirect_uris, scopes,
+          grant_types, token_endpoint_auth, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+      [id, clientId, hash,
+       JSON.stringify(redirect_uris), JSON.stringify(scopes),
+       JSON.stringify(grant_types), token_endpoint_auth_method],
+    );
+  } else {
+    // Bare minimum — just id, client_id, secret, redirect_uris
+    await execute(
+      `INSERT INTO oidc_clients
+         (id, client_id, client_secret_hash, redirect_uris, scopes, grant_types, active)
+       VALUES (?, ?, ?, ?, ?, ?, 1)`,
+      [id, clientId, hash,
+       JSON.stringify(redirect_uris), JSON.stringify(scopes),
+       JSON.stringify(grant_types)],
+    );
+  }
   res.status(201).json({ id, client_id: clientId, client_secret: secret });
 }));
 

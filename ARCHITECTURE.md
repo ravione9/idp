@@ -685,6 +685,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### *(this commit)* — 2026-05-24 — OIDC clients API: schema-tolerant reads/writes
+
+**Why** — `/api/admin/oidc-clients` returned 500 on pam-2 when migration 010 had not yet applied: queries assumed `name` and `token_endpoint_auth_method` columns that may be missing on partially-migrated schemas.
+
+**What changed:**
+
+- **`src/api/config-oidc-clients.ts`** — introspects `information_schema` at runtime; SELECT aliases missing columns; INSERT branches for pre-007, post-007, and post-010 schemas.
+
 ### `8fb0537` — 2026-05-24 — Schema fixes (010/011) + OIDC page redesign + role entitlements fix
 
 **Why** — Partial migration 007 left `oidc_clients` columns inconsistent on pam-2; notification service expected columns missing from migration 003; role entitlement POST used a non-existent `id` column; OIDC admin page used Clearbit CDN logos (blocked in airgapped deploys) and tab UX was awkward.
