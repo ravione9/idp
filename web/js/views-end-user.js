@@ -26,25 +26,25 @@ export function renderLogin() {
         <div class="auth-footer">© Lenskart Identity · idp.lenskart.com</div>
       </aside>
       <main class="auth-panel">
-        <div class="auth-card">
-          <h2>Sign in</h2>
-          <p class="muted">Use your administrator account or corporate SSO.</p>
+        <div class="auth-card" id="step-email">
+          <h2>Sign in to Lenskart IdP</h2>
+          <p class="muted">Enter your corporate email to continue.</p>
           <div id="login-error"></div>
-          <form id="local-login-form">
-            <div class="field"><label for="email">Email</label>
-              <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@lenskart.com" /></div>
-            <div class="field"><label for="password">Password</label>
-              <input id="password" name="password" type="password" required autocomplete="current-password" /></div>
-            <button type="submit" class="btn btn-primary btn-block btn-lg">Sign in</button>
+          <form id="email-form">
+            <div class="field">
+              <label for="email">Work email</label>
+              <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@lenskart.com" />
+            </div>
+            <button type="submit" class="btn btn-primary btn-block btn-lg">Continue →</button>
           </form>
-          <div class="divider">or</div>
-          <a href="/auth/google" class="btn btn-secondary btn-block">Continue with Google</a>
+          <div style="text-align:center;margin-top:1rem">
+            <a href="/auth/google" class="btn btn-secondary" style="width:100%">Continue with Google</a>
+          </div>
         </div>
       </main>
     </div>
   `);
 
-  const errEl = root.querySelector('#login-error');
   const panel = root.querySelector('.auth-panel');
 
   function renderMfaStep(challengeId, email) {
@@ -75,22 +75,88 @@ export function renderLogin() {
     });
   }
 
-  root.querySelector('#local-login-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    errEl.innerHTML = '';
-    const fd = new FormData(e.target);
-    const email = fd.get('email');
-    try {
-      const r = await api.localLogin(email, fd.get('password'));
-      if (r && r.mfaRequired && r.challengeId) {
-        renderMfaStep(r.challengeId, email);
+  function showPasswordStep(email) {
+    const initial = (email.trim().charAt(0) || '?').toUpperCase();
+    const card = el(`
+      <div class="auth-card" id="step-password">
+        <div class="auth-avatar-circle">${esc(initial)}</div>
+        <h2 style="text-align:center">Welcome back</h2>
+        <div class="auth-email-chip">
+          <span>${esc(email)}</span>
+          <a href="#" id="back-to-email">· Not you?</a>
+        </div>
+        <div id="pw-error"></div>
+        <form id="password-form">
+          <div class="field">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" required autocomplete="current-password" />
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg">Sign in</button>
+        </form>
+      </div>
+    `);
+    panel.replaceChildren(card);
+    card.querySelector('#password').focus();
+
+    card.querySelector('#back-to-email').addEventListener('click', (e) => {
+      e.preventDefault();
+      showEmailStep();
+    });
+
+    const pwErr = card.querySelector('#pw-error');
+    card.querySelector('#password-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      pwErr.innerHTML = '';
+      const password = new FormData(e.target).get('password');
+      try {
+        const r = await api.localLogin(email, password);
+        if (r && r.mfaRequired && r.challengeId) {
+          renderMfaStep(r.challengeId, email);
+          return;
+        }
+        location.href = '/';
+      } catch (err) {
+        pwErr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    });
+  }
+
+  function showEmailStep() {
+    const card = el(`
+      <div class="auth-card" id="step-email">
+        <h2>Sign in to Lenskart IdP</h2>
+        <p class="muted">Enter your corporate email to continue.</p>
+        <div id="login-error"></div>
+        <form id="email-form">
+          <div class="field">
+            <label for="email">Work email</label>
+            <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@lenskart.com" />
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg">Continue →</button>
+        </form>
+        <div style="text-align:center;margin-top:1rem">
+          <a href="/auth/google" class="btn btn-secondary" style="width:100%">Continue with Google</a>
+        </div>
+      </div>
+    `);
+    panel.replaceChildren(card);
+    wireEmailForm(card);
+  }
+
+  function wireEmailForm(card) {
+    const errEl = card.querySelector('#login-error');
+    card.querySelector('#email-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const email = new FormData(e.target).get('email');
+      if (!email || !email.trim()) {
+        errEl.innerHTML = `<div class="alert alert-error">Please enter your email address.</div>`;
         return;
       }
-      location.href = '/';
-    } catch (err) {
-      errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
-    }
-  });
+      showPasswordStep(email.trim());
+    });
+  }
+
+  wireEmailForm(root.querySelector('#step-email'));
 
   api.adminStatus().then((s) => {
     if (!s.bootstrapEnabled) return;
@@ -126,17 +192,7 @@ export function renderLogin() {
   return root;
 }
 
-/* ---------- Home: app launcher (miniOrange-style) ---------- */
-function appTile(app) {
-  const fb = app.iconUrl || app.icon_url
-    ? `<img class="app-icon" src="${esc(app.iconUrl || app.icon_url)}" alt="" />`
-    : `<div class="app-icon app-icon-fallback">${esc((app.name || '?').charAt(0).toUpperCase())}</div>`;
-  const launch = app.launchUrl || (app.slug ? `/saml/launch/${app.slug}` : '#');
-  return `<a class="app-tile" href="${esc(launch)}" target="_blank" rel="noopener" title="${esc(app.name)}">
-    <span class="saml-badge">S</span>${fb}<span class="app-name">${esc(app.name)}</span>
-  </a>`;
-}
-
+/* ---------- Home: app launcher (JumpCloud-style with favorites + search) ---------- */
 export async function viewHome(me, content) {
   const isAdmin = ROLES_ADMIN.includes(me.employee?.role);
 
@@ -153,12 +209,57 @@ export async function viewHome(me, content) {
     catalogApps = (r2.data || []).filter((a) => a.active && a.sso_enabled);
   } catch { /* ignore */ }
 
+  /* Deduplicate catalog vs entitled apps by slug */
+  const entitledSlugs = new Set(myApps.map((a) => a.slug).filter(Boolean));
+  const dedupedCatalog = catalogApps
+    .filter((a) => !entitledSlugs.has(a.slug))
+    .map((c) => ({ name: c.name, slug: c.slug, iconUrl: c.icon_url }));
+  const allApps = [...myApps, ...dedupedCatalog];
+
+  let favs = JSON.parse(localStorage.getItem('idp_fav_apps') || '[]');
+  let activeTab = 'all';
+  let searchQ = '';
+
+  function renderAppTile(app) {
+    const fb = app.iconUrl || app.icon_url
+      ? `<img class="app-icon" src="${esc(app.iconUrl || app.icon_url)}" alt="" onerror="this.style.display='none'" />`
+      : `<div class="app-icon app-icon-fallback">${esc((app.name || '?').charAt(0).toUpperCase())}</div>`;
+    const launch = app.launchUrl || (app.slug ? `/saml/launch/${app.slug}` : '#');
+    const appKey = app.slug || app.name;
+    const isFav = favs.includes(appKey);
+    return `<div class="app-tile-wrap" style="position:relative">
+      <a class="app-tile" href="${esc(launch)}" target="_blank" rel="noopener" title="${esc(app.name)}">
+        <span class="saml-badge">S</span>${fb}
+        <span class="app-name">${esc(app.name)}</span>
+      </a>
+      <button class="app-fav-btn ${isFav ? 'starred' : ''}" data-appkey="${esc(appKey)}" title="${isFav ? 'Remove from favorites' : 'Add to favorites'}">${isFav ? '★' : '☆'}</button>
+    </div>`;
+  }
+
+  function renderApps() {
+    const q = searchQ.toLowerCase();
+    let items = allApps.filter((a) => !q || (a.name || '').toLowerCase().includes(q));
+    if (activeTab === 'favs') {
+      items = items.filter((a) => favs.includes(a.slug || a.name));
+    }
+    if (!items.length) {
+      if (activeTab === 'favs') {
+        return `<div class="empty-state"><span class="empty-icon">⭐</span><p>No favorites yet — hover over an app tile and click ☆ to add it here.</p></div>`;
+      }
+      if (!samlEnabled) {
+        return `<p class="subtitle" style="text-align:center;padding:2rem 0">${isAdmin ? 'SAML IdP signing keys not configured — see Authentication.' : 'Contact your administrator to enable SSO.'}</p>`;
+      }
+      return `<div class="empty-state"><span class="empty-icon">◎</span><p>No applications match your search.</p></div>`;
+    }
+    return `<div class="app-grid">${items.map(renderAppTile).join('')}</div>`;
+  }
+
   const wrap = el(`
     <div>
       <div class="welcome-banner">
         <div>
           <h1>Welcome, ${esc(me.employee?.full_name || me.session?.email || 'there')}</h1>
-          <p>Your single sign-on launchpad. ${samlEnabled ? `${myApps.length} apps available` : 'SAML IdP is being configured by an administrator'}.</p>
+          <p>Your single sign-on launchpad. ${samlEnabled ? `${allApps.length} apps available` : 'SAML IdP is being configured by an administrator'}.</p>
         </div>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
           <span class="badge badge-light">${esc(me.employee?.role || 'USER')}</span>
@@ -167,36 +268,54 @@ export async function viewHome(me, content) {
       </div>
 
       <div class="apps-section">
-        <div class="section-title-row">
-          <div>
-            <h2>Sign-in to your favourite cloud apps</h2>
-            <div class="meta">${myApps.length} application${myApps.length === 1 ? '' : 's'} entitled</div>
-          </div>
+        <div class="home-toolbar">
+          <input class="form-input" id="home-search" placeholder="Search applications…">
         </div>
-        ${myApps.length
-          ? `<div class="app-grid">${myApps.map(appTile).join('')}</div>`
-          : `<p class="subtitle" style="text-align:center;padding:2rem 0">${samlEnabled
-              ? 'No applications entitled yet. Visit Request Access to ask for one.'
-              : (isAdmin ? 'SAML IdP signing keys not configured — see <a href="#" data-go="auth">Authentication</a>.' : 'Contact your administrator to enable SSO.')
-            }</p>`}
+        <div class="home-tabs">
+          <button class="home-tab active" data-tab="all">All Apps</button>
+          <button class="home-tab" data-tab="favs">⭐ Favorites</button>
+        </div>
+        <div id="apps-render"></div>
       </div>
-
-      ${catalogApps.length ? `
-      <div class="apps-section">
-        <div class="section-title-row">
-          <div>
-            <h2>Browse the application catalog</h2>
-            <div class="meta">All applications onboarded to Lenskart IdP</div>
-          </div>
-        </div>
-        <div class="app-grid">${catalogApps.map((c) => appTile({ name: c.name, slug: c.slug, iconUrl: c.icon_url })).join('')}</div>
-      </div>` : ''}
     </div>
   `);
 
-  wrap.querySelectorAll('[data-go]').forEach((a) => {
-    a.addEventListener('click', (e) => { e.preventDefault(); window.LILG_NAV(a.dataset.go); });
+  const appsRender = wrap.querySelector('#apps-render');
+
+  function redraw() {
+    appsRender.innerHTML = renderApps();
+    /* Wire fav buttons */
+    appsRender.querySelectorAll('.app-fav-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const key = btn.dataset.appkey;
+        const idx = favs.indexOf(key);
+        if (idx === -1) {
+          favs.push(key);
+        } else {
+          favs.splice(idx, 1);
+        }
+        localStorage.setItem('idp_fav_apps', JSON.stringify(favs));
+        redraw();
+      });
+    });
+  }
+
+  wrap.querySelector('#home-search').addEventListener('input', (e) => {
+    searchQ = e.target.value;
+    redraw();
   });
+
+  wrap.querySelectorAll('.home-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      activeTab = tab.dataset.tab;
+      wrap.querySelectorAll('.home-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === activeTab));
+      redraw();
+    });
+  });
+
+  redraw();
   content.replaceChildren(wrap);
 }
 

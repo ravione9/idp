@@ -125,12 +125,13 @@ function buildShell() {
   const primaryButtons = PRIMARY_NAV_ORDER.map((key) => {
     const r = ROUTES[key];
     if (r.admin && !isAdmin) return '';
-    return `<button data-key="${key}">${esc(r.label)}</button>`;
+    return `<button data-key="${key}" class="user-nav-btn">${esc(r.label)}</button>`;
   }).join('');
 
   const adminButton = isAdmin ? `<button data-key="dashboard">Admin</button>` : '';
 
   /* Build admin sidebar grouped */
+  const collapseState = localStorage.getItem('idp_sidebar_collapsed') === '1';
   const groups = new Map();
   for (const [key, r] of Object.entries(ROUTES)) {
     if (r.primary !== 'admin') continue;
@@ -138,12 +139,13 @@ function buildShell() {
     if (!groups.has(r.group)) groups.set(r.group, []);
     groups.get(r.group).push({ key, ...r });
   }
-  const sidebarHtml = ADMIN_GROUP_ORDER.map((g) => {
-    const items = groups.get(g);
-    if (!items) return '';
-    return `<div class="nav-section">${esc(g)}</div>` +
-      items.map((i) => `<button data-key="${esc(i.key)}">${esc(i.label)}</button>`).join('');
-  }).join('');
+  const sidebarHtml = `<div class="sidebar-toggle-btn"><button id="sidebar-toggle" title="Toggle sidebar">◀</button></div>` +
+    ADMIN_GROUP_ORDER.map((g) => {
+      const items = groups.get(g);
+      if (!items) return '';
+      return `<div class="nav-section"><span class="label-text">${esc(g)}</span></div>` +
+        items.map((i) => `<button data-key="${esc(i.key)}"><span class="label-text">${esc(i.label)}</span></button>`).join('');
+    }).join('');
 
   const root = el(`
     <div class="shell">
@@ -177,6 +179,16 @@ function buildShell() {
         </div>
       </header>
       <div class="admin-body">
+        <aside class="user-sidebar hidden" id="user-sidebar">
+          <div class="user-sidebar-header">
+            <span>My Portal</span>
+          </div>
+          <button data-key="home"><span class="nav-icon">🏠</span><span class="label-text">All Applications</span></button>
+          <button data-key="request"><span class="nav-icon">📋</span><span class="label-text">Request Access</span></button>
+          <button data-key="tasks"><span class="nav-icon">✅</span><span class="label-text">Approvals</span><span class="task-badge hidden" id="us-task-badge"></span></button>
+          <button data-key="myaccess"><span class="nav-icon">🔑</span><span class="label-text">My Access</span></button>
+          <button data-key="settings"><span class="nav-icon">🛡️</span><span class="label-text">Security</span></button>
+        </aside>
         <aside class="admin-sidebar hidden" id="admin-sidebar">${sidebarHtml}</aside>
         <main class="content" id="content"><div class="loading-row"><span class="spinner"></span></div></main>
       </div>
@@ -193,6 +205,30 @@ function buildShell() {
   root.querySelector('#admin-sidebar').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-key]');
     if (btn) navigate(btn.dataset.key);
+  });
+
+  /* User sidebar click */
+  root.querySelector('#user-sidebar').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-key]');
+    if (btn) navigate(btn.dataset.key);
+  });
+
+  /* Admin sidebar collapse toggle */
+  const toggleBtn = root.querySelector('#sidebar-toggle');
+  const adminSidebar = root.querySelector('#admin-sidebar');
+  const shellEl = root.querySelector('.shell');
+
+  if (collapseState) {
+    adminSidebar.classList.add('collapsed');
+    shellEl.classList.add('sidebar-collapsed');
+    toggleBtn.textContent = '▶';
+  }
+
+  toggleBtn.addEventListener('click', () => {
+    const isCollapsed = adminSidebar.classList.toggle('collapsed');
+    shellEl.classList.toggle('sidebar-collapsed', isCollapsed);
+    toggleBtn.textContent = isCollapsed ? '▶' : '◀';
+    localStorage.setItem('idp_sidebar_collapsed', isCollapsed ? '1' : '0');
   });
 
   /* Profile dropdown */
@@ -234,18 +270,28 @@ function applyActiveNav() {
     }
   });
 
-  /* Admin sidebar (visible only when in Admin) */
+  /* Sidebar visibility — admin vs user mode */
   const shell = document.querySelector('.shell');
   const sidebar = document.getElementById('admin-sidebar');
+  const userSidebar = document.getElementById('user-sidebar');
   if (route.primary === 'admin') {
+    shell.classList.remove('user-mode');
     shell.classList.add('admin-mode');
     sidebar.classList.remove('hidden');
-    sidebar.querySelectorAll('button').forEach((b) => {
+    if (userSidebar) userSidebar.classList.add('hidden');
+    sidebar.querySelectorAll('button[data-key]').forEach((b) => {
       b.classList.toggle('active', b.dataset.key === state.current);
     });
   } else {
     shell.classList.remove('admin-mode');
+    shell.classList.add('user-mode');
     sidebar.classList.add('hidden');
+    if (userSidebar) {
+      userSidebar.classList.remove('hidden');
+      userSidebar.querySelectorAll('button[data-key]').forEach((b) => {
+        b.classList.toggle('active', b.dataset.key === state.current);
+      });
+    }
   }
 }
 
@@ -299,6 +345,15 @@ async function main() {
 
   root.replaceChildren(buildShell());
   navigate(state.current);
+
+  /* Background: populate task badge counts */
+  api.igaMyTasks().then(r => {
+    const cnt = (r?.data || r || []).length;
+    const badge = document.getElementById('us-task-badge');
+    const topBadge = document.querySelector('#primary-nav [data-key="tasks"] .badge-count');
+    if (badge && cnt > 0) { badge.textContent = cnt; badge.classList.remove('hidden'); }
+    if (topBadge && cnt > 0) { topBadge.textContent = cnt; }
+  }).catch(() => {});
 }
 
 main();
