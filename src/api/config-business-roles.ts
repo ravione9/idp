@@ -80,10 +80,9 @@ router.get('/:id/entitlements', asyncHandler(async (req: Request, res: Response)
 router.post('/:id/entitlements', asyncHandler(async (req: Request, res: Response) => {
   const { entitlementId } = req.body as { entitlementId: string };
   if (!entitlementId) { res.status(400).json({ error: 'entitlementId required' }); return; }
-  const id = uuidv4();
   await execute(
-    `INSERT IGNORE INTO role_entitlements (id, role_id, entitlement_id) VALUES (?, ?, ?)`,
-    [id, req.params['id'], entitlementId],
+    `INSERT IGNORE INTO role_entitlements (role_id, entitlement_id) VALUES (?, ?)`,
+    [req.params['id'], entitlementId],
   );
   res.status(201).json({ success: true });
 }));

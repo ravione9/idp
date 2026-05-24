@@ -277,7 +277,7 @@ To add a new migration:
 | `saml_assertion_log` | Issued SAML assertions audit (live) |
 | `applications` | **(003)** Protocol-agnostic application catalog |
 | `app_protocol_configs` | **(003)** Per-application protocol bindings (SAML / OIDC / SCIM …) |
-| `oidc_clients` | **(003, 007)** Registered OIDC RP clients — `name`, `token_endpoint_auth_method` (007 aligns column names with `config-oidc-clients.ts`; issuer endpoints pending) |
+| `oidc_clients` | **(003, 007, 010)** Registered OIDC RP clients — `name`, `token_endpoint_auth_method` (010 idempotent backfill/rename when 007 partially applied) |
 | `oauth_tokens` | **(003)** Refresh / authorization-code token store |
 | `webauthn_credentials` | **(003)** Passkeys (routes pending) |
 
@@ -312,7 +312,7 @@ To add a new migration:
 | `workflow_definitions` | **(007)** Workflow library definitions (`steps_json`, `trigger_event`) — backs `/api/admin/workflows` |
 | `workflow_runs` | Generic workflow run history |
 | `compliance_reports` | **(003)** Generated SOX / GDPR / HIPAA reports |
-| `notifications` | **(003)** Email / Slack / Teams notification outbox |
+| `notifications` | **(003, 011)** Email / Slack / Teams notification outbox — 011 adds `recipient_emp_id`, `subject`, `body`, `template_id`, `reference_id`, `reference_type`, `error` for service layer |
 
 > The legacy `src/db/schema.sql` is **still present** for reference; it is NOT applied automatically — the `migrations/` folder is authoritative.
 
@@ -684,6 +684,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(this commit)* — 2026-05-24 — Schema fixes (010/011) + OIDC page redesign + role entitlements fix
+
+**Why** — Partial migration 007 left `oidc_clients` columns inconsistent on pam-2; notification service expected columns missing from migration 003; role entitlement POST used a non-existent `id` column; OIDC admin page used Clearbit CDN logos (blocked in airgapped deploys) and tab UX was awkward.
+
+**What changed:**
+
+- **`migrations/010_oidc_clients_schema_fix.sql`** — idempotent `name` backfill + `token_endpoint_auth_method` rename/add.
+- **`migrations/011_notifications_schema_fix.sql`** — adds service-layer columns to `notifications` + index on `recipient_emp_id`.
+- **`src/api/config-business-roles.ts`** — `INSERT IGNORE INTO role_entitlements (role_id, entitlement_id)` (composite PK, no `id`).
+- **`web/js/views-stubs.js`** — unified OIDC page (registered clients + inline pre-built catalog); letter-avatar icons instead of Clearbit CDN.
 
 ### `7970a96` — 2026-05-24 — IGA application catalog CRUD + admin UI
 

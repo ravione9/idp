@@ -444,10 +444,11 @@ export async function viewLoginCustomization(content) {
 
 // ─── 8. OIDC Apps ─────────────────────────────────────────────────────────────
 // ─── Pre-built SSO Integration Catalog (350+) ────────────────────────────────
-function _app(id, name, domain, cat, proto, hint, scopes, grants) {
+function _app(id, name, _domain, cat, proto, hint, scopes, grants) {
+  // icon intentionally null — no external CDN in airgapped deployments.
+  // The catalogIcon() renderer generates a coloured letter-avatar instead.
   return {
-    id, name,
-    icon: domain ? `https://logo.clearbit.com/${domain}` : null,
+    id, name, icon: null,
     cat, protocol: proto,
     hint: hint || `${name} supports ${proto} for enterprise SSO.`,
     scopes: scopes || ['openid','email','profile'],
@@ -820,28 +821,36 @@ const SSO_CATALOG = [
 const CATALOG_CATS = ['All', ...new Set(SSO_CATALOG.map(a => a.cat))];
 
 // ─── 8. OIDC / OAuth Applications ────────────────────────────────────────────
+// Single unified page: registered clients + pre-built catalog (no tabs)
 export async function viewOidcApps(content) {
   content.replaceChildren(el(`<div>
-    ${header('OIDC / OAuth Applications', 'OAuth 2.0 and OpenID Connect client registrations')}
-    <div class="inline-tabs" id="oidc-tabs">
-      <button class="inline-tab active" data-tab="my-apps">My Applications</button>
-      <button class="inline-tab" data-tab="catalog">Pre-built Integrations</button>
+    ${header('OIDC / OAuth Applications',
+      'OAuth 2.0 and OpenID Connect — registered clients and pre-built integrations',
+      `<button class="btn btn-primary" id="new-oidc-btn">+ Register Custom App</button>`)}
+
+    <!-- ── Registered Clients ───────────────────────────────────────────── -->
+    <div id="list-area" style="margin-bottom:2.5rem">${loading()}</div>
+
+    <!-- ── Pre-built Integrations Catalog ──────────────────────────────── -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <div>
+        <h2 style="margin:0;font-size:1.05rem;font-weight:700">Pre-built Integrations</h2>
+        <p class="muted" style="margin:0.2rem 0 0;font-size:0.82rem">
+          ${SSO_CATALOG.length} integrations — click to auto-configure
+        </p>
+      </div>
+      <div style="display:flex;gap:0.6rem;align-items:center">
+        <input class="form-input" id="cat-search" placeholder="Search integrations…" style="max-width:220px">
+      </div>
     </div>
-    <div id="tab-my-apps"><div id="list-area">${loading()}</div></div>
-    <div id="tab-catalog" style="display:none"></div>
+    <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:1rem" id="cat-filters">
+      ${['All',...new Set(SSO_CATALOG.map(a=>a.cat))].map(c =>
+        `<button class="btn btn-sm ${c==='All'?'btn-primary':'btn-secondary'} cat-filter" data-cat="${esc(c)}">${esc(c)}</button>`
+      ).join('')}
+    </div>
+    <div id="cat-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:0.85rem"></div>
   </div>`));
   const wrap = content.firstChild;
-
-  // ── tab switching ──────────────────────────────────────────────────────────
-  wrap.querySelectorAll('.inline-tab').forEach(t => {
-    t.addEventListener('click', () => {
-      wrap.querySelectorAll('.inline-tab').forEach(x => x.classList.remove('active'));
-      t.classList.add('active');
-      wrap.querySelector('#tab-my-apps').style.display  = t.dataset.tab === 'my-apps'  ? '' : 'none';
-      wrap.querySelector('#tab-catalog').style.display  = t.dataset.tab === 'catalog'  ? '' : 'none';
-      if (t.dataset.tab === 'catalog') renderCatalog();
-    });
-  });
 
   // ── My Applications tab ────────────────────────────────────────────────────
   async function load() {
@@ -851,21 +860,35 @@ export async function viewOidcApps(content) {
       const clients = Array.isArray(r) ? r : (r && r.data ? r.data : []);
       const rows = clients.length ? clients.map(c => `
         <tr>
-          <td class="cell-strong">${esc(c.name || c.client_name || '—')}</td>
-          <td><code style="font-size:0.78rem;user-select:all">${esc(c.client_id)}</code></td>
+          <td>
+            <div style="display:flex;align-items:center;gap:0.6rem">
+              <div style="width:32px;height:32px;border-radius:8px;background:${
+                ['#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444'][
+                  (c.name||'?').charCodeAt(0)%6]};
+                color:#fff;font-weight:700;font-size:0.875rem;display:flex;
+                align-items:center;justify-content:center;flex-shrink:0">
+                ${esc((c.name||c.client_name||'?')[0].toUpperCase())}
+              </div>
+              <span class="cell-strong">${esc(c.name || c.client_name || '—')}</span>
+            </div>
+          </td>
+          <td><code style="font-size:0.75rem;user-select:all">${esc(c.client_id)}</code></td>
           <td class="muted" style="font-size:0.8rem">${esc(parseJsonArr(c.grant_types).join(', ') || '—')}</td>
-          <td class="muted" style="font-size:0.75rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(parseJsonArr(c.redirect_uris).join(', '))}">${esc(parseJsonArr(c.redirect_uris).join(', ') || '—')}</td>
+          <td class="muted" style="font-size:0.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(parseJsonArr(c.redirect_uris).join(', '))}">${esc(parseJsonArr(c.redirect_uris).join(', ') || '—')}</td>
           <td>${c.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
           <td style="white-space:nowrap">
-            <button class="btn btn-sm btn-secondary rotate-oidc" data-id="${esc(String(c.id))}" data-name="${esc(c.name||c.client_name||'')}">↻ Rotate Secret</button>
+            <button class="btn btn-sm btn-secondary rotate-oidc" data-id="${esc(String(c.id))}" data-name="${esc(c.name||c.client_name||'')}">↻ Rotate</button>
             <button class="btn btn-sm btn-danger del-oidc" data-id="${esc(String(c.id))}">Delete</button>
           </td>
         </tr>`).join('')
-        : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No OIDC applications yet. Register one above or pick a pre-built integration.</p></div></td></tr>`;
+        : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No OIDC clients registered yet — use the pre-built integrations below or register a custom app.</p></div></td></tr>`;
 
+      const clientCount = clients.length;
       wrap.querySelector('#list-area').innerHTML = `
-        <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
-          <button class="btn btn-primary" id="new-oidc-btn">+ Register Custom App</button>
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem">
+          <h2 style="margin:0;font-size:1.05rem;font-weight:700">Registered Clients
+            ${clientCount ? `<span class="badge badge-info" style="font-size:0.75rem;margin-left:0.4rem">${clientCount}</span>` : ''}
+          </h2>
         </div>
         <div class="table-wrap"><table>
           <thead><tr><th>App Name</th><th>Client ID</th><th>Grant Types</th><th>Redirect URIs</th><th>Status</th><th></th></tr></thead>
@@ -982,99 +1005,80 @@ export async function viewOidcApps(content) {
     bd.querySelector('#sec-done').addEventListener('click', () => { bd.remove(); if (onDone) onDone(); });
   }
 
-  // ── Pre-built Integrations catalog ─────────────────────────────────────────
+  // ── Inline Pre-built Integrations catalog ──────────────────────────────────
+  const ICON_COLOURS = ['#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#6366f1'];
+  function catalogIcon(app) {
+    const bg = ICON_COLOURS[(app.name||' ').charCodeAt(0) % ICON_COLOURS.length];
+    const letter = esc((app.name||'?')[0].toUpperCase());
+    return `<div style="width:34px;height:34px;border-radius:8px;background:${bg};
+      color:#fff;font-weight:700;font-size:0.9rem;display:flex;align-items:center;
+      justify-content:center;flex-shrink:0">${letter}</div>`;
+  }
+
   let activeCat = 'All';
   let searchQ   = '';
 
-  function renderCatalog() {
-    const area = wrap.querySelector('#tab-catalog');
-    area.innerHTML = `
-      <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin-bottom:1.25rem">
-        <input class="form-input" id="cat-search" placeholder="Search integrations…" style="max-width:260px;flex:1" value="${esc(searchQ)}">
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap" id="cat-filters">
-          ${CATALOG_CATS.map(cat => `<button class="btn btn-sm ${activeCat===cat?'btn-primary':'btn-secondary'} cat-filter" data-cat="${esc(cat)}">${esc(cat)}</button>`).join('')}
-        </div>
-      </div>
-      <div id="cat-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem"></div>`;
+  function renderGrid() {
+    const q = searchQ.toLowerCase();
+    const visible = SSO_CATALOG.filter(a =>
+      (activeCat === 'All' || a.cat === activeCat) &&
+      (!q || a.name.toLowerCase().includes(q) || a.cat.toLowerCase().includes(q))
+    );
 
-    function renderGrid() {
-      const q = searchQ.toLowerCase();
-      const visible = SSO_CATALOG.filter(a =>
-        (activeCat === 'All' || a.cat === activeCat) &&
-        (!q || a.name.toLowerCase().includes(q) || a.cat.toLowerCase().includes(q))
-      );
-      // Letter-avatar colours — no external CDN dependency
-      const ICON_COLOURS = ['#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#6366f1'];
-      function catalogIcon(app) {
-        const bg = ICON_COLOURS[(app.name||' ').charCodeAt(0) % ICON_COLOURS.length];
-        const letter = esc((app.name||'?')[0].toUpperCase());
-        const fallback = `<div style="width:36px;height:36px;border-radius:8px;background:${bg};
-          color:#fff;font-weight:700;font-size:1rem;display:flex;align-items:center;
-          justify-content:center;flex-shrink:0">${letter}</div>`;
-        if (!app.icon) return fallback;
-        // img with safe fallback using nextElementSibling — no text-node trap
-        return `<img src="${esc(app.icon)}" width="36" height="36"
-          style="border-radius:8px;object-fit:contain;flex-shrink:0"
-          onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-          <div style="display:none;width:36px;height:36px;border-radius:8px;background:${bg};
-            color:#fff;font-weight:700;font-size:1rem;align-items:center;justify-content:center;flex-shrink:0">
-            ${letter}
-          </div>`;
-      }
-
-      area.querySelector('#cat-grid').innerHTML = visible.map(app => `
-        <div class="card" style="padding:1.25rem;cursor:default;position:relative">
-          <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem">
-            ${catalogIcon(app)}
-            <div>
-              <div style="font-weight:600;font-size:0.9rem">${esc(app.name)}</div>
-              <div><span class="badge ${app.protocol==='OIDC'?'badge-info':'badge-warning'}" style="font-size:0.65rem">${esc(app.protocol)}</span></div>
-            </div>
+    wrap.querySelector('#cat-grid').innerHTML = visible.map(app => `
+      <div class="card" style="padding:1rem;cursor:default;position:relative">
+        <div style="display:flex;align-items:center;gap:0.65rem;margin-bottom:0.6rem">
+          ${catalogIcon(app)}
+          <div>
+            <div style="font-weight:600;font-size:0.875rem;line-height:1.2">${esc(app.name)}</div>
+            <span class="badge ${app.protocol==='OIDC'?'badge-info':'badge-warning'}" style="font-size:0.62rem">${esc(app.protocol)}</span>
           </div>
-          <div class="muted" style="font-size:0.75rem;margin-bottom:0.75rem;line-height:1.5">${esc(app.hint || '')}</div>
-          <button class="btn btn-primary btn-sm" style="width:100%" data-app="${esc(app.id)}">+ Add Integration</button>
-        </div>`).join('') || `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">🔍</div><p>No integrations match "${esc(q)}"</p></div>`;
+        </div>
+        <div class="muted" style="font-size:0.72rem;margin-bottom:0.65rem;line-height:1.45;min-height:2.5em">${esc((app.hint||'').slice(0,80))}${(app.hint||'').length>80?'…':''}</div>
+        <button class="btn btn-primary btn-sm" style="width:100%;font-size:0.78rem" data-app="${esc(app.id)}">+ Add</button>
+      </div>`).join('')
+      || `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">🔍</div><p>No integrations match "${esc(q)}"</p></div>`;
 
-      area.querySelectorAll('[data-app]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const app = SSO_CATALOG.find(a => a.id === btn.dataset.app);
-          if (!app) return;
-          if (app.protocol === 'SAML') {
-            // Redirect to SAML apps page with pre-fill info
-            openModal(`<div class="modal"><div class="modal-header"><h2>${esc(app.name)} — SAML 2.0 Integration</h2></div>
-              <div class="modal-body">
-                <div class="info-box">ℹ️ ${esc(app.name)} uses <strong>SAML 2.0</strong>. Configure it as a SAML SP in the <strong>SAML Applications</strong> section, then paste the IdP metadata URL into ${esc(app.name)}'s SSO settings.<br><br>${esc(app.hint)}</div>
-                <div class="form-group"><label class="form-label">IdP Metadata URL (paste into ${esc(app.name)})</label>
-                  <input class="form-input" value="${esc(window.location.origin)}/auth/saml/metadata" readonly onclick="this.select()"></div>
-                <div class="form-group"><label class="form-label">IdP SSO URL</label>
-                  <input class="form-input" value="${esc(window.location.origin)}/auth/saml/sso" readonly onclick="this.select()"></div>
-              </div>
-              <div class="modal-footer">
-                <button class="btn btn-primary" onclick="this.closest('.modal-backdrop').remove(); window.LILG_NAV && window.LILG_NAV('samlApps');">Go to SAML Apps →</button>
-                <button class="btn btn-secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button>
-              </div>
-            </div>`);
-          } else {
-            wrap.querySelectorAll('.inline-tab')[0].click();
-            openRegisterModal({ name: app.name, scopes: app.scopes, grants: app.grants, hint: app.hint });
-          }
-        });
-      });
-    }
-
-    area.querySelector('#cat-search').addEventListener('input', e => { searchQ = e.target.value; renderGrid(); });
-    area.querySelectorAll('.cat-filter').forEach(btn => {
+    wrap.querySelectorAll('[data-app]').forEach(btn => {
       btn.addEventListener('click', () => {
-        activeCat = btn.dataset.cat;
-        area.querySelectorAll('.cat-filter').forEach(b => b.classList.toggle('btn-primary', b.dataset.cat === activeCat));
-        area.querySelectorAll('.cat-filter').forEach(b => b.classList.toggle('btn-secondary', b.dataset.cat !== activeCat));
-        renderGrid();
+        const app = SSO_CATALOG.find(a => a.id === btn.dataset.app);
+        if (!app) return;
+        if (app.protocol === 'SAML') {
+          openModal(`<div class="modal"><div class="modal-header"><h2>${esc(app.name)} — SAML 2.0</h2></div>
+            <div class="modal-body">
+              <div class="info-box">ℹ️ ${esc(app.name)} uses <strong>SAML 2.0</strong>. Configure it under
+                <strong>SAML Applications</strong>, then paste the IdP metadata URL below into ${esc(app.name)}'s SSO settings.</div>
+              <div class="form-group"><label class="form-label">IdP Metadata URL</label>
+                <input class="form-input" value="${esc(window.location.origin)}/auth/saml/metadata" readonly onclick="this.select()"></div>
+              <div class="form-group"><label class="form-label">IdP SSO URL</label>
+                <input class="form-input" value="${esc(window.location.origin)}/auth/saml/sso" readonly onclick="this.select()"></div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-primary" onclick="this.closest('.modal-backdrop').remove(); window.LILG_NAV && window.LILG_NAV('saml-apps');">Go to SAML Apps →</button>
+              <button class="btn btn-secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button>
+            </div>
+          </div>`);
+        } else {
+          openRegisterModal({ name: app.name, scopes: app.scopes, grants: app.grants, hint: app.hint });
+        }
       });
     });
-
-    renderGrid();
   }
 
+  // Wire catalog search + category filters
+  wrap.querySelector('#cat-search').addEventListener('input', e => { searchQ = e.target.value; renderGrid(); });
+  wrap.querySelectorAll('.cat-filter').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeCat = btn.dataset.cat;
+      wrap.querySelectorAll('.cat-filter').forEach(b => {
+        b.classList.toggle('btn-primary',   b.dataset.cat === activeCat);
+        b.classList.toggle('btn-secondary', b.dataset.cat !== activeCat);
+      });
+      renderGrid();
+    });
+  });
+
+  renderGrid();
   await load();
 }
 
