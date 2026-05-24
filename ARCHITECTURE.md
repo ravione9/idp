@@ -685,7 +685,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — Schema fixes (010/011) + OIDC page redesign + role entitlements fix
+### `8fb0537` — 2026-05-24 — Schema fixes (010/011) + OIDC page redesign + role entitlements fix
 
 **Why** — Partial migration 007 left `oidc_clients` columns inconsistent on pam-2; notification service expected columns missing from migration 003; role entitlement POST used a non-existent `id` column; OIDC admin page used Clearbit CDN logos (blocked in airgapped deploys) and tab UX was awkward.
 
