@@ -3,6 +3,7 @@
 import { api } from './api.js';
 import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut } from './ui.js';
 import { icon as svgIcon } from './icons.js';
+import { viewOidcApps } from './views-stubs.js';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
@@ -133,12 +134,75 @@ export async function viewDashboard(content) {
   content.replaceChildren(wrap);
 }
 
-/* ---------- Application Catalog (IGA) ---------- */
-export async function viewIgaApps(content) {
+/* ---------- Applications (unified: Catalog + SAML + OIDC) ---------- */
+export async function viewApplications(me, content, initialTab = 'catalog') {
+  const tabs = [
+    { id: 'catalog', label: 'Application Catalog' },
+    { id: 'saml',    label: 'SAML Applications' },
+    { id: 'oidc',    label: 'OIDC / OAuth' },
+  ];
+  const validTab = tabs.some((t) => t.id === initialTab) ? initialTab : 'catalog';
+
   const wrap = el(`<div>
-    ${header('Application Catalog',
-      'Protocol-agnostic registry. Each app may have one or more SAML / OIDC / SCIM bindings.',
-      `<button class="btn btn-primary" id="ac-new-btn">+ Register App</button>`)}
+    ${header('Applications', 'Application catalog, SAML service providers, and OIDC / OAuth clients')}
+    <div class="inline-tabs" id="apps-tabs">
+      ${tabs.map((t) => `<button type="button" class="inline-tab${t.id === validTab ? ' active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('')}
+    </div>
+    <div id="apps-panel-catalog"></div>
+    <div id="apps-panel-saml" hidden></div>
+    <div id="apps-panel-oidc" hidden></div>
+  </div>`);
+  content.replaceChildren(wrap);
+
+  const panels = {
+    catalog: wrap.querySelector('#apps-panel-catalog'),
+    saml:    wrap.querySelector('#apps-panel-saml'),
+    oidc:    wrap.querySelector('#apps-panel-oidc'),
+  };
+
+  async function showTab(tabId) {
+    wrap.querySelectorAll('#apps-tabs .inline-tab').forEach((b) => {
+      b.classList.toggle('active', b.dataset.tab === tabId);
+    });
+    for (const [id, panel] of Object.entries(panels)) {
+      panel.hidden = id !== tabId;
+    }
+
+    const qs = new URLSearchParams();
+    qs.set('v', 'applications');
+    if (tabId !== 'catalog') qs.set('tab', tabId);
+    history.replaceState(null, '', `/?${qs}`);
+
+    if (tabId === 'catalog' && !panels.catalog.dataset.loaded) {
+      panels.catalog.dataset.loaded = '1';
+      await viewIgaApps(panels.catalog, { embed: true });
+    } else if (tabId === 'saml' && !panels.saml.dataset.loaded) {
+      panels.saml.dataset.loaded = '1';
+      await viewSamlApps(me, panels.saml, { embed: true });
+    } else if (tabId === 'oidc' && !panels.oidc.dataset.loaded) {
+      panels.oidc.dataset.loaded = '1';
+      await viewOidcApps(panels.oidc, { embed: true });
+    }
+  }
+
+  wrap.querySelector('#apps-tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-tab]');
+    if (btn) void showTab(btn.dataset.tab);
+  });
+
+  await showTab(validTab);
+}
+
+/* ---------- Application Catalog (IGA) ---------- */
+export async function viewIgaApps(content, opts = {}) {
+  const embed = !!opts.embed;
+  const actionBtn = `<button class="btn btn-primary" id="ac-new-btn">+ Register App</button>`;
+  const wrap = el(`<div>
+    ${embed
+      ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actionBtn}</div>`
+      : header('Application Catalog',
+        'Protocol-agnostic registry. Each app may have one or more SAML / OIDC / SCIM bindings.',
+        actionBtn)}
     <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin-bottom:1.25rem">
       <input class="form-input" id="ac-search" placeholder="Search by name, slug, category…" style="max-width:280px;flex:1">
       <select class="form-select" id="ac-vis" style="max-width:150px">
@@ -371,8 +435,12 @@ export async function viewIgaApps(content) {
 }
 
 /* ---------- SAML Applications (legacy CRUD) ---------- */
-export async function viewSamlApps(me, content) {
-  const wrap = el(`<div>${header('SAML Applications', 'Service Providers registered with this Identity Provider')}<div id="sa-area"><div class="loading-row"><span class="spinner"></span></div></div></div>`);
+export async function viewSamlApps(me, content, opts = {}) {
+  const embed = !!opts.embed;
+  const wrap = el(`<div>
+    ${embed ? '' : header('SAML Applications', 'Service Providers registered with this Identity Provider')}
+    <div id="sa-area"><div class="loading-row"><span class="spinner"></span></div></div>
+  </div>`);
   content.replaceChildren(wrap);
 
   let resp, status;
@@ -433,7 +501,7 @@ export async function viewSamlApps(me, content) {
         await api.createSamlApp(body);
         errEl.innerHTML = `<div class="alert alert-success">Application registered.</div>`;
         e.target.reset();
-        setTimeout(() => viewSamlApps(me, content), 600);
+        setTimeout(() => viewSamlApps(me, content, opts), 600);
       } catch (err) {
         errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }
@@ -442,7 +510,7 @@ export async function viewSamlApps(me, content) {
   wrap.querySelectorAll('[data-sp-id]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       if (!confirm('Deactivate this application?')) return;
-      try { await api.deactivateSamlApp(btn.dataset.spId); viewSamlApps(me, content); }
+      try { await api.deactivateSamlApp(btn.dataset.spId); viewSamlApps(me, content, opts); }
       catch (err) { alert(err.message); }
     });
   });
@@ -609,7 +677,7 @@ export async function viewAuth(content) {
       <p class="subtitle" style="margin-bottom:1rem">Federated login for end users</p>
       <div class="kv-list"><div class="kv"><div class="k">Google Workspace</div><div class="v"><a href="/auth/google">/auth/google</a></div></div></div>
       <p class="subtitle" style="margin-top:1rem">Configure <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>, <code>GOOGLE_HOSTED_DOMAIN</code> in <code>.env</code>.</p>
-      <p class="subtitle">Zoho Mail is consumed as a SAML application — see <a href="#" data-go="saml-apps">SAML Applications</a>.</p>
+      <p class="subtitle">Zoho Mail is consumed as a SAML application — see <a href="#" data-go="applications" data-tab="saml">SAML Applications</a>.</p>
     </div>
     <div class="card"><h2>Local password login</h2>
       <p class="subtitle" style="margin-bottom:1rem">Email + password administrators</p>
@@ -619,7 +687,11 @@ export async function viewAuth(content) {
       </div>
     </div></div>`;
   wrap.querySelectorAll('[data-go]').forEach((a) => {
-    a.addEventListener('click', (e) => { e.preventDefault(); window.LILG_NAV(a.dataset.go); });
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const tab = a.dataset.tab || null;
+      window.LILG_NAV(a.dataset.go, tab ? { tab } : {});
+    });
   });
 }
 

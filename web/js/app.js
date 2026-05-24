@@ -11,12 +11,12 @@ import {
 } from './views-end-user.js';
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
-  viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports,
+  viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
 } from './views-admin.js';
 import {
   viewGroups, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,
-  viewOidcApps, viewAppDiscovery,
+  viewAppDiscovery,
   viewDirectorySync,
   viewRoles, viewBirthright,
   viewPamResources, viewPamSessions, viewPamVault,
@@ -61,9 +61,7 @@ const ROUTES = {
   loginCustomization: { primary: 'admin', group: 'Authentication', label: 'Login Customization', icon: 'paint',       admin: true, view: viewLoginCustomization },
 
   /* ── Admin > Applications ── */
-  'iga-apps':   { primary: 'admin', group: 'Applications', label: 'Application Catalog', icon: 'catalog', admin: true, view: viewIgaApps },
-  'saml-apps':  { primary: 'admin', group: 'Applications', label: 'SAML Applications',   icon: 'saml',    admin: true, view: viewSamlApps },
-  oidcApps:     { primary: 'admin', group: 'Applications', label: 'OIDC / OAuth',        icon: 'oidc',    admin: true, view: viewOidcApps },
+  applications: { primary: 'admin', group: 'Applications', label: 'Applications', icon: 'app', admin: true, view: viewApplications },
   appDiscovery: { primary: 'admin', group: 'Applications', label: 'App Discovery',       icon: 'search',  admin: true, view: viewAppDiscovery },
 
   /* ── Admin > Connections ── */
@@ -121,7 +119,10 @@ const ADMIN_GROUP_ORDER = ADMIN_GROUPS.map((g) => g.name);
 /* Order of items in the primary top nav */
 const PRIMARY_NAV_ORDER = ['home', 'request', 'tasks', 'myaccess'];
 
-const state = { me: null, current: 'home' };
+const APP_ROUTE_ALIASES = { 'iga-apps': 'catalog', 'saml-apps': 'saml', oidcApps: 'oidc' };
+const ADMIN_SIDEBAR_ALIASES = { 'iga-apps': 'applications', 'saml-apps': 'applications', oidcApps: 'applications' };
+
+const state = { me: null, current: 'home', appsTab: 'catalog' };
 window.LILG_NAV = navigate;
 
 /* ----------------------------------------------------------------
@@ -292,7 +293,8 @@ function applyActiveNav() {
     sidebar.classList.remove('hidden');
     if (userSidebar) userSidebar.classList.add('hidden');
     sidebar.querySelectorAll('button[data-key]').forEach((b) => {
-      b.classList.toggle('active', b.dataset.key === state.current);
+      const activeKey = ADMIN_SIDEBAR_ALIASES[state.current] || state.current;
+      b.classList.toggle('active', b.dataset.key === activeKey);
     });
   } else {
     shell.classList.remove('admin-mode');
@@ -310,23 +312,37 @@ function applyActiveNav() {
 /* ----------------------------------------------------------------
    ROUTER
    ---------------------------------------------------------------- */
-async function navigate(key) {
+async function navigate(key, opts = {}) {
   const me = state.me;
+  let tab = opts.tab || null;
+
+  if (APP_ROUTE_ALIASES[key]) {
+    tab = tab || APP_ROUTE_ALIASES[key];
+    key = 'applications';
+  }
+
   const route = ROUTES[key];
   if (!route) return;
   if (route.admin && !ROLES_ADMIN.includes(me.employee?.role)) return;
   if (route.super && me.employee?.role !== 'SUPER_ADMIN') return;
 
   state.current = key;
-  history.replaceState(null, '', key === 'home' ? '/' : `/?v=${key}`);
+  if (key === 'applications') {
+    state.appsTab = tab || new URLSearchParams(location.search).get('tab') || state.appsTab || 'catalog';
+  }
+
+  const qs = new URLSearchParams();
+  if (key !== 'home') qs.set('v', key);
+  if (key === 'applications' && state.appsTab && state.appsTab !== 'catalog') qs.set('tab', state.appsTab);
+  history.replaceState(null, '', qs.toString() ? `/?${qs}` : '/');
   applyActiveNav();
 
   const content = document.getElementById('content');
 
-  /* Views with a (me, content) signature; everything else is (content). */
-  const needsMe = new Set(['home', 'settings', 'saml-apps']);
+  const needsMe = new Set(['home', 'settings', 'applications']);
   if (needsMe.has(key)) {
-    await route.view(me, content);
+    if (key === 'applications') await route.view(me, content, state.appsTab);
+    else await route.view(me, content);
   } else {
     await route.view(content);
   }
@@ -352,8 +368,16 @@ async function main() {
   }
 
   const params = new URLSearchParams(location.search);
-  const initial = params.get('v') || 'home';
-  state.current = ROUTES[initial] ? initial : 'home';
+  const initialParam = params.get('v') || 'home';
+  if (APP_ROUTE_ALIASES[initialParam]) {
+    state.current = 'applications';
+    state.appsTab = params.get('tab') || APP_ROUTE_ALIASES[initialParam];
+  } else {
+    state.current = ROUTES[initialParam] ? initialParam : 'home';
+    if (state.current === 'applications') {
+      state.appsTab = params.get('tab') || 'catalog';
+    }
+  }
 
   root.replaceChildren(buildShell());
   navigate(state.current);

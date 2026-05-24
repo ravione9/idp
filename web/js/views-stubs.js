@@ -821,12 +821,15 @@ const SSO_CATALOG = [
 const CATALOG_CATS = ['All', ...new Set(SSO_CATALOG.map(a => a.cat))];
 
 // ─── 8. OIDC / OAuth Applications ────────────────────────────────────────────
-// Single unified page: registered clients + pre-built catalog (no tabs)
-export async function viewOidcApps(content) {
+export async function viewOidcApps(content, opts = {}) {
+  const embed = !!opts.embed;
+  const actionBtn = `<button class="btn btn-primary" id="new-oidc-btn">+ Register Custom App</button>`;
   content.replaceChildren(el(`<div>
-    ${header('OIDC / OAuth Applications',
-      'OAuth 2.0 and OpenID Connect — registered clients and pre-built integrations',
-      `<button class="btn btn-primary" id="new-oidc-btn">+ Register Custom App</button>`)}
+    ${embed
+      ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actionBtn}</div>`
+      : header('OIDC / OAuth Applications',
+        'OAuth 2.0 and OpenID Connect — registered clients and pre-built integrations',
+        actionBtn)}
 
     <!-- ── Registered Clients ───────────────────────────────────────────── -->
     <div id="list-area" style="margin-bottom:2.5rem">${loading()}</div>
@@ -980,8 +983,6 @@ export async function viewOidcApps(content) {
         const result = await api.createOidcClient(data);
         bd.remove();
         showSecretModal(result.client_id, result.client_secret, async () => {
-          // Switch to My Applications tab and reload
-          wrap.querySelectorAll('.inline-tab')[0].click();
           await load();
         });
       } catch(e) {
@@ -1054,7 +1055,7 @@ export async function viewOidcApps(content) {
                 <input class="form-input" value="${esc(window.location.origin)}/auth/saml/sso" readonly onclick="this.select()"></div>
             </div>
             <div class="modal-footer">
-              <button class="btn btn-primary" onclick="this.closest('.modal-backdrop').remove(); window.LILG_NAV && window.LILG_NAV('saml-apps');">Go to SAML Apps →</button>
+              <button class="btn btn-primary" onclick="this.closest('.modal-backdrop').remove(); window.LILG_NAV && window.LILG_NAV('applications', { tab: 'saml' });">Go to SAML Apps →</button>
               <button class="btn btn-secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button>
             </div>
           </div>`);
