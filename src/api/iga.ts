@@ -410,6 +410,7 @@ router.post(
         const host     = (cfg['host'] as string | undefined)?.trim();
         const port     = Number(cfg['port'] ?? 389);
         const useSsl   = Boolean(cfg['useSsl']);
+        const startTls = Boolean(cfg['startTls']);
         const bindDn   = (cfg['bindDn'] as string | undefined)?.trim();
         const bindPass = cfg['bindPassword'] as string | undefined;
 
@@ -438,15 +439,25 @@ router.post(
         }
 
         const url = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-        logger.info({ url, bindDn }, 'AD/LDAP connection test starting');
+        const protocol = useSsl ? 'LDAPS' : startTls ? 'LDAP+StartTLS' : 'LDAP';
+        logger.info({ url, bindDn, protocol }, 'AD/LDAP connection test starting');
 
         const { Client: LdapClient } = await import('ldapts');
-        const client = new LdapClient({ url, connectTimeout: 5000 });
+        const client = new LdapClient({
+          url,
+          connectTimeout: 5000,
+          tlsOptions: { rejectUnauthorized: process.env['NODE_ENV'] === 'production' },
+        });
 
         try {
+          if (startTls) {
+            await client.startTLS({
+              rejectUnauthorized: process.env['NODE_ENV'] === 'production',
+            });
+          }
           await client.bind(bindDn!, bindPass!);
           await client.unbind();
-          res.json({ success: true, message: `LDAP bind succeeded — connected to ${url} as ${bindDn}` });
+          res.json({ success: true, message: `${protocol} bind succeeded — connected to ${url} as ${bindDn}` });
         } catch (ldapErr) {
           const raw  = ldapErr instanceof Error ? ldapErr.message : String(ldapErr);
           const code = (ldapErr as Record<string, unknown>)['code'];
@@ -455,6 +466,8 @@ router.post(
           let friendly: string;
           if (typeof code === 'number' && code === 49) {
             friendly = `Invalid credentials (LDAP error 49) — check bindDn and bindPassword. DN used: ${bindDn}`;
+          } else if (typeof code === 'number' && code === 8) {
+            friendly = `Strong authentication required (LDAP error 8) — this AD server requires encryption. Switch the Protocol to "LDAP + StartTLS (port 389)" or "LDAPS (port 636)" and save before testing.`;
           } else if (typeof code === 'number' && code === 32) {
             friendly = `No Such Object (LDAP error 32) — the bindDn DN was not found in the directory. DN used: ${bindDn}`;
           } else if (raw.includes('ECONNREFUSED')) {

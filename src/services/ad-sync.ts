@@ -78,12 +78,38 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     [runId, connectorId],
   );
 
+  // ── Build ADAdapter from connector's stored config_json ──────────────────
+  // Falls back to env vars so existing deployments keep working.
+  const connRow = await queryOne<{ config_json: string | Record<string, unknown> }>(
+    `SELECT config_json FROM connectors WHERE id = ?`,
+    [connectorId],
+  );
+  const cfg: Record<string, unknown> =
+    connRow
+      ? typeof connRow.config_json === 'string'
+        ? JSON.parse(connRow.config_json || '{}')
+        : (connRow.config_json ?? {})
+      : {};
+
+  const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
+  const port       = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
+  const useSsl     = cfg['useSsl'] !== undefined ? Boolean(cfg['useSsl']) : config.ad.url.startsWith('ldaps');
+  const startTls   = cfg['startTls'] !== undefined ? Boolean(cfg['startTls']) : false;
+  const bindDn     = (cfg['bindDn']       as string | undefined) || config.ad.bindDn;
+  const bindPass   = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
+  const baseDn     = (cfg['baseDn']       as string | undefined) || config.ad.baseDn;
+  const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
+
+  logger.info({ connectorId, adUrl, bindDn, baseDn, startTls }, 'AD sync: connecting');
+
   const adapter = new ADAdapter(
     redis,
-    config.ad.url,
-    config.ad.bindDn,
-    config.ad.bindPassword,
-    config.ad.baseDn,
+    adUrl,
+    bindDn,
+    bindPass,
+    baseDn,
+    undefined,  // disabledOu — use default
+    startTls,
   );
 
   let itemsProcessed = 0;

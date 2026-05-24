@@ -40,6 +40,7 @@ export class ADAdapter extends BaseAdapter {
     private readonly bindPassword: string,
     private readonly baseDn: string,
     private readonly disabledOu = 'OU=Disabled,',
+    private readonly startTls = false,
   ) {
     super(redis, 'AD');
     this.client = this.createClient();
@@ -60,9 +61,15 @@ export class ADAdapter extends BaseAdapter {
   async connect(): Promise<void> {
     if (this.connected) return;
     try {
+      if (this.startTls) {
+        await this.client.startTLS({
+          rejectUnauthorized: process.env['NODE_ENV'] === 'production',
+        });
+        logger.info({ url: this.url }, 'AD: StartTLS negotiated');
+      }
       await this.client.bind(this.bindDn, this.bindPassword);
       this.connected = true;
-      logger.info({ url: this.url }, 'AD: LDAP bind successful');
+      logger.info({ url: this.url, startTls: this.startTls }, 'AD: LDAP bind successful');
     } catch (err) {
       this.connected = false;
       this.client = this.createClient(); // fresh client on failure

@@ -1993,15 +1993,18 @@ function initSourcesTab(panel) {
       const label = FIELD_LABELS[f] || f;
       const val = esc(String(defaults[f] || ''));
       if (f === 'useSsl') {
-        const usingSsl = defaults[f] === true || defaults[f] === 'true' || defaults[f] === 1;
+        const usingSsl    = defaults[f] === true || defaults[f] === 'true' || defaults[f] === 1;
+        const usingStartTls = defaults['startTls'] === true || defaults['startTls'] === 'true' || defaults['startTls'] === 1;
+        const proto = usingSsl ? 'ldaps' : usingStartTls ? 'starttls' : 'ldap';
         return `<div class="form-group">
           <label class="form-label" for="cfg-${f}">${esc(label)}</label>
           <select id="cfg-${f}" class="form-control" onchange="
             var port = document.getElementById('cfg-port');
             if (port) port.value = (this.value === 'ldaps') ? '636' : '389';
           ">
-            <option value="ldap"  ${!usingSsl ? 'selected' : ''}>LDAP  (port 389) — plain text</option>
-            <option value="ldaps" ${ usingSsl ? 'selected' : ''}>LDAPS (port 636) — SSL/TLS</option>
+            <option value="ldap"     ${proto === 'ldap'     ? 'selected' : ''}>LDAP (port 389) — plain text (not recommended)</option>
+            <option value="starttls" ${proto === 'starttls' ? 'selected' : ''}>LDAP + StartTLS (port 389) — encrypted</option>
+            <option value="ldaps"    ${proto === 'ldaps'    ? 'selected' : ''}>LDAPS (port 636) — SSL/TLS</option>
           </select>
         </div>`;
       }
@@ -2129,7 +2132,10 @@ function initSourcesTab(panel) {
       const el2 = bd.querySelector(`#cfg-${f}`);
       if (!el2) continue;
       if (el2.type === 'checkbox') configJson[f] = el2.checked;
-      else if (f === 'useSsl') configJson[f] = el2.value === 'ldaps';
+      else if (f === 'useSsl') {
+        configJson['useSsl']   = el2.value === 'ldaps';
+        configJson['startTls'] = el2.value === 'starttls';
+      }
       else if (el2.value.trim() !== '') configJson[f] = el2.value.trim();
     }
     return {
