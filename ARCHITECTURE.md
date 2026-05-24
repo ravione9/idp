@@ -654,7 +654,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — End-user portal UX: JumpCloud-style sidebar, identity-first login, app favorites
+### `63bd7b1` — 2026-05-24 — End-user portal UX: JumpCloud-style sidebar, identity-first login, app favorites
 
 **Why** — End-user experience still felt like an admin console; login and home needed to match JumpCloud / miniOrange user-portal patterns.
 
