@@ -552,7 +552,8 @@ docker exec -i idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg < migrations/<
 | `KeyError: 'ContainerConfig'` on `up -d` | docker-compose 1.29 + new Docker Engine | `docker rm -f idp-api` then `up -d` again, or run `scripts/fix-and-start.sh`, or install Compose v2 (`scripts/install-compose-v2.sh`) |
 | Browser login appears to fail (no redirect) | `Secure` cookie flag rejected over HTTP | `COOKIE_SECURE=false` in `.env` |
 | `Table 'lilg.lilg_sessions' doesn't exist` | Pre-migration MySQL volume | Restart API — migrations apply automatically |
-| `Configuration validation failed` at boot | Missing/invalid env var | Read message; `SESSION_SECRET` must be ≥32 chars, `INTERNAL_TOKEN` ≥16 |
+| `getaddrinfo EAI_AGAIN mysql` / API crash-loop, container named `lilg-api` while DB is `idp-mysql` | API started with root `docker-compose.yml` instead of `docker-compose.dev.yml` — `lilg-api` lands on a different network and cannot resolve hostname `mysql` | `docker rm -f lilg-api` then `./dev-up.sh up -d --build lilg-api` or `bash scripts/restart-api.sh` (never use bare `docker-compose up` on pam-2) |
+| `No such container: idp-api` after deploy | Same mismatch — API container is `lilg-api` from wrong compose file | Use `./dev-up.sh` / `docker-compose -f docker-compose.dev.yml`; logs: `docker logs idp-api` |
 
 ---
 
@@ -648,7 +649,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — Fix migration 007: idempotent OIDC/workflow DDL + valid timestamps
+### *(this commit)* — 2026-05-24 — Deploy scripts: remove orphan lilg-api + runbook for network mismatch
+
+- **`scripts/restart-api.sh`** / **`scripts/fix-and-start.sh`** — also remove orphan `lilg-api` container created when someone runs root `docker-compose.yml` instead of `docker-compose.dev.yml` on pam-2.
+- **§12.2 Known issues** — document `EAI_AGAIN mysql` / `No such container: idp-api` symptoms and fix.
+
+### `e00665b` — 2026-05-24 — doc: log a8daf21 migration 007 fix in change log
+
+### `a8daf21` — 2026-05-24 — Fix migration 007: idempotent OIDC/workflow DDL + valid timestamps
 
 **Why** — `007_fix_oidc_workflows.sql` crashed API startup on pam-2: `DEFAULT UTC_TIMESTAMP()` is invalid MySQL syntax for `CREATE TABLE`, and the first partial run left `oidc_clients.name` in place so every restart hit `Duplicate column name 'name'`.
 
@@ -659,10 +667,6 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
   - Replace `DEFAULT UTC_TIMESTAMP()` with `DEFAULT CURRENT_TIMESTAMP` / `ON UPDATE CURRENT_TIMESTAMP` on `workflow_definitions`.
 
 ### `e3b54d0` — 2026-05-24 — doc: log ba09929 in change log
-
-**Why** — The Universal Directory page only managed connector sources; admins had no way to browse all identities, create local users, link AD/Google accounts, or reset passwords across systems from one place.
-
-**What changed:**
 
 - **Migration `008_local_account_roles.sql`** — expands `local_accounts.role` enum to `USER | MANAGER | HRBP | ADMIN | SUPER_ADMIN` so non-admin local identities can sign in.
 - **`src/api/admin-users.ts`** — full unified directory API:

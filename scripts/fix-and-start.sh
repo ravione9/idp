@@ -35,8 +35,8 @@ fi
 
 echo "==> [2/6] Stop stack and remove stale containers (fixes ContainerConfig bug)..."
 "${COMPOSE[@]}" down --remove-orphans 2>/dev/null || true
-docker rm -f idp-api idp-worker idp-mysql idp-redis idp-localstack 2>/dev/null || true
-docker ps -a --format '{{.Names}}' | grep -E '^idp-|_idp-' | xargs -r docker rm -f 2>/dev/null || true
+docker rm -f idp-api lilg-api idp-worker idp-mysql idp-redis idp-localstack 2>/dev/null || true
+docker ps -a --format '{{.Names}}' | grep -E '^idp-|_idp-|^lilg-api$' | xargs -r docker rm -f 2>/dev/null || true
 
 echo "==> [3/6] Build and start all services..."
 "${COMPOSE[@]}" up -d --build

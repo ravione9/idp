@@ -14,9 +14,9 @@ fi
 echo "==> Building lilg-api..."
 "${COMPOSE[@]}" build lilg-api
 
-echo "==> Stopping and removing old idp-api container..."
+echo "==> Stopping and removing old API containers (idp-api + orphan lilg-api)..."
 "${COMPOSE[@]}" stop lilg-api 2>/dev/null || true
-docker rm -f idp-api 2>/dev/null || true
+docker rm -f idp-api lilg-api 2>/dev/null || true
 
 echo "==> Starting lilg-api..."
 "${COMPOSE[@]}" up -d --no-deps lilg-api
