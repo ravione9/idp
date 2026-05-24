@@ -3098,15 +3098,37 @@ export async function viewSystemHealth(content) {
   content.replaceChildren(el(`<div>${header('System Health', 'Infrastructure status and diagnostics', `<button class="btn btn-secondary" id="health-refresh">↺ Refresh</button>`)}<div id="health-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
 
+  function fmtUptime(seconds) {
+    if (seconds == null || Number.isNaN(seconds)) return '—';
+    const s = Math.floor(Number(seconds));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return rm ? `${h}h ${rm}m` : `${h}h`;
+  }
+
+  function serviceOk(v) {
+    if (v === true) return true;
+    if (v === false) return false;
+    return v?.ok === true || v?.status === 'ok' || v?.connected === true;
+  }
+
   async function load() {
     wrap.querySelector('#health-area').innerHTML = loading();
     try {
       const h = await api.systemHealth();
-      const statusBadge = (ok, label) => ok ? `<span class="badge badge-success">${label || 'OK'}</span>` : `<span class="badge badge-danger">${label || 'ERROR'}</span>`;
-      const dbOk = h.db?.status === 'ok' || h.db?.connected === true || h.database === 'ok';
-      const redisOk = h.redis?.status === 'ok' || h.redis?.connected === true || h.redis === 'ok';
+      const statusBadge = (ok, label) => ok
+        ? `<span class="badge badge-success">${label || 'OK'}</span>`
+        : `<span class="badge badge-danger">${label || 'ERROR'}</span>`;
+
+      const dbOk = serviceOk(h.db) || h.database === 'ok';
+      const redisOk = serviceOk(h.redis);
       const outbox = h.outbox || {};
       const connectors = h.connectors || [];
+      const migrationCount = (h.migrations || []).length;
+      const uptimeSec = h.uptime_seconds ?? h.uptime;
 
       wrap.querySelector('#health-area').innerHTML = `
         <div class="stat-grid" style="margin-bottom:1.5rem">
@@ -3114,17 +3136,18 @@ export async function viewSystemHealth(content) {
             <div style="display:flex;justify-content:space-between;align-items:center">
               <div class="stat-label">Database</div>${statusBadge(dbOk)}
             </div>
-            <div class="stat-value" style="font-size:1rem;margin-top:0.5rem">${esc(h.db?.latency_ms != null ? h.db.latency_ms + 'ms' : '—')}</div>
+            <div class="stat-value" style="font-size:1rem;margin-top:0.5rem">${h.db?.latency_ms != null ? esc(String(h.db.latency_ms) + 'ms') : '—'}</div>
           </div>
           <div class="stat-card">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <div class="stat-label">Redis</div>${statusBadge(redisOk)}
             </div>
-            <div class="stat-value" style="font-size:1rem;margin-top:0.5rem">${esc(h.redis?.latency_ms != null ? h.redis.latency_ms + 'ms' : '—')}</div>
+            <div class="stat-value" style="font-size:1rem;margin-top:0.5rem">${h.redis?.latency_ms != null ? esc(String(h.redis.latency_ms) + 'ms') : '—'}</div>
           </div>
           <div class="stat-card">
             <div class="stat-label">API Uptime</div>
-            <div class="stat-value" style="font-size:1rem;margin-top:0.5rem">${esc(h.uptime || h.uptime_seconds != null ? Math.round((h.uptime||h.uptime_seconds)/3600)+'h' : '—')}</div>
+            <div class="stat-value" style="font-size:1rem;margin-top:0.5rem">${esc(fmtUptime(uptimeSec))}</div>
+            <div class="stat-sub">${migrationCount ? esc(String(migrationCount) + ' migrations applied') : 'No migrations recorded'}</div>
           </div>
         </div>
         <div class="grid-3">
@@ -3137,14 +3160,15 @@ export async function viewSystemHealth(content) {
           <div class="card" style="grid-column:span 2">
             <h2>Connectors</h2>
             ${connectors.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Status</th></tr></thead><tbody>
-              ${connectors.map(c => `<tr><td>${esc(c.name||'—')}</td><td class="muted">${esc(c.type||c.connector_type||'—')}</td><td>${(c.status==='ok'||c.status==='ACTIVE')?'<span class="badge badge-success">OK</span>':'<span class="badge badge-neutral">'+esc(c.status||'Unknown')+'</span>'}</td></tr>`).join('')}
+              ${connectors.map(c => `<tr><td>${esc(c.name||'—')}</td><td class="muted">${esc(c.type||c.connector_type||'—')}</td><td>${(['ok','ACTIVE','CONNECTED','CONFIGURED'].includes(String(c.status||'').toUpperCase()) || c.status==='ok')?'<span class="badge badge-success">OK</span>':'<span class="badge badge-neutral">'+esc(c.status||'Unknown')+'</span>'}</td></tr>`).join('')}
             </tbody></table></div>` : '<p class="muted">No connectors configured.</p>'}
           </div>
         </div>`;
-      wrap.querySelector('#sys-body').innerHTML = html;
     } catch(e) {
-      wrap.querySelector('#sys-body').innerHTML = errHtml(e.message);
+      wrap.querySelector('#health-area').innerHTML = errHtml(e.message);
     }
   }
-  load();
+
+  wrap.querySelector('#health-refresh').addEventListener('click', () => load());
+  await load();
 }

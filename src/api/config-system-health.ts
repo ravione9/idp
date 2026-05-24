@@ -27,31 +27,45 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
     } catch { return null; }
   };
 
-  // DB check
   let dbOk = false;
-  try { await query('SELECT 1', []); dbOk = true; } catch { dbOk = false; }
+  let dbLatencyMs: number | null = null;
+  try {
+    const t0 = Date.now();
+    await query('SELECT 1', []);
+    dbOk = true;
+    dbLatencyMs = Date.now() - t0;
+  } catch { dbOk = false; }
 
-  // Redis check
   let redisOk = false;
-  try { const p = await redis.ping(); redisOk = p === 'PONG'; } catch { redisOk = false; }
+  let redisLatencyMs: number | null = null;
+  try {
+    const t0 = Date.now();
+    const p = await redis.ping();
+    redisOk = p === 'PONG';
+    redisLatencyMs = Date.now() - t0;
+  } catch { redisOk = false; }
 
-  const [queueDepth, connectorRuns, migrations] = await Promise.all([
+  const [queueDepth, connectorRows, migrations] = await Promise.all([
     safeQuery<{ status: string; count: number }>(
       `SELECT status, COUNT(*) AS count FROM adapter_outbox GROUP BY status`,
     ),
-    safeQuery<Record<string, unknown>>(
-      `SELECT * FROM connector_runs ORDER BY started_at DESC LIMIT 10`,
+    safeQuery<{ name: string; connector_type: string; status: string }>(
+      `SELECT name, connector_type, status FROM connectors ORDER BY name LIMIT 20`,
     ),
     safeQuery<{ name: string; applied_at: string }>(
       `SELECT name, applied_at FROM lilg_schema_migrations ORDER BY applied_at`,
     ),
   ]);
 
-  // Table stats
+  const outbox: Record<string, number> = {};
+  for (const row of queueDepth) {
+    outbox[row.status.toLowerCase()] = Number(row.count) || 0;
+  }
+
   const tables = [
-    'employees', 'idp_sessions', 'saml_service_providers', 'saml_assertion_log',
+    'employees', 'lilg_sessions', 'saml_service_providers', 'saml_assertion_log',
     'connectors', 'entitlements', 'business_roles', 'access_requests',
-    'sod_policies', 'notifications', 'tickets', 'pam_resources',
+    'sod_policies', 'notifications', 'applications', 'oidc_clients',
   ];
   const tableStats: Record<string, number> = {};
   await Promise.all(tables.map(async (t) => {
@@ -60,13 +74,13 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   }));
 
   res.json({
-    db: dbOk,
-    redis: redisOk,
-    queueDepth,
-    recentConnectorRuns: connectorRuns,
+    db: { ok: dbOk, latency_ms: dbLatencyMs },
+    redis: { ok: redisOk, latency_ms: redisLatencyMs },
+    outbox,
+    connectors: connectorRows,
     migrations,
     tableStats,
-    uptime: process.uptime(),
+    uptime_seconds: Math.floor(process.uptime()),
   });
 }));
 
