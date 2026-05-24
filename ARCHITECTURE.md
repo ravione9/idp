@@ -685,6 +685,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### *(this commit)* — 2026-05-24 — Fix OIDC integration add (response_types + catalog link)
+
+**Why** — Registering an OIDC client from the pre-built integration catalog returned 500: `INSERT` omitted required `response_types` column. Integration add also did not create a row in the application catalog.
+
+**What changed:**
+
+- **`POST /api/admin/oidc-clients`** — always inserts `response_types`; optional `catalog_slug` + `category` auto-create/link `applications` row via `app_id`.
+- **`viewOidcApps`** — passes catalog metadata on + Add; validates redirect URI for authorization_code; scrolls to registered clients after success.
+
 ### `27ccbe9` — 2026-05-24 — OIDC clients API: schema-tolerant reads/writes
 
 **Why** — `/api/admin/oidc-clients` returned 500 on pam-2 when migration 010 had not yet applied: queries assumed `name` and `token_endpoint_auth_method` columns that may be missing on partially-migrated schemas.
