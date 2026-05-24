@@ -1751,7 +1751,7 @@ const FIELD_LABELS = {
   bindDn:             'Bind DN',
   bindPassword:       'Bind Password',
   baseDn:             'Base DN',
-  useSsl:             'Use SSL/TLS',
+  useSsl:             'Protocol',
   customerDomain:     'Customer Domain',
   serviceAccountEmail:'Service Account Email',
   serviceAccountKey:  'Service Account JSON Key',
@@ -1993,9 +1993,16 @@ function initSourcesTab(panel) {
       const label = FIELD_LABELS[f] || f;
       const val = esc(String(defaults[f] || ''));
       if (f === 'useSsl') {
-        return `<div class="form-group" style="display:flex;align-items:center;gap:0.5rem">
-          <input type="checkbox" id="cfg-${f}" class="form-check" ${defaults[f] ? 'checked' : ''}>
-          <label class="form-label" style="margin:0" for="cfg-${f}">${esc(label)}</label>
+        const usingSsl = defaults[f] === true || defaults[f] === 'true' || defaults[f] === 1;
+        return `<div class="form-group">
+          <label class="form-label" for="cfg-${f}">${esc(label)}</label>
+          <select id="cfg-${f}" class="form-control" onchange="
+            var port = document.getElementById('cfg-port');
+            if (port) port.value = (this.value === 'ldaps') ? '636' : '389';
+          ">
+            <option value="ldap"  ${!usingSsl ? 'selected' : ''}>LDAP  (port 389) — plain text</option>
+            <option value="ldaps" ${ usingSsl ? 'selected' : ''}>LDAPS (port 636) — SSL/TLS</option>
+          </select>
         </div>`;
       }
       if (f === 'serviceAccountKey') {
@@ -2122,6 +2129,7 @@ function initSourcesTab(panel) {
       const el2 = bd.querySelector(`#cfg-${f}`);
       if (!el2) continue;
       if (el2.type === 'checkbox') configJson[f] = el2.checked;
+      else if (f === 'useSsl') configJson[f] = el2.value === 'ldaps';
       else if (el2.value.trim() !== '') configJson[f] = el2.value.trim();
     }
     return {
