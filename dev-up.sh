@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Run docker-compose v1 on dev server (no "docker compose" plugin required)
+# pam-2 compose wrapper — prefer this over raw docker-compose (avoids ContainerConfig bug).
 set -euo pipefail
-cd "$(dirname "$0")"
-exec docker-compose -f docker-compose.dev.yml "$@"
+exec "$(dirname "$0")/scripts/compose.sh" "$@"

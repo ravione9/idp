@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Rebuild/restart lilg-api without docker-compose v1.29 ContainerConfig bug.
-# Workaround: remove the old container before "up" (do not use compose recreate).
+# Rebuild and restart lilg-api (safe on docker-compose v1.29 + modern Docker Engine).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-COMPOSE=(docker-compose -f docker-compose.dev.yml)
+# shellcheck source=compose-lib.sh
+source "$(dirname "$0")/compose-lib.sh"
+idp_compose_init
 
 if [[ ! -f .env ]]; then
   cp env.dev.example .env
@@ -12,14 +13,12 @@ if [[ ! -f .env ]]; then
 fi
 
 echo "==> Building lilg-api..."
-"${COMPOSE[@]}" build lilg-api
+"${IDP_COMPOSE[@]}" build lilg-api
 
-echo "==> Stopping and removing old API containers (idp-api + orphan lilg-api)..."
-"${COMPOSE[@]}" stop lilg-api 2>/dev/null || true
-docker rm -f idp-api lilg-api 2>/dev/null || true
+idp_rm_stale_api
 
 echo "==> Starting lilg-api..."
-"${COMPOSE[@]}" up -d --no-deps lilg-api
+"${IDP_COMPOSE[@]}" up -d --no-deps lilg-api
 
 echo "==> Waiting for health (up to 2 min)..."
 for i in $(seq 1 24); do
@@ -32,5 +31,5 @@ for i in $(seq 1 24); do
 done
 
 echo "WARN: API not healthy yet. Logs:"
-docker logs idp-api --tail 60 2>&1 || true
+docker logs idp-api --tail 60 2>&1 || docker logs lilg-api --tail 60 2>&1 || true
 exit 1

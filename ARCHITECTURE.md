@@ -494,12 +494,24 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 
 ### 11.1 Dev (single-tier docker-compose on `pam-2`)
 
+**Always use the compose wrapper** — never raw `docker-compose up` (v1.29 hits `KeyError: ContainerConfig` when recreating after `--build`):
+
 ```bash
 ssh pam-2
 cd /opt/idp
 git pull
+
+# Redeploy API only (most common after git pull)
+bash scripts/restart-api.sh
+
+# Or equivalent:
+./dev-up.sh up -d --build lilg-api
+
+# Full stack reset
 sudo bash scripts/fix-and-start.sh
 ```
+
+`./dev-up.sh` and `scripts/compose.sh` auto-remove stale `idp-api` / `lilg-api` containers before any `up --build`, working around docker-compose v1.29. **Permanent fix:** install Compose v2 once: `sudo bash scripts/install-compose-v2.sh`.
 
 `fix-and-start.sh` handles:
 1. `.env` bootstrap from `env.dev.example` if missing.
@@ -531,14 +543,15 @@ Multi-stage build (`Dockerfile`):
 # Status
 docker ps --filter name=idp-
 
+# Redeploy API after git pull (preferred — ContainerConfig-safe)
+bash scripts/restart-api.sh
+
 # Logs
 docker logs idp-api --tail 100 -f
 docker logs idp-worker --tail 100 -f
 
-# Restart only the API after pulling new code
-docker-compose -f docker-compose.dev.yml stop lilg-api
-docker rm -f idp-api
-docker-compose -f docker-compose.dev.yml up -d --build --no-deps lilg-api
+# Compose via wrapper (never raw docker-compose on pam-2)
+./dev-up.sh up -d --build lilg-api
 
 # Diagnostics
 bash scripts/diagnose.sh
@@ -554,7 +567,7 @@ docker exec -i idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg < migrations/<
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `KeyError: 'ContainerConfig'` on `up -d` | docker-compose 1.29 + new Docker Engine | `docker rm -f idp-api` then `up -d` again, or run `scripts/fix-and-start.sh`, or install Compose v2 (`scripts/install-compose-v2.sh`) |
+| `KeyError: 'ContainerConfig'` on `up -d --build` | docker-compose **v1.29** tries to recreate an existing container after image rebuild | **`bash scripts/restart-api.sh`** or **`./dev-up.sh up -d --build lilg-api`** (auto-removes stale container). Manual: `docker rm -f idp-api lilg-api` then `up -d --no-deps --build lilg-api`. Permanent fix: `sudo bash scripts/install-compose-v2.sh` |
 | Browser login appears to fail (no redirect) | `Secure` cookie flag rejected over HTTP | `COOKIE_SECURE=false` in `.env` |
 | `Table 'lilg.lilg_sessions' doesn't exist` | Pre-migration MySQL volume | Restart API — migrations apply automatically |
 | `getaddrinfo EAI_AGAIN mysql` / API crash-loop, container named `lilg-api` while DB is `idp-mysql` | API started with root `docker-compose.yml` instead of `docker-compose.dev.yml` — `lilg-api` lands on a different network and cannot resolve hostname `mysql` | `docker rm -f lilg-api` then `./dev-up.sh up -d --build lilg-api` or `bash scripts/restart-api.sh` (never use bare `docker-compose up` on pam-2) |
@@ -653,6 +666,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(this commit)* — 2026-05-24 — Permanent ContainerConfig workaround: compose wrapper scripts
+
+**Why** — Every `docker-compose up -d --build lilg-api` on pam-2 hit `KeyError: ContainerConfig` because compose v1.29 cannot recreate containers after rebuild.
+
+**What changed:**
+
+- **`scripts/compose-lib.sh`** + **`scripts/compose.sh`** — shared wrapper: prefers `docker compose` v2, auto-`docker rm -f idp-api lilg-api` before `up --build`.
+- **`dev-up.sh`** — execs `scripts/compose.sh` (use `./dev-up.sh` instead of raw docker-compose).
+- **`scripts/restart-api.sh`**, **`fix-and-start.sh`**, **`reset-and-up.sh`** — use compose-lib; removed `--force-recreate` from reset-and-up.
+- **§11 / §12** — document preferred deploy commands.
 
 ### `910aa5c` — 2026-05-24 — Universal Directory profile drawer + migration 009 identity_links
 

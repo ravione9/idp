@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # Fix docker-compose v1.29 "KeyError: ContainerConfig" with newer Docker Engine.
-# Also cleans stale idp-* containers and brings the stack up fresh.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-COMPOSE=(docker-compose -f docker-compose.dev.yml)
+# shellcheck source=compose-lib.sh
+source "$(dirname "$0")/compose-lib.sh"
+idp_compose_init
 
 echo "==> Stopping stack..."
-"${COMPOSE[@]}" down --remove-orphans 2>/dev/null || true
+"${IDP_COMPOSE[@]}" down --remove-orphans 2>/dev/null || true
 
 echo "==> Removing stale idp containers..."
-docker rm -f idp-api idp-worker idp-mysql idp-redis idp-localstack 2>/dev/null || true
-docker ps -a --format '{{.Names}}' | grep -E '^idp-|_idp-' | xargs -r docker rm -f 2>/dev/null || true
+docker rm -f idp-api lilg-api idp-worker idp-mysql idp-redis idp-localstack 2>/dev/null || true
+docker ps -a --format '{{.Names}}' | grep -E '^idp-|_idp-|^lilg-api$' | xargs -r docker rm -f 2>/dev/null || true
 
 echo "==> Ensuring .env exists..."
 if [[ ! -f .env ]]; then
@@ -19,8 +20,9 @@ if [[ ! -f .env ]]; then
   echo "Created .env from env.dev.example — edit secrets if needed."
 fi
 
-echo "==> Starting stack (force recreate)..."
-"${COMPOSE[@]}" up -d --build --force-recreate --remove-orphans
+echo "==> Starting stack..."
+idp_rm_stale_api
+"${IDP_COMPOSE[@]}" up -d --build --remove-orphans
 
 echo "==> Waiting for API (up to 2 min)..."
 for i in $(seq 1 24); do

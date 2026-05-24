@@ -3,7 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-COMPOSE=(docker-compose -f docker-compose.dev.yml)
+# shellcheck source=compose-lib.sh
+source "$(dirname "$0")/compose-lib.sh"
+idp_compose_init
 DB_PASS="${DB_PASSWORD:-s3cr3t_change_me}"
 
 echo "==> [1/6] Ensure .env exists with required keys..."
@@ -34,12 +36,12 @@ if grep -q '^SESSION_SECRET=' .env; then
 fi
 
 echo "==> [2/6] Stop stack and remove stale containers (fixes ContainerConfig bug)..."
-"${COMPOSE[@]}" down --remove-orphans 2>/dev/null || true
+"${IDP_COMPOSE[@]}" down --remove-orphans 2>/dev/null || true
 docker rm -f idp-api lilg-api idp-worker idp-mysql idp-redis idp-localstack 2>/dev/null || true
 docker ps -a --format '{{.Names}}' | grep -E '^idp-|_idp-|^lilg-api$' | xargs -r docker rm -f 2>/dev/null || true
 
 echo "==> [3/6] Build and start all services..."
-"${COMPOSE[@]}" up -d --build
+"${IDP_COMPOSE[@]}" up -d --build
 
 echo "==> [4/6] Wait for MySQL..."
 for i in $(seq 1 36); do
