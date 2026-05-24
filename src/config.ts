@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import { ensureSamlKeys } from './services/saml-auto-keys.js';
+
+// Auto-generate SAML keys if not configured — must run before env is parsed
+ensureSamlKeys();
 
 // ---------------------------------------------------------------------------
 // Helper coercions
