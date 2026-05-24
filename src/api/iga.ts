@@ -338,7 +338,11 @@ router.put(
         `SELECT config_json FROM connectors WHERE id = ?`, [req.params['id']],
       );
       if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
-      const existingCfg: Record<string, unknown> = JSON.parse(existing.config_json || '{}');
+      const rawCfg = existing.config_json;
+      const existingCfg: Record<string, unknown> =
+        typeof rawCfg === 'string'
+          ? JSON.parse(rawCfg || '{}')
+          : ((rawCfg as Record<string, unknown>) ?? {});
       const merged: Record<string, unknown> = { ...existingCfg };
       for (const [k, v] of Object.entries(configJson)) {
         // Don't overwrite secret fields with redaction placeholder
