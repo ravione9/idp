@@ -643,7 +643,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — IGA governance UI: access requests, review campaigns, SoD remediation
+### `cec8cd4` — 2026-05-24 — IGA governance UI: access requests, review campaigns, SoD remediation
 
 **Why** — End-user and admin IGA pages were read-only stubs; operators could not submit requests, run certification campaigns, or resolve SoD violations from the console.
 
