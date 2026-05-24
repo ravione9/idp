@@ -1668,183 +1668,381 @@ function initUsersTab(panel) {
     });
   }
 
-  // ── Full profile side-panel / modal ──────────────────────────────────────────
+  // ── Full profile slide-in drawer (godmode) ──────────────────────────────────
   async function openProfilePanel(empId) {
-    const bd = openModal(`<div class="modal" style="width:720px;max-width:97vw;max-height:90vh;display:flex;flex-direction:column">
-      <div class="modal-header" style="display:flex;justify-content:space-between;align-items:center">
-        <h2 id="prof-title">Loading…</h2>
-        <button class="btn btn-secondary btn-sm" id="prof-close">✕ Close</button>
-      </div>
-      <div class="modal-body" id="prof-body" style="overflow-y:auto;flex:1">${loading()}</div>
-    </div>`);
-    bd.querySelector('#prof-close').addEventListener('click', () => bd.remove());
+    // Remove any existing panel
+    document.querySelector('.profile-panel-overlay')?.remove();
 
-    async function reloadProfile() {
-      bd.querySelector('#prof-body').innerHTML = loading();
-      try {
-        const d = await api.getUserProfile(empId);
-        const emp = d.employee || {};
-        const links = d.identityLinks || [];
-        const recentLogins = d.recentLogins || [];
-        const writebackLog = d.writebackLog || [];
+    // Build overlay + slide-in panel
+    const overlay = document.createElement('div');
+    overlay.className = 'profile-panel-overlay';
+    overlay.innerHTML = `
+      <div class="profile-panel" id="pp-panel">
+        <button class="pp-close-x" id="pp-close-x" title="Close (Esc)">✕</button>
 
-        bd.querySelector('#prof-title').textContent = emp.full_name || empId;
+        <!-- ── Header ───────────────────────────────────────────────────────── -->
+        <div class="pp-header" id="pp-header">
+          <div class="pp-avatar" id="pp-avatar">?</div>
+          <div>
+            <div class="pp-name" id="pp-name">Loading…</div>
+            <div class="pp-sub" id="pp-sub"></div>
+            <div class="pp-badges" id="pp-badges"></div>
+          </div>
+          <div class="pp-lifecycle" id="pp-lifecycle"></div>
+        </div>
 
-        const sources = links.filter(l => l.status === 'ACTIVE').map(l => l.system);
-        const srcBadges = sources.length ? sources.map(srcBadge).join('') : srcBadge('LOCAL');
+        <!-- ── Tab bar ──────────────────────────────────────────────────────── -->
+        <div class="pp-tabs" id="pp-tabs">
+          <button class="pp-tab active" data-tab="overview">Overview</button>
+          <button class="pp-tab" data-tab="identity">Identity Links <span class="pp-tab-badge" id="pp-tab-id-count" style="display:none"></span></button>
+          <button class="pp-tab" data-tab="sessions">Sessions <span class="pp-tab-badge" id="pp-tab-sess-count" style="display:none"></span></button>
+          <button class="pp-tab" data-tab="password">Password Reset</button>
+        </div>
 
-        // ── Identity links table
-        const linkRows = links.length ? links.map(l => `<tr>
-          <td>${srcBadge(l.system)}</td>
-          <td class="muted" style="font-size:0.8rem;word-break:break-all">${esc(l.external_id||'—')}</td>
-          <td><span class="badge ${l.status==='ACTIVE'?'badge-success':'badge-neutral'}">${esc(l.status)}</span></td>
-          <td class="muted" style="font-size:0.78rem">${l.last_synced_at ? fmtDate(l.last_synced_at) : '—'}</td>
-          <td>${l.drift_flag ? '<span class="badge badge-warning" title="Attribute drift detected">⚠ Drift</span>' : ''}</td>
-          <td>${l.auth_kind ? `<span class="badge badge-neutral" style="font-size:0.72rem">${esc(l.auth_kind)}</span>` : ''}</td>
-          <td>
-            ${l.status === 'ACTIVE'
-              ? `<button class="btn btn-sm btn-danger ud-unlink" data-linkid="${esc(String(l.id))}" title="Remove identity link">Unlink</button>`
-              : ''}
-          </td>
-        </tr>`).join('') : `<tr><td colspan="7" class="muted" style="text-align:center;padding:1.5rem">No identity links — local account only.</td></tr>`;
+        <!-- ── Tab body ─────────────────────────────────────────────────────── -->
+        <div class="pp-body" id="pp-body">${loading()}</div>
+      </div>`;
 
-        // ── Recent logins table (collapsed)
-        const loginRows = recentLogins.slice(0, 5).map(s => `<tr>
-          <td class="muted" style="font-size:0.78rem">${s.started_at ? fmtDate(s.started_at) : '—'}</td>
-          <td class="muted" style="font-size:0.78rem">${esc(s.iss||'—')}</td>
-          <td class="muted" style="font-size:0.78rem">${esc(s.ip||'—')}</td>
-        </tr>`).join('');
+    document.body.appendChild(overlay);
 
-        // ── Password writeback log
-        const wbRows = writebackLog.slice(0, 5).map(w => `<tr>
-          <td>${srcBadge(w.target_system)}</td>
-          <td><span class="badge ${w.status==='SUCCESS'?'badge-success':'badge-danger'}">${esc(w.status)}</span></td>
-          <td class="muted" style="font-size:0.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(w.error||'')}</td>
-          <td class="muted" style="font-size:0.78rem">${w.created_at ? fmtDate(w.created_at) : '—'}</td>
-        </tr>`).join('');
+    // Animate in
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        overlay.querySelector('#pp-panel').classList.add('pp-open');
+      });
+    });
 
-        bd.querySelector('#prof-body').innerHTML = `
-          <!-- ── Core attributes ──────────────────────────────────────────── -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem 1.5rem;margin-bottom:1.5rem">
-            ${[
-              ['Employee ID', emp.emp_id],
-              ['Email',       emp.email_corp],
-              ['Department',  emp.dept_id],
-              ['State',       stateBadge(emp.ilg_state)],
-              ['Employment',  emp.employment_type],
-              ['Manager',     emp.manager_name ? `${esc(emp.manager_name)} <span class="muted">&lt;${esc(emp.manager_email||'')}&gt;</span>` : '—'],
-              ['Hire Date',   emp.hire_date ? fmtDate(emp.hire_date) : '—'],
-              ['Admin Role',  emp.admin_role || '—'],
-            ].map(([k,v]) => `
-              <div>
-                <div class="muted" style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em">${k}</div>
-                <div style="margin-top:0.2rem">${v||'—'}</div>
+    // Close helpers
+    function closePanel() {
+      const panel2 = overlay.querySelector('#pp-panel');
+      panel2.classList.remove('pp-open');
+      panel2.addEventListener('transitionend', () => overlay.remove(), { once: true });
+    }
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closePanel(); });
+    overlay.querySelector('#pp-close-x').addEventListener('click', closePanel);
+    const onKey = (e) => { if (e.key === 'Escape') { closePanel(); document.removeEventListener('keydown', onKey); } };
+    document.addEventListener('keydown', onKey);
+
+    // State
+    let profileData = null;
+    let activeTab = 'overview';
+
+    // ── Render header ───────────────────────────────────────────────────────────
+    function renderHeader() {
+      const emp   = profileData.employee      || {};
+      const links = profileData.identityLinks || [];
+      const sessions = profileData.recentLogins || [];
+
+      const initial = (emp.full_name || empId).charAt(0).toUpperCase();
+      overlay.querySelector('#pp-avatar').textContent = initial;
+      overlay.querySelector('#pp-name').textContent   = emp.full_name || empId;
+      overlay.querySelector('#pp-sub').textContent    =
+        [emp.emp_id, emp.email_corp, emp.dept_id].filter(Boolean).join('  ·  ');
+
+      const activeSources = links.filter(l => l.status === 'ACTIVE').map(l => l.system);
+      overlay.querySelector('#pp-badges').innerHTML =
+        stateBadge(emp.ilg_state) +
+        (activeSources.length ? activeSources.map(srcBadge).join('') : srcBadge('LOCAL'));
+
+      // Tab counters
+      const idCount = links.filter(l => l.status === 'ACTIVE').length;
+      const sessCount = sessions.length;
+      const idBadge   = overlay.querySelector('#pp-tab-id-count');
+      const sessBadge = overlay.querySelector('#pp-tab-sess-count');
+      if (idCount)   { idBadge.textContent   = idCount;   idBadge.style.display   = ''; }
+      if (sessCount) { sessBadge.textContent = sessCount; sessBadge.style.display = ''; }
+
+      // Lifecycle buttons
+      const state        = (emp.ilg_state || '').toUpperCase();
+      const canSuspend   = state === 'ACTIVE';
+      const canUnsuspend = state === 'SUSPENDED';
+      const canTerminate = state !== 'TERMINATED';
+
+      overlay.querySelector('#pp-lifecycle').innerHTML = [
+        canSuspend   ? `<button class="btn btn-sm btn-warning"  id="pp-btn-suspend">⏸ Suspend</button>`    : '',
+        canUnsuspend ? `<button class="btn btn-sm btn-success"  id="pp-btn-unsuspend">▶ Unsuspend</button>` : '',
+        canTerminate ? `<button class="btn btn-sm btn-danger"   id="pp-btn-terminate">✕ Terminate</button>` : '',
+      ].join('');
+
+      if (canSuspend) {
+        overlay.querySelector('#pp-btn-suspend').addEventListener('click', async () => {
+          if (!confirm(`Suspend ${emp.full_name}?\nThey will lose all active sessions and login access immediately.`)) return;
+          try { await api.suspendUser(empId); reloadProfile(); }
+          catch(e) { alert('Failed to suspend: ' + e.message); }
+        });
+      }
+      if (canUnsuspend) {
+        overlay.querySelector('#pp-btn-unsuspend').addEventListener('click', async () => {
+          if (!confirm(`Restore access for ${emp.full_name}?`)) return;
+          try { await api.unsuspendUser(empId); reloadProfile(); }
+          catch(e) { alert('Failed to unsuspend: ' + e.message); }
+        });
+      }
+      if (canTerminate) {
+        overlay.querySelector('#pp-btn-terminate').addEventListener('click', async () => {
+          if (!confirm(`TERMINATE ${emp.full_name}?\n\nThis will permanently revoke all access and cannot be undone.`)) return;
+          try { await api.terminateUser(empId); reloadProfile(); }
+          catch(e) { alert('Failed to terminate: ' + e.message); }
+        });
+      }
+    }
+
+    // ── Render tab content ──────────────────────────────────────────────────────
+    function renderTab(tab) {
+      activeTab = tab;
+      overlay.querySelectorAll('.pp-tab').forEach(t =>
+        t.classList.toggle('active', t.dataset.tab === tab));
+
+      if (!profileData) {
+        overlay.querySelector('#pp-body').innerHTML = loading();
+        return;
+      }
+
+      const emp          = profileData.employee      || {};
+      const links        = profileData.identityLinks || [];
+      const recentLogins = profileData.recentLogins  || [];
+      const writebackLog = profileData.writebackLog  || [];
+      const body         = overlay.querySelector('#pp-body');
+
+      // ── Overview tab ─────────────────────────────────────────────────────────
+      if (tab === 'overview') {
+        const attrs = [
+          ['Employee ID',      esc(emp.emp_id     || '—')],
+          ['Corporate Email',  esc(emp.email_corp || '—')],
+          ['Department',       esc(emp.dept_id    || '—')],
+          ['Employment Type',  esc(emp.employment_type || '—')],
+          ['State',            stateBadge(emp.ilg_state)],
+          ['Admin Role',       emp.admin_role ? `<span class="badge badge-primary">${esc(emp.admin_role)}</span>` : '<span class="muted">None</span>'],
+          ['Hire Date',        emp.hire_date ? fmtDate(emp.hire_date) : '—'],
+          ['Last Login',       emp.last_login_at ? fmtDate(emp.last_login_at) : '—'],
+          ['Manager',          emp.manager_name
+            ? `${esc(emp.manager_name)} <span class="muted" style="font-size:0.8rem">&lt;${esc(emp.manager_email||'')}&gt;</span>`
+            : '—'],
+          ['Manager ID',       esc(emp.manager_emp_id || '—')],
+        ];
+
+        body.innerHTML = `
+          <p class="pp-section-title">Account Details</p>
+          <div class="pp-attr-grid">
+            ${attrs.map(([k, v]) => `
+              <div class="pp-attr">
+                <span class="pp-attr-label">${k}</span>
+                <span class="pp-attr-value">${v}</span>
               </div>`).join('')}
           </div>
-          <div style="margin-bottom:0.5rem"><strong>Identity Sources:</strong> ${srcBadges}</div>
-          <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
 
-          <!-- ── Identity Links ───────────────────────────────────────────── -->
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
-            <h3 style="margin:0;font-size:1rem">Identity Links</h3>
-            <button class="btn btn-sm btn-secondary" id="ud-link-btn">+ Link Identity</button>
-          </div>
-          <div class="table-wrap" style="margin-bottom:1.5rem">
-            <table><thead><tr><th>Source</th><th>External ID</th><th>Status</th><th>Last Synced</th><th>Drift</th><th>Auth</th><th></th></tr></thead>
-            <tbody>${linkRows}</tbody></table>
-          </div>
-
-          <!-- ── Password Reset ────────────────────────────────────────────── -->
-          <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
-          <h3 style="margin:0 0 0.75rem;font-size:1rem">Reset Password</h3>
-          <p class="muted" style="font-size:0.85rem;margin-bottom:0.75rem">
-            Password will be updated in <strong>all linked systems simultaneously</strong>
-            (Local account, Active Directory, Google Workspace, and any other active links).
-          </p>
-          <div style="display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap;margin-bottom:0.75rem">
-            <div class="form-group" style="margin:0;flex:1;min-width:200px">
-              <label class="form-label">New Password <span style="color:var(--danger)">*</span></label>
-              <input type="password" class="form-input" id="ud-new-pwd" placeholder="Min. 10 characters" autocomplete="new-password">
-            </div>
-            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;margin-bottom:0.1rem">
-              <input type="checkbox" id="ud-notify-user"> Notify user by email
-            </label>
-            <button class="btn btn-primary" id="ud-reset-btn">Reset in All Systems</button>
-          </div>
-          <div id="ud-reset-results"></div>
-
-          <!-- ── Recent logins ─────────────────────────────────────────────── -->
-          ${recentLogins.length ? `
-          <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
-          <h3 style="margin:0 0 0.75rem;font-size:1rem">Recent Login Sessions</h3>
-          <div class="table-wrap" style="margin-bottom:1rem">
-            <table><thead><tr><th>When</th><th>Provider</th><th>IP</th></tr></thead>
-            <tbody>${loginRows}</tbody></table>
-          </div>` : ''}
-
-          <!-- ── Password writeback log ────────────────────────────────────── -->
           ${writebackLog.length ? `
-          <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
-          <h3 style="margin:0 0 0.75rem;font-size:1rem">Password Writeback History</h3>
+          <p class="pp-section-title" style="margin-top:0.5rem">Password Writeback History</p>
           <div class="table-wrap">
-            <table><thead><tr><th>System</th><th>Status</th><th>Error</th><th>When</th></tr></thead>
-            <tbody>${wbRows}</tbody></table>
+            <table>
+              <thead><tr><th>System</th><th>Status</th><th>Error</th><th>When</th></tr></thead>
+              <tbody>
+                ${writebackLog.slice(0, 5).map(w => `<tr>
+                  <td>${srcBadge(w.target_system)}</td>
+                  <td><span class="badge ${w.status==='SUCCESS'?'badge-success':'badge-danger'}">${esc(w.status)}</span></td>
+                  <td class="muted" style="font-size:0.78rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.error||'')}</td>
+                  <td class="muted" style="font-size:0.78rem;white-space:nowrap">${w.created_at ? fmtDate(w.created_at) : '—'}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
           </div>` : ''}`;
+      }
 
-        // ── Unlink buttons
-        bd.querySelectorAll('.ud-unlink').forEach(btn => {
+      // ── Identity Links tab ───────────────────────────────────────────────────
+      else if (tab === 'identity') {
+        const linkRows = links.length
+          ? links.map(l => `<tr>
+              <td>${srcBadge(l.system)}</td>
+              <td style="font-size:0.8rem;word-break:break-all;max-width:160px">${esc(l.external_id||'—')}</td>
+              <td><span class="badge ${l.status==='ACTIVE'?'badge-success':'badge-neutral'}">${esc(l.status)}</span></td>
+              <td style="font-size:0.75rem">${esc(l.auth_kind||'—')}</td>
+              <td style="font-size:0.75rem;white-space:nowrap">${l.last_synced_at ? fmtDate(l.last_synced_at) : '—'}</td>
+              <td>${l.drift_flag ? '<span class="badge badge-warning" title="Attribute drift detected">⚠ Drift</span>' : ''}</td>
+              <td>
+                ${l.status === 'ACTIVE'
+                  ? `<button class="btn btn-sm btn-danger pp-unlink-btn" data-linkid="${esc(String(l.id))}" data-sys="${esc(l.system)}">Unlink</button>`
+                  : ''}
+              </td>
+            </tr>`).join('')
+          : `<tr><td colspan="7"><div class="pp-empty"><div class="pp-empty-icon">🔗</div>No identity links — this user authenticates locally only.</div></td></tr>`;
+
+        body.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <p class="pp-section-title" style="margin:0">Linked Identity Sources</p>
+            <button class="btn btn-sm btn-secondary" id="pp-link-btn">+ Link Identity</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Source</th><th>External ID</th><th>Status</th><th>Auth</th><th>Last Synced</th><th>Drift</th><th></th></tr></thead>
+              <tbody>${linkRows}</tbody>
+            </table>
+          </div>`;
+
+        body.querySelector('#pp-link-btn').addEventListener('click', () =>
+          openLinkModal(empId, reloadProfile));
+
+        body.querySelectorAll('.pp-unlink-btn').forEach(btn => {
           btn.addEventListener('click', async () => {
-            if (!confirm('Remove this identity link? The user will no longer authenticate via this source.')) return;
+            if (!confirm(`Remove ${btn.dataset.sys} identity link?\nThe user will no longer be able to authenticate via this source.`)) return;
+            btn.disabled = true; btn.textContent = 'Removing…';
             try {
               await api.unlinkIdentity(empId, btn.dataset.linkid);
               reloadProfile();
-            } catch(e) { alert('Failed to remove link: ' + e.message); }
+            } catch(e) {
+              btn.disabled = false; btn.textContent = 'Unlink';
+              alert('Failed to remove link: ' + e.message);
+            }
           });
         });
+      }
 
-        // ── Link Identity form
-        bd.querySelector('#ud-link-btn').addEventListener('click', () => {
-          openLinkModal(empId, reloadProfile);
+      // ── Sessions tab ─────────────────────────────────────────────────────────
+      else if (tab === 'sessions') {
+        const sessRows = recentLogins.length
+          ? recentLogins.map(s => `<tr>
+              <td style="font-size:0.8rem;white-space:nowrap">${s.started_at ? fmtDate(s.started_at) : '—'}</td>
+              <td style="font-size:0.8rem">${esc(s.iss||'—')}</td>
+              <td style="font-size:0.78rem;font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.ip||'—')}</td>
+              <td style="font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.user_agent||'')}">
+                ${esc((s.user_agent||'').replace(/\(.*?\)/g,'').trim().slice(0,50))}
+              </td>
+              <td style="font-size:0.78rem;white-space:nowrap">${s.last_active_at ? fmtDate(s.last_active_at) : '—'}</td>
+            </tr>`).join('')
+          : '';
+
+        body.innerHTML = recentLogins.length
+          ? `
+            <p class="pp-section-title">Active & Recent Sessions (last 10)</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Started</th><th>Provider</th><th>IP Address</th><th>User Agent</th><th>Last Active</th></tr></thead>
+                <tbody>${sessRows}</tbody>
+              </table>
+            </div>`
+          : `<div class="pp-empty"><div class="pp-empty-icon">🖥️</div>No recent sessions found.</div>`;
+      }
+
+      // ── Password Reset tab ───────────────────────────────────────────────────
+      else if (tab === 'password') {
+        const activeSystems = links.filter(l => l.status === 'ACTIVE').map(l => l.system);
+        const systemsList   = ['LOCAL', ...activeSystems];
+
+        body.innerHTML = `
+          <p class="pp-section-title">Reset Password</p>
+          <p style="font-size:0.875rem;color:var(--text-muted);margin-bottom:1.25rem;line-height:1.6">
+            The new password will be pushed to <strong>all linked systems simultaneously</strong>:
+            ${systemsList.map(s => srcBadge(s)).join('')}
+          </p>
+
+          <div class="form-group">
+            <label class="form-label">New Password <span style="color:var(--danger)">*</span></label>
+            <input type="password" class="form-input" id="pp-new-pwd"
+              placeholder="Minimum 10 characters" autocomplete="new-password"
+              style="font-family:var(--mono,'JetBrains Mono',monospace);letter-spacing:0.05em">
+          </div>
+          <div class="form-group" style="margin-top:-0.25rem">
+            <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.875rem;cursor:pointer">
+              <input type="checkbox" id="pp-notify-user"> Notify user by email
+            </label>
+          </div>
+          <div style="display:flex;gap:0.75rem;margin-top:0.5rem">
+            <button class="btn btn-primary" id="pp-reset-btn">Reset Password in All Systems</button>
+            <button class="btn btn-secondary" id="pp-show-pwd">👁 Show</button>
+          </div>
+          <div id="pp-reset-results" style="margin-top:1rem"></div>
+
+          <div style="margin-top:2rem;padding:1rem;background:var(--surface-raised,#f8fafc);border-radius:8px;border:1px solid var(--border)">
+            <p style="font-size:0.75rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-dim,#9ca3af);margin:0 0 0.5rem">Password Policy</p>
+            <ul style="margin:0;padding-left:1.25rem;font-size:0.82rem;color:var(--text-muted);line-height:1.8">
+              <li>Minimum 10 characters</li>
+              <li>Writeback applies to: Active Directory, Google Workspace, and any active identity link</li>
+              <li>User will be prompted to change password on next login (if notify is enabled)</li>
+            </ul>
+          </div>`;
+
+        // Toggle password visibility
+        const pwdInput = body.querySelector('#pp-new-pwd');
+        body.querySelector('#pp-show-pwd').addEventListener('click', (e) => {
+          const showing = pwdInput.type === 'text';
+          pwdInput.type = showing ? 'password' : 'text';
+          e.currentTarget.textContent = showing ? '👁 Show' : '🙈 Hide';
         });
 
-        // ── Password Reset
-        bd.querySelector('#ud-reset-btn').addEventListener('click', async () => {
-          const resetBtn = bd.querySelector('#ud-reset-btn');
-          const pwd = bd.querySelector('#ud-new-pwd').value.trim();
-          const notify = bd.querySelector('#ud-notify-user').checked;
+        body.querySelector('#pp-reset-btn').addEventListener('click', async () => {
+          const resetBtn  = body.querySelector('#pp-reset-btn');
+          const resultsEl = body.querySelector('#pp-reset-results');
+          const pwd       = pwdInput.value;
+          const notify    = body.querySelector('#pp-notify-user').checked;
+
           if (!pwd || pwd.length < 10) {
-            bd.querySelector('#ud-reset-results').innerHTML = errHtml('Password must be at least 10 characters.');
+            resultsEl.innerHTML = `<div class="pp-alert error">Password must be at least 10 characters.</div>`;
             return;
           }
-          resetBtn.disabled = true; resetBtn.textContent = '⟳ Resetting…';
-          bd.querySelector('#ud-reset-results').innerHTML = '';
-          try {
-            const r = await api.adminResetPassword(empId, pwd, notify);
-            const results = r.results || [];
-            const html = results.map(res => `
-              <div style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0.6rem;
-                border-radius:4px;margin-bottom:0.35rem;
-                background:${res.status==='SUCCESS'?'var(--success-bg, #f0fdf4)':'var(--danger-bg, #fff1f2)'}">
-                ${srcBadge(res.system)}
-                <span class="${res.status==='SUCCESS'?'':''}">
-                  ${res.status==='SUCCESS' ? '✓ Updated successfully' : `✗ ${esc(res.error||'Failed')}`}
-                </span>
-              </div>`).join('');
-            const overall = r.success
-              ? `<div class="alert alert-success" style="margin-bottom:0.5rem">✓ ${esc(r.summary)}</div>`
-              : `<div class="alert alert-error" style="margin-bottom:0.5rem">⚠ ${esc(r.summary)}</div>`;
-            bd.querySelector('#ud-reset-results').innerHTML = overall + html;
-            bd.querySelector('#ud-new-pwd').value = '';
-            // Refresh writeback log in profile
-            reloadProfile();
-          } catch(e) {
-            bd.querySelector('#ud-reset-results').innerHTML = errHtml(e.message);
-          }
-          resetBtn.disabled = false; resetBtn.textContent = 'Reset in All Systems';
-        });
+          resetBtn.disabled    = true;
+          resetBtn.textContent = '⟳ Resetting across all systems…';
+          resultsEl.innerHTML  = '';
 
+          try {
+            const r       = await api.adminResetPassword(empId, pwd, notify);
+            const results = r.results || [];
+
+            const rows = results.map(res => `
+              <div class="pp-reset-result ${res.status === 'SUCCESS' ? 'success' : 'fail'}">
+                ${srcBadge(res.system)}
+                <span style="flex:1">${res.status === 'SUCCESS'
+                  ? '✓ Updated successfully'
+                  : `✗ ${esc(res.error || 'Failed')}`}</span>
+              </div>`).join('');
+
+            const banner = r.success
+              ? `<div class="pp-alert success" style="margin-bottom:0.75rem">✓ ${esc(r.summary)}</div>`
+              : `<div class="pp-alert error"   style="margin-bottom:0.75rem">⚠ ${esc(r.summary)}</div>`;
+
+            resultsEl.innerHTML = banner + rows;
+            pwdInput.value = '';
+            // Refresh writeback log in overview
+            reloadProfile(/* keepTab */ true);
+          } catch(e) {
+            resultsEl.innerHTML = `<div class="pp-alert error">Reset failed: ${esc(e.message)}</div>`;
+          }
+          resetBtn.disabled    = false;
+          resetBtn.textContent = 'Reset Password in All Systems';
+        });
+      }
+    }
+
+    // ── Wire tab clicks ─────────────────────────────────────────────────────────
+    overlay.querySelectorAll('.pp-tab').forEach(t => {
+      t.addEventListener('click', () => renderTab(t.dataset.tab));
+    });
+
+    // ── Load profile ────────────────────────────────────────────────────────────
+    async function reloadProfile(keepTab = false) {
+      if (!keepTab) {
+        // Reset to loading state
+        overlay.querySelector('#pp-name').textContent    = 'Loading…';
+        overlay.querySelector('#pp-sub').textContent     = '';
+        overlay.querySelector('#pp-badges').innerHTML    = '';
+        overlay.querySelector('#pp-lifecycle').innerHTML = '';
+        overlay.querySelector('#pp-body').innerHTML      = loading();
+        overlay.querySelector('#pp-tab-id-count').style.display   = 'none';
+        overlay.querySelector('#pp-tab-sess-count').style.display = 'none';
+      }
+
+      try {
+        profileData = await api.getUserProfile(empId);
+        renderHeader();
+        renderTab(activeTab);
       } catch(e) {
-        bd.querySelector('#prof-body').innerHTML = errHtml(e.message);
+        overlay.querySelector('#pp-name').textContent = 'Error';
+        overlay.querySelector('#pp-sub').textContent  = '';
+        overlay.querySelector('#pp-badges').innerHTML =
+          `<span class="badge badge-danger">Failed to load</span>`;
+        overlay.querySelector('#pp-body').innerHTML   =
+          `<div class="pp-alert error" style="margin-top:1rem">
+            <strong>Could not load profile</strong><br>
+            <span style="font-size:0.85rem">${esc(e.message)}</span>
+          </div>`;
       }
     }
 

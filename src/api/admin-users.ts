@@ -107,24 +107,40 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
   );
   if (!employee) { res.status(404).json({ error: 'Employee not found' }); return; }
 
-  const identityLinks = await query<Record<string, unknown>>(
-    `SELECT id, system, external_id, status, last_synced_at, drift_flag, auth_kind
-       FROM identity_links WHERE emp_id = ? ORDER BY system ASC`,
-    [empId],
-  );
+  // Secondary queries are wrapped individually — a missing table never breaks the profile.
+  let identityLinks: Record<string, unknown>[] = [];
+  try {
+    identityLinks = await query<Record<string, unknown>>(
+      `SELECT id, system, external_id, status, last_synced_at, drift_flag, auth_kind
+         FROM identity_links WHERE emp_id = ? ORDER BY system ASC`,
+      [empId],
+    );
+  } catch (err) {
+    logger.warn({ empId, err }, 'identity_links query failed (table may not exist yet)');
+  }
 
-  const recentLogins = await query<Record<string, unknown>>(
-    `SELECT session_id, iss, ip, user_agent, created_at AS started_at, last_active_at
-       FROM idp_sessions WHERE emp_id = ? AND revoked_at IS NULL
-       ORDER BY created_at DESC LIMIT 10`,
-    [empId],
-  );
+  let recentLogins: Record<string, unknown>[] = [];
+  try {
+    recentLogins = await query<Record<string, unknown>>(
+      `SELECT session_id, iss, ip, user_agent, created_at AS started_at, last_active_at
+         FROM idp_sessions WHERE emp_id = ? AND revoked_at IS NULL
+         ORDER BY created_at DESC LIMIT 10`,
+      [empId],
+    );
+  } catch (err) {
+    logger.warn({ empId, err }, 'idp_sessions query failed');
+  }
 
-  const writebackLog = await query<Record<string, unknown>>(
-    `SELECT target_system, status, error, initiated_by, created_at
-       FROM password_writeback_log WHERE emp_id = ? ORDER BY created_at DESC LIMIT 10`,
-    [empId],
-  );
+  let writebackLog: Record<string, unknown>[] = [];
+  try {
+    writebackLog = await query<Record<string, unknown>>(
+      `SELECT target_system, status, error, initiated_by, created_at
+         FROM password_writeback_log WHERE emp_id = ? ORDER BY created_at DESC LIMIT 10`,
+      [empId],
+    );
+  } catch (err) {
+    logger.warn({ empId, err }, 'password_writeback_log query failed');
+  }
 
   res.json({
     employee,

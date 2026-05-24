@@ -1404,3 +1404,244 @@ td code, .td-code { font-size: 0.78rem; }
   background: var(--primary);
   border-radius: 2px 2px 0 0;
 }
+
+/* ============================================================
+   PROFILE PANEL  (slide-in right drawer, godmode)
+   ============================================================ */
+.profile-panel-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 1100;
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.profile-panel {
+  width: 680px;
+  max-width: 96vw;
+  height: 100%;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -6px 0 32px rgba(0,0,0,0.22);
+  transform: translateX(100%);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+.profile-panel.pp-open {
+  transform: translateX(0);
+}
+
+/* ── Header ── */
+.pp-header {
+  padding: 1.5rem 1.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--primary-dim, #eff6ff) 0%, var(--surface) 60%);
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 0.25rem 1rem;
+  align-items: center;
+  position: relative;
+}
+
+.pp-avatar {
+  grid-row: 1 / 3;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary, #3b82f6), #6366f1);
+  color: #fff;
+  font-size: 1.4rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(59,130,246,0.35);
+}
+
+.pp-name {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.pp-sub {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 0.1rem;
+}
+
+.pp-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+
+.pp-close-x {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  background: transparent;
+  border: none;
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.pp-close-x:hover {
+  background: var(--danger-bg, #fff1f2);
+  color: var(--danger, #ef4444);
+}
+
+.pp-lifecycle {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-end;
+}
+
+/* ── Tab bar ── */
+.pp-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pp-tabs::-webkit-scrollbar { display: none; }
+
+.pp-tab {
+  padding: 0.75rem 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  position: relative;
+  transition: color 0.15s;
+  flex-shrink: 0;
+}
+.pp-tab:hover { color: var(--text); }
+.pp-tab.active {
+  color: var(--primary, #3b82f6);
+  font-weight: 600;
+}
+.pp-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: -2px;
+  height: 2px;
+  background: var(--primary, #3b82f6);
+  border-radius: 2px 2px 0 0;
+}
+.pp-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary, #3b82f6);
+  color: #fff;
+  border-radius: 10px;
+  padding: 0 5px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  min-width: 17px;
+  height: 17px;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
+/* ── Body ── */
+.pp-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 1.5rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* ── Section headers inside panel ── */
+.pp-section-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim, #9ca3af);
+  margin: 0 0 0.75rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Attribute grid ── */
+.pp-attr-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.9rem 1.75rem;
+  margin-bottom: 1.5rem;
+}
+.pp-attr { display: flex; flex-direction: column; gap: 0.15rem; }
+.pp-attr-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim, #9ca3af);
+}
+.pp-attr-value {
+  font-size: 0.9rem;
+  color: var(--text);
+  word-break: break-word;
+}
+
+/* ── Reset result rows ── */
+.pp-reset-result {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  margin-bottom: 0.4rem;
+  font-size: 0.875rem;
+}
+.pp-reset-result.success { background: var(--success-bg, #f0fdf4); color: var(--success-text, #166534); }
+.pp-reset-result.fail    { background: var(--danger-bg,  #fff1f2); color: var(--danger-text,  #9f1239); }
+
+/* ── Empty state ── */
+.pp-empty {
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+.pp-empty-icon { font-size: 2rem; margin-bottom: 0.5rem; }
+
+/* ── Alert banners in panel ── */
+.pp-alert {
+  padding: 0.65rem 1rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+  border-left: 3px solid;
+}
+.pp-alert.success { background: var(--success-bg, #f0fdf4); border-color: var(--success, #22c55e); color: var(--success-text, #166534); }
+.pp-alert.warning { background: #fffbeb; border-color: #f59e0b; color: #92400e; }
+.pp-alert.error   { background: var(--danger-bg, #fff1f2); border-color: var(--danger, #ef4444); color: var(--danger-text, #9f1239); }
+
