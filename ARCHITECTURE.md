@@ -417,13 +417,18 @@ web/
 
 ### 9.2 Layout
 
-- **Login screen** — split: brand hero (gradient) + sign-in card. MFA challenge step renders inline when needed.
-- **Console** — fixed dark sidebar + topbar + content area.
+- **Login screen** — split: brand hero (gradient) + sign-in card. **Identity-first flow**: email step → password step (avatar + "Not you?" link) → optional MFA challenge inline. Google SSO button on email step.
+- **Console** — fixed top primary nav + contextual left sidebar (user or admin mode).
 
-Layout: a fixed dark **top primary nav** (workspace) + a **left admin sidebar** that appears only when "Admin" is the active section.
+Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that switches by mode:
+
+| Mode | Sidebar | Behaviour |
+|---|---|---|
+| **End-user** (JumpCloud-style) | My Portal nav: All Applications · Request Access · Approvals (badge) · My Access · Security | Top-nav user buttons hidden; sidebar drives navigation |
+| **Admin** (miniOrange-style) | Grouped admin sections (collapsible via ◀/▶ toggle, persisted in `localStorage`) | Visible only when Admin is active |
 
 **Top primary nav** (always visible, modelled on SailPoint IdentityNow)
-- **Home** — miniOrange-style tile launcher (My favourite cloud apps + catalog browser)
+- **Home** — JumpCloud-style app launcher: search bar, All Apps / Favorites tabs, star-to-favorite (stored in `localStorage`), entitled + catalog tiles merged
 - **Request Center** — browse the catalogue, raise an access request
 - **Approvals** — pending approvals + access-review items routed to the user
 - **My Access** — current entitlements & roles
@@ -649,7 +654,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — Deploy scripts: remove orphan lilg-api + runbook for network mismatch
+### *(this commit)* — 2026-05-24 — End-user portal UX: JumpCloud-style sidebar, identity-first login, app favorites
+
+**Why** — End-user experience still felt like an admin console; login and home needed to match JumpCloud / miniOrange user-portal patterns.
+
+**What changed:**
+
+- **`web/js/app.js`** — end-user **My Portal** left sidebar (All Applications, Request Access, Approvals with task badge, My Access, Security); admin sidebar **collapse toggle** (persisted in `localStorage`); `user-mode` / `admin-mode` shell classes.
+- **`web/js/views-end-user.js`** — **identity-first login** (email → password with avatar); **Home** redesign with search, All Apps / Favorites tabs, star-to-favorite (`localStorage idp_fav_apps`), merged entitled + catalog tiles.
+- **`web/css/styles.css`** — styles for user sidebar, admin collapse, auth avatar chip, app favorites, home tabs/toolbar.
+
+### `6e8515d` — 2026-05-24 — Deploy scripts: remove orphan lilg-api + runbook for network mismatch
 
 - **`scripts/restart-api.sh`** / **`scripts/fix-and-start.sh`** — also remove orphan `lilg-api` container created when someone runs root `docker-compose.yml` instead of `docker-compose.dev.yml` on pam-2.
 - **§12.2 Known issues** — document `EAI_AGAIN mysql` / `No such container: idp-api` symptoms and fix.
