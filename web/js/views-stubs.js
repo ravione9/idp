@@ -1093,7 +1093,67 @@ function openSamlWizard(app) {
             <label class="form-label">IdP Metadata URL <span class="muted" style="font-weight:400;font-size:0.78rem">(most apps accept this — paste once and they auto-discover the rest)</span></label>
             ${readonlyInput(idpMeta, 'idp-meta')}
           </div>
+          <div style="border-top:1px solid var(--border);margin-top:1.25rem;padding-top:1.25rem">
+            <p class="form-label" style="margin-bottom:0.65rem">Downloads — some apps require the raw files instead of a URL</p>
+            <div style="display:flex;gap:0.75rem;flex-wrap:wrap">
+              <button type="button" class="btn btn-secondary btn-sm" id="dl-metadata">
+                ⬇ Download Metadata XML
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm" id="dl-cert">
+                ⬇ Download Certificate (.pem)
+              </button>
+            </div>
+            <p id="dl-error" class="muted" style="font-size:0.78rem;color:var(--danger);margin-top:0.5rem;display:none"></p>
+          </div>
         `,
+        bind: (_body) => {
+          // wire download buttons after DOM is injected
+          const body = _body;
+          const errEl = body.querySelector('#dl-error');
+
+          body.querySelector('#dl-metadata').addEventListener('click', async () => {
+            try {
+              const res = await fetch(idpMeta);
+              if (!res.ok) throw new Error(`Server returned ${res.status}`);
+              const xml = await res.text();
+              const blob = new Blob([xml], { type: 'application/xml' });
+              const a = document.createElement('a');
+              a.href = URL.createObjectURL(blob);
+              a.download = 'idp-metadata.xml';
+              a.click();
+              URL.revokeObjectURL(a.href);
+              errEl.style.display = 'none';
+            } catch (e) {
+              errEl.textContent = 'Could not fetch metadata: ' + e.message;
+              errEl.style.display = '';
+            }
+          });
+
+          body.querySelector('#dl-cert').addEventListener('click', async () => {
+            try {
+              const res = await fetch(idpMeta);
+              if (!res.ok) throw new Error(`Server returned ${res.status}`);
+              const xml = await res.text();
+              // Extract X509Certificate value from metadata XML
+              const match = xml.match(/<[^>]*:?X509Certificate[^>]*>([\s\S]*?)<\/[^>]*:?X509Certificate>/i);
+              if (!match) throw new Error('No X.509 certificate found in metadata. Generate SAML keys first (scripts/gen-saml-dev-keys.sh).');
+              const raw = match[1].replace(/\s+/g, '');
+              const pem = '-----BEGIN CERTIFICATE-----\n' +
+                raw.match(/.{1,64}/g).join('\n') +
+                '\n-----END CERTIFICATE-----\n';
+              const blob = new Blob([pem], { type: 'application/x-pem-file' });
+              const a = document.createElement('a');
+              a.href = URL.createObjectURL(blob);
+              a.download = 'idp-certificate.pem';
+              a.click();
+              URL.revokeObjectURL(a.href);
+              errEl.style.display = 'none';
+            } catch (e) {
+              errEl.textContent = e.message;
+              errEl.style.display = '';
+            }
+          });
+        },
       },
       {
         id: 'sp', label: 'SP Configuration',
