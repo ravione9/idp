@@ -405,21 +405,85 @@ router.post(
       const cfg: Record<string, unknown> = typeof row.config_json === 'string'
         ? JSON.parse(row.config_json || '{}')
         : ((row.config_json as Record<string, unknown>) ?? {});
+
       if (type === 'AD' || type === 'LDAP') {
+        const host     = (cfg['host'] as string | undefined)?.trim();
+        const port     = Number(cfg['port'] ?? 389);
+        const useSsl   = Boolean(cfg['useSsl']);
+        const bindDn   = (cfg['bindDn'] as string | undefined)?.trim();
+        const bindPass = cfg['bindPassword'] as string | undefined;
+
+        // ── Pre-flight: required fields ──────────────────────────────────────
+        const missing: string[] = [];
+        if (!host)     missing.push('host');
+        if (!bindDn)   missing.push('bindDn');
+        if (!bindPass) missing.push('bindPassword');
+        if (missing.length) {
+          res.status(422).json({
+            success: false,
+            code:    'MISSING_CONFIG',
+            message: `Missing required AD/LDAP config field(s): ${missing.join(', ')}. Save the connector with all fields filled in before testing.`,
+          });
+          return;
+        }
+
+        // ── Pre-flight: detect un-saved redaction placeholder ────────────────
+        if (bindPass === '••••••••') {
+          res.status(422).json({
+            success: false,
+            code:    'REDACTED_PASSWORD',
+            message: 'The bindPassword appears to still be the redaction placeholder. Re-enter the real password and save the connector before testing.',
+          });
+          return;
+        }
+
+        const url = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
+        logger.info({ url, bindDn }, 'AD/LDAP connection test starting');
+
         const { Client: LdapClient } = await import('ldapts');
-        const host = cfg['host'] as string || 'localhost';
-        const port = Number(cfg['port'] ?? 389);
-        const useSsl = Boolean(cfg['useSsl']);
-        const client = new LdapClient({ url: `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`, connectTimeout: 5000 });
-        await client.bind(cfg['bindDn'] as string || '', cfg['bindPassword'] as string || '');
-        await client.unbind();
-        res.json({ success: true, message: `LDAP bind succeeded (${host}:${port})` });
+        const client = new LdapClient({ url, connectTimeout: 5000 });
+
+        try {
+          await client.bind(bindDn!, bindPass!);
+          await client.unbind();
+          res.json({ success: true, message: `LDAP bind succeeded — connected to ${url} as ${bindDn}` });
+        } catch (ldapErr) {
+          const raw  = ldapErr instanceof Error ? ldapErr.message : String(ldapErr);
+          const code = (ldapErr as Record<string, unknown>)['code'];
+
+          // Map well-known LDAP / network errors to actionable messages
+          let friendly: string;
+          if (typeof code === 'number' && code === 49) {
+            friendly = `Invalid credentials (LDAP error 49) — check bindDn and bindPassword. DN used: ${bindDn}`;
+          } else if (typeof code === 'number' && code === 32) {
+            friendly = `No Such Object (LDAP error 32) — the bindDn DN was not found in the directory. DN used: ${bindDn}`;
+          } else if (raw.includes('ECONNREFUSED')) {
+            friendly = `Connection refused — ${url} is not reachable. Check the host, port, and firewall rules.`;
+          } else if (raw.includes('ETIMEDOUT') || raw.includes('connectTimeout')) {
+            friendly = `Connection timed out reaching ${url}. The host may be unreachable or the port is blocked.`;
+          } else if (raw.includes('ENOTFOUND') || raw.includes('getaddrinfo')) {
+            friendly = `DNS resolution failed for host "${host}". Verify the hostname is correct and resolvable from this server.`;
+          } else if (raw.includes('DEPTH_ZERO_SELF_SIGNED_CERT') || raw.includes('self signed') || raw.includes('unable to verify')) {
+            friendly = `TLS certificate error connecting to ${url}. The server's certificate is self-signed or untrusted. Either install the CA cert or set useSsl to false if using plain LDAP.`;
+          } else if (raw.includes('ECONNRESET')) {
+            friendly = `Connection was reset by ${url}. This often means useSsl is set incorrectly — try toggling the SSL setting.`;
+          } else {
+            friendly = `LDAP error (${typeof code !== 'undefined' ? `code ${code}` : 'unknown code'}): ${raw}`;
+          }
+
+          logger.warn({ url, bindDn, code, raw }, 'AD/LDAP connection test failed');
+          res.status(422).json({ success: false, code: `LDAP_${code ?? 'ERROR'}`, message: friendly, detail: raw });
+        }
       } else if (type === 'GOOGLE_WORKSPACE') {
         // Just validate that config fields are present
         const required = ['customerDomain', 'serviceAccountEmail'];
         const missing = required.filter((k) => !cfg[k]);
         if (missing.length) {
-          res.status(400).json({ success: false, message: `Missing config: ${missing.join(', ')}` });
+          res.status(422).json({
+            success: false,
+            code:    'MISSING_CONFIG',
+            message: `Missing required Google Workspace config field(s): ${missing.join(', ')}`,
+          });
         } else {
           res.json({ success: true, message: `Google Workspace config looks valid for ${cfg['customerDomain']}` });
         }
@@ -429,7 +493,8 @@ router.post(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      res.status(422).json({ success: false, message: msg });
+      logger.error({ connectorId: req.params['id'], err }, 'Connector test unexpected error');
+      res.status(422).json({ success: false, code: 'UNEXPECTED_ERROR', message: msg });
     }
   }),
 );
