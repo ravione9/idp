@@ -278,9 +278,6 @@ async function main(): Promise<void> {
         logger.info({ port: httpsPort }, 'Portal HTTPS server started');
       });
       registerHttpsServer(httpsServer, httpsPort);
-
-      // Propagate shutdown to HTTPS server
-      const origShutdown = shutdown;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (globalThis as any).__httpsServer = httpsServer;
     } else {
