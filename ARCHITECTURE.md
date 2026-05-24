@@ -667,7 +667,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — Fix Compose v2 install (404 on v2.24.9) + v1 fallback never aborts
+### `1d9b177` — 2026-05-24 — Fix Compose v2 install URL (v2.24.9 404) + v1 fallback never aborts
 
 - **`install-compose-v2.sh`** — default pin `v2.36.1` (v2.24.9 removed from GitHub); fallback to `/latest/download/`; verify `docker compose version` after install.
 - **`idp_ensure_compose_v2`** — install failure no longer aborts `restart-api.sh`; falls back to v1 `create`+`start`.
