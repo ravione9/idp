@@ -21,13 +21,19 @@ idp_compose_init() {
 }
 
 # Install Compose v2 plugin when only legacy docker-compose v1.29 is present.
+# Returns 0 even if install fails — caller falls back to v1 create+start.
 idp_ensure_compose_v2() {
   if docker compose version >/dev/null 2>&1; then
     return 0
   fi
   echo "==> Docker Compose v2 not found — installing plugin (fixes ContainerConfig bug)..."
-  bash "$(dirname "${BASH_SOURCE[0]}")/install-compose-v2.sh"
+  if bash "$(dirname "${BASH_SOURCE[0]}")/install-compose-v2.sh"; then
+    idp_compose_init
+    return 0
+  fi
+  echo "WARN: Compose v2 install failed — continuing with docker-compose v1 + create/start workaround."
   idp_compose_init
+  return 0
 }
 
 idp_rm_stale_api() {
@@ -51,11 +57,15 @@ idp_compose_start_api() {
   echo "==> Starting lilg-api..."
   if [[ ${IDP_COMPOSE_V2:-0} -eq 1 ]]; then
     "${IDP_COMPOSE[@]}" up -d --no-deps lilg-api
-  else
-    # v1.29: never use `up` after `build` — use create+start to avoid recreate path
-    "${IDP_COMPOSE[@]}" create lilg-api
-    docker start idp-api
+    return
   fi
+  # v1.29: `up` after `build` triggers broken recreate — use create + start
+  if ! "${IDP_COMPOSE[@]}" create lilg-api; then
+    echo "WARN: compose create failed — retrying after extra cleanup..."
+    idp_rm_stale_api
+    "${IDP_COMPOSE[@]}" create lilg-api
+  fi
+  docker start idp-api
 }
 
 # docker-compose v1.29 crashes with KeyError: ContainerConfig when recreating
