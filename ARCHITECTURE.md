@@ -667,7 +667,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — ContainerConfig fix v2: compose rm ghosts + auto-install Compose v2 + create/start on v1
+### `03f23d4` — 2026-05-24 — ContainerConfig fix v2: compose rm ghosts + auto-install Compose v2 + create/start on v1
 
 **Why** — `restart-api.sh` still failed: compose v1 left ghost containers (`504b9cb60f54_idp-api`) that `docker rm idp-api` did not remove; `up` still hit recreate/ContainerConfig.
 
