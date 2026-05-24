@@ -6,6 +6,15 @@ import { icon as svgIcon } from './icons.js';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
+// Shared helpers (mirrors views-stubs.js — not yet in a shared module)
+function openModal(html) {
+  const bd = el(`<div class="modal-backdrop">${html}</div>`);
+  bd.addEventListener('click', (e) => { if (e.target === bd) bd.remove(); });
+  document.body.appendChild(bd);
+  return bd;
+}
+function errHtml(msg) { return `<div class="alert alert-error">${esc(msg)}</div>`; }
+
 function header(title, subtitle, action = '') {
   return `<div class="page-header">
     <div><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div>
@@ -126,28 +135,239 @@ export async function viewDashboard(content) {
 
 /* ---------- Application Catalog (IGA) ---------- */
 export async function viewIgaApps(content) {
-  const wrap = el(`<div>${header('Application Catalog', 'Protocol-agnostic registry. Each app may have one or more SAML / OIDC / SCIM bindings.')}<div id="ac-list"><div class="loading-row"><span class="spinner"></span></div></div></div>`);
+  const wrap = el(`<div>
+    ${header('Application Catalog',
+      'Protocol-agnostic registry. Each app may have one or more SAML / OIDC / SCIM bindings.',
+      `<button class="btn btn-primary" id="ac-new-btn">+ Register App</button>`)}
+    <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin-bottom:1.25rem">
+      <input class="form-input" id="ac-search" placeholder="Search by name, slug, category…" style="max-width:280px;flex:1">
+      <select class="form-select" id="ac-vis" style="max-width:150px">
+        <option value="">All Visibility</option>
+        <option value="PUBLIC">Public</option>
+        <option value="RESTRICTED">Restricted</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.875rem">
+        <input type="checkbox" id="ac-show-inactive"> Show inactive
+      </label>
+    </div>
+    <div id="ac-list"><div class="loading-row"><span class="spinner"></span></div></div>
+  </div>`);
   content.replaceChildren(wrap);
-  try {
-    const r = await api.igaApps();
-    const rows = r.data || [];
-    wrap.querySelector('#ac-list').innerHTML = rows.length
-      ? `<div class="table-wrap"><table>
-          <thead><tr><th>Name</th><th>Slug</th><th>Category</th><th>Visibility</th><th>SSO</th><th>Provisioning</th><th>Protocols</th><th>Status</th></tr></thead>
-          <tbody>${rows.map((a) => `<tr>
-            <td class="cell-strong">${esc(a.name)}</td>
-            <td><code>${esc(a.slug)}</code></td>
-            <td>${esc(a.category || '—')}</td>
-            <td><span class="badge badge-neutral">${esc(a.visibility)}</span></td>
-            <td>${a.sso_enabled ? '<span class="badge badge-success">On</span>' : '—'}</td>
-            <td>${a.provisioning ? '<span class="badge badge-info">On</span>' : '—'}</td>
-            <td>${a.protocol_count}</td>
-            <td>${a.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
-          </tr>`).join('')}</tbody></table></div>`
-      : `<div class="card empty-state"><span class="empty-icon">▦</span>No applications registered yet. SAML SPs from /admin/saml-apps appear here once migrated.</div>`;
-  } catch (err) {
-    wrap.querySelector('#ac-list').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+
+  let allApps = [];
+  let searchQ = '';
+  let visFilter = '';
+  let showInactive = false;
+
+  // ── App icon helper — coloured letter avatar, no external CDN ──────────────
+  function appIcon(app) {
+    const colours = ['#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#6366f1'];
+    const bg = colours[(app.name || ' ').charCodeAt(0) % colours.length];
+    if (app.icon_url) {
+      return `<img src="${esc(app.icon_url)}" width="36" height="36"
+        style="border-radius:8px;object-fit:contain;flex-shrink:0"
+        onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+        <div style="display:none;width:36px;height:36px;border-radius:8px;background:${bg};
+          color:#fff;font-weight:700;font-size:1rem;align-items:center;justify-content:center;flex-shrink:0">
+          ${esc((app.name||'?')[0].toUpperCase())}
+        </div>`;
+    }
+    return `<div style="width:36px;height:36px;border-radius:8px;background:${bg};
+      color:#fff;font-weight:700;font-size:1rem;display:flex;align-items:center;
+      justify-content:center;flex-shrink:0">${esc((app.name||'?')[0].toUpperCase())}</div>`;
   }
+
+  // ── Render table ────────────────────────────────────────────────────────────
+  function renderTable() {
+    const q = searchQ.toLowerCase();
+    const rows = allApps.filter(a =>
+      (!q || a.name.toLowerCase().includes(q) || a.slug.toLowerCase().includes(q) || (a.category||'').toLowerCase().includes(q)) &&
+      (!visFilter || a.visibility === visFilter) &&
+      (showInactive || a.active)
+    );
+
+    if (!rows.length) {
+      wrap.querySelector('#ac-list').innerHTML =
+        `<div class="empty-state"><div class="empty-icon">▦</div>
+         <p>${allApps.length ? 'No apps match the current filter.' : 'No applications registered yet.'}</p></div>`;
+      return;
+    }
+
+    wrap.querySelector('#ac-list').innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Application</th><th>Slug</th><th>Category</th><th>Visibility</th>
+            <th>SSO</th><th>Provisioning</th><th>Protocols</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(a => `<tr>
+              <td>
+                <div style="display:flex;align-items:center;gap:0.6rem">
+                  ${appIcon(a)}
+                  <span class="cell-strong">${esc(a.name)}</span>
+                </div>
+              </td>
+              <td><code style="font-size:0.78rem">${esc(a.slug)}</code></td>
+              <td class="muted" style="font-size:0.875rem">${esc(a.category || '—')}</td>
+              <td><span class="badge ${a.visibility==='PUBLIC'?'badge-info':'badge-warning'}">${esc(a.visibility||'—')}</span></td>
+              <td>${a.sso_enabled ? '<span class="badge badge-success">On</span>' : '<span class="muted">—</span>'}</td>
+              <td>${a.provisioning ? '<span class="badge badge-info">On</span>' : '<span class="muted">—</span>'}</td>
+              <td class="muted">${a.protocol_count ?? 0}</td>
+              <td>${a.active
+                ? '<span class="badge badge-success">Active</span>'
+                : '<span class="badge badge-neutral">Inactive</span>'}</td>
+              <td style="white-space:nowrap">
+                <button class="btn btn-sm btn-secondary ac-edit"
+                  data-id="${esc(String(a.id))}" title="Edit">✏️ Edit</button>
+                <button class="btn btn-sm ${a.active?'btn-warning':'btn-success'} ac-toggle"
+                  data-id="${esc(String(a.id))}" data-active="${a.active?'1':'0'}"
+                  title="${a.active?'Deactivate':'Activate'}">${a.active?'Deactivate':'Activate'}</button>
+                <button class="btn btn-sm btn-danger ac-del"
+                  data-id="${esc(String(a.id))}" data-name="${esc(a.name)}" title="Delete">Delete</button>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    // Edit
+    wrap.querySelectorAll('.ac-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const app = allApps.find(a => String(a.id) === btn.dataset.id);
+        if (app) openAppModal(app);
+      });
+    });
+    // Toggle active
+    wrap.querySelectorAll('.ac-toggle').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const newActive = btn.dataset.active !== '1';
+        if (!confirm(`${newActive?'Activate':'Deactivate'} this application?`)) return;
+        try {
+          await api.updateIgaApp(btn.dataset.id, { active: newActive });
+          await loadApps();
+        } catch(e) { alert(e.message); }
+      });
+    });
+    // Delete
+    wrap.querySelectorAll('.ac-del').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Permanently delete "${btn.dataset.name}"?\nThis will also remove all protocol configs and entitlements.`)) return;
+        btn.disabled = true; btn.textContent = 'Deleting…';
+        try {
+          await api.deleteIgaApp(btn.dataset.id);
+          await loadApps();
+        } catch(e) { alert(e.message); btn.disabled = false; btn.textContent = 'Delete'; }
+      });
+    });
+  }
+
+  // ── Load ────────────────────────────────────────────────────────────────────
+  async function loadApps() {
+    wrap.querySelector('#ac-list').innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.igaApps();
+      allApps = r.data || [];
+      renderTable();
+    } catch(e) {
+      wrap.querySelector('#ac-list').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+    }
+  }
+
+  // ── Create / Edit modal ─────────────────────────────────────────────────────
+  function openAppModal(app = null) {
+    const isEdit = !!app;
+    const bd = openModal(`<div class="modal" style="width:580px;max-width:96vw">
+      <div class="modal-header"><h2>${isEdit ? 'Edit Application' : 'Register Application'}</h2></div>
+      <div class="modal-body">
+        <div class="form-2col">
+          <div class="form-group">
+            <label class="form-label">Application Name <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="ac-name" value="${esc(app?.name||'')}" placeholder="e.g. Slack">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Slug <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="ac-slug" value="${esc(app?.slug||'')}"
+              placeholder="e.g. slack" pattern="[a-z0-9-]+"
+              ${isEdit ? 'readonly title="Slug cannot be changed after creation"' : ''}>
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">Description</label>
+            <textarea class="form-textarea" id="ac-desc" rows="2">${esc(app?.description||'')}</textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Category</label>
+            <input class="form-input" id="ac-cat" value="${esc(app?.category||'')}" placeholder="e.g. Productivity">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Visibility</label>
+            <select class="form-select" id="ac-vis-sel">
+              <option value="PUBLIC"      ${(app?.visibility||'PUBLIC')==='PUBLIC'     ?'selected':''}>Public</option>
+              <option value="RESTRICTED"  ${(app?.visibility)==='RESTRICTED'           ?'selected':''}>Restricted</option>
+            </select>
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">Icon URL <span class="muted" style="font-weight:400">(optional)</span></label>
+            <input class="form-input" id="ac-icon" value="${esc(app?.icon_url||'')}" type="url" placeholder="https://…/logo.png">
+          </div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+              <input type="checkbox" id="ac-sso" ${app?.sso_enabled||(!isEdit)?'checked':''}> SSO Enabled
+            </label>
+          </div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+              <input type="checkbox" id="ac-prov" ${app?.provisioning?'checked':''}> SCIM Provisioning
+            </label>
+          </div>
+        </div>
+        <div id="ac-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="ac-save">${isEdit?'Save Changes':'Register'}</button>
+        <button class="btn btn-secondary" id="ac-cancel">Cancel</button>
+      </div>
+    </div>`);
+
+    bd.querySelector('#ac-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#ac-save').addEventListener('click', async () => {
+      const saveBtn = bd.querySelector('#ac-save');
+      const name  = bd.querySelector('#ac-name').value.trim();
+      const slug  = bd.querySelector('#ac-slug').value.trim();
+      const desc  = bd.querySelector('#ac-desc').value.trim();
+      const cat   = bd.querySelector('#ac-cat').value.trim();
+      const vis   = bd.querySelector('#ac-vis-sel').value;
+      const icon  = bd.querySelector('#ac-icon').value.trim();
+      const sso   = bd.querySelector('#ac-sso').checked;
+      const prov  = bd.querySelector('#ac-prov').checked;
+
+      if (!name) { bd.querySelector('#ac-err').innerHTML = errHtml('Name is required.'); return; }
+      if (!isEdit && !slug) { bd.querySelector('#ac-err').innerHTML = errHtml('Slug is required.'); return; }
+
+      saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
+      const data = { name, description: desc||undefined, category: cat||undefined,
+        iconUrl: icon||undefined, visibility: vis, ssoEnabled: sso, provisioning: prov };
+      if (!isEdit) data.slug = slug;
+
+      try {
+        if (isEdit) await api.updateIgaApp(app.id, data);
+        else        await api.createIgaApp(data);
+        bd.remove();
+        await loadApps();
+      } catch(e) {
+        bd.querySelector('#ac-err').innerHTML = errHtml(e.message);
+        saveBtn.disabled = false; saveBtn.textContent = isEdit ? 'Save Changes' : 'Register';
+      }
+    });
+  }
+
+  // ── Wire filters + create button ────────────────────────────────────────────
+  wrap.querySelector('#ac-new-btn').addEventListener('click', () => openAppModal());
+  wrap.querySelector('#ac-search').addEventListener('input', (e) => { searchQ = e.target.value; renderTable(); });
+  wrap.querySelector('#ac-vis').addEventListener('change', (e) => { visFilter = e.target.value; renderTable(); });
+  wrap.querySelector('#ac-show-inactive').addEventListener('change', (e) => { showInactive = e.target.checked; renderTable(); });
+
+  await loadApps();
 }
 
 /* ---------- SAML Applications (legacy CRUD) ---------- */
@@ -799,10 +1019,9 @@ export async function viewReports(content) {
     () => api.igaReports(),
     ['Name', 'Framework', 'Period', 'Generated', 'Artifact'],
     (r) => `<td class="cell-strong">${esc(r.name)}</td>
-      <td><span class="badge badge-info">${esc(r.framework)}</span></td>
-      <td class="muted">${fmtDate(r.period_start)} → ${fmtDate(r.period_end)}</td>
-      <td class="muted">${fmtDate(r.generated_at)}</td>
-      <td>${r.artifact_url ? `<a href="${esc(r.artifact_url)}" target="_blank">Download</a>` : '—'}</td>`,
-    'No reports generated yet. Report generator ships in Phase 5.', '☰',
+      <td><span class="badge badge-info">${esc(r.framework || '—')}</span></td>
+      <td class="muted">${esc(r.period || '—')}</td>
+      <td class="muted">${r.generated_at ? fmtDate(r.generated_at) : '—'}</td>
+      <td>${r.artifact_url ? `<a href="${esc(r.artifact_url)}" target="_blank" class="btn btn-sm btn-secondary">Download</a>` : '—'}</td>`,
   );
 }

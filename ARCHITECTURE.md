@@ -375,6 +375,8 @@ To add a new migration:
 | Method | Path | Purpose |
 |---|---|---|
 | `GET`/`POST` | `/api/iga/applications[/:id]` | Protocol-agnostic application catalog |
+| `PUT` | `/api/iga/applications/:id` | Update application metadata (ADMIN+) |
+| `DELETE` | `/api/iga/applications/:id` | Remove application (SUPER_ADMIN) |
 | `GET` | `/api/iga/connectors` | Target-system connectors |
 | `POST` | `/api/iga/connectors` | Register connector (501) |
 | `GET` | `/api/iga/connectors/:id/runs` | Connector run history |
@@ -682,6 +684,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(this commit)* — 2026-05-24 — IGA application catalog CRUD + admin UI
+
+**Why** — Application catalog was read-only in the admin console; admins could not register, edit, or retire apps from the UI.
+
+**What changed:**
+
+- **`PUT /api/iga/applications/:id`** — partial update (name, description, icon, category, visibility, SSO/provisioning flags, active).
+- **`DELETE /api/iga/applications/:id`** — SUPER_ADMIN only.
+- **`web/js/views-admin.js`** — full catalog UI: search/filter, register/edit modal, activate/deactivate, delete.
+- **`web/js/api.js`** — `createIgaApp`, `updateIgaApp`, `deleteIgaApp` client methods.
+- **`web/js/views-stubs.js`** — OIDC catalogue letter-avatar icons; system health connector table fixes.
 
 ### `23d5fb2` — 2026-05-24 — Admin console UI polish: line-icon system + cache-control
 

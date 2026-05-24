@@ -264,16 +264,13 @@ async function main(): Promise<void> {
     process.exit(1);
   });
 
-  // Unhandled promise rejections are typically from one buggy request handler.
-  // Log loudly but DO NOT exit — that would take down the whole web server
-  // because of one bad query. Each route is responsible for its own error
-  // handling via `asyncHandler` (src/utils/async-handler.ts).
+  // Unhandled promise rejections — log and continue (don't crash on transient DB errors)
   process.on('unhandledRejection', (reason) => {
-    logger.error({ reason }, 'Unhandled promise rejection (process kept alive)');
+    logger.error({ reason }, 'Unhandled promise rejection');
   });
 }
 
-main().catch((err) => {
+void main().catch((err) => {
   logger.fatal({ err }, 'Failed to start IDP API server');
   process.exit(1);
 });

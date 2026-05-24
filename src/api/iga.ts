@@ -126,6 +126,58 @@ router.get('/applications/:id', asyncHandler(async (req: Request, res: Response)
   res.json({ ...app, protocols });
 }));
 
+// PUT /applications/:id — update an existing application
+router.put(
+  '/applications/:id',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const app = await queryOne<{ id: string }>(
+      `SELECT id FROM applications WHERE id = ? OR slug = ?`, [id, id],
+    );
+    if (!app) { res.status(404).json({ error: 'Application not found' }); return; }
+
+    const parsed = appSchema.partial().safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const d = parsed.data;
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+    if (d.name        !== undefined) { setClauses.push('name = ?');        values.push(d.name); }
+    if (d.description !== undefined) { setClauses.push('description = ?'); values.push(d.description); }
+    if (d.iconUrl     !== undefined) { setClauses.push('icon_url = ?');    values.push(d.iconUrl); }
+    if (d.category    !== undefined) { setClauses.push('category = ?');    values.push(d.category); }
+    if (d.visibility  !== undefined) { setClauses.push('visibility = ?');  values.push(d.visibility); }
+    if (d.ssoEnabled  !== undefined) { setClauses.push('sso_enabled = ?'); values.push(d.ssoEnabled ? 1 : 0); }
+    if (d.provisioning!== undefined) { setClauses.push('provisioning = ?');values.push(d.provisioning ? 1 : 0); }
+    if ('active' in req.body)         { setClauses.push('active = ?');      values.push(req.body['active'] ? 1 : 0); }
+    if (!setClauses.length) { res.json({ updated: false }); return; }
+    setClauses.push('updated_at = UTC_TIMESTAMP()');
+    values.push(app.id);
+    await execute(`UPDATE applications SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    logger.info({ id: app.id }, 'Application updated');
+    res.json({ updated: true });
+  }),
+);
+
+// DELETE /applications/:id — remove an application
+router.delete(
+  '/applications/:id',
+  requireRole('SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const app = await queryOne<{ id: string }>(
+      `SELECT id FROM applications WHERE id = ? OR slug = ?`, [id, id],
+    );
+    if (!app) { res.status(404).json({ error: 'Application not found' }); return; }
+    await execute(`DELETE FROM applications WHERE id = ?`, [app.id]);
+    logger.info({ id: app.id }, 'Application deleted');
+    res.json({ deleted: true });
+  }),
+);
+
 // ===========================================================================
 // /connectors — pluggable target system adapters
 // ===========================================================================

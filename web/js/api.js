@@ -56,6 +56,9 @@ Object.assign(api, {
   mfaRegenCodes:    () => f('/api/me/mfa/regenerate-codes', { method: 'POST' }),
 
   igaApps:          () => f('/api/iga/applications'),
+  createIgaApp:     (data) => f('/api/iga/applications', { method: 'POST', body: JSON.stringify(data) }),
+  updateIgaApp:     (id, data) => f(`/api/iga/applications/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteIgaApp:     (id) => f(`/api/iga/applications/${id}`, { method: 'DELETE' }),
   igaConnectors:    () => f('/api/iga/connectors'),
   igaEntitlements:  (appId) => f(`/api/iga/entitlements${appId ? `?appId=${appId}` : ''}`),
   igaMyAccess:      () => f('/api/iga/entitlements/me'),

@@ -1003,14 +1003,29 @@ export async function viewOidcApps(content) {
         (activeCat === 'All' || a.cat === activeCat) &&
         (!q || a.name.toLowerCase().includes(q) || a.cat.toLowerCase().includes(q))
       );
+      // Letter-avatar colours — no external CDN dependency
+      const ICON_COLOURS = ['#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#6366f1'];
+      function catalogIcon(app) {
+        const bg = ICON_COLOURS[(app.name||' ').charCodeAt(0) % ICON_COLOURS.length];
+        const letter = esc((app.name||'?')[0].toUpperCase());
+        const fallback = `<div style="width:36px;height:36px;border-radius:8px;background:${bg};
+          color:#fff;font-weight:700;font-size:1rem;display:flex;align-items:center;
+          justify-content:center;flex-shrink:0">${letter}</div>`;
+        if (!app.icon) return fallback;
+        // img with safe fallback using nextElementSibling — no text-node trap
+        return `<img src="${esc(app.icon)}" width="36" height="36"
+          style="border-radius:8px;object-fit:contain;flex-shrink:0"
+          onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+          <div style="display:none;width:36px;height:36px;border-radius:8px;background:${bg};
+            color:#fff;font-weight:700;font-size:1rem;align-items:center;justify-content:center;flex-shrink:0">
+            ${letter}
+          </div>`;
+      }
+
       area.querySelector('#cat-grid').innerHTML = visible.map(app => `
         <div class="card" style="padding:1.25rem;cursor:default;position:relative">
           <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem">
-            ${app.icon
-              ? `<img src="${esc(app.icon)}" width="36" height="36" style="border-radius:8px;object-fit:contain;background:var(--surface-3);padding:4px" onerror="this.style.display='none';this.nextSibling.style.display='flex'">`
-              : ''
-            }
-            <div class="app-icon-fallback" style="width:36px;height:36px;border-radius:8px;font-size:1.1rem;${app.icon?'display:none':'display:flex'}">${esc(app.name[0])}</div>
+            ${catalogIcon(app)}
             <div>
               <div style="font-weight:600;font-size:0.9rem">${esc(app.name)}</div>
               <div><span class="badge ${app.protocol==='OIDC'?'badge-info':'badge-warning'}" style="font-size:0.65rem">${esc(app.protocol)}</span></div>
@@ -3100,19 +3115,14 @@ export async function viewSystemHealth(content) {
           <div class="card" style="grid-column:span 2">
             <h2>Connectors</h2>
             ${connectors.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Status</th></tr></thead><tbody>
-              ${connectors.map(c => `<tr><td>${esc(c.name||'—')}</td><td class="muted">${esc(c.type||'—')}</td><td>${c.status==='ok'||c.status==='ACTIVE'?'<span class="badge badge-success">OK</span>':'<span class="badge badge-danger">'+esc(c.status||'?')+'</span>'}</td></tr>`).join('')}
-            </tbody></table></div>` : '<p class="muted">No connector health data.</p>'}
-          </div>
-        </div>
-        <div class="card" style="margin-top:1rem">
-          <h2>Diagnostic Links</h2>
-          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem">
-            ${['/healthz','/readyz','/diagz','/metrics'].map(p => `<a href="${p}" target="_blank" class="btn btn-sm btn-secondary">${p}</a>`).join('')}
+              ${connectors.map(c => `<tr><td>${esc(c.name||'—')}</td><td class="muted">${esc(c.type||c.connector_type||'—')}</td><td>${(c.status==='ok'||c.status==='ACTIVE')?'<span class="badge badge-success">OK</span>':'<span class="badge badge-neutral">'+esc(c.status||'Unknown')+'</span>'}</td></tr>`).join('')}
+            </tbody></table></div>` : '<p class="muted">No connectors configured.</p>'}
           </div>
         </div>`;
-    } catch(e) { wrap.querySelector('#health-area').innerHTML = errHtml(e.message); }
+      wrap.querySelector('#sys-body').innerHTML = html;
+    } catch(e) {
+      wrap.querySelector('#sys-body').innerHTML = errHtml(e.message);
+    }
   }
-
-  wrap.querySelector('#health-refresh').addEventListener('click', load);
-  await load();
+  load();
 }
