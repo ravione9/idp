@@ -685,7 +685,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — IGA application catalog CRUD + admin UI
+### `7970a96` — 2026-05-24 — IGA application catalog CRUD + admin UI
 
 **Why** — Application catalog was read-only in the admin console; admins could not register, edit, or retire apps from the UI.
 
