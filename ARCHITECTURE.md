@@ -494,24 +494,36 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 
 ### 11.1 Dev (single-tier docker-compose on `pam-2`)
 
-**Always use the compose wrapper** — never raw `docker-compose up` (v1.29 hits `KeyError: ContainerConfig` when recreating after `--build`):
+**Deploy model:** `pam-2` is a **deploy-only** checkout — never edit tracked files under `/opt/idp` on the server (manual patches to `scripts/*.sh` cause recurring `git pull` conflicts). Configuration lives in **`.env`** only (gitignored). All code changes happen in git; the server syncs with `git reset --hard origin/main`.
+
+**One command deploy** (sync + rebuild + restart API):
 
 ```bash
 ssh pam-2
 cd /opt/idp
-git pull
+bash scripts/deploy.sh
+```
 
-# Redeploy API only (most common after git pull)
+`deploy.sh` runs `sync-repo.sh` (hard reset to `origin/main`, keeps `.env`) then `restart-api.sh`.
+
+Other commands:
+
+```bash
+# Sync repo only (fix "local changes would be overwritten by merge")
+bash scripts/sync-repo.sh
+
+# Restart API without pulling (already synced)
 bash scripts/restart-api.sh
 
-# Or equivalent:
-./dev-up.sh up -d --build lilg-api
-
-# Full stack reset
+# Full stack reset (MySQL volume kept)
 sudo bash scripts/fix-and-start.sh
 ```
 
-`./dev-up.sh` and `scripts/compose.sh` auto-remove stale `idp-api` / `lilg-api` containers before any `up --build`, working around docker-compose v1.29. **Permanent fix:** install Compose v2 once: `sudo bash scripts/install-compose-v2.sh`.
+**Do not** run bare `git pull` on pam-2 — use `bash scripts/sync-repo.sh` or `bash scripts/deploy.sh`.
+
+**Do not** run raw `docker-compose up --build` — use `./dev-up.sh` or `restart-api.sh` (ContainerConfig workaround).
+
+`./dev-up.sh` and `scripts/compose.sh` auto-remove stale `idp-api` / `lilg-api` containers before any `up --build`. **Permanent fix:** install Compose v2 once: `sudo bash scripts/install-compose-v2.sh`.
 
 `fix-and-start.sh` handles:
 1. `.env` bootstrap from `env.dev.example` if missing.
@@ -540,10 +552,13 @@ Multi-stage build (`Dockerfile`):
 ### 12.1 Common commands (on `pam-2`)
 
 ```bash
+# Standard deploy after code is pushed to GitHub
+bash scripts/deploy.sh
+
 # Status
 docker ps --filter name=idp-
 
-# Redeploy API after git pull (preferred — ContainerConfig-safe)
+# Restart API only (repo already synced)
 bash scripts/restart-api.sh
 
 # Logs
@@ -567,7 +582,8 @@ docker exec -i idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg < migrations/<
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `KeyError: 'ContainerConfig'` on `up -d --build` | docker-compose **v1.29** tries to recreate an existing container after image rebuild | **`bash scripts/restart-api.sh`** or **`./dev-up.sh up -d --build lilg-api`** (auto-removes stale container). Manual: `docker rm -f idp-api lilg-api` then `up -d --no-deps --build lilg-api`. Permanent fix: `sudo bash scripts/install-compose-v2.sh` |
+| `git pull` — "local changes would be overwritten" | Tracked files edited on pam-2 (manual script fixes) | **`bash scripts/sync-repo.sh`** or **`bash scripts/deploy.sh`** — never commit on pam-2; use `.env` for config |
+| `KeyError: 'ContainerConfig'` on `up -d --build` | docker-compose **v1.29** tries to recreate an existing container after image rebuild | **`bash scripts/deploy.sh`** or **`bash scripts/restart-api.sh`**. Permanent fix: `sudo bash scripts/install-compose-v2.sh` |
 | Browser login appears to fail (no redirect) | `Secure` cookie flag rejected over HTTP | `COOKIE_SECURE=false` in `.env` |
 | `Table 'lilg.lilg_sessions' doesn't exist` | Pre-migration MySQL volume | Restart API — migrations apply automatically |
 | `getaddrinfo EAI_AGAIN mysql` / API crash-loop, container named `lilg-api` while DB is `idp-mysql` | API started with root `docker-compose.yml` instead of `docker-compose.dev.yml` — `lilg-api` lands on a different network and cannot resolve hostname `mysql` | `docker rm -f lilg-api` then `./dev-up.sh up -d --build lilg-api` or `bash scripts/restart-api.sh` (never use bare `docker-compose up` on pam-2) |
@@ -666,6 +682,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(this commit)* — 2026-05-24 — pam-2 deploy model: sync-repo.sh + deploy.sh (no local edits on server)
+
+**Why** — Repeated `git pull` failures on pam-2 (`local changes would be overwritten`) from manual script patches; deploy workflow was undefined.
+
+**What changed:**
+
+- **`scripts/sync-repo.sh`** — `git fetch` + `git reset --hard origin/main` (`.env` gitignored, untouched).
+- **`scripts/deploy.sh`** — standard pam-2 entry point: sync + `restart-api.sh`.
+- **§11 / §12** — document deploy-only server model; replace bare `git pull` with `deploy.sh`.
 
 ### `1d9b177` — 2026-05-24 — Fix Compose v2 install URL (v2.24.9 404) + v1 fallback never aborts
 

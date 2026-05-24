@@ -52,6 +52,7 @@ What to update:
 - New deploy/diagnostic scripts live in `scripts/`.
 - Must be idempotent and safe to re-run.
 - Document them in §11 (Deployment) of `ARCHITECTURE.md`.
+- **pam-2 (`/opt/idp`)** is deploy-only: use `bash scripts/deploy.sh` — never edit tracked files on the server (causes `git pull` conflicts). Config belongs in `.env` only.
 
 ## 6. Don't
 

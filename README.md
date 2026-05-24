@@ -18,9 +18,10 @@ Enterprise Identity Provider, Single Sign-On, and Identity Governance for Lenska
 
 ```bash
 cd /opt/idp
-git pull
-sudo bash scripts/fix-and-start.sh
+bash scripts/deploy.sh
 ```
+
+Do **not** run bare `git pull` on pam-2 — local edits to tracked files block merges. `deploy.sh` syncs from `origin/main` (keeps `.env`) and restarts the API.
 
 Then open `http://192.168.24.254:8080/login`. Master admin credentials come from `.env` (`MASTER_ADMIN_EMAIL` / `MASTER_ADMIN_PASSWORD`).
 
