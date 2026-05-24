@@ -683,7 +683,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — Admin console UI polish: line-icon system + cache-control
+### `23d5fb2` — 2026-05-24 — Admin console UI polish: line-icon system + cache-control
 
 **Why** — User reported the admin GUI looked unfinished and asked for miniOrange / Entrust-grade polish. Emoji glyphs (`◍`, `⛨`, `🏠`, etc.) used as nav and stat icons were the most visible quality regression; sidebar items had no icons at all; and deployed UI changes did not show up because static assets were cached aggressively by browsers.
 
