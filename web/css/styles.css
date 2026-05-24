@@ -207,6 +207,161 @@ button { font-family: inherit; cursor: pointer; }
   flex: 1;
 }
 
+/* ============================================================
+   INTEGRATION WIZARD (multi-step modal)
+   ============================================================ */
+.modal.modal-wizard {
+  width: 760px;
+}
+.modal-wizard .modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+}
+.modal-wizard .modal-header .wizard-title-block { min-width: 0; flex: 1; }
+.modal-wizard .modal-header h2 { font-size: 1.05rem; font-weight: 700; }
+.modal-wizard .modal-header .muted { font-size: 0.78rem; margin-top: 0.15rem; color: var(--text-muted); }
+.modal-wizard .wizard-close {
+  background: transparent;
+  border: none;
+  width: 32px; height: 32px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+.modal-wizard .wizard-close:hover { background: var(--surface-2); color: var(--text); }
+
+.wizard-stepper {
+  display: flex;
+  align-items: center;
+  padding: 0.85rem 1.5rem;
+  background: var(--surface-3);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  gap: 0;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.wizard-stepper .wiz-step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+.wizard-stepper .wiz-num {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 0.78rem;
+  background: var(--surface);
+  border: 1.5px solid var(--border-strong);
+  color: var(--text-dim);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.wizard-stepper .wiz-label {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.wizard-stepper .wiz-sep {
+  width: 28px;
+  height: 2px;
+  background: var(--border-strong);
+  margin: 0 0.65rem;
+  border-radius: 2px;
+}
+.wizard-stepper .wiz-step-active .wiz-num {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  box-shadow: 0 0 0 4px rgba(37,99,235,0.18);
+}
+.wizard-stepper .wiz-step-active .wiz-label { color: var(--primary); font-weight: 600; }
+.wizard-stepper .wiz-step-done .wiz-num {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+.wizard-stepper .wiz-step-done + .wiz-sep,
+.wizard-stepper .wiz-step-done .wiz-sep { background: var(--success); }
+.wizard-stepper .wiz-step-done .wiz-label { color: var(--text); }
+
+.modal-wizard .modal-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.85rem 1.5rem;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.modal-wizard .modal-footer .footer-right { display: flex; gap: 0.5rem; }
+
+.wizard-success {
+  text-align: center;
+  padding: 2rem 1rem 1rem;
+}
+.wizard-success .check-circle {
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  background: var(--success-soft);
+  color: var(--success);
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-bottom: 1rem;
+}
+.wizard-success .check-circle svg { width: 32px; height: 32px; stroke-width: 2.5; }
+.wizard-success h3 { font-size: 1.1rem; font-weight: 700; }
+.wizard-success p.muted { font-size: 0.88rem; margin: 0.4rem 0 1.25rem; }
+
+.wiz-vendor-card {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+  padding: 0.85rem;
+  background: var(--surface-3);
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+}
+.wiz-vendor-card .wiz-vendor-icon {
+  width: 48px; height: 48px;
+  border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: 1.25rem;
+  flex-shrink: 0;
+}
+.wiz-vendor-card h3 { font-size: 1rem; font-weight: 700; margin: 0; }
+.wiz-vendor-card p { margin: 0.25rem 0 0; font-size: 0.82rem; color: var(--text-muted); }
+
+.wiz-tip-list {
+  margin: 0.5rem 0 0 1.25rem;
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.wiz-tip-list li { margin-bottom: 0.25rem; }
+
+.wiz-readonly-input {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.wiz-readonly-input input {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  background: var(--surface-2);
+}
+.wiz-readonly-input .copy-btn {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+
 .modal-footer {
   padding: 0.85rem 1.5rem;
   border-top: 1px solid var(--border);

@@ -820,6 +820,569 @@ const SSO_CATALOG = [
 
 const CATALOG_CATS = ['All', ...new Set(SSO_CATALOG.map(a => a.cat))];
 
+// =============================================================================
+// INTEGRATION WIZARD — multi-step setup flow for catalog apps
+// =============================================================================
+const WIZ_ICON_COLOURS = ['#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#6366f1'];
+function wizColour(name = '') { return WIZ_ICON_COLOURS[name.charCodeAt(0) % WIZ_ICON_COLOURS.length]; }
+
+// Vendor-specific setup tips. Anything not in the table falls back to generic instructions.
+const VENDOR_TIPS = {
+  slack: {
+    docsUrl: 'https://slack.com/help/articles/360039304351-Use-OpenID-Connect-with-Slack',
+    setupSteps: [
+      'Open <strong>Slack workspace admin → Settings &amp; permissions → Authentication</strong>.',
+      'Choose <strong>OpenID Connect</strong> as the SSO method.',
+      'Paste the IdP discovery / authorization / token endpoints from this wizard.',
+      'Save, then return here to enter Slack\'s callback URL.',
+    ],
+  },
+  zoom: {
+    docsUrl: 'https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0066768',
+    setupSteps: [
+      'Sign in to <strong>Zoom Admin → Advanced → Single Sign-On</strong>.',
+      'Choose <strong>SAML</strong> and click <em>Edit</em>.',
+      'Paste the IdP Issuer / SSO URL / X.509 certificate from the next step.',
+      'Zoom will display its Service Provider details — paste them back here.',
+    ],
+  },
+  'google-workspace': {
+    docsUrl: 'https://support.google.com/a/answer/6087519',
+    setupSteps: [
+      'Open <strong>Google Admin Console → Security → Authentication → SSO with third-party IdP</strong>.',
+      'Add a new IdP profile and paste the metadata URL from this wizard.',
+      'Assign the profile to the relevant Organisational Units.',
+    ],
+  },
+  github: {
+    docsUrl: 'https://docs.github.com/en/enterprise-cloud@latest/admin/identity-and-access-management/using-saml-for-enterprise-iam',
+    setupSteps: [
+      'In <strong>GitHub Enterprise → Settings → Authentication security</strong>, enable SAML SSO.',
+      'Paste the Sign-on URL, Issuer, and X.509 certificate from this wizard.',
+      'GitHub will return ACS URL and Entity ID — paste them back into the SP step.',
+    ],
+  },
+  teams: {
+    docsUrl: 'https://learn.microsoft.com/en-us/microsoftteams/sign-in-teams',
+    setupSteps: [
+      'Microsoft Teams uses <strong>Microsoft Entra ID</strong> for federation.',
+      'Configure Lenskart IdP as a custom claims provider in Entra ID.',
+      'Use the IdP metadata URL from this wizard when setting up the federation trust.',
+    ],
+  },
+  jira: {
+    docsUrl: 'https://support.atlassian.com/security-and-access-policies/docs/configure-saml-single-sign-on-with-an-identity-provider/',
+    setupSteps: [
+      'Open <strong>Atlassian Access → Security → Authentication policies</strong>.',
+      'Add a new SAML SSO directory.',
+      'Paste the IdP Entity ID, SSO URL, and certificate from this wizard.',
+      'Atlassian will display the SP Entity ID and ACS URL — paste them in the SP step.',
+    ],
+  },
+  aws: {
+    docsUrl: 'https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_saml.html',
+    setupSteps: [
+      'In the AWS IAM console, create a new SAML Identity Provider with the metadata XML from this wizard.',
+      'Create or edit IAM Roles with a trust policy that references the new IdP.',
+      'AWS will display the SP role ARN and audience — paste those into the SP step.',
+    ],
+  },
+};
+
+function vendorTips(slug, app) {
+  const t = VENDOR_TIPS[slug];
+  if (t) return t;
+  return {
+    docsUrl: null,
+    setupSteps: [
+      `Open <strong>${esc(app.name)}</strong>'s SSO / Authentication settings page.`,
+      `Choose <strong>${esc(app.protocol)} 2.0</strong> as the SSO method.`,
+      `Paste the IdP details from the next step into <strong>${esc(app.name)}</strong>.`,
+      `Copy the Service Provider details that <strong>${esc(app.name)}</strong> returns and paste them back here.`,
+    ],
+  };
+}
+
+// Small DOM helper: copyable read-only field
+function readonlyInput(value, id) {
+  return `<div class="wiz-readonly-input">
+    <input class="form-input" id="${id}" value="${esc(value)}" readonly onclick="this.select()">
+    <button type="button" class="btn btn-secondary btn-sm copy-btn" data-copy="${id}">Copy</button>
+  </div>`;
+}
+
+function wireCopyButtons(root) {
+  root.querySelectorAll('[data-copy]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = root.querySelector('#' + btn.dataset.copy);
+      if (!target) return;
+      try {
+        navigator.clipboard?.writeText(target.value);
+        const orig = btn.textContent;
+        btn.textContent = '✓ Copied';
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+      } catch { /* clipboard API unavailable */ }
+    });
+  });
+}
+
+// Generic stepped wizard — `steps` is an array of { id, label, render(d), validate?(d, body), collect?(d, body), bind?(body, d), finishLabel? }
+function runWizard({ title, subtitle, vendor, steps, initialData, onFinish }) {
+  let stepIdx = 0;
+  const data = { ...(initialData || {}) };
+
+  const bd = openModal(`<div class="modal modal-wizard" role="dialog" aria-labelledby="wiz-title">
+    <div class="modal-header">
+      <div style="display:flex;gap:0.85rem;align-items:center;min-width:0;flex:1">
+        ${vendor ? `<div style="width:40px;height:40px;border-radius:9px;background:${wizColour(vendor.name||'')};color:#fff;font-weight:700;font-size:1.1rem;display:flex;align-items:center;justify-content:center;flex-shrink:0">${esc((vendor.name||'?')[0].toUpperCase())}</div>` : ''}
+        <div class="wizard-title-block">
+          <h2 id="wiz-title">${esc(title)}</h2>
+          ${subtitle ? `<div class="muted">${esc(subtitle)}</div>` : ''}
+        </div>
+      </div>
+      <button type="button" class="wizard-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="wizard-stepper" id="wiz-stepper"></div>
+    <div class="modal-body" id="wiz-body" style="min-height:280px"></div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" id="wiz-back">← Back</button>
+      <div class="footer-right">
+        <button type="button" class="btn btn-secondary" id="wiz-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="wiz-next">Next →</button>
+      </div>
+    </div>
+  </div>`);
+
+  const stepperEl = bd.querySelector('#wiz-stepper');
+  const bodyEl    = bd.querySelector('#wiz-body');
+  const backBtn   = bd.querySelector('#wiz-back');
+  const cancelBtn = bd.querySelector('#wiz-cancel');
+  const nextBtn   = bd.querySelector('#wiz-next');
+  const closeBtn  = bd.querySelector('.wizard-close');
+
+  function setError(msg) {
+    let errEl = bodyEl.querySelector('.wiz-err');
+    if (!errEl) {
+      errEl = document.createElement('div');
+      errEl.className = 'wiz-err alert alert-error';
+      errEl.style.marginTop = '1rem';
+      bodyEl.appendChild(errEl);
+    }
+    errEl.textContent = msg;
+  }
+
+  function clearError() {
+    bodyEl.querySelector('.wiz-err')?.remove();
+  }
+
+  function renderStepper() {
+    stepperEl.innerHTML = steps.map((s, i) => {
+      const status = i < stepIdx ? 'done' : i === stepIdx ? 'active' : 'pending';
+      const num = i < stepIdx ? '✓' : (i + 1);
+      return `<div class="wiz-step wiz-step-${status}">
+        <span class="wiz-num">${num}</span>
+        <span class="wiz-label">${esc(s.label)}</span>
+        ${i < steps.length - 1 ? '<span class="wiz-sep"></span>' : ''}
+      </div>`;
+    }).join('');
+  }
+
+  function renderStep() {
+    renderStepper();
+    const step = steps[stepIdx];
+    bodyEl.innerHTML = step.render(data);
+    if (step.bind) step.bind(bodyEl, data);
+    wireCopyButtons(bodyEl);
+    backBtn.style.visibility = stepIdx === 0 ? 'hidden' : 'visible';
+    nextBtn.textContent = stepIdx === steps.length - 1
+      ? (step.finishLabel || 'Finish ✓')
+      : 'Next →';
+    clearError();
+  }
+
+  async function tryAdvance() {
+    const step = steps[stepIdx];
+    nextBtn.disabled = true;
+    try {
+      if (step.validate) {
+        const err = step.validate(data, bodyEl);
+        if (err) { setError(err); nextBtn.disabled = false; return; }
+      }
+      if (step.collect) await step.collect(data, bodyEl);
+      if (stepIdx === steps.length - 1) {
+        if (onFinish) await onFinish(data, bd);
+        return;
+      }
+      stepIdx++;
+      renderStep();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      nextBtn.disabled = false;
+    }
+  }
+
+  backBtn.addEventListener('click', () => {
+    if (stepIdx > 0) { stepIdx--; renderStep(); }
+  });
+  cancelBtn.addEventListener('click', () => bd.remove());
+  closeBtn.addEventListener('click', () => bd.remove());
+  nextBtn.addEventListener('click', tryAdvance);
+
+  renderStep();
+  return { bd, getData: () => data, close: () => bd.remove() };
+}
+
+// SAML integration wizard — 4 steps: Overview, IdP details, SP configuration, Activate
+function openSamlWizard(app) {
+  const origin   = window.location.origin;
+  const idpMeta  = `${origin}/saml/metadata`;
+  const idpSso   = `${origin}/saml/sso`;
+  const idpEntId = idpMeta;
+  const tips     = vendorTips(app.id, app);
+
+  const initial = {
+    name:         app.name,
+    slug:         app.id,
+    entityId:     '',
+    acsUrl:       '',
+    sloUrl:       '',
+    nameidFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
+    iconUrl:      '',
+  };
+
+  runWizard({
+    title:    `Add ${app.name}`,
+    subtitle: `${app.cat || 'Pre-built integration'} · SAML 2.0`,
+    vendor:   app,
+    initialData: initial,
+    steps: [
+      {
+        id: 'overview', label: 'Overview',
+        render: () => `
+          <div class="info-box">
+            <strong>How this works</strong>
+            <ol class="wiz-tip-list">
+              <li>Copy the <strong>IdP details</strong> from step 2 into ${esc(app.name)}'s SSO settings.</li>
+              <li>Paste the <strong>Service Provider details</strong> that ${esc(app.name)} gives you back into step 3.</li>
+              <li>Test the integration and activate it.</li>
+            </ol>
+          </div>
+          <h3 style="font-size:0.95rem;margin:1.25rem 0 0.5rem">Vendor setup steps</h3>
+          <ol class="wiz-tip-list">
+            ${tips.setupSteps.map((s) => `<li>${s}</li>`).join('')}
+          </ol>
+          ${tips.docsUrl ? `<p style="font-size:0.85rem;margin-top:1rem"><a href="${esc(tips.docsUrl)}" target="_blank" rel="noopener">Open ${esc(app.name)} SSO documentation →</a></p>` : ''}
+        `,
+      },
+      {
+        id: 'idp', label: 'IdP Details',
+        render: () => `
+          <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
+            Open <strong>${esc(app.name)}</strong>'s SSO / SAML settings in another tab and paste these values.
+          </p>
+          <div class="form-group">
+            <label class="form-label">Identity Provider Issuer / Entity ID</label>
+            ${readonlyInput(idpEntId, 'idp-eid')}
+          </div>
+          <div class="form-group">
+            <label class="form-label">Identity Provider SSO URL</label>
+            ${readonlyInput(idpSso, 'idp-sso')}
+          </div>
+          <div class="form-group">
+            <label class="form-label">IdP Metadata URL <span class="muted" style="font-weight:400;font-size:0.78rem">(most apps accept this — paste once and they auto-discover the rest)</span></label>
+            ${readonlyInput(idpMeta, 'idp-meta')}
+          </div>
+        `,
+      },
+      {
+        id: 'sp', label: 'SP Configuration',
+        render: (d) => `
+          <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
+            Paste the values that <strong>${esc(app.name)}</strong> shows on its SAML configuration screen.
+          </p>
+          <div class="form-2col">
+            <div class="form-group span2">
+              <label class="form-label">Display Name <span style="color:var(--danger)">*</span></label>
+              <input class="form-input" id="w-name" value="${esc(d.name)}">
+            </div>
+            <div class="form-group span2">
+              <label class="form-label">SP Entity ID <span style="color:var(--danger)">*</span></label>
+              <input class="form-input" id="w-eid" value="${esc(d.entityId)}" placeholder="https://app.example.com/saml/metadata">
+            </div>
+            <div class="form-group span2">
+              <label class="form-label">Assertion Consumer Service (ACS) URL <span style="color:var(--danger)">*</span></label>
+              <input class="form-input" id="w-acs" type="url" value="${esc(d.acsUrl)}" placeholder="https://app.example.com/saml/acs">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Single Logout URL <span class="muted" style="font-weight:400">(optional)</span></label>
+              <input class="form-input" id="w-slo" type="url" value="${esc(d.sloUrl)}" placeholder="https://app.example.com/saml/slo">
+            </div>
+            <div class="form-group">
+              <label class="form-label">NameID Format</label>
+              <select class="form-select" id="w-nid">
+                <option value="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">Email Address</option>
+                <option value="urn:oasis:names:tc:SAML:2.0:nameid-format:persistent">Persistent</option>
+                <option value="urn:oasis:names:tc:SAML:2.0:nameid-format:transient">Transient</option>
+                <option value="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">Unspecified</option>
+              </select>
+            </div>
+            <div class="form-group span2">
+              <label class="form-label">Internal Slug <span style="color:var(--danger)">*</span></label>
+              <input class="form-input" id="w-slug" value="${esc(d.slug)}" pattern="[a-z0-9-]+">
+              <p class="muted" style="font-size:0.72rem;margin-top:0.25rem">Used in launch URLs (<code>/saml/launch/${esc(d.slug)}</code>). Lower-case letters, digits, hyphens only.</p>
+            </div>
+          </div>
+        `,
+        bind: (body, d) => {
+          body.querySelector('#w-nid').value = d.nameidFormat;
+        },
+        validate: (_d, body) => {
+          const v = (sel) => body.querySelector(sel).value.trim();
+          if (!v('#w-name')) return 'Display name is required.';
+          if (!v('#w-eid'))  return 'SP Entity ID is required.';
+          if (!v('#w-acs'))  return 'ACS URL is required.';
+          if (!/^[a-z0-9-]+$/.test(v('#w-slug'))) return 'Slug must use lower-case letters, digits, and hyphens only.';
+          try { new URL(v('#w-acs')); } catch { return 'ACS URL must be a valid absolute URL.'; }
+          if (v('#w-slo')) { try { new URL(v('#w-slo')); } catch { return 'SLO URL must be a valid absolute URL.'; } }
+          return null;
+        },
+        collect: (d, body) => {
+          d.name         = body.querySelector('#w-name').value.trim();
+          d.slug         = body.querySelector('#w-slug').value.trim();
+          d.entityId     = body.querySelector('#w-eid').value.trim();
+          d.acsUrl       = body.querySelector('#w-acs').value.trim();
+          d.sloUrl       = body.querySelector('#w-slo').value.trim();
+          d.nameidFormat = body.querySelector('#w-nid').value;
+        },
+      },
+      {
+        id: 'review', label: 'Activate',
+        finishLabel: '✓ Activate Integration',
+        render: (d) => `
+          <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">Review the values below — they will be saved as a SAML application.</p>
+          <div class="card">
+            <div class="kv"><div class="k">Name</div><div class="v">${esc(d.name)}</div></div>
+            <div class="kv"><div class="k">Slug</div><div class="v"><code>${esc(d.slug)}</code></div></div>
+            <div class="kv"><div class="k">SP Entity ID</div><div class="v truncate" title="${esc(d.entityId)}">${esc(d.entityId)}</div></div>
+            <div class="kv"><div class="k">ACS URL</div><div class="v truncate" title="${esc(d.acsUrl)}">${esc(d.acsUrl)}</div></div>
+            ${d.sloUrl ? `<div class="kv"><div class="k">SLO URL</div><div class="v truncate" title="${esc(d.sloUrl)}">${esc(d.sloUrl)}</div></div>` : ''}
+            <div class="kv"><div class="k">NameID Format</div><div class="v"><code>${esc((d.nameidFormat||'').split(':').pop())}</code></div></div>
+          </div>
+        `,
+      },
+    ],
+    onFinish: async (d, bd) => {
+      await api.createSamlApp({
+        name:         d.name,
+        slug:         d.slug,
+        entityId:     d.entityId,
+        acsUrl:       d.acsUrl,
+        sloUrl:       d.sloUrl || undefined,
+        nameidFormat: d.nameidFormat,
+      });
+      bd.querySelector('.wizard-stepper').style.display = 'none';
+      bd.querySelector('#wiz-body').innerHTML = `
+        <div class="wizard-success">
+          <div class="check-circle">${svgIcon('check')}</div>
+          <h3>${esc(d.name)} is connected</h3>
+          <p class="muted">Users with access can now launch ${esc(d.name)} via SSO.</p>
+          <a href="/saml/launch/${esc(d.slug)}" target="_blank" class="btn btn-primary">Test SSO Launch →</a>
+        </div>
+      `;
+      bd.querySelector('#wiz-back').style.display = 'none';
+      bd.querySelector('#wiz-next').style.display = 'none';
+      const cancel = bd.querySelector('#wiz-cancel');
+      cancel.textContent = 'Done';
+      cancel.classList.replace('btn-secondary', 'btn-primary');
+      // Reload the Applications tab if visible so the new app appears
+      cancel.addEventListener('click', () => {
+        if (window.LILG_NAV) window.LILG_NAV('applications', { tab: 'saml' });
+      }, { once: true });
+    },
+  });
+}
+
+// OIDC integration wizard — 4 steps: Overview, Redirect URIs, Advanced, Review
+function openOidcWizard(app) {
+  const tips = vendorTips(app.id, app);
+
+  const initial = {
+    name:           app.name,
+    catalog_slug:   app.id,
+    category:       app.cat,
+    redirectsRaw:   '',
+    grants:         [...(app.grants || ['authorization_code'])],
+    scopes:         [...(app.scopes || ['openid', 'email', 'profile'])],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'client_secret_basic',
+  };
+
+  runWizard({
+    title:    `Add ${app.name}`,
+    subtitle: `${app.cat || 'Pre-built integration'} · OIDC / OAuth 2.0`,
+    vendor:   app,
+    initialData: initial,
+    steps: [
+      {
+        id: 'overview', label: 'Overview',
+        render: () => `
+          <div class="info-box">
+            <strong>What you'll do</strong>
+            <ol class="wiz-tip-list">
+              <li>Tell ${esc(app.name)} where to send users after login (redirect URIs).</li>
+              <li>Pick the OAuth grant types and OpenID scopes you need.</li>
+              <li>Save and copy the <strong>Client ID</strong> and <strong>Client Secret</strong> into ${esc(app.name)}.</li>
+            </ol>
+          </div>
+          <h3 style="font-size:0.95rem;margin:1.25rem 0 0.5rem">Vendor setup steps</h3>
+          <ol class="wiz-tip-list">
+            ${tips.setupSteps.map((s) => `<li>${s}</li>`).join('')}
+          </ol>
+          ${tips.docsUrl ? `<p style="font-size:0.85rem;margin-top:1rem"><a href="${esc(tips.docsUrl)}" target="_blank" rel="noopener">Open ${esc(app.name)} OIDC documentation →</a></p>` : ''}
+        `,
+      },
+      {
+        id: 'redirects', label: 'Redirect URIs',
+        render: (d) => `
+          <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
+            One per line. ${esc(app.name)} will send users to one of these URLs after they authenticate.
+          </p>
+          <div class="form-group">
+            <label class="form-label">Allowed Redirect URIs <span style="color:var(--danger)">*</span></label>
+            <textarea class="form-textarea" id="w-uris" rows="5" placeholder="https://app.example.com/callback&#10;https://app.example.com/auth/callback">${esc(d.redirectsRaw || '')}</textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Display Name</label>
+            <input class="form-input" id="w-name" value="${esc(d.name)}">
+          </div>
+        `,
+        validate: (_d, body) => {
+          if (!body.querySelector('#w-name').value.trim()) return 'Display name is required.';
+          const lines = body.querySelector('#w-uris').value
+            .split('\n').map((s) => s.trim()).filter(Boolean);
+          if (!lines.length) return 'At least one redirect URI is required.';
+          for (const line of lines) {
+            try { new URL(line); }
+            catch { return `Invalid URL: ${line}`; }
+          }
+          return null;
+        },
+        collect: (d, body) => {
+          d.name = body.querySelector('#w-name').value.trim();
+          d.redirectsRaw = body.querySelector('#w-uris').value;
+        },
+      },
+      {
+        id: 'advanced', label: 'Advanced',
+        render: (d) => {
+          const grant = (id) => d.grants.includes(id) ? 'checked' : '';
+          const scope = (id) => d.scopes.includes(id) ? 'checked' : '';
+          return `
+            <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
+              The defaults work for most apps. Adjust if ${esc(app.name)}'s docs require something different.
+            </p>
+            <div class="form-2col">
+              <div class="form-group">
+                <label class="form-label">Grant Types</label>
+                <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-code" ${grant('authorization_code')}><label for="gt-code">authorization_code</label></div>
+                <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-refresh" ${grant('refresh_token')}><label for="gt-refresh">refresh_token</label></div>
+                <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-creds" ${grant('client_credentials')}><label for="gt-creds">client_credentials</label></div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Scopes</label>
+                ${['openid','email','profile','groups','roles'].map((s) => `
+                  <div class="form-check-row"><input type="checkbox" class="form-check" id="sc-${s}" ${scope(s)}><label for="sc-${s}">${esc(s)}</label></div>
+                `).join('')}
+              </div>
+              <div class="form-group span2">
+                <label class="form-label">Token Endpoint Auth Method</label>
+                <select class="form-select" id="w-tea">
+                  <option value="client_secret_basic">client_secret_basic (recommended)</option>
+                  <option value="client_secret_post">client_secret_post</option>
+                  <option value="none">none (public clients / PKCE)</option>
+                </select>
+              </div>
+            </div>
+          `;
+        },
+        bind: (body, d) => {
+          body.querySelector('#w-tea').value = d.token_endpoint_auth_method;
+        },
+        validate: (_d, body) => {
+          const grants = ['gt-code','gt-refresh','gt-creds']
+            .filter((id) => body.querySelector('#' + id).checked);
+          if (!grants.length) return 'Select at least one grant type.';
+          return null;
+        },
+        collect: (d, body) => {
+          d.grants = [];
+          if (body.querySelector('#gt-code').checked)    d.grants.push('authorization_code');
+          if (body.querySelector('#gt-refresh').checked) d.grants.push('refresh_token');
+          if (body.querySelector('#gt-creds').checked)   d.grants.push('client_credentials');
+          d.scopes = ['openid','email','profile','groups','roles']
+            .filter((s) => body.querySelector('#sc-' + s).checked);
+          d.token_endpoint_auth_method = body.querySelector('#w-tea').value;
+        },
+      },
+      {
+        id: 'review', label: 'Activate',
+        finishLabel: '✓ Register & Reveal Secret',
+        render: (d) => {
+          const uris = (d.redirectsRaw || '').split('\n').map((s) => s.trim()).filter(Boolean);
+          return `
+            <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">Review the values — registering will generate a <strong>Client ID</strong> and <strong>Client Secret</strong>.</p>
+            <div class="card">
+              <div class="kv"><div class="k">Name</div><div class="v">${esc(d.name)}</div></div>
+              <div class="kv"><div class="k">Redirect URIs</div><div class="v" style="word-break:break-all">${uris.map((u) => `<code style="font-size:0.78rem;display:block">${esc(u)}</code>`).join('')}</div></div>
+              <div class="kv"><div class="k">Grant Types</div><div class="v">${d.grants.map((g) => `<span class="badge badge-info" style="margin-right:0.25rem">${esc(g)}</span>`).join('')}</div></div>
+              <div class="kv"><div class="k">Scopes</div><div class="v">${d.scopes.map((s) => `<span class="badge badge-neutral" style="margin-right:0.25rem">${esc(s)}</span>`).join('')}</div></div>
+              <div class="kv"><div class="k">Token Auth</div><div class="v"><code>${esc(d.token_endpoint_auth_method)}</code></div></div>
+            </div>
+          `;
+        },
+      },
+    ],
+    onFinish: async (d, bd) => {
+      const result = await api.createOidcClient({
+        name:           d.name,
+        redirect_uris:  (d.redirectsRaw || '').split('\n').map((s) => s.trim()).filter(Boolean),
+        grant_types:    d.grants,
+        scopes:         d.scopes,
+        response_types: ['code'],
+        token_endpoint_auth_method: d.token_endpoint_auth_method,
+        catalog_slug:   d.catalog_slug,
+        category:       d.category,
+      });
+      bd.querySelector('.wizard-stepper').style.display = 'none';
+      bd.querySelector('#wiz-body').innerHTML = `
+        <div class="wizard-success">
+          <div class="check-circle">${svgIcon('check')}</div>
+          <h3>${esc(d.name)} is registered</h3>
+          <p class="muted">Copy the credentials below — the secret will <strong>not</strong> be shown again.</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Client ID</label>
+          ${readonlyInput(result.client_id, 'r-cid')}
+        </div>
+        <div class="form-group">
+          <label class="form-label">Client Secret</label>
+          ${readonlyInput(result.client_secret, 'r-csec')}
+        </div>
+      `;
+      wireCopyButtons(bd.querySelector('#wiz-body'));
+      bd.querySelector('#wiz-back').style.display = 'none';
+      bd.querySelector('#wiz-next').style.display = 'none';
+      const cancel = bd.querySelector('#wiz-cancel');
+      cancel.textContent = 'Done';
+      cancel.classList.replace('btn-secondary', 'btn-primary');
+      cancel.addEventListener('click', () => {
+        if (window.LILG_NAV) window.LILG_NAV('applications', { tab: 'oidc' });
+      }, { once: true });
+    },
+  });
+}
+
 // ─── 8. OIDC / OAuth Applications ────────────────────────────────────────────
 export async function viewOidcApps(content, opts = {}) {
   const embed = !!opts.embed;
@@ -1054,31 +1617,8 @@ export async function viewOidcApps(content, opts = {}) {
       btn.addEventListener('click', () => {
         const app = SSO_CATALOG.find(a => a.id === btn.dataset.app);
         if (!app) return;
-        if (app.protocol === 'SAML') {
-          openModal(`<div class="modal"><div class="modal-header"><h2>${esc(app.name)} — SAML 2.0</h2></div>
-            <div class="modal-body">
-              <div class="info-box">ℹ️ ${esc(app.name)} uses <strong>SAML 2.0</strong>. Configure it under
-                <strong>SAML Applications</strong>, then paste the IdP metadata URL below into ${esc(app.name)}'s SSO settings.</div>
-              <div class="form-group"><label class="form-label">IdP Metadata URL</label>
-                <input class="form-input" value="${esc(window.location.origin)}/auth/saml/metadata" readonly onclick="this.select()"></div>
-              <div class="form-group"><label class="form-label">IdP SSO URL</label>
-                <input class="form-input" value="${esc(window.location.origin)}/auth/saml/sso" readonly onclick="this.select()"></div>
-            </div>
-            <div class="modal-footer">
-              <button class="btn btn-primary" onclick="this.closest('.modal-backdrop').remove(); window.LILG_NAV && window.LILG_NAV('applications', { tab: 'saml' });">Go to SAML Apps →</button>
-              <button class="btn btn-secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button>
-            </div>
-          </div>`);
-        } else {
-          openRegisterModal({
-            name: app.name,
-            scopes: app.scopes,
-            grants: app.grants,
-            hint: app.hint,
-            catalog_slug: app.id,
-            category: app.cat,
-          });
-        }
+        if (app.protocol === 'SAML') openSamlWizard(app);
+        else                          openOidcWizard(app);
       });
     });
   }

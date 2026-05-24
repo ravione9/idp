@@ -685,7 +685,27 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — Fix OIDC integration add (response_types + catalog link)
+### *(this commit)* — 2026-05-24 — Integration setup wizard (SAML + OIDC) replaces ad-hoc "+ Add" modals
+
+**Why** — Clicking *+ Add* on a pre-built integration just showed an info dialog or a flat form — there was no guided setup, no SP detail capture, and no success/test step. miniOrange and Entrust both ship a step-by-step wizard, which the previous flow lacked.
+
+**What changed:**
+
+- **`web/js/views-stubs.js`** — adds `runWizard()` (shared multi-step modal runner), `openSamlWizard(app)`, `openOidcWizard(app)`, `VENDOR_TIPS` table with per-vendor setup steps for Slack, Zoom, Google Workspace, GitHub, Teams, Jira, AWS (generic fallback for the rest).
+  - **SAML wizard**: Overview → IdP Details (copy-from-us URLs) → SP Configuration (paste from vendor: Entity ID, ACS, SLO, NameID format, slug) → Activate (review + create + success screen with test launch link).
+  - **OIDC wizard**: Overview → Redirect URIs → Advanced (grants, scopes, token auth) → Review (register and reveal Client ID / Secret in the same modal).
+- **`web/css/styles.css`** — `.modal-wizard`, `.wizard-stepper` (pill-style numbered progress), `.wizard-success`, `.wiz-readonly-input` with copy buttons, and matching responsive styles.
+
+### `e8b9646` — 2026-05-24 — System Health page: fix false DB/Redis ERROR + working refresh
+
+**Why** — Backend returned `{ db: true, redis: true }` but the frontend compared `h.db?.status === 'ok'`, so health pills always rendered as ERROR even when both services were fine. Refresh button referenced a non-existent `#sys-body` and uptime under 1h showed `0h`.
+
+**What changed:**
+
+- **`src/api/config-system-health.ts`** — returns `{ db: { ok, latency_ms }, redis: { ok, latency_ms }, outbox: {pending, processing, done, dead}, connectors: [...], migrations: [...], uptime_seconds }`.
+- **`web/js/views-stubs.js`** — `serviceOk()` accepts boolean OR `{ ok }` OR `{ status:'ok' }`; uptime formatter shows seconds/minutes/hours; refresh button now actually re-fetches.
+
+### `f2b431e` — 2026-05-24 — Fix OIDC integration add (response_types + catalog link)
 
 **Why** — Registering an OIDC client from the pre-built integration catalog returned 500: `INSERT` omitted required `response_types` column. Integration add also did not create a row in the application catalog.
 
