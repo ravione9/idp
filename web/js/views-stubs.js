@@ -855,6 +855,8 @@ export async function viewOidcApps(content, opts = {}) {
   </div>`));
   const wrap = content.firstChild;
 
+  wrap.querySelector('#new-oidc-btn')?.addEventListener('click', () => openRegisterModal());
+
   // ── My Applications tab ────────────────────────────────────────────────────
   async function load() {
     try {
@@ -897,8 +899,6 @@ export async function viewOidcApps(content, opts = {}) {
           <thead><tr><th>App Name</th><th>Client ID</th><th>Grant Types</th><th>Redirect URIs</th><th>Status</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>`;
-
-      wrap.querySelector('#new-oidc-btn').addEventListener('click', () => openRegisterModal());
 
       wrap.querySelectorAll('.del-oidc').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -971,19 +971,29 @@ export async function viewOidcApps(content, opts = {}) {
       const scopes = ['openid','email','profile','groups','roles'].filter(s => bd.querySelector(`#sc-${s}`)?.checked);
       const urisRaw = bd.querySelector('#oidc-uris').value;
       const data = {
-        name: bd.querySelector('#oidc-name').value.trim(),     // backend expects 'name' not 'client_name'
+        name: bd.querySelector('#oidc-name').value.trim(),
         redirect_uris: urisRaw.split('\n').map(s => s.trim()).filter(Boolean),
-        grant_types: grants,
-        scopes,
+        grant_types: grants.length ? grants : ['authorization_code'],
+        scopes: scopes.length ? scopes : ['openid', 'email', 'profile'],
         response_types: ['code'],
         token_endpoint_auth_method: 'client_secret_basic',
       };
+      if (prefill.catalog_slug) {
+        data.catalog_slug = prefill.catalog_slug;
+        if (prefill.category) data.category = prefill.category;
+      }
       if (!data.name) { bd.querySelector('#oidc-err').innerHTML = errHtml('Application name is required'); saveBtn.disabled=false; saveBtn.textContent='Register Application'; return; }
+      if (data.grant_types.includes('authorization_code') && !data.redirect_uris.length) {
+        bd.querySelector('#oidc-err').innerHTML = errHtml('At least one redirect URI is required for authorization_code grant.');
+        saveBtn.disabled=false; saveBtn.textContent='Register Application';
+        return;
+      }
       try {
         const result = await api.createOidcClient(data);
         bd.remove();
         showSecretModal(result.client_id, result.client_secret, async () => {
           await load();
+          wrap.querySelector('#list-area')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
       } catch(e) {
         bd.querySelector('#oidc-err').innerHTML = errHtml(e.message);
@@ -1060,7 +1070,14 @@ export async function viewOidcApps(content, opts = {}) {
             </div>
           </div>`);
         } else {
-          openRegisterModal({ name: app.name, scopes: app.scopes, grants: app.grants, hint: app.hint });
+          openRegisterModal({
+            name: app.name,
+            scopes: app.scopes,
+            grants: app.grants,
+            hint: app.hint,
+            catalog_slug: app.id,
+            category: app.cat,
+          });
         }
       });
     });

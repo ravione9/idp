@@ -49,57 +49,100 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
 
 // POST /
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
-  const { name, redirect_uris = [], scopes = [], grant_types = [], token_endpoint_auth_method = 'client_secret_basic' } = req.body as {
-    name: string; redirect_uris?: string[]; scopes?: string[];
-    grant_types?: string[]; token_endpoint_auth_method?: string;
+  const {
+    name,
+    redirect_uris = [],
+    scopes = [],
+    grant_types = [],
+    response_types = ['code'],
+    token_endpoint_auth_method = 'client_secret_basic',
+    catalog_slug,
+    category,
+  } = req.body as {
+    name: string;
+    redirect_uris?: string[];
+    scopes?: string[];
+    grant_types?: string[];
+    response_types?: string[];
+    token_endpoint_auth_method?: string;
+    catalog_slug?: string;
+    category?: string;
   };
   if (!name) { res.status(400).json({ error: 'name required' }); return; }
+
   const id = uuidv4();
   const clientId = `client_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
   const secret = genSecret();
   const hash = await bcrypt.hash(secret, 10);
 
-  // Check which columns exist before inserting (schema may lag behind)
+  const redirectJson = JSON.stringify(redirect_uris);
+  const scopesJson = JSON.stringify(scopes);
+  const grantsJson = JSON.stringify(grant_types);
+  const responseJson = JSON.stringify(response_types.length ? response_types : ['code']);
+
+  let appId: string | null = null;
+  if (catalog_slug) {
+    const slug = catalog_slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
+    if (slug) {
+      const existing = await queryOne<{ id: string }>(
+        `SELECT id FROM applications WHERE slug = ?`,
+        [slug],
+      );
+      if (existing) {
+        appId = existing.id;
+      } else {
+        appId = uuidv4();
+        await execute(
+          `INSERT INTO applications
+             (id, slug, name, category, visibility, sso_enabled, provisioning)
+           VALUES (?, ?, ?, ?, 'PUBLIC', 1, 0)`,
+          [appId, slug, name, category ?? null],
+        );
+      }
+    }
+  }
+
   const colRows2 = await query<{ COLUMN_NAME: string }>(
     `SELECT COLUMN_NAME FROM information_schema.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'oidc_clients'`,
     [],
   );
   const existCols = new Set(colRows2.map(r => r.COLUMN_NAME));
+  const appCol = appId && existCols.has('app_id') ? ', app_id' : '';
+  const appVal = appId && existCols.has('app_id') ? ', ?' : '';
+  const appParam = appId && existCols.has('app_id') ? [appId] : [];
 
-  if (existCols.has('name') && existCols.has('token_endpoint_auth_method')) {
+  if (existCols.has('name') && existCols.has('token_endpoint_auth_method') && existCols.has('response_types')) {
     await execute(
       `INSERT INTO oidc_clients
          (id, client_id, client_secret_hash, name, redirect_uris, scopes,
-          grant_types, token_endpoint_auth_method, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      [id, clientId, hash, name,
-       JSON.stringify(redirect_uris), JSON.stringify(scopes),
-       JSON.stringify(grant_types), token_endpoint_auth_method],
+          grant_types, response_types, token_endpoint_auth_method, active${appCol})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1${appVal})`,
+      [id, clientId, hash, name, redirectJson, scopesJson, grantsJson, responseJson,
+       token_endpoint_auth_method, ...appParam],
     );
-  } else if (existCols.has('token_endpoint_auth')) {
-    // Pre-migration 007 schema
+  } else if (existCols.has('token_endpoint_auth') && existCols.has('response_types')) {
     await execute(
       `INSERT INTO oidc_clients
          (id, client_id, client_secret_hash, redirect_uris, scopes,
-          grant_types, token_endpoint_auth, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-      [id, clientId, hash,
-       JSON.stringify(redirect_uris), JSON.stringify(scopes),
-       JSON.stringify(grant_types), token_endpoint_auth_method],
+          grant_types, response_types, token_endpoint_auth, active${appCol})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1${appVal})`,
+      [id, clientId, hash, redirectJson, scopesJson, grantsJson, responseJson,
+       token_endpoint_auth_method, ...appParam],
     );
-  } else {
-    // Bare minimum — just id, client_id, secret, redirect_uris
+  } else if (existCols.has('response_types')) {
     await execute(
       `INSERT INTO oidc_clients
-         (id, client_id, client_secret_hash, redirect_uris, scopes, grant_types, active)
-       VALUES (?, ?, ?, ?, ?, ?, 1)`,
-      [id, clientId, hash,
-       JSON.stringify(redirect_uris), JSON.stringify(scopes),
-       JSON.stringify(grant_types)],
+         (id, client_id, client_secret_hash, redirect_uris, scopes, grant_types, response_types, active${appCol})
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1${appVal})`,
+      [id, clientId, hash, redirectJson, scopesJson, grantsJson, responseJson, ...appParam],
     );
+  } else {
+    res.status(500).json({ error: 'oidc_clients table is missing required columns — run migrations 010+' });
+    return;
   }
-  res.status(201).json({ id, client_id: clientId, client_secret: secret });
+
+  res.status(201).json({ id, client_id: clientId, client_secret: secret, app_id: appId });
 }));
 
 // PUT /:id
