@@ -397,11 +397,14 @@ router.post(
       [req.params['id']],
     );
     if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-    const cfg: Record<string, unknown> = JSON.parse(row.config_json || '{}');
     const type = row.connector_type;
 
     // Lightweight connectivity check per type
     try {
+      // Parse config_json safely — MySQL JSON columns may already be deserialized objects
+      const cfg: Record<string, unknown> = typeof row.config_json === 'string'
+        ? JSON.parse(row.config_json || '{}')
+        : ((row.config_json as Record<string, unknown>) ?? {});
       if (type === 'AD' || type === 'LDAP') {
         const { Client: LdapClient } = await import('ldapts');
         const host = cfg['host'] as string || 'localhost';

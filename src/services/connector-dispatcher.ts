@@ -57,7 +57,7 @@ export async function triggerConnectorSync(
 
   let syncPromise: Promise<SyncResult>;
 
-  if (connector.connector_type === 'LDAP' || connector.slug === 'active-directory') {
+  if (connector.connector_type === 'AD' || connector.connector_type === 'LDAP' || connector.slug === 'active-directory') {
     syncPromise = runAdSync(connectorId);
   } else if (connector.connector_type === 'GOOGLE' || connector.slug === 'google-workspace') {
     syncPromise = runGoogleSync(connectorId);
