@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 
 # shellcheck source=compose-lib.sh
 source "$(dirname "$0")/compose-lib.sh"
+idp_ensure_compose_v2
 idp_compose_init
 
 if [[ ! -f .env ]]; then
@@ -15,10 +16,7 @@ fi
 echo "==> Building lilg-api..."
 "${IDP_COMPOSE[@]}" build lilg-api
 
-idp_rm_stale_api
-
-echo "==> Starting lilg-api..."
-"${IDP_COMPOSE[@]}" up -d --no-deps lilg-api
+idp_compose_start_api
 
 echo "==> Waiting for health (up to 2 min)..."
 for i in $(seq 1 24); do

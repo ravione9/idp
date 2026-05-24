@@ -20,10 +20,42 @@ idp_compose_init() {
   fi
 }
 
+# Install Compose v2 plugin when only legacy docker-compose v1.29 is present.
+idp_ensure_compose_v2() {
+  if docker compose version >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "==> Docker Compose v2 not found — installing plugin (fixes ContainerConfig bug)..."
+  bash "$(dirname "${BASH_SOURCE[0]}")/install-compose-v2.sh"
+  idp_compose_init
+}
+
 idp_rm_stale_api() {
   echo "==> Removing stale API containers (ContainerConfig workaround)..."
   "${IDP_COMPOSE[@]}" stop lilg-api 2>/dev/null || true
+  # Remove from compose project (clears ghost names like 504b9cb60f54_idp-api)
+  "${IDP_COMPOSE[@]}" rm -f -s lilg-api 2>/dev/null || true
   docker rm -f idp-api lilg-api 2>/dev/null || true
+  # Any container whose name contains idp-api or lilg-api (compose v1 debris)
+  local id
+  while read -r id; do
+    [[ -n "$id" ]] && docker rm -f "$id" 2>/dev/null || true
+  done < <(docker ps -aq --filter "name=idp-api" 2>/dev/null || true)
+  while read -r id; do
+    [[ -n "$id" ]] && docker rm -f "$id" 2>/dev/null || true
+  done < <(docker ps -aq --filter "name=lilg-api" 2>/dev/null || true)
+}
+
+idp_compose_start_api() {
+  idp_rm_stale_api
+  echo "==> Starting lilg-api..."
+  if [[ ${IDP_COMPOSE_V2:-0} -eq 1 ]]; then
+    "${IDP_COMPOSE[@]}" up -d --no-deps lilg-api
+  else
+    # v1.29: never use `up` after `build` — use create+start to avoid recreate path
+    "${IDP_COMPOSE[@]}" create lilg-api
+    docker start idp-api
+  fi
 }
 
 # docker-compose v1.29 crashes with KeyError: ContainerConfig when recreating

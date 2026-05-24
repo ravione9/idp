@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 
 # shellcheck source=compose-lib.sh
 source "$(dirname "$0")/compose-lib.sh"
+idp_ensure_compose_v2
 idp_compose_init
 DB_PASS="${DB_PASSWORD:-s3cr3t_change_me}"
 

@@ -667,6 +667,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### *(this commit)* — 2026-05-24 — ContainerConfig fix v2: compose rm ghosts + auto-install Compose v2 + create/start on v1
+
+**Why** — `restart-api.sh` still failed: compose v1 left ghost containers (`504b9cb60f54_idp-api`) that `docker rm idp-api` did not remove; `up` still hit recreate/ContainerConfig.
+
+**What changed:**
+
+- **`idp_rm_stale_api`** — also runs `compose rm -f -s lilg-api` and removes all containers matching `name=idp-api` / `name=lilg-api`.
+- **`idp_ensure_compose_v2`** — `restart-api.sh` auto-installs Compose v2 plugin when only v1.29 is present.
+- **`idp_compose_start_api`** — on v1, uses `compose create` + `docker start idp-api` instead of `up` (avoids recreate code path).
+
 ### `20de138` — 2026-05-24 — Permanent ContainerConfig workaround: compose wrapper scripts
 
 **Why** — Every `docker-compose up -d --build lilg-api` on pam-2 hit `KeyError: ContainerConfig` because compose v1.29 cannot recreate containers after rebuild.
