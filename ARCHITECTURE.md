@@ -683,7 +683,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — pam-2 deploy model: sync-repo.sh + deploy.sh (no local edits on server)
+### `ded9501` — 2026-05-24 — pam-2 deploy model: sync-repo.sh + deploy.sh (no local edits on server)
 
 **Why** — Repeated `git pull` failures on pam-2 (`local changes would be overwritten`) from manual script patches; deploy workflow was undefined.
 
