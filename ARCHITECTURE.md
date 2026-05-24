@@ -685,7 +685,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — Integration setup wizard (SAML + OIDC) replaces ad-hoc "+ Add" modals
+### `97424f5` — 2026-05-24 — Integration setup wizard (SAML + OIDC) replaces ad-hoc "+ Add" modals
 
 **Why** — Clicking *+ Add* on a pre-built integration just showed an info dialog or a flat form — there was no guided setup, no SP detail capture, and no success/test step. miniOrange and Entrust both ship a step-by-step wizard, which the previous flow lacked.
 
