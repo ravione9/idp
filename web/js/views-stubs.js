@@ -3538,7 +3538,7 @@ export async function viewGeneralSettings(content) {
             <label style="display:flex;align-items:flex-start;gap:0.75rem;cursor:pointer">
               <input type="checkbox" id="gs-https-enabled" ${chk(ssl.portal_https_enabled)} style="margin-top:3px">
               <div>
-                <div style="font-weight:600">Enable HTTPS (port 8443)</div>
+                <div style="font-weight:600">Enable HTTPS (port 443)</div>
                 <div style="font-size:0.8rem;color:var(--muted)">Starts the HTTPS listener using the uploaded certificate. Requires a valid cert to be installed.</div>
               </div>
             </label>
@@ -3652,7 +3652,7 @@ export async function viewGeneralSettings(content) {
         msg.innerHTML = `<div class="alert alert-success">
           Connection settings saved.
           ${httpsOn && !allowHttp ? '<br><strong>HTTP→HTTPS redirect is now active.</strong>' : ''}
-          ${httpsOn ? '<br>HTTPS server will be available on port 8443.' : ''}
+          ${httpsOn ? '<br>HTTPS server will be available on port 443.' : ''}
         </div>`;
         setTimeout(() => { if (wrap.querySelector('#gs-conn-msg')) wrap.querySelector('#gs-conn-msg').innerHTML = ''; }, 5000);
       } catch(e) { msg.innerHTML = errHtml(e.message); }
