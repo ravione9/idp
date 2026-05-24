@@ -99,8 +99,74 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-// DELETE /:id — deactivate application
-router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
+// PUT /:id — update application fields
+router.put('/:id', async (req: Request, res: Response): Promise<void> => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing application id' });
+    return;
+  }
+
+  const updateSchema = z.object({
+    name:     z.string().min(1).max(100).optional(),
+    slug:     z.string().min(1).max(50).regex(/^[a-z0-9-]+$/).optional(),
+    entityId: z.string().min(1).max(512).optional(),
+    acsUrl:   z.string().url().optional(),
+    sloUrl:   z.string().url().optional().nullable(),
+    iconUrl:  z.string().url().optional().nullable(),
+    active:   z.boolean().optional(),
+  });
+
+  const parsed = updateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const d = parsed.data;
+
+  try {
+    const result = await execute(
+      `UPDATE saml_service_providers SET
+         name       = COALESCE(?, name),
+         slug       = COALESCE(?, slug),
+         entity_id  = COALESCE(?, entity_id),
+         acs_url    = COALESCE(?, acs_url),
+         slo_url    = COALESCE(?, slo_url),
+         icon_url   = COALESCE(?, icon_url),
+         active     = COALESCE(?, active)
+       WHERE id = ?`,
+      [
+        d.name     ?? null,
+        d.slug     ?? null,
+        d.entityId ?? null,
+        d.acsUrl   ?? null,
+        d.sloUrl   !== undefined ? d.sloUrl : null,
+        d.iconUrl  !== undefined ? d.iconUrl : null,
+        d.active   !== undefined ? (d.active ? 1 : 0) : null,
+        id,
+      ],
+    );
+
+    if (result.affectedRows === 0) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+
+    logger.info({ id }, 'SAML SP updated via Admin Central');
+    res.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Update failed';
+    if (msg.includes('Duplicate') || msg.includes('uk_')) {
+      res.status(409).json({ error: 'An application with this slug or entity ID already exists' });
+      return;
+    }
+    res.status(400).json({ error: msg });
+  }
+});
+
+// PUT /:id/activate — re-activate application
+router.put('/:id/activate', async (req: Request, res: Response): Promise<void> => {
   const id = req.params['id'];
   if (!id) {
     res.status(400).json({ error: 'Missing application id' });
@@ -108,7 +174,7 @@ router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
   }
 
   const result = await execute(
-    'UPDATE saml_service_providers SET active = 0 WHERE id = ?',
+    'UPDATE saml_service_providers SET active = 1 WHERE id = ?',
     [id],
   );
 
@@ -117,7 +183,29 @@ router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  logger.info({ id }, 'SAML SP deactivated via Admin Central');
+  logger.info({ id }, 'SAML SP activated via Admin Central');
+  res.json({ success: true });
+});
+
+// DELETE /:id — hard-delete application
+router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing application id' });
+    return;
+  }
+
+  const result = await execute(
+    'DELETE FROM saml_service_providers WHERE id = ?',
+    [id],
+  );
+
+  if (result.affectedRows === 0) {
+    res.status(404).json({ error: 'Application not found' });
+    return;
+  }
+
+  logger.info({ id }, 'SAML SP deleted via Admin Central');
   res.json({ success: true });
 });
 

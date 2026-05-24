@@ -37,6 +37,8 @@ Object.assign(api, {
   listSamlApps:     () => f('/api/admin/saml-apps'),
   createSamlApp:    (data) => f('/api/admin/saml-apps', { method: 'POST', body: JSON.stringify(data) }),
   deactivateSamlApp:(id) => f(`/api/admin/saml-apps/${id}`, { method: 'DELETE' }),
+  updateSamlApp:    (id, data) => f(`/api/admin/saml-apps/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  activateSamlApp:  (id) => f(`/api/admin/saml-apps/${id}/activate`, { method: 'PUT' }),
   samlAudit:        () => f('/api/admin/audit/saml'),
   systemAudit:      () => f('/api/admin/audit/system'),
 

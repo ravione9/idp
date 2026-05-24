@@ -241,11 +241,100 @@ export async function viewIgaApps(content, opts = {}) {
       justify-content:center;flex-shrink:0">${esc((app.name||'?')[0].toUpperCase())}</div>`;
   }
 
+  // ── SAML edit modal (for use within catalog) ───────────────────────────────
+  function openSpModal(sp = null) {
+    const isEdit = !!sp;
+    const NAMEID_OPTIONS = [
+      ['urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',    'Email Address'],
+      ['urn:oasis:names:tc:SAML:2.0:nameid-format:persistent',      'Persistent'],
+      ['urn:oasis:names:tc:SAML:2.0:nameid-format:transient',       'Transient'],
+      ['urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified',     'Unspecified'],
+      ['urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName', 'X.509 Subject'],
+    ];
+    const curFormat = sp?.nameid_format || 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
+    const bd = openModal(`<div class="modal" style="width:580px;max-width:96vw">
+      <div class="modal-header"><h2>${isEdit ? 'Edit SAML Application' : 'Register SAML Application'}</h2></div>
+      <div class="modal-body">
+        <div class="form-2col">
+          <div class="form-group">
+            <label class="form-label">Application Name <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="csp-name" value="${esc(sp?.name||'')}" placeholder="e.g. Darwinbox HRMS">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Slug <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="csp-slug" value="${esc(sp?.slug||'')}"
+              placeholder="e.g. darwinbox" pattern="[a-z0-9-]+"
+              ${isEdit ? 'readonly title="Slug cannot be changed after creation"' : ''}>
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">SP Entity ID <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="csp-entity" value="${esc(sp?.entity_id||'')}" placeholder="https://app.example.com/saml/metadata">
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">ACS URL <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="csp-acs" type="url" value="${esc(sp?.acs_url||'')}" placeholder="https://app.example.com/saml/acs">
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">SLO URL <span class="muted" style="font-weight:400">(optional)</span></label>
+            <input class="form-input" id="csp-slo" type="url" value="${esc(sp?.slo_url||'')}" placeholder="https://app.example.com/saml/slo">
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">NameID Format</label>
+            <select class="form-select" id="csp-nameid">
+              ${NAMEID_OPTIONS.map(([v, l]) => `<option value="${esc(v)}" ${curFormat===v?'selected':''}>${esc(l)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">Icon URL <span class="muted" style="font-weight:400">(optional)</span></label>
+            <input class="form-input" id="csp-icon" type="url" value="${esc(sp?.icon_url||'')}" placeholder="https://…/logo.png">
+          </div>
+        </div>
+        <div id="csp-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="csp-save">${isEdit ? 'Save Changes' : 'Register'}</button>
+        <button class="btn btn-secondary" id="csp-cancel">Cancel</button>
+      </div>
+    </div>`);
+
+    bd.querySelector('#csp-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#csp-save').addEventListener('click', async () => {
+      const saveBtn = bd.querySelector('#csp-save');
+      const name     = bd.querySelector('#csp-name').value.trim();
+      const slug     = bd.querySelector('#csp-slug').value.trim();
+      const entityId = bd.querySelector('#csp-entity').value.trim();
+      const acsUrl   = bd.querySelector('#csp-acs').value.trim();
+      const sloUrl   = bd.querySelector('#csp-slo').value.trim();
+      const nameidFormat = bd.querySelector('#csp-nameid').value;
+      const iconUrl  = bd.querySelector('#csp-icon').value.trim();
+
+      if (!name)     { bd.querySelector('#csp-err').innerHTML = errHtml('Name is required.'); return; }
+      if (!isEdit && !slug) { bd.querySelector('#csp-err').innerHTML = errHtml('Slug is required.'); return; }
+      if (!entityId) { bd.querySelector('#csp-err').innerHTML = errHtml('SP Entity ID is required.'); return; }
+      if (!acsUrl)   { bd.querySelector('#csp-err').innerHTML = errHtml('ACS URL is required.'); return; }
+
+      saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
+      const data = { name, entityId, acsUrl, nameidFormat,
+        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined };
+      if (!isEdit) data.slug = slug;
+
+      try {
+        if (isEdit) await api.updateSamlApp(sp.id, data);
+        else        await api.createSamlApp(data);
+        bd.remove();
+        await loadApps();
+      } catch (e) {
+        bd.querySelector('#csp-err').innerHTML = errHtml(e.message);
+        saveBtn.disabled = false; saveBtn.textContent = isEdit ? 'Save Changes' : 'Register';
+      }
+    });
+  }
+
   // ── Render table ────────────────────────────────────────────────────────────
   function renderTable() {
     const q = searchQ.toLowerCase();
     const rows = allApps.filter(a =>
-      (!q || a.name.toLowerCase().includes(q) || a.slug.toLowerCase().includes(q) || (a.category||'').toLowerCase().includes(q)) &&
+      (!q || (a.name||'').toLowerCase().includes(q) || (a.slug||'').toLowerCase().includes(q) || (a.category||'').toLowerCase().includes(q)) &&
       (!visFilter || a.visibility === visFilter) &&
       (showInactive || a.active)
     );
@@ -261,36 +350,39 @@ export async function viewIgaApps(content, opts = {}) {
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Application</th><th>Slug</th><th>Category</th><th>Visibility</th>
-            <th>SSO</th><th>Provisioning</th><th>Protocols</th><th>Status</th><th></th>
+            <th>Application</th><th>Type</th><th>Slug</th><th>Category</th><th>Status</th><th>Actions</th>
           </tr></thead>
           <tbody>
-            ${rows.map(a => `<tr>
+            ${rows.map(a => {
+              const typeBadge = a._type === 'SAML'
+                ? '<span class="badge badge-info">SAML</span>'
+                : a._type === 'OIDC'
+                  ? '<span class="badge badge-purple">OIDC</span>'
+                  : '<span class="badge badge-neutral">IGA</span>';
+              return `<tr>
               <td>
                 <div style="display:flex;align-items:center;gap:0.6rem">
                   ${appIcon(a)}
                   <span class="cell-strong">${esc(a.name)}</span>
                 </div>
               </td>
-              <td><code style="font-size:0.78rem">${esc(a.slug)}</code></td>
+              <td>${typeBadge}</td>
+              <td><code style="font-size:0.78rem">${esc(a.slug||'—')}</code></td>
               <td class="muted" style="font-size:0.875rem">${esc(a.category || '—')}</td>
-              <td><span class="badge ${a.visibility==='PUBLIC'?'badge-info':'badge-warning'}">${esc(a.visibility||'—')}</span></td>
-              <td>${a.sso_enabled ? '<span class="badge badge-success">On</span>' : '<span class="muted">—</span>'}</td>
-              <td>${a.provisioning ? '<span class="badge badge-info">On</span>' : '<span class="muted">—</span>'}</td>
-              <td class="muted">${a.protocol_count ?? 0}</td>
               <td>${a.active
                 ? '<span class="badge badge-success">Active</span>'
                 : '<span class="badge badge-neutral">Inactive</span>'}</td>
               <td style="white-space:nowrap">
                 <button class="btn btn-sm btn-secondary ac-edit"
-                  data-id="${esc(String(a.id))}" title="Edit">✏️ Edit</button>
+                  data-id="${esc(String(a.id))}" data-type="${esc(a._type)}" title="Edit">✏️ Edit</button>
                 <button class="btn btn-sm ${a.active?'btn-warning':'btn-success'} ac-toggle"
-                  data-id="${esc(String(a.id))}" data-active="${a.active?'1':'0'}"
+                  data-id="${esc(String(a.id))}" data-type="${esc(a._type)}" data-active="${a.active?'1':'0'}"
                   title="${a.active?'Deactivate':'Activate'}">${a.active?'Deactivate':'Activate'}</button>
                 <button class="btn btn-sm btn-danger ac-del"
-                  data-id="${esc(String(a.id))}" data-name="${esc(a.name)}" title="Delete">Delete</button>
+                  data-id="${esc(String(a.id))}" data-type="${esc(a._type)}" data-name="${esc(a.name)}" title="Delete">Delete</button>
               </td>
-            </tr>`).join('')}
+            </tr>`;
+            }).join('')}
           </tbody>
         </table>
       </div>`;
@@ -298,8 +390,15 @@ export async function viewIgaApps(content, opts = {}) {
     // Edit
     wrap.querySelectorAll('.ac-edit').forEach(btn => {
       btn.addEventListener('click', () => {
-        const app = allApps.find(a => String(a.id) === btn.dataset.id);
-        if (app) openAppModal(app);
+        const app = allApps.find(a => String(a.id) === btn.dataset.id && a._type === btn.dataset.type);
+        if (!app) return;
+        if (app._type === 'SAML') {
+          openSpModal(app);
+        } else if (app._type === 'OIDC') {
+          alert('Edit OIDC apps in the OIDC / OAuth tab.');
+        } else {
+          openAppModal(app);
+        }
       });
     });
     // Toggle active
@@ -308,7 +407,13 @@ export async function viewIgaApps(content, opts = {}) {
         const newActive = btn.dataset.active !== '1';
         if (!confirm(`${newActive?'Activate':'Deactivate'} this application?`)) return;
         try {
-          await api.updateIgaApp(btn.dataset.id, { active: newActive });
+          if (btn.dataset.type === 'SAML') {
+            await api.updateSamlApp(btn.dataset.id, { active: newActive });
+          } else if (btn.dataset.type === 'OIDC') {
+            await api.updateOidcClient(btn.dataset.id, { active: newActive });
+          } else {
+            await api.updateIgaApp(btn.dataset.id, { active: newActive });
+          }
           await loadApps();
         } catch(e) { alert(e.message); }
       });
@@ -316,10 +421,16 @@ export async function viewIgaApps(content, opts = {}) {
     // Delete
     wrap.querySelectorAll('.ac-del').forEach(btn => {
       btn.addEventListener('click', async () => {
-        if (!confirm(`Permanently delete "${btn.dataset.name}"?\nThis will also remove all protocol configs and entitlements.`)) return;
+        if (!confirm(`Permanently delete "${btn.dataset.name}"?`)) return;
         btn.disabled = true; btn.textContent = 'Deleting…';
         try {
-          await api.deleteIgaApp(btn.dataset.id);
+          if (btn.dataset.type === 'SAML') {
+            await api.deactivateSamlApp(btn.dataset.id);
+          } else if (btn.dataset.type === 'OIDC') {
+            await api.deleteOidcClient(btn.dataset.id);
+          } else {
+            await api.deleteIgaApp(btn.dataset.id);
+          }
           await loadApps();
         } catch(e) { alert(e.message); btn.disabled = false; btn.textContent = 'Delete'; }
       });
@@ -330,8 +441,15 @@ export async function viewIgaApps(content, opts = {}) {
   async function loadApps() {
     wrap.querySelector('#ac-list').innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
     try {
-      const r = await api.igaApps();
-      allApps = r.data || [];
+      const [igaR, samlR, oidcR] = await Promise.all([
+        api.igaApps().catch(() => ({ data: [] })),
+        api.listSamlApps().catch(() => ({ data: [] })),
+        api.listOidcClients().catch(() => ({ data: [] })),
+      ]);
+      const igaApps  = (igaR.data  || []).map(a => ({ ...a, _type: 'IGA'  }));
+      const samlApps = (samlR.data || []).map(a => ({ ...a, _type: 'SAML', category: a.category || null, visibility: a.visibility || 'PUBLIC' }));
+      const oidcApps = (oidcR.data || []).map(a => ({ ...a, _type: 'OIDC', category: a.category || null, visibility: a.visibility || 'PUBLIC', active: a.active !== undefined ? a.active : 1 }));
+      allApps = [...igaApps, ...samlApps, ...oidcApps];
       renderTable();
     } catch(e) {
       wrap.querySelector('#ac-list').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
@@ -437,8 +555,16 @@ export async function viewIgaApps(content, opts = {}) {
 /* ---------- SAML Applications (legacy CRUD) ---------- */
 export async function viewSamlApps(me, content, opts = {}) {
   const embed = !!opts.embed;
+  const isSuper = me.employee?.role === 'SUPER_ADMIN';
+
+  const actionBtn = isSuper
+    ? `<button class="btn btn-primary" id="sa-new-btn">+ Register SAML App</button>`
+    : '';
+
   const wrap = el(`<div>
-    ${embed ? '' : header('SAML Applications', 'Service Providers registered with this Identity Provider')}
+    ${embed
+      ? (isSuper ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actionBtn}</div>` : '')
+      : header('SAML Applications', 'Service Providers registered with this Identity Provider', actionBtn)}
     <div id="sa-area"><div class="loading-row"><span class="spinner"></span></div></div>
   </div>`);
   content.replaceChildren(wrap);
@@ -451,69 +577,169 @@ export async function viewSamlApps(me, content, opts = {}) {
     return;
   }
   const apps = resp.data || [];
-  const isSuper = me.employee?.role === 'SUPER_ADMIN';
 
-  const tableBody = apps.length
-    ? apps.map((sp) => `<tr>
-      <td class="cell-strong">${esc(sp.name)}</td>
-      <td><code>${esc(sp.slug)}</code></td>
-      <td class="truncate muted" title="${esc(sp.entity_id)}">${esc(sp.entity_id)}</td>
-      <td class="truncate muted" title="${esc(sp.acs_url)}">${esc(sp.acs_url)}</td>
-      <td>${sp.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Disabled</span>'}</td>
-      <td class="actions">${isSuper && sp.active ? `<button class="btn btn-sm btn-danger" data-sp-id="${esc(sp.id)}">Deactivate</button>` : ''}</td>
-    </tr>`).join('')
-    : `<tr><td colspan="6" class="empty-state"><span class="empty-icon">⛨</span>No SAML applications</td></tr>`;
+  const NAMEID_OPTIONS = [
+    ['urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',       'Email Address'],
+    ['urn:oasis:names:tc:SAML:2.0:nameid-format:persistent',         'Persistent'],
+    ['urn:oasis:names:tc:SAML:2.0:nameid-format:transient',          'Transient'],
+    ['urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified',        'Unspecified'],
+    ['urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName',    'X.509 Subject'],
+  ];
 
-  wrap.querySelector('#sa-area').innerHTML = `
-    ${status.metadataUrl ? `<div class="alert alert-info" style="margin-bottom:1.5rem"><div>
-      <div style="font-weight:500;margin-bottom:0.2rem">IdP metadata for SP onboarding</div>
-      <a href="${esc(status.metadataUrl)}" target="_blank">${esc(status.metadataUrl)}</a></div></div>` : ''}
-    ${isSuper ? `<details class="card" style="margin-bottom:1rem">
-      <summary style="cursor:pointer;font-weight:600">Register new SAML application</summary>
-      <p class="subtitle" style="margin:0.5rem 0 1rem">Add a Service Provider so users can launch it via SSO.</p>
-      <div id="sp-error"></div>
-      <form id="sp-form">
-        <div class="grid-2">
-          <div class="field"><label>Application name</label><input name="name" required placeholder="e.g. Darwinbox HRMS" /></div>
-          <div class="field"><label>Slug</label><input name="slug" required pattern="[a-z0-9-]+" placeholder="e.g. darwinbox" /></div>
-          <div class="field"><label>SP Entity ID</label><input name="entityId" required placeholder="https://app.example.com/saml/metadata" /></div>
-          <div class="field"><label>ACS URL</label><input name="acsUrl" type="url" required placeholder="https://app.example.com/saml/acs" /></div>
-          <div class="field"><label>SLO URL (optional)</label><input name="sloUrl" type="url" /></div>
-          <div class="field"><label>Icon URL (optional)</label><input name="iconUrl" type="url" /></div>
+  function openSpModal(sp = null) {
+    const isEdit = !!sp;
+    const curFormat = sp?.nameid_format || 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
+    const bd = openModal(`<div class="modal" style="width:580px;max-width:96vw">
+      <div class="modal-header"><h2>${isEdit ? 'Edit SAML Application' : 'Register SAML Application'}</h2></div>
+      <div class="modal-body">
+        <div class="form-2col">
+          <div class="form-group">
+            <label class="form-label">Application Name <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="sp-name" value="${esc(sp?.name||'')}" placeholder="e.g. Darwinbox HRMS">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Slug <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="sp-slug" value="${esc(sp?.slug||'')}"
+              placeholder="e.g. darwinbox" pattern="[a-z0-9-]+"
+              ${isEdit ? 'readonly title="Slug cannot be changed after creation"' : ''}>
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">SP Entity ID <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="sp-entity" value="${esc(sp?.entity_id||'')}" placeholder="https://app.example.com/saml/metadata">
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">ACS URL <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="sp-acs" type="url" value="${esc(sp?.acs_url||'')}" placeholder="https://app.example.com/saml/acs">
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">SLO URL <span class="muted" style="font-weight:400">(optional)</span></label>
+            <input class="form-input" id="sp-slo" type="url" value="${esc(sp?.slo_url||'')}" placeholder="https://app.example.com/saml/slo">
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">NameID Format</label>
+            <select class="form-select" id="sp-nameid">
+              ${NAMEID_OPTIONS.map(([v, l]) => `<option value="${esc(v)}" ${curFormat===v?'selected':''}>${esc(l)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">Icon URL <span class="muted" style="font-weight:400">(optional)</span></label>
+            <input class="form-input" id="sp-icon" type="url" value="${esc(sp?.icon_url||'')}" placeholder="https://…/logo.png">
+          </div>
         </div>
-        <button type="submit" class="btn btn-primary">Register application</button>
-      </form>
-    </details>` : ''}
-    <div class="table-wrap">
-      <div class="table-toolbar"><strong>Registered applications</strong><span class="muted">${apps.length} total</span></div>
-      <table><thead><tr><th>Name</th><th>Slug</th><th>Entity ID</th><th>ACS URL</th><th>Status</th><th></th></tr></thead><tbody>${tableBody}</tbody></table>
-    </div>`;
+        <div id="sp-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="sp-save">${isEdit ? 'Save Changes' : 'Register'}</button>
+        <button class="btn btn-secondary" id="sp-cancel">Cancel</button>
+      </div>
+    </div>`);
 
-  if (isSuper) {
-    wrap.querySelector('#sp-form')?.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const errEl = wrap.querySelector('#sp-error');
-      errEl.innerHTML = '';
-      const body = Object.fromEntries(new FormData(e.target));
-      if (!body.sloUrl) delete body.sloUrl;
-      if (!body.iconUrl) delete body.iconUrl;
+    bd.querySelector('#sp-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#sp-save').addEventListener('click', async () => {
+      const saveBtn = bd.querySelector('#sp-save');
+      const name     = bd.querySelector('#sp-name').value.trim();
+      const slug     = bd.querySelector('#sp-slug').value.trim();
+      const entityId = bd.querySelector('#sp-entity').value.trim();
+      const acsUrl   = bd.querySelector('#sp-acs').value.trim();
+      const sloUrl   = bd.querySelector('#sp-slo').value.trim();
+      const nameidFormat = bd.querySelector('#sp-nameid').value;
+      const iconUrl  = bd.querySelector('#sp-icon').value.trim();
+
+      if (!name)     { bd.querySelector('#sp-err').innerHTML = errHtml('Name is required.'); return; }
+      if (!isEdit && !slug) { bd.querySelector('#sp-err').innerHTML = errHtml('Slug is required.'); return; }
+      if (!entityId) { bd.querySelector('#sp-err').innerHTML = errHtml('SP Entity ID is required.'); return; }
+      if (!acsUrl)   { bd.querySelector('#sp-err').innerHTML = errHtml('ACS URL is required.'); return; }
+
+      saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
+      const data = { name, entityId, acsUrl, nameidFormat,
+        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined };
+      if (!isEdit) data.slug = slug;
+
       try {
-        await api.createSamlApp(body);
-        errEl.innerHTML = `<div class="alert alert-success">Application registered.</div>`;
-        e.target.reset();
-        setTimeout(() => viewSamlApps(me, content, opts), 600);
-      } catch (err) {
-        errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+        if (isEdit) await api.updateSamlApp(sp.id, data);
+        else        await api.createSamlApp(data);
+        bd.remove();
+        viewSamlApps(me, content, opts);
+      } catch (e) {
+        bd.querySelector('#sp-err').innerHTML = errHtml(e.message);
+        saveBtn.disabled = false; saveBtn.textContent = isEdit ? 'Save Changes' : 'Register';
       }
     });
   }
-  wrap.querySelectorAll('[data-sp-id]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('Deactivate this application?')) return;
-      try { await api.deactivateSamlApp(btn.dataset.spId); viewSamlApps(me, content, opts); }
-      catch (err) { alert(err.message); }
+
+  const tableBody = apps.length
+    ? apps.map((sp) => `<tr>
+        <td class="cell-strong">${esc(sp.name)}</td>
+        <td><code style="font-size:0.78rem">${esc(sp.slug)}</code></td>
+        <td class="truncate muted" style="font-size:0.85rem" title="${esc(sp.entity_id)}">${esc(sp.entity_id)}</td>
+        <td class="truncate muted" style="font-size:0.85rem" title="${esc(sp.acs_url)}">${esc(sp.acs_url)}</td>
+        <td>${sp.active
+          ? '<span class="badge badge-success">Active</span>'
+          : '<span class="badge badge-neutral">Disabled</span>'}</td>
+        <td style="white-space:nowrap">${isSuper ? `
+          <button class="btn btn-sm btn-secondary sp-edit" data-id="${esc(String(sp.id))}" title="Edit">✏️ Edit</button>
+          <button class="btn btn-sm ${sp.active ? 'btn-warning' : 'btn-success'} sp-toggle"
+            data-id="${esc(String(sp.id))}" data-active="${sp.active ? '1' : '0'}">${sp.active ? 'Disable' : 'Enable'}</button>
+          <button class="btn btn-sm btn-danger sp-del"
+            data-id="${esc(String(sp.id))}" data-name="${esc(sp.name)}">Delete</button>
+        ` : ''}</td>
+      </tr>`).join('')
+    : `<tr><td colspan="6" class="empty-state"><span class="empty-icon">⛨</span>No SAML applications registered.</td></tr>`;
+
+  wrap.querySelector('#sa-area').innerHTML = `
+    ${status.metadataUrl ? `<div class="alert alert-info" style="margin-bottom:1.5rem">
+      <div style="font-weight:500;margin-bottom:0.2rem">IdP metadata for SP onboarding</div>
+      <a href="${esc(status.metadataUrl)}" target="_blank">${esc(status.metadataUrl)}</a>
+    </div>` : ''}
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <strong>Registered applications</strong>
+        <span class="muted">${apps.length} total</span>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Name</th><th>Slug</th><th>Entity ID</th><th>ACS URL</th><th>Status</th><th>Actions</th>
+        </tr></thead>
+        <tbody>${tableBody}</tbody>
+      </table>
+    </div>`;
+
+  // Wire edit buttons
+  wrap.querySelectorAll('.sp-edit').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sp = apps.find(a => String(a.id) === btn.dataset.id);
+      if (sp) openSpModal(sp);
     });
   });
+
+  // Wire enable/disable toggle buttons
+  wrap.querySelectorAll('.sp-toggle').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const newActive = btn.dataset.active !== '1';
+      if (!confirm(`${newActive ? 'Enable' : 'Disable'} this application?`)) return;
+      try {
+        await api.updateSamlApp(btn.dataset.id, { active: newActive });
+        viewSamlApps(me, content, opts);
+      } catch (err) { alert(err.message); }
+    });
+  });
+
+  // Wire delete buttons
+  wrap.querySelectorAll('.sp-del').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Permanently delete "${btn.dataset.name}"?`)) return;
+      btn.disabled = true; btn.textContent = 'Deleting…';
+      try {
+        await api.deactivateSamlApp(btn.dataset.id);
+        viewSamlApps(me, content, opts);
+      } catch (err) { alert(err.message); btn.disabled = false; btn.textContent = 'Delete'; }
+    });
+  });
+
+  // Wire register button
+  if (isSuper) {
+    wrap.querySelector('#sa-new-btn')?.addEventListener('click', () => openSpModal());
+  }
 }
 
 /* ---------- Connectors ---------- */
