@@ -186,12 +186,20 @@ Object.assign(api, {
   terminateUser: (empId, reason) => f(`/api/admin/users/${empId}/terminate`, { method: 'POST', body: JSON.stringify({ reason }) }),
   userLifecycle: (empId) => f(`/api/admin/users/${empId}/lifecycle`),
 
+  // Access requests
+  igaSubmitRequest:  (data) => f('/api/iga/access-requests', { method: 'POST', body: JSON.stringify(data) }),
+  igaRequestDecision: (id, decision, comment) => f(`/api/iga/access-requests/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision, comment }) }),
+
   // Access reviews CRUD
   createAccessReview: (data) => f('/api/iga/access-reviews', { method: 'POST', body: JSON.stringify(data) }),
+  igaReviewItems:     (campaignId) => f(`/api/iga/access-reviews/${campaignId}/items`),
   submitReviewDecision: (campaignId, itemId, decision, comment) => f(`/api/iga/access-reviews/${campaignId}/items/${itemId}/decision`, { method: 'POST', body: JSON.stringify({ decision, comment }) }),
 
   // SoD Policy CRUD
   createSodPolicy: (data) => f('/api/iga/sod-policies', { method: 'POST', body: JSON.stringify(data) }),
   updateSodPolicy: (id, data) => f(`/api/iga/sod-policies/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteSodPolicy: (id) => f(`/api/iga/sod-policies/${id}`, { method: 'DELETE' }),
+
+  // SoD violation remediation
+  igaRemediateSod: (id) => f(`/api/iga/sod-violations/${id}/remediate`, { method: 'POST' }),
 });

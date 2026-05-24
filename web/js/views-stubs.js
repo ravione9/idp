@@ -20,6 +20,9 @@ function errHtml(msg) {
   return `<div class="alert alert-error">${esc(msg)}</div>`;
 }
 
+/* Normalise backend responses — all list endpoints return {data:[...]} */
+const norm = r => Array.isArray(r) ? r : (r?.data ?? []);
+
 // ─── 1. Groups ────────────────────────────────────────────────────────────────
 export async function viewGroups(content) {
   content.replaceChildren(el(`<div>${header('Groups', 'Manage static and dynamic groups', `<button class="btn btn-primary" id="new-group-btn">+ New Group</button>`)}<div id="list-area">${loading()}</div></div>`));
@@ -27,7 +30,7 @@ export async function viewGroups(content) {
 
   async function load() {
     try {
-      const groups = await api.listGroups();
+      const groups = norm(await api.listGroups());
       const rows = groups.length ? groups.map(g => `
         <tr>
           <td class="cell-strong">${esc(g.name)}</td>
@@ -71,7 +74,7 @@ export async function viewSystemUsers(content) {
 
   async function load() {
     try {
-      const users = await api.listSystemUsers();
+      const users = norm(await api.listSystemUsers());
       const rows = users.length ? users.map(u => `
         <tr>
           <td class="cell-strong">${esc(u.name || u.username || '—')}</td>
@@ -115,7 +118,7 @@ export async function viewIdentityProfiles(content) {
 
   async function load() {
     try {
-      const profiles = await api.listIdentityProfiles();
+      const profiles = norm(await api.listIdentityProfiles());
       const rows = profiles.length ? profiles.map(p => `
         <tr>
           <td class="cell-strong">${esc(p.name)}</td>
@@ -212,7 +215,7 @@ export async function viewAdaptiveAuth(content) {
 
   async function load() {
     try {
-      const policies = await api.listAdaptivePolicies();
+      const policies = norm(await api.listAdaptivePolicies());
       const actionBadge = a => ({ ALLOW: 'badge-success', MFA_REQUIRED: 'badge-warning', DENY: 'badge-danger', BLOCK: 'badge-danger' }[a] || 'badge-neutral');
       const rows = policies.length ? policies.map(p => {
         let condSummary = '';
@@ -279,7 +282,7 @@ export async function viewPasswordPolicies(content) {
 
   async function load() {
     try {
-      const policies = await api.listPasswordPolicies();
+      const policies = norm(await api.listPasswordPolicies());
       const rows = policies.length ? policies.map(p => `
         <tr>
           <td class="cell-strong">${esc(p.name)}</td>
@@ -1498,7 +1501,7 @@ export async function viewRoles(content) {
 
   async function load() {
     try {
-      const roles = await api.listBusinessRoles();
+      const roles = norm(await api.listBusinessRoles());
       const rows = roles.length ? roles.map(r => `
         <tr>
           <td class="cell-strong">${esc(r.name)}</td>
@@ -1551,7 +1554,7 @@ export async function viewRoles(content) {
     bd.querySelector('#ent-close').addEventListener('click', () => bd.remove());
     async function reloadEnt() {
       try {
-        const ents = await api.getRoleEntitlements(roleId);
+        const ents = norm(await api.getRoleEntitlements(roleId));
         bd.querySelector('#ent-body').innerHTML = `
           <div style="margin-bottom:1rem;display:flex;gap:0.5rem">
             <input class="form-input" id="ent-add-id" placeholder="Entitlement ID" style="flex:1">
@@ -1585,8 +1588,7 @@ export async function viewBirthright(content) {
   content.replaceChildren(el(`<div>${header('Birthright Provisioning', 'Automatically provision entitlements based on joiner rules')}<div id="br-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
   try {
-    const rules = await api.listBirthrightRules();
-    const list = (rules || []);
+    const list = norm(await api.listBirthrightRules());
     const rows = list.length ? list.map(r => {
       let ruleSummary = '—';
       try { const j = JSON.parse(r.birthright_rule || '{}'); ruleSummary = Object.keys(j).join(', ') || '—'; } catch {}
@@ -1633,7 +1635,7 @@ export async function viewPamResources(content) {
 
   async function load() {
     try {
-      const resources = await api.listPamResources();
+      const resources = norm(await api.listPamResources());
       const typeBadge = t => ({ SSH: 'badge-success', RDP: 'badge-info', DATABASE: 'badge-warning', DB: 'badge-warning', WEB: 'badge-neutral', WINDOWS: 'badge-neutral' }[t] || 'badge-neutral');
       const rows = resources.length ? resources.map(r => `
         <tr>
@@ -1698,7 +1700,7 @@ export async function viewPamSessions(content) {
 
   async function load() {
     try {
-      const sessions = await api.listPamSessions();
+      const sessions = norm(await api.listPamSessions());
       const statusBadge = s => ({ ACTIVE: 'badge-success', ENDED: 'badge-neutral', TERMINATED: 'badge-danger' }[s] || 'badge-neutral');
       const rows = sessions.length ? sessions.map(s => `
         <tr>
@@ -1729,7 +1731,7 @@ export async function viewPamVault(content) {
 
   async function load() {
     try {
-      const entries = await api.listVaultEntries();
+      const entries = norm(await api.listVaultEntries());
       const rows = entries.length ? entries.map(e => `
         <tr>
           <td class="cell-strong">${esc(e.label)}</td>
@@ -1791,7 +1793,7 @@ export async function viewWorkflowLibrary(content) {
 
   async function load() {
     try {
-      const workflows = await api.listWorkflows();
+      const workflows = norm(await api.listWorkflows());
       const rows = workflows.length ? workflows.map(w => `
         <tr>
           <td class="cell-strong">${esc(w.name)}</td>
@@ -1849,7 +1851,7 @@ export async function viewEventTriggers(content) {
 
   async function load() {
     try {
-      const triggers = await api.listEventTriggers();
+      const triggers = norm(await api.listEventTriggers());
       const chBadge = ch => ({ WEBHOOK: 'badge-info', SLACK: 'badge-success', TEAMS: 'badge-warning', EMAIL: 'badge-neutral' }[ch] || 'badge-neutral');
       const rows = triggers.length ? triggers.map(t => `
         <tr>
@@ -1910,9 +1912,10 @@ export async function viewNotifications(content) {
 
   async function load() {
     try {
-      const [stats, notifs] = await Promise.all([api.notificationStats(), api.listNotifications()]);
+      const [stats, _rawNotifs] = await Promise.all([api.notificationStats(), api.listNotifications()]);
+      const notifs = norm(_rawNotifs);
       const statusBadge = s => ({ SENT: 'badge-success', FAILED: 'badge-danger', PENDING: 'badge-warning', PROCESSING: 'badge-info' }[s] || 'badge-neutral');
-      const rows = (notifs||[]).length ? notifs.map(n => `
+      const rows = notifs.length ? notifs.map(n => `
         <tr>
           <td class="cell-strong">${esc(n.subject||'—')}</td>
           <td><span class="badge badge-info">${esc(n.channel||'—')}</span></td>
@@ -1977,14 +1980,14 @@ export async function viewSsoReports(content) {
   content.replaceChildren(el(`<div>${header('SSO Reports', 'Login analytics, adoption and dormancy reports')}<div id="sso-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
   try {
-    const [summary, failed, adoption, dormant] = await Promise.all([
+    const [summary, failed, adoption, dormant] = (await Promise.all([
       api.ssoLoginSummary(), api.ssoFailedLogins(), api.ssoAppAdoption(), api.ssoDormantUsers()
-    ]);
+    ])).map(norm);
 
-    const summaryRows = (summary||[]).map(r => `<tr><td>${esc(r.app||r.application||'—')}</td><td>${r.count ?? 0}</td></tr>`).join('') || `<tr><td colspan="2" class="muted">No data</td></tr>`;
-    const failedRows = (failed||[]).map(r => `<tr><td>${esc(r.email||'—')}</td><td>${r.count ?? 0}</td><td class="muted">${r.last_attempt ? fmtDate(r.last_attempt) : '—'}</td></tr>`).join('') || `<tr><td colspan="3" class="muted">No data</td></tr>`;
-    const adoptionRows = (adoption||[]).map(r => `<tr><td>${esc(r.app||r.application||'—')}</td><td>${r.entitled ?? 0}</td><td>${r.signed_in ?? 0}</td><td>${r.adoption_pct != null ? r.adoption_pct+'%' : '—'}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">No data</td></tr>`;
-    const dormantRows = (dormant||[]).map(r => `<tr><td>${esc(r.email||'—')}</td><td class="muted">${r.last_login ? fmtDate(r.last_login) : 'Never'}</td></tr>`).join('') || `<tr><td colspan="2" class="muted">No data</td></tr>`;
+    const summaryRows = summary.map(r => `<tr><td>${esc(r.app||r.application||'—')}</td><td>${r.count ?? 0}</td></tr>`).join('') || `<tr><td colspan="2" class="muted">No data</td></tr>`;
+    const failedRows = failed.map(r => `<tr><td>${esc(r.email||'—')}</td><td>${r.count ?? 0}</td><td class="muted">${r.last_attempt ? fmtDate(r.last_attempt) : '—'}</td></tr>`).join('') || `<tr><td colspan="3" class="muted">No data</td></tr>`;
+    const adoptionRows = adoption.map(r => `<tr><td>${esc(r.app||r.application||'—')}</td><td>${r.entitled ?? 0}</td><td>${r.signed_in ?? 0}</td><td>${r.adoption_pct != null ? r.adoption_pct+'%' : '—'}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">No data</td></tr>`;
+    const dormantRows = dormant.map(r => `<tr><td>${esc(r.email||'—')}</td><td class="muted">${r.last_login ? fmtDate(r.last_login) : 'Never'}</td></tr>`).join('') || `<tr><td colspan="2" class="muted">No data</td></tr>`;
 
     wrap.querySelector('#sso-area').innerHTML = `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
@@ -2018,10 +2021,10 @@ export async function viewSsoReports(content) {
         </div>
       </div>`;
 
-    wrap.querySelector('#exp-summary').addEventListener('click', () => csvDownload('login-summary.csv', [['App','Logins'], ...(summary||[]).map(r => [r.app||r.application||'', r.count||0])]));
-    wrap.querySelector('#exp-failed').addEventListener('click', () => csvDownload('failed-logins.csv', [['Email','Count','Last Attempt'], ...(failed||[]).map(r => [r.email||'', r.count||0, r.last_attempt||''])]));
-    wrap.querySelector('#exp-adoption').addEventListener('click', () => csvDownload('app-adoption.csv', [['App','Entitled','Signed In','Adoption %'], ...(adoption||[]).map(r => [r.app||r.application||'', r.entitled||0, r.signed_in||0, r.adoption_pct||''])]));
-    wrap.querySelector('#exp-dormant').addEventListener('click', () => csvDownload('dormant-users.csv', [['Email','Last Login'], ...(dormant||[]).map(r => [r.email||'', r.last_login||'Never'])]));
+    wrap.querySelector('#exp-summary').addEventListener('click', () => csvDownload('login-summary.csv', [['App','Logins'], ...summary.map(r => [r.app||r.application||'', r.count||0])]));
+    wrap.querySelector('#exp-failed').addEventListener('click', () => csvDownload('failed-logins.csv', [['Email','Count','Last Attempt'], ...failed.map(r => [r.email||'', r.count||0, r.last_attempt||''])]));
+    wrap.querySelector('#exp-adoption').addEventListener('click', () => csvDownload('app-adoption.csv', [['App','Entitled','Signed In','Adoption %'], ...adoption.map(r => [r.app||r.application||'', r.entitled||0, r.signed_in||0, r.adoption_pct||''])]));
+    wrap.querySelector('#exp-dormant').addEventListener('click', () => csvDownload('dormant-users.csv', [['Email','Last Login'], ...dormant.map(r => [r.email||'', r.last_login||'Never'])]));
   } catch(e) { wrap.querySelector('#sso-area').innerHTML = errHtml(e.message); }
 }
 
@@ -2222,7 +2225,7 @@ export async function viewTickets(content) {
     const status = wrap.querySelector('#tk-status').value;
     const cat = wrap.querySelector('#tk-cat').value;
     try {
-      const tickets = await api.listTickets(status || undefined, cat || undefined);
+      const tickets = norm(await api.listTickets(status || undefined, cat || undefined));
       const priColor = p => ({ HIGH: 'badge-danger', MEDIUM: 'badge-warning', LOW: 'badge-neutral', CRITICAL: 'badge-danger' }[p] || 'badge-neutral');
       const stColor = s => ({ OPEN: 'badge-info', IN_PROGRESS: 'badge-warning', RESOLVED: 'badge-success', CLOSED: 'badge-neutral' }[s] || 'badge-neutral');
       const rows = tickets.length ? tickets.map(t => `

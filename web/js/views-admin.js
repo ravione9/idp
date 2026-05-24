@@ -464,42 +464,308 @@ async function simpleTable(content, title, subtitle, fetchFn, columns, render, e
 }
 
 export async function viewReviews(content) {
-  await simpleTable(
-    content, 'Access Reviews', 'Quarterly certification campaigns — managers and app owners certify or revoke access',
-    () => api.igaReviews(),
-    ['Name', 'Reviewer kind', 'Period', 'Status', 'Items', 'Pending'],
-    (c) => `<td class="cell-strong">${esc(c.name)}</td><td>${esc(c.reviewer_kind)}</td>
-      <td class="muted">${fmtDate(c.start_date)} → ${fmtDate(c.end_date)}</td>
-      <td>${({DRAFT:'<span class="badge badge-neutral">Draft</span>',ACTIVE:'<span class="badge badge-success">Active</span>',COMPLETED:'<span class="badge badge-info">Completed</span>',CANCELLED:'<span class="badge badge-danger">Cancelled</span>'})[c.status] || esc(c.status)}</td>
-      <td>${c.item_count}</td><td>${c.pending_count}</td>`,
-    'No campaigns yet. Create one in Phase 2.', '✓',
-  );
+  const statusBadge = s => ({
+    DRAFT:     '<span class="badge badge-neutral">Draft</span>',
+    ACTIVE:    '<span class="badge badge-success">Active</span>',
+    COMPLETED: '<span class="badge badge-info">Completed</span>',
+    CANCELLED: '<span class="badge badge-danger">Cancelled</span>',
+  })[s] || esc(s);
+
+  content.replaceChildren(el(`<div>
+    ${header('Access Reviews', 'Certification campaigns — managers and app owners certify or revoke access',
+      `<button class="btn btn-primary" id="new-rev-btn">+ New Campaign</button>`)}
+    <div id="rev-list"><div class="loading-row"><span class="spinner"></span></div></div>
+  </div>`));
+  const wrap = content.firstChild;
+  const errEl = html => `<div class="alert alert-error">${esc(html)}</div>`;
+
+  async function load() {
+    try {
+      const r = await api.igaReviews();
+      const rows = r.data || [];
+      if (!rows.length) {
+        wrap.querySelector('#rev-list').innerHTML = `<div class="empty-state"><div class="empty-icon">✓</div><p>No campaigns yet. Click "+ New Campaign" to create the first certification campaign.</p></div>`;
+        return;
+      }
+      wrap.querySelector('#rev-list').innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Scope</th><th>Reviewer</th><th>Period</th><th>Status</th><th>Items</th><th>Pending</th><th></th></tr></thead>
+        <tbody>${rows.map(c => `<tr>
+          <td class="cell-strong">${esc(c.name)}</td>
+          <td class="muted">${esc(c.scope||'—')}</td>
+          <td><span class="badge badge-neutral">${esc(c.reviewer_kind||'—')}</span></td>
+          <td class="muted" style="font-size:0.8rem">${fmtDate(c.start_date)} → ${fmtDate(c.end_date)}</td>
+          <td>${statusBadge(c.status)}</td>
+          <td>${c.item_count ?? 0}</td>
+          <td>${c.pending_count > 0 ? `<span class="badge badge-warning">${c.pending_count}</span>` : (c.pending_count ?? 0)}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary view-items-btn" data-id="${esc(String(c.id))}" data-name="${esc(c.name)}" data-status="${esc(c.status||'')}">View Items</button>
+          </td>
+        </tr>`).join('')}</tbody></table></div>`;
+
+      wrap.querySelectorAll('.view-items-btn').forEach(btn => {
+        btn.addEventListener('click', () => openItemsModal(btn.dataset.id, btn.dataset.name));
+      });
+    } catch(e) { wrap.querySelector('#rev-list').innerHTML = errEl(e.message); }
+  }
+
+  async function openItemsModal(campaignId, campaignName) {
+    const decBadge = d => ({
+      PENDING:  '<span class="badge badge-warning">Pending</span>',
+      CERTIFY:  '<span class="badge badge-success">Certified</span>',
+      REVOKE:   '<span class="badge badge-danger">Revoked</span>',
+      EXCEPTION:'<span class="badge badge-info">Exception</span>',
+    })[d] || `<span class="badge badge-neutral">${esc(d||'—')}</span>`;
+
+    const bd = el(`<div class="modal-backdrop"><div class="modal" style="max-width:860px;width:95vw">
+      <div class="modal-header" style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Items — ${esc(campaignName)}</h2>
+        <button class="btn btn-sm btn-secondary" id="items-close">✕</button>
+      </div>
+      <div class="modal-body" id="items-body"><div class="loading-row"><span class="spinner"></span></div></div>
+    </div></div>`);
+    document.body.appendChild(bd);
+    bd.querySelector('#items-close').addEventListener('click', () => bd.remove());
+    bd.addEventListener('click', e => { if (e.target === bd) bd.remove(); });
+
+    try {
+      const r = await api.igaReviewItems(campaignId);
+      const rows = r.data || [];
+      if (!rows.length) {
+        bd.querySelector('#items-body').innerHTML = `<div class="empty-state"><p>No items in this campaign yet.</p></div>`;
+        return;
+      }
+      const pending = rows.filter(r => r.decision === 'PENDING');
+      const decided = rows.filter(r => r.decision !== 'PENDING');
+      bd.querySelector('#items-body').innerHTML = `
+        <div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap">
+          <span class="badge badge-warning">${pending.length} pending</span>
+          <span class="badge badge-success">${rows.filter(r=>r.decision==='CERTIFY').length} certified</span>
+          <span class="badge badge-danger">${rows.filter(r=>r.decision==='REVOKE').length} revoked</span>
+        </div>
+        <div id="items-msg" style="margin-bottom:0.75rem"></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Subject</th><th>Access Item</th><th>Reviewer</th><th>Decision</th><th>Actions</th></tr></thead>
+          <tbody id="items-tbody">${rows.map(i => `<tr data-iid="${esc(String(i.id))}">
+            <td class="cell-strong">${esc(i.subject_name||i.emp_id||'—')}<br><span class="muted" style="font-size:0.75rem">${esc(i.subject_email||'')}</span></td>
+            <td>${esc(i.entitlement_name||i.role_name||'—')}</td>
+            <td class="muted" style="font-size:0.85rem">${esc(i.reviewer_name||i.reviewer_emp_id||'—')}</td>
+            <td>${decBadge(i.decision)}</td>
+            <td style="white-space:nowrap">${i.decision === 'PENDING' ? `
+              <button class="btn btn-sm btn-success item-certify" data-iid="${esc(String(i.id))}">✓</button>
+              <button class="btn btn-sm btn-danger item-revoke" style="margin-left:0.25rem" data-iid="${esc(String(i.id))}">✗</button>
+            ` : `<span class="muted" style="font-size:0.8rem">${fmtDate(i.decided_at)||'—'}</span>`}</td>
+          </tr>`).join('')}</tbody></table></div>`;
+
+      async function decide(itemId, decision) {
+        try {
+          await api.submitReviewDecision(campaignId, itemId, decision);
+          bd.querySelector('#items-msg').innerHTML = `<div class="alert alert-success">Decision recorded.</div>`;
+          const row = bd.querySelector(`tr[data-iid="${itemId}"]`);
+          if (row) {
+            row.querySelector('td:nth-child(4)').innerHTML = decBadge(decision);
+            row.querySelector('td:nth-child(5)').innerHTML = `<span class="muted" style="font-size:0.8rem">Just now</span>`;
+          }
+        } catch(e) { bd.querySelector('#items-msg').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`; }
+      }
+      bd.querySelectorAll('.item-certify').forEach(btn => btn.addEventListener('click', () => decide(btn.dataset.iid, 'CERTIFY')));
+      bd.querySelectorAll('.item-revoke').forEach(btn => btn.addEventListener('click', () => decide(btn.dataset.iid, 'REVOKE')));
+    } catch(e) { bd.querySelector('#items-body').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`; }
+  }
+
+  wrap.querySelector('#new-rev-btn').addEventListener('click', () => {
+    const today = new Date().toISOString().slice(0,10);
+    const end = new Date(); end.setMonth(end.getMonth()+1);
+    const endStr = end.toISOString().slice(0,10);
+    const bd = el(`<div class="modal-backdrop"><div class="modal">
+      <div class="modal-header"><h2>New Certification Campaign</h2></div>
+      <div class="modal-body">
+        <div class="form-group"><label class="form-label">Campaign Name</label><input class="form-input" id="nrc-name" placeholder="Q2 2026 Access Review"></div>
+        <div class="form-group"><label class="form-label">Description</label><textarea class="form-textarea" id="nrc-desc" rows="2"></textarea></div>
+        <div class="form-group"><label class="form-label">Scope</label><select class="form-select" id="nrc-scope">
+          <option value="ALL_USERS">All Users</option>
+          <option value="HIGH_RISK">High Risk Users</option>
+          <option value="APP_SPECIFIC">App Specific</option>
+          <option value="ROLE_SPECIFIC">Role Specific</option>
+        </select></div>
+        <div class="form-group"><label class="form-label">Reviewer Kind</label><select class="form-select" id="nrc-rev">
+          <option value="MANAGER">Manager</option>
+          <option value="APP_OWNER">App Owner</option>
+          <option value="ROLE_OWNER">Role Owner</option>
+        </select></div>
+        <div class="form-group" style="display:flex;gap:0.75rem">
+          <div style="flex:1"><label class="form-label">Start Date</label><input class="form-input" id="nrc-start" type="date" value="${today}"></div>
+          <div style="flex:1"><label class="form-label">End Date</label><input class="form-input" id="nrc-end" type="date" value="${endStr}"></div>
+        </div>
+        <div id="nrc-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="nrc-save">Create Campaign</button>
+        <button class="btn btn-secondary" id="nrc-cancel">Cancel</button>
+      </div>
+    </div></div>`);
+    document.body.appendChild(bd);
+    bd.querySelector('#nrc-cancel').addEventListener('click', () => bd.remove());
+    bd.addEventListener('click', e => { if (e.target === bd) bd.remove(); });
+    bd.querySelector('#nrc-save').addEventListener('click', async () => {
+      const data = {
+        name:        bd.querySelector('#nrc-name').value.trim(),
+        description: bd.querySelector('#nrc-desc').value,
+        scope:       bd.querySelector('#nrc-scope').value,
+        reviewerKind: bd.querySelector('#nrc-rev').value,
+        startDate:   bd.querySelector('#nrc-start').value,
+        endDate:     bd.querySelector('#nrc-end').value,
+      };
+      if (!data.name) { bd.querySelector('#nrc-err').innerHTML = `<div class="alert alert-error">Name required</div>`; return; }
+      const btn = bd.querySelector('#nrc-save');
+      btn.disabled = true; btn.textContent = 'Creating…';
+      try { await api.createAccessReview(data); bd.remove(); await load(); }
+      catch(e) { bd.querySelector('#nrc-err').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`; btn.disabled=false; btn.textContent='Create Campaign'; }
+    });
+  });
+
+  await load();
 }
 
 export async function viewSod(content) {
-  const wrap = el(`<div>${header('Segregation of Duties', 'Toxic combinations and policy violations')}
-    <h3 class="section-title">Open violations</h3><div id="sod-v"><div class="loading-row"><span class="spinner"></span></div></div>
-    <h3 class="section-title">Active policies</h3><div id="sod-p"><div class="loading-row"><span class="spinner"></span></div></div></div>`);
-  content.replaceChildren(wrap);
-  try {
-    const v = await api.igaSodViolations(); const rows = v.data || [];
-    wrap.querySelector('#sod-v').innerHTML = rows.length
-      ? `<div class="table-wrap"><table><thead><tr><th>Severity</th><th>Policy</th><th>Employee</th><th>Detected</th></tr></thead>
-          <tbody>${rows.map((r) => `<tr>
-            <td>${({LOW:'<span class="badge badge-neutral">Low</span>',MEDIUM:'<span class="badge badge-info">Medium</span>',HIGH:'<span class="badge badge-warning">High</span>',CRITICAL:'<span class="badge badge-danger">Critical</span>'})[r.severity] || esc(r.severity)}</td>
-            <td>${esc(r.policy_name)}</td>
-            <td>${esc(r.emp_name || r.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(r.email_corp || '')}</span></td>
-            <td class="muted">${fmtDate(r.detected_at)}</td>
-          </tr>`).join('')}</tbody></table></div>`
-      : `<div class="card empty-state"><span class="empty-icon">⚠</span>No open violations. Detection job runs in Phase 2.</div>`;
-  } catch (err) { wrap.querySelector('#sod-v').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; }
-  try {
-    const p = await api.igaSodPolicies(); const rows = p.data || [];
-    wrap.querySelector('#sod-p').innerHTML = rows.length
-      ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Severity</th><th>Enforcement</th><th>Active</th></tr></thead>
-          <tbody>${rows.map((r) => `<tr><td class="cell-strong">${esc(r.name)}</td><td>${esc(r.severity)}</td><td><span class="badge badge-neutral">${esc(r.enforcement)}</span></td><td>${r.active ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-neutral">No</span>'}</td></tr>`).join('')}</tbody></table></div>`
-      : `<div class="card empty-state">No policies defined. SoD authoring UI ships in Phase 2.</div>`;
-  } catch (err) { wrap.querySelector('#sod-p').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; }
+  const sevBadge = s => ({
+    LOW:      '<span class="badge badge-neutral">Low</span>',
+    MEDIUM:   '<span class="badge badge-info">Medium</span>',
+    HIGH:     '<span class="badge badge-warning">High</span>',
+    CRITICAL: '<span class="badge badge-danger">Critical</span>',
+  })[s] || esc(s||'—');
+
+  content.replaceChildren(el(`<div>
+    ${header('Segregation of Duties', 'Toxic combinations and policy violations', `<button class="btn btn-primary" id="new-sod-btn">+ New Policy</button>`)}
+    <h3 class="section-title">Open violations</h3>
+    <div id="sod-msg" style="margin-bottom:0.75rem"></div>
+    <div id="sod-v"><div class="loading-row"><span class="spinner"></span></div></div>
+    <h3 class="section-title" style="margin-top:1.5rem">Policies</h3>
+    <div id="sod-p"><div class="loading-row"><span class="spinner"></span></div></div>
+  </div>`));
+  const wrap = content.firstChild;
+
+  async function loadViolations() {
+    try {
+      const v = await api.igaSodViolations();
+      const rows = v.data || [];
+      if (!rows.length) {
+        wrap.querySelector('#sod-v').innerHTML = `<div class="card empty-state"><span class="empty-icon">✓</span>No open violations — all identities are compliant.</div>`;
+        return;
+      }
+      wrap.querySelector('#sod-v').innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Severity</th><th>Policy</th><th>Employee</th><th>Detected</th><th>Actions</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr data-vid="${esc(String(r.id))}">
+          <td>${sevBadge(r.severity)}</td>
+          <td class="cell-strong">${esc(r.policy_name||'—')}</td>
+          <td>${esc(r.emp_name || r.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(r.email_corp || '')}</span></td>
+          <td class="muted">${fmtDate(r.detected_at)}</td>
+          <td><button class="btn btn-sm btn-warning remediate-btn" data-vid="${esc(String(r.id))}">Remediate</button></td>
+        </tr>`).join('')}</tbody></table></div>`;
+
+      wrap.querySelectorAll('.remediate-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Mark this violation as remediated/resolved?')) return;
+          btn.disabled = true; btn.textContent = 'Remediating…';
+          try {
+            await api.igaRemediateSod(btn.dataset.vid);
+            wrap.querySelector('#sod-msg').innerHTML = `<div class="alert alert-success">Violation resolved.</div>`;
+            await loadViolations();
+          } catch(e) {
+            wrap.querySelector('#sod-msg').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+            btn.disabled = false; btn.textContent = 'Remediate';
+          }
+        });
+      });
+    } catch(err) { wrap.querySelector('#sod-v').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; }
+  }
+
+  async function loadPolicies() {
+    try {
+      const p = await api.igaSodPolicies();
+      const rows = p.data || [];
+      if (!rows.length) {
+        wrap.querySelector('#sod-p').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div><p>No SoD policies defined. Click "+ New Policy" to create one.</p></div>`;
+        return;
+      }
+      wrap.querySelector('#sod-p').innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Severity</th><th>Enforcement</th><th>Active</th><th>Actions</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr>
+          <td class="cell-strong">${esc(r.name)}</td>
+          <td>${sevBadge(r.severity)}</td>
+          <td><span class="badge badge-neutral">${esc(r.enforcement||'—')}</span></td>
+          <td>${r.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary toggle-pol" data-id="${esc(String(r.id))}" data-active="${r.active?'1':'0'}">${r.active ? 'Disable' : 'Enable'}</button>
+            <button class="btn btn-sm btn-danger del-pol" style="margin-left:0.25rem" data-id="${esc(String(r.id))}">Delete</button>
+          </td>
+        </tr>`).join('')}</tbody></table></div>`;
+
+      wrap.querySelectorAll('.toggle-pol').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const newActive = btn.dataset.active === '1' ? 0 : 1;
+          try { await api.updateSodPolicy(btn.dataset.id, { active: newActive }); await loadPolicies(); }
+          catch(e) { alert(e.message); }
+        });
+      });
+      wrap.querySelectorAll('.del-pol').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Delete this SoD policy?')) return;
+          try { await api.deleteSodPolicy(btn.dataset.id); await loadPolicies(); }
+          catch(e) { alert(e.message); }
+        });
+      });
+    } catch(err) { wrap.querySelector('#sod-p').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; }
+  }
+
+  wrap.querySelector('#new-sod-btn').addEventListener('click', () => {
+    const bd = el(`<div class="modal-backdrop"><div class="modal">
+      <div class="modal-header"><h2>New SoD Policy</h2></div>
+      <div class="modal-body">
+        <div class="form-group"><label class="form-label">Policy Name</label><input class="form-input" id="sp-name" placeholder="Finance + IT Admin conflict"></div>
+        <div class="form-group"><label class="form-label">Description</label><textarea class="form-textarea" id="sp-desc" rows="2"></textarea></div>
+        <div class="form-group"><label class="form-label">Severity</label><select class="form-select" id="sp-sev">
+          <option value="LOW">Low</option><option value="MEDIUM">Medium</option>
+          <option value="HIGH" selected>High</option><option value="CRITICAL">Critical</option>
+        </select></div>
+        <div class="form-group"><label class="form-label">Enforcement</label><select class="form-select" id="sp-enf">
+          <option value="ADVISORY">Advisory (warn only)</option>
+          <option value="BLOCKING">Blocking (prevent grant)</option>
+        </select></div>
+        <div class="form-group"><label class="form-label">Conflict Groups (JSON)</label>
+          <textarea class="form-textarea" id="sp-groups" rows="4" placeholder='[["entitlement-id-1","entitlement-id-2"],["role-id-a","role-id-b"]]'></textarea>
+          <p class="muted" style="font-size:0.78rem;margin-top:0.25rem">Array of pairs — each pair is a set of entitlement/role IDs that conflict with each other.</p>
+        </div>
+        <div id="sp-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="sp-save">Create Policy</button>
+        <button class="btn btn-secondary" id="sp-cancel">Cancel</button>
+      </div>
+    </div></div>`);
+    document.body.appendChild(bd);
+    bd.querySelector('#sp-cancel').addEventListener('click', () => bd.remove());
+    bd.addEventListener('click', e => { if (e.target === bd) bd.remove(); });
+    bd.querySelector('#sp-save').addEventListener('click', async () => {
+      let conflictGroups;
+      try { conflictGroups = JSON.parse(bd.querySelector('#sp-groups').value || '[]'); }
+      catch { bd.querySelector('#sp-err').innerHTML = `<div class="alert alert-error">Conflict Groups must be valid JSON</div>`; return; }
+      const data = {
+        name:          bd.querySelector('#sp-name').value.trim(),
+        description:   bd.querySelector('#sp-desc').value,
+        severity:      bd.querySelector('#sp-sev').value,
+        enforcement:   bd.querySelector('#sp-enf').value,
+        conflictGroups,
+      };
+      if (!data.name) { bd.querySelector('#sp-err').innerHTML = `<div class="alert alert-error">Name required</div>`; return; }
+      const btn = bd.querySelector('#sp-save');
+      btn.disabled = true; btn.textContent = 'Creating…';
+      try { await api.createSodPolicy(data); bd.remove(); await loadPolicies(); }
+      catch(e) { bd.querySelector('#sp-err').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`; btn.disabled=false; btn.textContent='Create Policy'; }
+    });
+  });
+
+  loadViolations();
+  loadPolicies();
 }
 
 export async function viewRisk(content) {

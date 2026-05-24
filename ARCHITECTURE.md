@@ -377,13 +377,16 @@ To add a new migration:
 | `GET` | `/api/iga/entitlements[?appId=…]` | Entitlement catalog |
 | `GET` | `/api/iga/entitlements/me` | My current entitlements |
 | `GET` | `/api/iga/access-requests?scope=mine\|tasks\|all` | List access requests by scope |
-| `POST` | `/api/iga/access-requests` | Submit request (501) |
-| `POST` | `/api/iga/access-requests/:id/decision` | Approve / reject (501) |
+| `POST` | `/api/iga/access-requests` | Submit access request (SoD pre-check + approval chain) |
+| `POST` | `/api/iga/access-requests/:id/decision` | Approve / reject pending request |
 | `GET` | `/api/iga/access-reviews` | Active certification campaigns |
+| `GET` | `/api/iga/access-reviews/:id/items` | All review items for a campaign (admin) |
 | `GET` | `/api/iga/access-reviews/me` | Review items routed to me |
-| `POST` | `/api/iga/access-reviews` | Create campaign (501) |
+| `POST` | `/api/iga/access-reviews` | Create campaign |
+| `POST` | `/api/iga/access-reviews/:id/items/:itemId/decision` | Certify / revoke / exception on a review item |
 | `GET` | `/api/iga/sod-policies` | SoD policy registry |
 | `GET` | `/api/iga/sod-violations?status=…` | Detected violations |
+| `POST` | `/api/iga/sod-violations/:id/remediate` | Mark an open SoD violation as RESOLVED |
 | `GET` | `/api/iga/risk/dashboard` | Top risk identities + 24h counters |
 | `GET`/`POST` | `/api/iga/reports` | Compliance report archive (POST returns 501) |
 
@@ -639,6 +642,22 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(this commit)* — 2026-05-24 — IGA governance UI: access requests, review campaigns, SoD remediation
+
+**Why** — End-user and admin IGA pages were read-only stubs; operators could not submit requests, run certification campaigns, or resolve SoD violations from the console.
+
+**What changed:**
+
+- **`src/api/iga.ts`** — two new admin endpoints:
+  - `GET /api/iga/access-reviews/:id/items` — list all items in a campaign with subject, entitlement/role, reviewer, and decision.
+  - `POST /api/iga/sod-violations/:id/remediate` — mark an open violation as `RESOLVED`.
+- **`web/js/api.js`** — client methods: `igaSubmitRequest`, `igaRequestDecision`, `igaReviewItems`, `igaRemediateSod`.
+- **`web/js/views-end-user.js`** — **Request Access** is now a full catalog browser (search, type filter, slide-out request drawer with justification); **My Tasks** shows pending approvals and review items with inline certify/revoke actions.
+- **`web/js/views-admin.js`** — **Access Reviews** gains campaign creation modal, item drill-down modal with inline certify/revoke; **SoD** page adds violation remediation button.
+- **`web/js/views-stubs.js`** — minor field/display fixes in config pages.
+
+### `bd20de3` — 2026-05-24 — doc: log 706d66d in change log
 
 ### `706d66d` — 2026-05-24 — Migration 007 (OIDC schema fix + workflows) + expanded SSO catalogue + config UI field alignment
 

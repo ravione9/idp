@@ -556,6 +556,31 @@ router.get(
   }),
 );
 
+// GET /access-reviews/:id/items — all items for a campaign (admin)
+router.get(
+  '/access-reviews/:id/items',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const campaignId = req.params['id']!;
+    const rows = await safeQuery<Record<string, unknown>>(
+      `SELECT i.id, i.campaign_id, i.emp_id, e.full_name AS subject_name, e.email_corp AS subject_email,
+              i.entitlement_id, ent.name AS entitlement_name, ent.app_id,
+              i.role_id, br.name AS role_name,
+              i.reviewer_emp_id, rev.full_name AS reviewer_name,
+              i.decision, i.comment, i.decided_at, i.created_at
+         FROM access_review_items i
+         LEFT JOIN employees e   ON e.emp_id = i.emp_id
+         LEFT JOIN employees rev ON rev.emp_id = i.reviewer_emp_id
+         LEFT JOIN entitlements ent ON ent.id = i.entitlement_id
+         LEFT JOIN business_roles br ON br.id = i.role_id
+        WHERE i.campaign_id = ?
+        ORDER BY i.decision ASC, e.full_name ASC`,
+      [campaignId],
+    );
+    res.json({ data: rows });
+  }),
+);
+
 router.get('/access-reviews/me', asyncHandler(async (req: Request, res: Response) => {
   const empId = req.user!.empId;
   const rows = await safeQuery<Record<string, unknown>>(
@@ -679,6 +704,24 @@ router.get(
       [status],
     );
     res.json({ data: rows });
+  }),
+);
+
+// POST /sod-violations/:id/remediate — mark violation as RESOLVED
+router.post(
+  '/sod-violations/:id/remediate',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const id = req.params['id']!;
+    const result = await execute(
+      `UPDATE sod_violations SET status='RESOLVED', exception_until=NULL WHERE id=? AND status='OPEN'`,
+      [id],
+    );
+    if ((result as { affectedRows?: number }).affectedRows === 0) {
+      res.status(404).json({ error: 'Violation not found or already resolved' });
+      return;
+    }
+    res.json({ success: true });
   }),
 );
 

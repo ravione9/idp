@@ -234,30 +234,189 @@ export async function viewMyAccess(content) {
   }
 }
 
-/* ---------- Request Access (placeholder for now) ---------- */
+/* ---------- Request Access — full catalog browser with SoD pre-check ---------- */
 export async function viewRequestAccess(content) {
   const wrap = el(`
     <div>
       <div class="page-header">
-        <div><h1>Request Access</h1><p class="subtitle">Browse the catalog and request applications, roles, or entitlements</p></div>
+        <div><h1>Request Access</h1><p class="subtitle">Browse the application catalog and request access with business justification</p></div>
       </div>
-      <div class="card">
-        <h2>Catalog browser</h2>
-        <p class="subtitle" style="margin-top:0.5rem">
-          End-user catalog with one-click request, justification, validity period and pre-flight SoD check ships in the next release.
-          The <code>POST /api/iga/access-requests</code> endpoint is scaffolded and returns 501 until the approval-chain resolver lands.
-        </p>
+
+      <!-- search + filter bar -->
+      <div class="card" style="margin-bottom:1.25rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
+        <input class="form-input" id="ra-search" placeholder="Search applications…" style="flex:1;min-width:200px">
+        <select class="form-select" id="ra-type" style="width:auto">
+          <option value="">All types</option>
+          <option value="APP">Applications</option>
+          <option value="ENTITLEMENT">Entitlements</option>
+          <option value="ROLE">Business Roles</option>
+        </select>
+      </div>
+
+      <div id="ra-catalog"><div class="loading-row"><span class="spinner"></span></div></div>
+
+      <!-- request drawer (hidden by default) -->
+      <div id="ra-drawer" style="display:none;position:fixed;right:0;top:0;height:100%;width:420px;max-width:100vw;background:var(--surface);border-left:1px solid var(--border);box-shadow:-4px 0 16px rgba(0,0,0,.15);z-index:200;overflow-y:auto">
+        <div style="padding:1.5rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
+            <h2 style="margin:0" id="ra-d-title">Request access</h2>
+            <button id="ra-d-close" class="btn btn-sm btn-secondary">✕</button>
+          </div>
+          <div id="ra-d-body"></div>
+        </div>
       </div>
     </div>`);
   content.replaceChildren(wrap);
+
+  // Close drawer
+  wrap.querySelector('#ra-d-close').addEventListener('click', () => {
+    wrap.querySelector('#ra-drawer').style.display = 'none';
+  });
+
+  // Filter / search
+  let allItems = [];
+  function renderCatalog() {
+    const q = (wrap.querySelector('#ra-search').value || '').toLowerCase();
+    const type = wrap.querySelector('#ra-type').value;
+    const filtered = allItems.filter(item => {
+      const matchQ = !q || (item.name||'').toLowerCase().includes(q) || (item.description||'').toLowerCase().includes(q);
+      const matchT = !type || item._type === type;
+      return matchQ && matchT;
+    });
+    if (!filtered.length) {
+      wrap.querySelector('#ra-catalog').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div><p>No matching items.</p></div>`;
+      return;
+    }
+    // Group by type
+    const groups = { APP: [], ENTITLEMENT: [], ROLE: [] };
+    filtered.forEach(i => (groups[i._type] || (groups.OTHER = groups.OTHER||[])).push(i));
+    const typeLabel = { APP: 'Applications', ENTITLEMENT: 'Entitlements', ROLE: 'Business Roles' };
+    let html = '';
+    for (const [t, items] of Object.entries(groups)) {
+      if (!items.length) continue;
+      html += `<h3 class="section-title">${typeLabel[t] || t}</h3>
+        <div class="grid-3" style="margin-bottom:1.5rem">
+          ${items.map(item => `
+            <div class="card" style="cursor:pointer;transition:box-shadow .15s" data-req-id="${esc(String(item.id))}" data-req-type="${esc(item._type)}">
+              <div style="display:flex;gap:0.75rem;align-items:flex-start">
+                ${item.icon_url ? `<img src="${esc(item.icon_url)}" alt="" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.style.display='none'">` : `<div style="width:36px;height:36px;border-radius:6px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">${esc((item.name||'?').charAt(0).toUpperCase())}</div>`}
+                <div style="flex:1;min-width:0">
+                  <div style="font-weight:600;margin-bottom:0.25rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.name)}</div>
+                  <div class="muted" style="font-size:0.78rem;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${esc(item.description||'')}</div>
+                </div>
+              </div>
+              <div style="margin-top:0.75rem;display:flex;justify-content:space-between;align-items:center">
+                <span class="badge badge-info">${esc(item._type)}</span>
+                <button class="btn btn-sm btn-primary req-btn" data-req-id="${esc(String(item.id))}" data-req-type="${esc(item._type)}" data-req-name="${esc(item.name)}">Request</button>
+              </div>
+            </div>`).join('')}
+        </div>`;
+    }
+    wrap.querySelector('#ra-catalog').innerHTML = html;
+    wrap.querySelectorAll('.req-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openRequestDrawer(btn.dataset.reqId, btn.dataset.reqType, btn.dataset.reqName);
+      });
+    });
+  }
+
+  function openRequestDrawer(id, type, name) {
+    const drawer = wrap.querySelector('#ra-drawer');
+    wrap.querySelector('#ra-d-title').textContent = `Request: ${name}`;
+    const now = new Date();
+    const defEnd = new Date(now);
+    defEnd.setMonth(defEnd.getMonth() + 6);
+    const fmt = d => d.toISOString().slice(0,10);
+    wrap.querySelector('#ra-d-body').innerHTML = `
+      <div class="form-group">
+        <label class="form-label">Request for (optional — defaults to you)</label>
+        <input class="form-input" id="ra-target" placeholder="Employee ID (leave blank for self)">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Justification <span style="color:var(--danger)">*</span></label>
+        <textarea class="form-textarea" id="ra-just" rows="4" placeholder="Briefly explain why you need this access…"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Validity period</label>
+        <div style="display:flex;gap:0.5rem">
+          <div style="flex:1"><label class="form-label" style="font-size:0.8rem">From</label><input class="form-input" id="ra-from" type="date" value="${fmt(now)}"></div>
+          <div style="flex:1"><label class="form-label" style="font-size:0.8rem">Until</label><input class="form-input" id="ra-until" type="date" value="${fmt(defEnd)}"></div>
+        </div>
+      </div>
+      <div id="ra-sod-check" style="margin-bottom:1rem"></div>
+      <div id="ra-req-msg" style="margin-bottom:1rem"></div>
+      <div style="display:flex;gap:0.5rem">
+        <button class="btn btn-primary" id="ra-submit" style="flex:1">Submit Request</button>
+        <button class="btn btn-secondary" id="ra-d-cancel">Cancel</button>
+      </div>`;
+    drawer.style.display = 'block';
+    wrap.querySelector('#ra-d-cancel').addEventListener('click', () => { drawer.style.display = 'none'; });
+    wrap.querySelector('#ra-submit').addEventListener('click', async () => {
+      const just = wrap.querySelector('#ra-just').value.trim();
+      const targetInput = wrap.querySelector('#ra-target').value.trim();
+      if (!just) { wrap.querySelector('#ra-req-msg').innerHTML = `<div class="alert alert-error">Justification is required.</div>`; return; }
+      const btn = wrap.querySelector('#ra-submit');
+      btn.disabled = true; btn.textContent = 'Submitting…';
+      wrap.querySelector('#ra-req-msg').innerHTML = '';
+      wrap.querySelector('#ra-sod-check').innerHTML = '';
+      try {
+        await api.igaSubmitRequest({
+          itemType: type,
+          itemIds: [id],
+          justification: just,
+          ...(targetInput ? { targetEmpId: targetInput } : {}),
+        });
+        wrap.querySelector('#ra-req-msg').innerHTML = `<div class="alert alert-success">✓ Request submitted! Your manager will be notified for approval.</div>`;
+        btn.disabled = false; btn.textContent = 'Submit Another';
+      } catch(err) {
+        const isSOD = err.message?.includes('SOD_VIOLATION') || err.code === 'SOD_VIOLATION';
+        if (isSOD) {
+          wrap.querySelector('#ra-sod-check').innerHTML = `<div class="alert alert-error" style="border-left:4px solid var(--danger)">
+            <strong>⚠ SoD Policy Violation Detected</strong><br>
+            <span style="font-size:0.875rem">${esc(err.message||'This access conflicts with an existing entitlement under your SoD policy.')}</span>
+          </div>`;
+        } else {
+          wrap.querySelector('#ra-req-msg').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+        }
+        btn.disabled = false; btn.textContent = 'Submit Request';
+      }
+    });
+  }
+
+  // Load catalog — apps + entitlements + roles
+  try {
+    const [appsR, entsR, rolesR] = await Promise.all([
+      api.igaApps().catch(() => ({ data: [] })),
+      api.igaEntitlements().catch(() => ({ data: [] })),
+      api.listBusinessRoles().catch(() => ({ data: [] })),
+    ]);
+    const apps = (appsR.data || []).filter(a => a.active);
+    const ents = (entsR.data || []);
+    const roles = (rolesR.data || []).filter(r => r.active);
+    allItems = [
+      ...apps.map(a => ({ ...a, _type: 'APP' })),
+      ...ents.map(e => ({ ...e, _type: 'ENTITLEMENT' })),
+      ...roles.map(r => ({ ...r, _type: 'ROLE' })),
+    ];
+    if (!allItems.length) {
+      wrap.querySelector('#ra-catalog').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div><p>No items in the catalog yet. Ask an admin to onboard applications.</p></div>`;
+    } else {
+      renderCatalog();
+    }
+    wrap.querySelector('#ra-search').addEventListener('input', renderCatalog);
+    wrap.querySelector('#ra-type').addEventListener('change', renderCatalog);
+  } catch(err) {
+    wrap.querySelector('#ra-catalog').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+  }
 }
 
-/* ---------- My Tasks ---------- */
+/* ---------- My Tasks — approvals + access review certifications ---------- */
 export async function viewMyTasks(content) {
   const wrap = el(`
     <div>
       <div class="page-header"><div>
-        <h1>My Tasks</h1><p class="subtitle">Pending approvals and access reviews assigned to you</p>
+        <h1>My Tasks</h1><p class="subtitle">Pending approvals and access review certifications assigned to you</p>
       </div></div>
       <h3 class="section-title">Access request approvals</h3>
       <div id="t-approvals"><div class="loading-row"><span class="spinner"></span></div></div>
@@ -266,40 +425,110 @@ export async function viewMyTasks(content) {
     </div>`);
   content.replaceChildren(wrap);
 
-  try {
-    const r = await api.igaMyTasks();
-    const rows = r.data || [];
-    wrap.querySelector('#t-approvals').innerHTML = rows.length
-      ? `<div class="table-wrap"><table>
-          <thead><tr><th>Request</th><th>Requester</th><th>For</th><th>Type</th><th>Submitted</th></tr></thead>
-          <tbody>${rows.map((r) => `<tr>
-            <td><code>${esc(String(r.id).slice(0, 8))}</code></td>
-            <td>${esc(r.requester_name || r.requester_emp_id)}</td>
-            <td>${esc(r.target_name || r.target_emp_id)}</td>
-            <td><span class="badge badge-info">${esc(r.item_type)}</span></td>
-            <td class="muted">${fmtDate(r.created_at)}</td>
-          </tr>`).join('')}</tbody></table></div>`
-      : `<div class="card empty-state"><span class="empty-icon">◐</span>No pending approvals</div>`;
-  } catch (err) {
-    wrap.querySelector('#t-approvals').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+  /* ── Access request approvals ── */
+  async function loadApprovals() {
+    try {
+      const r = await api.igaMyTasks();
+      const rows = r.data || [];
+      if (!rows.length) {
+        wrap.querySelector('#t-approvals').innerHTML = `<div class="card empty-state"><span class="empty-icon">◐</span>No pending approvals — you're all caught up!</div>`;
+        return;
+      }
+      wrap.querySelector('#t-approvals').innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Request ID</th><th>Requester</th><th>For</th><th>Type / Items</th><th>Submitted</th><th>Actions</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr data-rid="${esc(String(r.id))}">
+          <td><code style="font-size:0.8rem">${esc(String(r.id).slice(0,8))}…</code></td>
+          <td class="cell-strong">${esc(r.requester_name || r.requester_emp_id || '—')}</td>
+          <td class="muted">${esc(r.target_name || r.target_emp_id || 'Self')}</td>
+          <td><span class="badge badge-info">${esc(r.item_type||'—')}</span></td>
+          <td class="muted">${fmtDate(r.created_at)}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-success approve-btn" data-id="${esc(String(r.id))}">✓ Approve</button>
+            <button class="btn btn-sm btn-danger reject-btn" style="margin-left:0.25rem" data-id="${esc(String(r.id))}">✗ Reject</button>
+          </td>
+        </tr>`).join('')}</tbody></table></div>
+      <div id="appr-msg" style="margin-top:0.75rem"></div>`;
+
+      function decisionRow(id, decision) {
+        const row = wrap.querySelector(`tr[data-rid="${id}"]`);
+        if (!row) return;
+        const existing = wrap.querySelector('#appr-reason-row-' + id.slice(0,8));
+        if (existing) { existing.remove(); return; }
+        const reasonRow = document.createElement('tr');
+        reasonRow.id = 'appr-reason-row-' + id.slice(0,8);
+        reasonRow.innerHTML = `<td colspan="6" style="background:var(--bg);padding:0.75rem 1rem">
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <input class="form-input" id="appr-reason-${esc(id.slice(0,8))}" placeholder="${decision === 'APPROVE' ? 'Optional comment' : 'Reason for rejection (required)'}" style="flex:1">
+            <button class="btn btn-sm ${decision==='APPROVE'?'btn-success':'btn-danger'} confirm-decision" data-id="${esc(id)}" data-decision="${decision}">Confirm ${decision === 'APPROVE' ? 'Approval' : 'Rejection'}</button>
+            <button class="btn btn-sm btn-secondary cancel-reason" data-id="${esc(id)}">Cancel</button>
+          </div>
+        </td>`;
+        row.after(reasonRow);
+        wrap.querySelector('.cancel-reason[data-id="'+id+'"]').addEventListener('click', () => reasonRow.remove());
+        wrap.querySelector('.confirm-decision[data-id="'+id+'"]').addEventListener('click', async () => {
+          const comment = wrap.querySelector('#appr-reason-' + id.slice(0,8)).value.trim();
+          if (decision === 'REJECT' && !comment) {
+            wrap.querySelector('#appr-msg').innerHTML = `<div class="alert alert-error">Rejection reason is required.</div>`; return;
+          }
+          try {
+            await api.igaRequestDecision(id, decision, comment || undefined);
+            wrap.querySelector('#appr-msg').innerHTML = `<div class="alert alert-success">Decision recorded.</div>`;
+            setTimeout(() => loadApprovals(), 1200);
+          } catch(e) {
+            wrap.querySelector('#appr-msg').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+          }
+        });
+      }
+
+      wrap.querySelectorAll('.approve-btn').forEach(btn => btn.addEventListener('click', () => decisionRow(btn.dataset.id, 'APPROVE')));
+      wrap.querySelectorAll('.reject-btn').forEach(btn => btn.addEventListener('click', () => decisionRow(btn.dataset.id, 'REJECT')));
+    } catch(err) {
+      wrap.querySelector('#t-approvals').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
   }
 
-  try {
-    const r = await api.igaMyReviews();
-    const rows = r.data || [];
-    wrap.querySelector('#t-reviews').innerHTML = rows.length
-      ? `<div class="table-wrap"><table>
-          <thead><tr><th>Campaign</th><th>Subject</th><th>Item</th><th>Due</th></tr></thead>
-          <tbody>${rows.map((r) => `<tr>
-            <td>${esc(r.campaign_name)}</td>
-            <td>${esc(r.subject_name || r.emp_id)}</td>
-            <td>${esc(r.entitlement_name || r.role_name || '—')}</td>
-            <td class="muted">${fmtDate(r.end_date)}</td>
-          </tr>`).join('')}</tbody></table></div>`
-      : `<div class="card empty-state"><span class="empty-icon">✓</span>No active review items</div>`;
-  } catch (err) {
-    wrap.querySelector('#t-reviews').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+  /* ── Access review certifications ── */
+  async function loadReviews() {
+    try {
+      const r = await api.igaMyReviews();
+      const rows = r.data || [];
+      if (!rows.length) {
+        wrap.querySelector('#t-reviews').innerHTML = `<div class="card empty-state"><span class="empty-icon">✓</span>No active review items — nothing to certify</div>`;
+        return;
+      }
+      wrap.querySelector('#t-reviews').innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Campaign</th><th>Subject</th><th>Access Item</th><th>Due</th><th>Certify / Revoke</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr data-iid="${esc(String(r.id))}" data-cid="${esc(String(r.campaign_id))}">
+          <td class="muted" style="font-size:0.85rem">${esc(r.campaign_name||'—')}</td>
+          <td class="cell-strong">${esc(r.subject_name || r.emp_id || '—')}</td>
+          <td>${esc(r.entitlement_name || r.role_name || '—')}</td>
+          <td class="muted">${fmtDate(r.end_date)}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-success certify-btn" data-iid="${esc(String(r.id))}" data-cid="${esc(String(r.campaign_id))}">✓ Certify</button>
+            <button class="btn btn-sm btn-danger revoke-btn" style="margin-left:0.25rem" data-iid="${esc(String(r.id))}" data-cid="${esc(String(r.campaign_id))}">✗ Revoke</button>
+          </td>
+        </tr>`).join('')}</tbody></table></div>
+      <div id="rev-msg" style="margin-top:0.75rem"></div>`;
+
+      async function certifyItem(campaignId, itemId, decision) {
+        try {
+          await api.submitReviewDecision(campaignId, itemId, decision);
+          wrap.querySelector('#rev-msg').innerHTML = `<div class="alert alert-success">${decision === 'CERTIFY' ? '✓ Access certified.' : '✗ Access revoked — will be removed at campaign close.'}</div>`;
+          setTimeout(() => loadReviews(), 1000);
+        } catch(e) {
+          wrap.querySelector('#rev-msg').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+        }
+      }
+
+      wrap.querySelectorAll('.certify-btn').forEach(btn => btn.addEventListener('click', () => certifyItem(btn.dataset.cid, btn.dataset.iid, 'CERTIFY')));
+      wrap.querySelectorAll('.revoke-btn').forEach(btn => btn.addEventListener('click', () => certifyItem(btn.dataset.cid, btn.dataset.iid, 'REVOKE')));
+    } catch(err) {
+      wrap.querySelector('#t-reviews').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
   }
+
+  loadApprovals();
+  loadReviews();
 }
 
 /* ---------- Settings (Profile / Security / Sessions / MFA) ---------- */
