@@ -261,7 +261,7 @@ To add a new migration:
 | Table | Purpose |
 |---|---|
 | `employees` | Master record from HRMS — primary identity |
-| `identity_links` | External system → employee mapping |
+| `identity_links` | **(009)** External system → employee mapping (AD, Google, Zoho, …) — used by Universal Directory and connector sync |
 | `local_accounts` | Email/password admin accounts |
 | `local_password_history` | Password change history |
 | `mfa_secrets` | TOTP secret + hashed backup codes |
@@ -653,6 +653,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(this commit)* — 2026-05-24 — Universal Directory profile drawer + migration 009 identity_links
+
+**Why** — User profile panel was a cramped modal; `identity_links` table was missing on migration-only DB volumes (schema.sql init path had it, migrations folder did not).
+
+**What changed:**
+
+- **Migration `009_identity_links.sql`** — creates `identity_links` aligned with `schema.sql` (`ACTIVE|DISABLED|DELETED|ORPHAN`, `uk_system_external`).
+- **`src/api/admin-users.ts`** — profile endpoint wraps identity_links / sessions / writeback queries in try/catch so a missing table never 500s the drawer.
+- **`web/js/views-stubs.js`** — Universal Directory user profile rebuilt as a **slide-in drawer** (avatar header, tabbed sections: Overview, Identity Links, Sessions, Password Reset, Writeback Log).
+- **`web/css/styles.css`** — profile panel overlay, drawer, tabs, and action-bar styles.
 
 ### `63bd7b1` — 2026-05-24 — End-user portal UX: JumpCloud-style sidebar, identity-first login, app favorites
 
