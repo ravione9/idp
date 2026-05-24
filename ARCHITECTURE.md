@@ -359,7 +359,12 @@ To add a new migration:
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/admin/dashboard` | Aggregate stats |
-| `GET` | `/api/admin/users` | Employee + admin list (search, filter) |
+| `GET` | `/api/admin/users` | Paginated employee list (search, state, identity source filter) |
+| `GET` | `/api/admin/users/:empId` | Full profile: employee, identity links, sessions, password writeback log |
+| `POST` | `/api/admin/users/local` | Create local employee + password account |
+| `POST` | `/api/admin/users/:empId/reset-password` | Admin password reset with AD/Google writeback |
+| `POST` | `/api/admin/users/:empId/link-identity` | Attach an external identity link |
+| `DELETE` | `/api/admin/users/:empId/identity-links/:linkId` | Remove an identity link |
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD |
 | `GET`/`POST`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry |
 | `GET` | `/api/admin/audit/saml` | SAML assertions log |
@@ -642,6 +647,24 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(this commit)* — 2026-05-24 — Universal Directory: hybrid identity user management
+
+**Why** — The Universal Directory page only managed connector sources; admins had no way to browse all identities, create local users, link AD/Google accounts, or reset passwords across systems from one place.
+
+**What changed:**
+
+- **Migration `008_local_account_roles.sql`** — expands `local_accounts.role` enum to `USER | MANAGER | HRBP | ADMIN | SUPER_ADMIN` so non-admin local identities can sign in.
+- **`src/api/admin-users.ts`** — full unified directory API:
+  - `GET /` — list with `q`, `state`, `source` filters and aggregated identity sources per employee.
+  - `GET /:empId` — profile with identity links, recent sessions (`idp_sessions`), writeback log.
+  - `POST /local` — create employee + local account (zod-validated).
+  - `POST /:empId/reset-password` — local hash update + AD/Google writeback via `password-writeback.ts`.
+  - `POST /:empId/link-identity` / `DELETE /:empId/identity-links/:linkId` — manual link management.
+- **`web/js/api.js`** — client methods for all new endpoints.
+- **`web/js/views-stubs.js`** — Universal Directory split into **Directory Sources** and **Users** tabs; Users tab has searchable hybrid directory, profile drawer (links, sessions, writeback log), multi-system password reset, link/unlink identity, and create-local-user modal.
+
+### `2decef9` — 2026-05-24 — doc: log cec8cd4 in change log
 
 ### `cec8cd4` — 2026-05-24 — IGA governance UI: access requests, review campaigns, SoD remediation
 

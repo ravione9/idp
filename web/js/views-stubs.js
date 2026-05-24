@@ -1118,13 +1118,43 @@ function connectorStatusBadge(status) {
 }
 
 export async function viewDirectorySync(content) {
+  // ── tab shell ────────────────────────────────────────────────────────────────
   content.replaceChildren(el(`<div>
-    ${header('Universal Directory', 'Connect and manage identity sources — Active Directory, Google Workspace, Azure AD and more',
-      `<button class="btn btn-primary" id="ds-add-btn">+ Add Directory Source</button>`)}
-    <div id="ds-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem"></div>
-    <div id="ds-area">${loading()}</div>
+    ${header('Universal Directory', 'Manage identity sources and all user identities across AD, Google, local and more')}
+    <div class="tabs" style="margin-bottom:1.5rem">
+      <button class="tab active" data-tab="sources">🔌 Directory Sources</button>
+      <button class="tab" data-tab="users">👤 Users</button>
+    </div>
+    <div id="tab-sources"></div>
+    <div id="tab-users" style="display:none"></div>
   </div>`));
   const wrap = content.firstChild;
+
+  // ── tab switching ────────────────────────────────────────────────────────────
+  wrap.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => {
+      wrap.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      wrap.querySelector('#tab-sources').style.display = t.dataset.tab === 'sources' ? '' : 'none';
+      wrap.querySelector('#tab-users').style.display = t.dataset.tab === 'users' ? '' : 'none';
+    });
+  });
+
+  // ── initialise both tabs ─────────────────────────────────────────────────────
+  initSourcesTab(wrap.querySelector('#tab-sources'));
+  initUsersTab(wrap.querySelector('#tab-users'));
+}
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  TAB 1: Directory Sources (connector management)            ║
+// ╚══════════════════════════════════════════════════════════════╝
+function initSourcesTab(panel) {
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:1rem">
+      <button class="btn btn-primary" id="ds-add-btn">+ Add Directory Source</button>
+    </div>
+    <div id="ds-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem"></div>
+    <div id="ds-area">${loading()}</div>`;
 
   // ── render connector cards ──────────────────────────────────────────────────
   async function load() {
@@ -1140,7 +1170,7 @@ export async function viewDirectorySync(content) {
         if (!c.last_sync_at) return best;
         return !best || new Date(c.last_sync_at) > new Date(best) ? c.last_sync_at : best;
       }, null);
-      wrap.querySelector('#ds-stats').innerHTML = `
+      panel.querySelector('#ds-stats').innerHTML = `
         <div class="card" style="text-align:center;padding:1rem">
           <div style="font-size:1.75rem;font-weight:700;color:var(--accent)">${total}</div>
           <div class="muted" style="font-size:0.8rem;margin-top:0.25rem">Total Sources</div>
@@ -1159,14 +1189,14 @@ export async function viewDirectorySync(content) {
         </div>`;
 
       if (!connectors.length) {
-        wrap.querySelector('#ds-area').innerHTML = `
+        panel.querySelector('#ds-area').innerHTML = `
           <div class="card" style="text-align:center;padding:3rem 2rem">
             <div style="font-size:3rem;margin-bottom:1rem">🔌</div>
             <h2 style="margin:0 0 0.5rem">No directory sources configured</h2>
             <p class="muted" style="margin-bottom:1.5rem">Connect Active Directory, Google Workspace, Azure AD or any SCIM-compatible directory to start syncing identities.</p>
             <button class="btn btn-primary" id="ds-empty-add">+ Add Your First Directory Source</button>
           </div>`;
-        wrap.querySelector('#ds-empty-add').addEventListener('click', openAddWizard);
+        panel.querySelector('#ds-empty-add').addEventListener('click', openAddWizard);
         return;
       }
 
@@ -1200,15 +1230,15 @@ export async function viewDirectorySync(content) {
           </div>
         </div>`;
       }).join('');
-      wrap.querySelector('#ds-area').innerHTML = cards;
+      panel.querySelector('#ds-area').innerHTML = cards;
       bindCardActions();
-    } catch(e) { wrap.querySelector('#ds-area').innerHTML = errHtml(e.message); }
+    } catch(e) { panel.querySelector('#ds-area').innerHTML = errHtml(e.message); }
   }
 
   // ── bind all card button actions ────────────────────────────────────────────
   function bindCardActions() {
     // Sync Now
-    wrap.querySelectorAll('.ds-sync').forEach(btn => {
+    panel.querySelectorAll('.ds-sync').forEach(btn => {
       btn.addEventListener('click', async () => {
         btn.disabled = true; btn.textContent = '⟳ Syncing…';
         try {
@@ -1221,7 +1251,7 @@ export async function viewDirectorySync(content) {
     });
 
     // Test Connection
-    wrap.querySelectorAll('.ds-test').forEach(btn => {
+    panel.querySelectorAll('.ds-test').forEach(btn => {
       btn.addEventListener('click', async () => {
         btn.disabled = true; btn.textContent = '⟳ Testing…';
         try {
@@ -1233,17 +1263,17 @@ export async function viewDirectorySync(content) {
     });
 
     // Edit
-    wrap.querySelectorAll('.ds-edit').forEach(btn => {
+    panel.querySelectorAll('.ds-edit').forEach(btn => {
       btn.addEventListener('click', () => openEditModal(btn.dataset.id, btn.dataset));
     });
 
     // Sync History
-    wrap.querySelectorAll('.ds-logs').forEach(btn => {
+    panel.querySelectorAll('.ds-logs').forEach(btn => {
       btn.addEventListener('click', () => openLogsModal(btn.dataset.id, btn.dataset.name));
     });
 
     // Delete
-    wrap.querySelectorAll('.ds-del').forEach(btn => {
+    panel.querySelectorAll('.ds-del').forEach(btn => {
       btn.addEventListener('click', async () => {
         if (!confirm('Remove this directory source? This will not delete synced users.')) return;
         try { await api.deleteConnector(btn.dataset.id); await load(); } catch(e) { alert(e.message); }
@@ -1490,8 +1520,526 @@ export async function viewDirectorySync(content) {
     } catch(e) { bd.querySelector('#logs-body').innerHTML = errHtml(e.message); }
   }
 
-  wrap.querySelector('#ds-add-btn').addEventListener('click', openAddWizard);
-  await load();
+  panel.querySelector('#ds-add-btn').addEventListener('click', openAddWizard);
+  load();
+}
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  TAB 2: Universal Directory — Hybrid Identity Users         ║
+// ╚══════════════════════════════════════════════════════════════╝
+function initUsersTab(panel) {
+  // ── Source badge colours ─────────────────────────────────────────────────────
+  const SRC_BADGE = {
+    AD:            { label: 'AD',              color: '#0078D4', bg: '#e8f3fc' },
+    GOOGLE:        { label: 'Google',          color: '#34a853', bg: '#e8f7ed' },
+    ZOHO:          { label: 'Zoho',            color: '#e42527', bg: '#fde9e9' },
+    SLACK:         { label: 'Slack',           color: '#4a154b', bg: '#f0e9f0' },
+    GITHUB:        { label: 'GitHub',          color: '#24292e', bg: '#ebebeb' },
+    HRMS:          { label: 'HRMS',            color: '#ff6600', bg: '#fff0e6' },
+    NEXSID:        { label: 'NexSid',          color: '#5c4ee5', bg: '#efedfc' },
+    SALESMAN_OTP:  { label: 'Salesman OTP',    color: '#0aa',    bg: '#e6fbfb' },
+    BIGQUERY:      { label: 'BigQuery',        color: '#4285f4', bg: '#eaf1fd' },
+    AWS_IDC:       { label: 'AWS IDC',         color: '#ff9900', bg: '#fff5e6' },
+    LOCAL:         { label: 'Local',           color: '#6c757d', bg: '#f0f0f0' },
+  };
+
+  function srcBadge(src) {
+    const b = SRC_BADGE[src] || { label: src, color: '#555', bg: '#eee' };
+    return `<span style="display:inline-block;padding:0.15rem 0.45rem;border-radius:4px;
+      font-size:0.72rem;font-weight:600;margin-right:0.25rem;
+      background:${b.bg};color:${b.color};border:1px solid ${b.color}33">${esc(b.label)}</span>`;
+  }
+
+  function stateBadge(s) {
+    const map = { ACTIVE:'badge-success', SUSPENDED:'badge-warning', TERMINATED:'badge-danger', INACTIVE:'badge-neutral' };
+    return `<span class="badge ${map[s]||'badge-neutral'}">${esc(s||'—')}</span>`;
+  }
+
+  // ── Build shell ──────────────────────────────────────────────────────────────
+  panel.innerHTML = `
+    <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem">
+      <input class="form-input" id="ud-search" placeholder="Search name, email, ID…" style="flex:1;min-width:200px;max-width:340px">
+      <select class="form-select" id="ud-src-filter" style="min-width:140px">
+        <option value="">All Sources</option>
+        <option value="AD">Active Directory</option>
+        <option value="GOOGLE">Google Workspace</option>
+        <option value="LOCAL">Local Only</option>
+        <option value="ZOHO">Zoho</option>
+        <option value="SLACK">Slack</option>
+        <option value="GITHUB">GitHub</option>
+        <option value="HRMS">HRMS</option>
+        <option value="AWS_IDC">AWS IDC</option>
+      </select>
+      <select class="form-select" id="ud-state-filter" style="min-width:130px">
+        <option value="">All States</option>
+        <option value="ACTIVE">Active</option>
+        <option value="SUSPENDED">Suspended</option>
+        <option value="TERMINATED">Terminated</option>
+        <option value="INACTIVE">Inactive</option>
+      </select>
+      <button class="btn btn-secondary" id="ud-refresh-btn">⟳ Refresh</button>
+      <button class="btn btn-primary"   id="ud-create-btn">+ Create Local User</button>
+    </div>
+    <div id="ud-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:0.75rem;margin-bottom:1.25rem"></div>
+    <div id="ud-table-area">${loading()}</div>`;
+
+  let allUsers = [];
+  let searchTimer = null;
+
+  // ── Load & render user list ──────────────────────────────────────────────────
+  async function loadUsers(q = '', state = '', source = '') {
+    panel.querySelector('#ud-table-area').innerHTML = loading();
+    try {
+      const r = await api.listUsersUnified(q, state, source, 200, 0);
+      allUsers = Array.isArray(r) ? r : (r?.data ?? []);
+      renderStats(allUsers);
+      renderTable(allUsers);
+    } catch(e) {
+      panel.querySelector('#ud-table-area').innerHTML = errHtml(e.message);
+    }
+  }
+
+  function renderStats(users) {
+    const total   = users.length;
+    const withAD  = users.filter(u => (u.identity_sources||'').includes('AD')).length;
+    const withG   = users.filter(u => (u.identity_sources||'').includes('GOOGLE')).length;
+    const local   = users.filter(u => !(u.identity_sources||'').replace(/^,+|,+$/g,'').length || u.local_active).length;
+    panel.querySelector('#ud-stats').innerHTML = [
+      [total,  'Total Users',       'var(--accent)'],
+      [withAD, 'With AD',           '#0078D4'],
+      [withG,  'With Google',       '#34a853'],
+      [local,  'Local / No Source', 'var(--text-dim)'],
+    ].map(([n, lbl, clr]) => `
+      <div class="card" style="text-align:center;padding:0.75rem">
+        <div style="font-size:1.6rem;font-weight:700;color:${clr}">${n}</div>
+        <div class="muted" style="font-size:0.78rem;margin-top:0.2rem">${lbl}</div>
+      </div>`).join('');
+  }
+
+  function renderTable(users) {
+    if (!users.length) {
+      panel.querySelector('#ud-table-area').innerHTML = `
+        <div class="card" style="text-align:center;padding:3rem 2rem">
+          <div style="font-size:3rem;margin-bottom:1rem">👤</div>
+          <p class="muted">No users match your filter.</p>
+        </div>`;
+      return;
+    }
+
+    const rows = users.map(u => {
+      const sources = (u.identity_sources || '').split(',').filter(Boolean);
+      const badges  = sources.length ? sources.map(srcBadge).join('') : srcBadge('LOCAL');
+      const initials = (u.full_name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+      return `<tr style="cursor:pointer" class="ud-row" data-empid="${esc(u.emp_id)}">
+        <td>
+          <div style="display:flex;align-items:center;gap:0.6rem">
+            <div style="width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;
+              display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;flex-shrink:0">${esc(initials)}</div>
+            <div>
+              <div style="font-weight:600;font-size:0.9rem">${esc(u.full_name||'—')}</div>
+              <div class="muted" style="font-size:0.78rem">${esc(u.emp_id)}</div>
+            </div>
+          </div>
+        </td>
+        <td class="muted" style="font-size:0.85rem">${esc(u.email_corp||'—')}</td>
+        <td class="muted" style="font-size:0.85rem">${esc(u.dept_id||'—')}</td>
+        <td>${stateBadge(u.ilg_state)}</td>
+        <td>${badges}</td>
+        <td>
+          <button class="btn btn-sm btn-secondary ud-profile-btn" data-empid="${esc(u.emp_id)}">View Profile</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    panel.querySelector('#ud-table-area').innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>User</th><th>Email</th><th>Department</th><th>State</th><th>Sources</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+
+    panel.querySelectorAll('.ud-row, .ud-profile-btn').forEach(el2 => {
+      el2.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const empId = el2.dataset.empid || el2.closest('tr')?.dataset?.empid;
+        if (empId) openProfilePanel(empId);
+      });
+    });
+  }
+
+  // ── Full profile side-panel / modal ──────────────────────────────────────────
+  async function openProfilePanel(empId) {
+    const bd = openModal(`<div class="modal" style="width:720px;max-width:97vw;max-height:90vh;display:flex;flex-direction:column">
+      <div class="modal-header" style="display:flex;justify-content:space-between;align-items:center">
+        <h2 id="prof-title">Loading…</h2>
+        <button class="btn btn-secondary btn-sm" id="prof-close">✕ Close</button>
+      </div>
+      <div class="modal-body" id="prof-body" style="overflow-y:auto;flex:1">${loading()}</div>
+    </div>`);
+    bd.querySelector('#prof-close').addEventListener('click', () => bd.remove());
+
+    async function reloadProfile() {
+      bd.querySelector('#prof-body').innerHTML = loading();
+      try {
+        const d = await api.getUserProfile(empId);
+        const emp = d.employee || {};
+        const links = d.identityLinks || [];
+        const recentLogins = d.recentLogins || [];
+        const writebackLog = d.writebackLog || [];
+
+        bd.querySelector('#prof-title').textContent = emp.full_name || empId;
+
+        const sources = links.filter(l => l.status === 'ACTIVE').map(l => l.system);
+        const srcBadges = sources.length ? sources.map(srcBadge).join('') : srcBadge('LOCAL');
+
+        // ── Identity links table
+        const linkRows = links.length ? links.map(l => `<tr>
+          <td>${srcBadge(l.system)}</td>
+          <td class="muted" style="font-size:0.8rem;word-break:break-all">${esc(l.external_id||'—')}</td>
+          <td><span class="badge ${l.status==='ACTIVE'?'badge-success':'badge-neutral'}">${esc(l.status)}</span></td>
+          <td class="muted" style="font-size:0.78rem">${l.last_synced_at ? fmtDate(l.last_synced_at) : '—'}</td>
+          <td>${l.drift_flag ? '<span class="badge badge-warning" title="Attribute drift detected">⚠ Drift</span>' : ''}</td>
+          <td>${l.auth_kind ? `<span class="badge badge-neutral" style="font-size:0.72rem">${esc(l.auth_kind)}</span>` : ''}</td>
+          <td>
+            ${l.status === 'ACTIVE'
+              ? `<button class="btn btn-sm btn-danger ud-unlink" data-linkid="${esc(String(l.id))}" title="Remove identity link">Unlink</button>`
+              : ''}
+          </td>
+        </tr>`).join('') : `<tr><td colspan="7" class="muted" style="text-align:center;padding:1.5rem">No identity links — local account only.</td></tr>`;
+
+        // ── Recent logins table (collapsed)
+        const loginRows = recentLogins.slice(0, 5).map(s => `<tr>
+          <td class="muted" style="font-size:0.78rem">${s.started_at ? fmtDate(s.started_at) : '—'}</td>
+          <td class="muted" style="font-size:0.78rem">${esc(s.iss||'—')}</td>
+          <td class="muted" style="font-size:0.78rem">${esc(s.ip||'—')}</td>
+        </tr>`).join('');
+
+        // ── Password writeback log
+        const wbRows = writebackLog.slice(0, 5).map(w => `<tr>
+          <td>${srcBadge(w.target_system)}</td>
+          <td><span class="badge ${w.status==='SUCCESS'?'badge-success':'badge-danger'}">${esc(w.status)}</span></td>
+          <td class="muted" style="font-size:0.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(w.error||'')}</td>
+          <td class="muted" style="font-size:0.78rem">${w.created_at ? fmtDate(w.created_at) : '—'}</td>
+        </tr>`).join('');
+
+        bd.querySelector('#prof-body').innerHTML = `
+          <!-- ── Core attributes ──────────────────────────────────────────── -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem 1.5rem;margin-bottom:1.5rem">
+            ${[
+              ['Employee ID', emp.emp_id],
+              ['Email',       emp.email_corp],
+              ['Department',  emp.dept_id],
+              ['State',       stateBadge(emp.ilg_state)],
+              ['Employment',  emp.employment_type],
+              ['Manager',     emp.manager_name ? `${esc(emp.manager_name)} <span class="muted">&lt;${esc(emp.manager_email||'')}&gt;</span>` : '—'],
+              ['Hire Date',   emp.hire_date ? fmtDate(emp.hire_date) : '—'],
+              ['Admin Role',  emp.admin_role || '—'],
+            ].map(([k,v]) => `
+              <div>
+                <div class="muted" style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em">${k}</div>
+                <div style="margin-top:0.2rem">${v||'—'}</div>
+              </div>`).join('')}
+          </div>
+          <div style="margin-bottom:0.5rem"><strong>Identity Sources:</strong> ${srcBadges}</div>
+          <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
+
+          <!-- ── Identity Links ───────────────────────────────────────────── -->
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+            <h3 style="margin:0;font-size:1rem">Identity Links</h3>
+            <button class="btn btn-sm btn-secondary" id="ud-link-btn">+ Link Identity</button>
+          </div>
+          <div class="table-wrap" style="margin-bottom:1.5rem">
+            <table><thead><tr><th>Source</th><th>External ID</th><th>Status</th><th>Last Synced</th><th>Drift</th><th>Auth</th><th></th></tr></thead>
+            <tbody>${linkRows}</tbody></table>
+          </div>
+
+          <!-- ── Password Reset ────────────────────────────────────────────── -->
+          <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
+          <h3 style="margin:0 0 0.75rem;font-size:1rem">Reset Password</h3>
+          <p class="muted" style="font-size:0.85rem;margin-bottom:0.75rem">
+            Password will be updated in <strong>all linked systems simultaneously</strong>
+            (Local account, Active Directory, Google Workspace, and any other active links).
+          </p>
+          <div style="display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap;margin-bottom:0.75rem">
+            <div class="form-group" style="margin:0;flex:1;min-width:200px">
+              <label class="form-label">New Password <span style="color:var(--danger)">*</span></label>
+              <input type="password" class="form-input" id="ud-new-pwd" placeholder="Min. 10 characters" autocomplete="new-password">
+            </div>
+            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;margin-bottom:0.1rem">
+              <input type="checkbox" id="ud-notify-user"> Notify user by email
+            </label>
+            <button class="btn btn-primary" id="ud-reset-btn">Reset in All Systems</button>
+          </div>
+          <div id="ud-reset-results"></div>
+
+          <!-- ── Recent logins ─────────────────────────────────────────────── -->
+          ${recentLogins.length ? `
+          <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
+          <h3 style="margin:0 0 0.75rem;font-size:1rem">Recent Login Sessions</h3>
+          <div class="table-wrap" style="margin-bottom:1rem">
+            <table><thead><tr><th>When</th><th>Provider</th><th>IP</th></tr></thead>
+            <tbody>${loginRows}</tbody></table>
+          </div>` : ''}
+
+          <!-- ── Password writeback log ────────────────────────────────────── -->
+          ${writebackLog.length ? `
+          <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
+          <h3 style="margin:0 0 0.75rem;font-size:1rem">Password Writeback History</h3>
+          <div class="table-wrap">
+            <table><thead><tr><th>System</th><th>Status</th><th>Error</th><th>When</th></tr></thead>
+            <tbody>${wbRows}</tbody></table>
+          </div>` : ''}`;
+
+        // ── Unlink buttons
+        bd.querySelectorAll('.ud-unlink').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            if (!confirm('Remove this identity link? The user will no longer authenticate via this source.')) return;
+            try {
+              await api.unlinkIdentity(empId, btn.dataset.linkid);
+              reloadProfile();
+            } catch(e) { alert('Failed to remove link: ' + e.message); }
+          });
+        });
+
+        // ── Link Identity form
+        bd.querySelector('#ud-link-btn').addEventListener('click', () => {
+          openLinkModal(empId, reloadProfile);
+        });
+
+        // ── Password Reset
+        bd.querySelector('#ud-reset-btn').addEventListener('click', async () => {
+          const resetBtn = bd.querySelector('#ud-reset-btn');
+          const pwd = bd.querySelector('#ud-new-pwd').value.trim();
+          const notify = bd.querySelector('#ud-notify-user').checked;
+          if (!pwd || pwd.length < 10) {
+            bd.querySelector('#ud-reset-results').innerHTML = errHtml('Password must be at least 10 characters.');
+            return;
+          }
+          resetBtn.disabled = true; resetBtn.textContent = '⟳ Resetting…';
+          bd.querySelector('#ud-reset-results').innerHTML = '';
+          try {
+            const r = await api.adminResetPassword(empId, pwd, notify);
+            const results = r.results || [];
+            const html = results.map(res => `
+              <div style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0.6rem;
+                border-radius:4px;margin-bottom:0.35rem;
+                background:${res.status==='SUCCESS'?'var(--success-bg, #f0fdf4)':'var(--danger-bg, #fff1f2)'}">
+                ${srcBadge(res.system)}
+                <span class="${res.status==='SUCCESS'?'':''}">
+                  ${res.status==='SUCCESS' ? '✓ Updated successfully' : `✗ ${esc(res.error||'Failed')}`}
+                </span>
+              </div>`).join('');
+            const overall = r.success
+              ? `<div class="alert alert-success" style="margin-bottom:0.5rem">✓ ${esc(r.summary)}</div>`
+              : `<div class="alert alert-error" style="margin-bottom:0.5rem">⚠ ${esc(r.summary)}</div>`;
+            bd.querySelector('#ud-reset-results').innerHTML = overall + html;
+            bd.querySelector('#ud-new-pwd').value = '';
+            // Refresh writeback log in profile
+            reloadProfile();
+          } catch(e) {
+            bd.querySelector('#ud-reset-results').innerHTML = errHtml(e.message);
+          }
+          resetBtn.disabled = false; resetBtn.textContent = 'Reset in All Systems';
+        });
+
+      } catch(e) {
+        bd.querySelector('#prof-body').innerHTML = errHtml(e.message);
+      }
+    }
+
+    reloadProfile();
+  }
+
+  // ── Link Identity sub-modal ──────────────────────────────────────────────────
+  function openLinkModal(empId, onDone) {
+    const bd2 = openModal(`<div class="modal" style="width:480px;max-width:96vw">
+      <div class="modal-header"><h2>Link External Identity</h2></div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Source System <span style="color:var(--danger)">*</span></label>
+          <select class="form-select" id="lnk-sys">
+            <option value="">— Choose —</option>
+            <option value="AD">Active Directory</option>
+            <option value="GOOGLE">Google Workspace</option>
+            <option value="ZOHO">Zoho</option>
+            <option value="SLACK">Slack</option>
+            <option value="GITHUB">GitHub</option>
+            <option value="HRMS">HRMS</option>
+            <option value="NEXSID">NexSid</option>
+            <option value="SALESMAN_OTP">Salesman OTP</option>
+            <option value="BIGQUERY">BigQuery</option>
+            <option value="AWS_IDC">AWS IDC</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">External ID <span style="color:var(--danger)">*</span></label>
+          <input class="form-input" id="lnk-extid" placeholder="e.g. CN=john.doe,DC=corp,DC=com or john@company.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Auth Kind</label>
+          <select class="form-select" id="lnk-auth">
+            <option value="LDAP">LDAP</option>
+            <option value="OIDC">OIDC</option>
+            <option value="SAML">SAML</option>
+            <option value="OTP">OTP</option>
+            <option value="BIOMETRIC">Biometric</option>
+          </select>
+        </div>
+        <div id="lnk-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="lnk-save">Link Identity</button>
+        <button class="btn btn-secondary" id="lnk-cancel">Cancel</button>
+      </div>
+    </div>`);
+    bd2.querySelector('#lnk-cancel').addEventListener('click', () => bd2.remove());
+    bd2.querySelector('#lnk-save').addEventListener('click', async () => {
+      const saveBtn = bd2.querySelector('#lnk-save');
+      const sys    = bd2.querySelector('#lnk-sys').value;
+      const extId  = bd2.querySelector('#lnk-extid').value.trim();
+      const auth   = bd2.querySelector('#lnk-auth').value;
+      if (!sys || !extId) {
+        bd2.querySelector('#lnk-err').innerHTML = errHtml('Source and External ID are required.');
+        return;
+      }
+      saveBtn.disabled = true; saveBtn.textContent = 'Linking…';
+      try {
+        await api.linkIdentity(empId, { system: sys, externalId: extId, authKind: auth });
+        bd2.remove();
+        onDone();
+      } catch(e) {
+        bd2.querySelector('#lnk-err').innerHTML = errHtml(e.message);
+        saveBtn.disabled = false; saveBtn.textContent = 'Link Identity';
+      }
+    });
+  }
+
+  // ── Create Local User modal ──────────────────────────────────────────────────
+  function openCreateUserModal() {
+    const bd = openModal(`<div class="modal" style="width:580px;max-width:96vw">
+      <div class="modal-header"><h2>Create Local User</h2></div>
+      <div class="modal-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">
+          <div class="form-group">
+            <label class="form-label">Full Name <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="cu-name" placeholder="Jane Doe">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Corporate Email <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="cu-email" type="email" placeholder="jane.doe@company.com">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Password <span style="color:var(--danger)">*</span></label>
+            <input class="form-input" id="cu-pwd" type="password" placeholder="Min. 10 characters" autocomplete="new-password">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Role</label>
+            <select class="form-select" id="cu-role">
+              <option value="USER">User</option>
+              <option value="MANAGER">Manager</option>
+              <option value="HRBP">HRBP</option>
+              <option value="ADMIN">Admin</option>
+              <option value="SUPER_ADMIN">Super Admin</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Department ID</label>
+            <input class="form-input" id="cu-dept" placeholder="e.g. DEPT-ENG">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Employment Type</label>
+            <select class="form-select" id="cu-emptype">
+              <option value="CORPORATE">Corporate</option>
+              <option value="STORE">Store</option>
+              <option value="PLANT">Plant</option>
+              <option value="DC">Distribution Center</option>
+            </select>
+          </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label class="form-label">Manager Employee ID</label>
+            <input class="form-input" id="cu-mgr" placeholder="e.g. EMP-00042">
+          </div>
+        </div>
+        <div id="cu-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary"   id="cu-save">Create User</button>
+        <button class="btn btn-secondary" id="cu-cancel">Cancel</button>
+      </div>
+    </div>`);
+    bd.querySelector('#cu-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#cu-save').addEventListener('click', async () => {
+      const saveBtn = bd.querySelector('#cu-save');
+      const name  = bd.querySelector('#cu-name').value.trim();
+      const email = bd.querySelector('#cu-email').value.trim();
+      const pwd   = bd.querySelector('#cu-pwd').value;
+      const role  = bd.querySelector('#cu-role').value;
+      const dept  = bd.querySelector('#cu-dept').value.trim();
+      const etype = bd.querySelector('#cu-emptype').value;
+      const mgr   = bd.querySelector('#cu-mgr').value.trim();
+      if (!name || !email || !pwd) {
+        bd.querySelector('#cu-err').innerHTML = errHtml('Name, email, and password are required.'); return;
+      }
+      if (pwd.length < 10) {
+        bd.querySelector('#cu-err').innerHTML = errHtml('Password must be at least 10 characters.'); return;
+      }
+      saveBtn.disabled = true; saveBtn.textContent = 'Creating…';
+      try {
+        const res = await api.createLocalUser({
+          fullName: name, email, password: pwd, role,
+          deptId:  dept  || undefined,
+          empType: etype,
+          managerId: mgr || undefined,
+        });
+        bd.remove();
+        // refresh table
+        const q      = panel.querySelector('#ud-search').value.trim();
+        const src    = panel.querySelector('#ud-src-filter').value;
+        const state  = panel.querySelector('#ud-state-filter').value;
+        loadUsers(q, state, src);
+        // Auto-open the new user's profile
+        if (res.empId) openProfilePanel(res.empId);
+      } catch(e) {
+        bd.querySelector('#cu-err').innerHTML = errHtml(e.message);
+        saveBtn.disabled = false; saveBtn.textContent = 'Create User';
+      }
+    });
+  }
+
+  // ── Wire up search / filters ─────────────────────────────────────────────────
+  function getFilters() {
+    return {
+      q:      panel.querySelector('#ud-search').value.trim(),
+      state:  panel.querySelector('#ud-state-filter').value,
+      source: panel.querySelector('#ud-src-filter').value,
+    };
+  }
+
+  panel.querySelector('#ud-search').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      const f = getFilters();
+      loadUsers(f.q, f.state, f.source);
+    }, 350);
+  });
+
+  ['#ud-src-filter', '#ud-state-filter'].forEach(sel => {
+    panel.querySelector(sel).addEventListener('change', () => {
+      const f = getFilters();
+      loadUsers(f.q, f.state, f.source);
+    });
+  });
+
+  panel.querySelector('#ud-refresh-btn').addEventListener('click', () => {
+    const f = getFilters();
+    loadUsers(f.q, f.state, f.source);
+  });
+
+  panel.querySelector('#ud-create-btn').addEventListener('click', openCreateUserModal);
+
+  // ── Initial load ─────────────────────────────────────────────────────────────
+  loadUsers();
 }
 
 // ─── 11. Business Roles ───────────────────────────────────────────────────────

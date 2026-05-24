@@ -186,6 +186,16 @@ Object.assign(api, {
   terminateUser: (empId, reason) => f(`/api/admin/users/${empId}/terminate`, { method: 'POST', body: JSON.stringify({ reason }) }),
   userLifecycle: (empId) => f(`/api/admin/users/${empId}/lifecycle`),
 
+  // Unified directory — hybrid identity
+  listUsersUnified: (q = '', state = '', source = '', limit = 100, offset = 0) =>
+    f(`/api/admin/users?q=${encodeURIComponent(q)}&state=${encodeURIComponent(state)}&source=${encodeURIComponent(source)}&limit=${limit}&offset=${offset}`),
+  getUserProfile:      (empId) => f(`/api/admin/users/${empId}`),
+  createLocalUser:     (data) => f('/api/admin/users/local', { method: 'POST', body: JSON.stringify(data) }),
+  adminResetPassword:  (empId, newPassword, notifyUser = false) =>
+    f(`/api/admin/users/${empId}/reset-password`, { method: 'POST', body: JSON.stringify({ newPassword, notifyUser }) }),
+  linkIdentity:        (empId, data) => f(`/api/admin/users/${empId}/link-identity`, { method: 'POST', body: JSON.stringify(data) }),
+  unlinkIdentity:      (empId, linkId) => f(`/api/admin/users/${empId}/identity-links/${linkId}`, { method: 'DELETE' }),
+
   // Access requests
   igaSubmitRequest:  (data) => f('/api/iga/access-requests', { method: 'POST', body: JSON.stringify(data) }),
   igaRequestDecision: (id, decision, comment) => f(`/api/iga/access-requests/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision, comment }) }),
