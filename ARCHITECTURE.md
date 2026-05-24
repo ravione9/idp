@@ -648,7 +648,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### `ba09929` — 2026-05-24 — Universal Directory: hybrid identity user management
+### *(this commit)* — 2026-05-24 — Fix migration 007: idempotent OIDC/workflow DDL + valid timestamps
+
+**Why** — `007_fix_oidc_workflows.sql` crashed API startup on pam-2: `DEFAULT UTC_TIMESTAMP()` is invalid MySQL syntax for `CREATE TABLE`, and the first partial run left `oidc_clients.name` in place so every restart hit `Duplicate column name 'name'`.
+
+**What changed:**
+
+- **`migrations/007_fix_oidc_workflows.sql`** (never successfully applied — safe to rewrite):
+  - Guard `ADD COLUMN name` and `CHANGE COLUMN token_endpoint_auth` with `information_schema` checks (idempotent after partial apply).
+  - Replace `DEFAULT UTC_TIMESTAMP()` with `DEFAULT CURRENT_TIMESTAMP` / `ON UPDATE CURRENT_TIMESTAMP` on `workflow_definitions`.
+
+### `e3b54d0` — 2026-05-24 — doc: log ba09929 in change log
 
 **Why** — The Universal Directory page only managed connector sources; admins had no way to browse all identities, create local users, link AD/Google accounts, or reset passwords across systems from one place.
 
