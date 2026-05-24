@@ -648,7 +648,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(this commit)* — 2026-05-24 — Universal Directory: hybrid identity user management
+### `ba09929` — 2026-05-24 — Universal Directory: hybrid identity user management
 
 **Why** — The Universal Directory page only managed connector sources; admins had no way to browse all identities, create local users, link AD/Google accounts, or reset passwords across systems from one place.
 
