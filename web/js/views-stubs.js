@@ -1,8 +1,20 @@
 import { api } from './api.js';
 import { el, esc, fmtDate } from './ui.js';
+import { icon as svgIcon } from './icons.js';
 
 function header(title, subtitle, action = '') {
   return `<div class="page-header"><div><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div>${action}</div>`;
+}
+
+function statCard(iconName, label, value, sub = '', cls = 'primary') {
+  return `<div class="stat-card">
+    <div class="stat-icon ${cls}">${svgIcon(iconName)}</div>
+    <div>
+      <div class="stat-label">${esc(label)}</div>
+      <div class="stat-value">${esc(String(value ?? 0))}</div>
+      ${sub ? `<div class="stat-sub">${sub}</div>` : ''}
+    </div>
+  </div>`;
 }
 
 function openModal(html) {
@@ -206,9 +218,9 @@ export async function viewMfaMethods(content) {
         : '<span class="badge badge-neutral">Not enrolled</span>';
     wrap.querySelector('#mfa-area').innerHTML = `
       <div class="stat-grid" style="margin-bottom:1.5rem">
-        <div class="stat-card"><div class="stat-value">${enrolledCount}</div><div class="stat-label">Methods Enrolled</div><div class="stat-sub">${enrollmentBadge}</div></div>
-        <div class="stat-card"><div class="stat-value">${liveOrSchemaCount}</div><div class="stat-label">Live / Schema</div></div>
-        <div class="stat-card"><div class="stat-value">2</div><div class="stat-label">Planned</div></div>
+        ${statCard('shieldCheck', 'Methods Enrolled', enrolledCount,    enrollmentBadge,                'primary')}
+        ${statCard('check',       'Live / Schema',   liveOrSchemaCount, 'available now',                'success')}
+        ${statCard('bolt',        'Planned',         2,                 'arriving in next milestone',   'warning')}
       </div>
       <div class="grid-3">${cards}</div>
       <div style="margin-top:1rem"><a href="/?v=settings" class="btn btn-primary">Manage Enrollment →</a></div>`;

@@ -2,6 +2,7 @@
    Reviews, SoD, Risk, Authentication, Audit, Reports. */
 import { api } from './api.js';
 import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut } from './ui.js';
+import { icon as svgIcon } from './icons.js';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
@@ -11,9 +12,9 @@ function header(title, subtitle, action = '') {
     ${action}</div>`;
 }
 
-function statCard(icon, label, value, sub = '', cls = 'primary') {
+function statCard(iconName, label, value, sub = '', cls = 'primary') {
   return `<div class="stat-card">
-    <div class="stat-icon ${cls}">${icon}</div>
+    <div class="stat-icon ${cls}">${svgIcon(iconName)}</div>
     <div>
       <div class="stat-label">${esc(label)}</div>
       <div class="stat-value">${esc(String(value ?? 0))}</div>
@@ -71,14 +72,14 @@ export async function viewDashboard(content) {
     ${header('Dashboard', 'Overview of your identity and access management deployment')}
 
     <section class="stat-grid">
-      ${statCard('◍', 'Total users',     c.employees,        `${c.activeEmployees} active`,        'primary')}
-      ${statCard('⛨', 'SAML apps',       c.activeSamlApps,   `${c.samlApps} registered`,           'accent')}
-      ${statCard('●', 'Active sessions', c.activeSessions,   'across all users',                   'success')}
-      ${statCard('⌖', 'SSO logins (24h)', c.assertions24h,   `${c.assertions7d} in 7 days`,        'info')}
-      ${statCard('◐', 'Pending tasks',   c.pendingApprovals + c.pendingReviews, 'approvals + reviews', 'warning')}
-      ${statCard('⚠', 'SoD violations',  c.openSodViolations, 'open',                              'danger')}
-      ${statCard('⚿', 'MFA enrolled',    c.mfaEnrolled,       'admins',                            'purple')}
-      ${statCard('☰', 'Local admins',    c.localAdmins,       'console accounts',                  'teal')}
+      ${statCard('users',       'Total users',       c.employees,                            `${c.activeEmployees} active`,    'primary')}
+      ${statCard('saml',        'SAML apps',         c.activeSamlApps,                       `${c.samlApps} registered`,       'accent')}
+      ${statCard('activity',    'Active sessions',   c.activeSessions,                       'across all users',               'success')}
+      ${statCard('key',         'SSO logins (24h)',  c.assertions24h,                        `${c.assertions7d} in 7 days`,    'info')}
+      ${statCard('check',       'Pending tasks',     c.pendingApprovals + c.pendingReviews,  'approvals + reviews',            'warning')}
+      ${statCard('alert',       'SoD violations',    c.openSodViolations,                    'open',                           'danger')}
+      ${statCard('shieldCheck', 'MFA enrolled',      c.mfaEnrolled,                          'admins',                         'purple')}
+      ${statCard('userShield',  'Local admins',      c.localAdmins,                          'console accounts',               'teal')}
     </section>
 
     <div class="chart-row">
@@ -775,9 +776,9 @@ export async function viewRisk(content) {
     const r = await api.igaRisk();
     wrap.querySelector('#rk').innerHTML = `
       <section class="stat-grid">
-        ${statCard('◆', 'Identities at risk', (r.topRisk || []).length, 'score ≥ 50', 'warning')}
-        ${statCard('◐', 'MFA challenged (24h)', r.counters?.mfaChallengeLast24h ?? 0, '', 'info')}
-        ${statCard('⊘', 'Logins denied (24h)', r.counters?.deniedLast24h ?? 0, '', 'danger')}
+        ${statCard('alert',       'Identities at risk',     (r.topRisk || []).length,                'score ≥ 50', 'warning')}
+        ${statCard('shieldCheck', 'MFA challenged (24h)',   r.counters?.mfaChallengeLast24h ?? 0,    '',           'info')}
+        ${statCard('lock',        'Logins denied (24h)',    r.counters?.deniedLast24h ?? 0,          '',           'danger')}
       </section>
       <h3 class="section-title">High-risk identities</h3>
       ${(r.topRisk || []).length

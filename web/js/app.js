@@ -5,6 +5,7 @@
    ============================================================ */
 import { api } from './api.js';
 import { el, esc, initials } from './ui.js';
+import { icon } from './icons.js';
 import {
   renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
 } from './views-end-user.js';
@@ -34,79 +35,88 @@ const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
    ---------------------------------------------------------------- */
 const ROUTES = {
   /* ── Workspace (top primary nav) ── */
-  home:     { primary: 'home',     label: 'Home',           view: viewHome },
-  request:  { primary: 'request',  label: 'Request Center', view: viewRequestAccess },
-  tasks:    { primary: 'tasks',    label: 'Approvals',      view: viewMyTasks },
-  myaccess: { primary: 'myaccess', label: 'My Access',      view: viewMyAccess },
+  home:     { primary: 'home',     label: 'Home',           icon: 'grid',         view: viewHome },
+  request:  { primary: 'request',  label: 'Request Center', icon: 'catalog',      view: viewRequestAccess },
+  tasks:    { primary: 'tasks',    label: 'Approvals',      icon: 'check',        view: viewMyTasks },
+  myaccess: { primary: 'myaccess', label: 'My Access',      icon: 'key',          view: viewMyAccess },
 
   /* ── Account ── */
-  settings: { primary: 'settings', label: 'Account', view: viewSettings },
+  settings: { primary: 'settings', label: 'Account',        icon: 'shield',       view: viewSettings },
 
   /* ── Admin > Dashboard ── */
-  dashboard: { primary: 'admin', group: 'Overview', label: 'Dashboard', admin: true, view: viewDashboard },
+  dashboard: { primary: 'admin', group: 'Overview', label: 'Dashboard', icon: 'dashboard', admin: true, view: viewDashboard },
 
   /* ── Admin > Identity ── */
-  users:            { primary: 'admin', group: 'Identity', label: 'Users / Identities',     admin: true, view: viewUsers },
-  groups:           { primary: 'admin', group: 'Identity', label: 'Groups',                 admin: true, view: viewGroups },
-  admins:           { primary: 'admin', group: 'Identity', label: 'Administrators',         super: true, view: viewAdmins },
-  systemUsers:      { primary: 'admin', group: 'Identity', label: 'System / Privileged',    admin: true, view: viewSystemUsers },
-  identityProfiles: { primary: 'admin', group: 'Identity', label: 'Identity Profiles',      admin: true, view: viewIdentityProfiles },
+  users:            { primary: 'admin', group: 'Identity', label: 'Users / Identities',  icon: 'users',        admin: true, view: viewUsers },
+  groups:           { primary: 'admin', group: 'Identity', label: 'Groups',              icon: 'users',        admin: true, view: viewGroups },
+  admins:           { primary: 'admin', group: 'Identity', label: 'Administrators',      icon: 'userShield',   super: true, view: viewAdmins },
+  systemUsers:      { primary: 'admin', group: 'Identity', label: 'System / Privileged', icon: 'userCog',      admin: true, view: viewSystemUsers },
+  identityProfiles: { primary: 'admin', group: 'Identity', label: 'Identity Profiles',   icon: 'identityCard', admin: true, view: viewIdentityProfiles },
 
   /* ── Admin > Authentication ── */
-  ssoConfig:          { primary: 'admin', group: 'Authentication', label: 'SSO Configuration',   admin: true, view: viewAuth },
-  mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', admin: true, view: viewMfaMethods },
-  adaptiveAuth:       { primary: 'admin', group: 'Authentication', label: 'Adaptive Auth',       admin: true, view: viewAdaptiveAuth },
-  passwordPolicies:   { primary: 'admin', group: 'Authentication', label: 'Password Policies',   admin: true, view: viewPasswordPolicies },
-  loginCustomization: { primary: 'admin', group: 'Authentication', label: 'Login Customization', admin: true, view: viewLoginCustomization },
+  ssoConfig:          { primary: 'admin', group: 'Authentication', label: 'SSO Configuration',   icon: 'key',         admin: true, view: viewAuth },
+  mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', icon: 'shieldCheck', admin: true, view: viewMfaMethods },
+  adaptiveAuth:       { primary: 'admin', group: 'Authentication', label: 'Adaptive Auth',       icon: 'adaptive',    admin: true, view: viewAdaptiveAuth },
+  passwordPolicies:   { primary: 'admin', group: 'Authentication', label: 'Password Policies',   icon: 'lock',        admin: true, view: viewPasswordPolicies },
+  loginCustomization: { primary: 'admin', group: 'Authentication', label: 'Login Customization', icon: 'paint',       admin: true, view: viewLoginCustomization },
 
   /* ── Admin > Applications ── */
-  'iga-apps':   { primary: 'admin', group: 'Applications', label: 'Application Catalog', admin: true, view: viewIgaApps },
-  'saml-apps':  { primary: 'admin', group: 'Applications', label: 'SAML Applications',   admin: true, view: viewSamlApps },
-  oidcApps:     { primary: 'admin', group: 'Applications', label: 'OIDC / OAuth',        admin: true, view: viewOidcApps },
-  appDiscovery: { primary: 'admin', group: 'Applications', label: 'App Discovery',       admin: true, view: viewAppDiscovery },
+  'iga-apps':   { primary: 'admin', group: 'Applications', label: 'Application Catalog', icon: 'catalog', admin: true, view: viewIgaApps },
+  'saml-apps':  { primary: 'admin', group: 'Applications', label: 'SAML Applications',   icon: 'saml',    admin: true, view: viewSamlApps },
+  oidcApps:     { primary: 'admin', group: 'Applications', label: 'OIDC / OAuth',        icon: 'oidc',    admin: true, view: viewOidcApps },
+  appDiscovery: { primary: 'admin', group: 'Applications', label: 'App Discovery',       icon: 'search',  admin: true, view: viewAppDiscovery },
 
   /* ── Admin > Connections ── */
-  connectors:    { primary: 'admin', group: 'Connections', label: 'Connectors / Sources', admin: true, view: viewConnectors },
-  directorySync: { primary: 'admin', group: 'Connections', label: 'Directory Sync',       admin: true, view: viewDirectorySync },
+  connectors:    { primary: 'admin', group: 'Connections', label: 'Connectors / Sources', icon: 'plug',    admin: true, view: viewConnectors },
+  directorySync: { primary: 'admin', group: 'Connections', label: 'Directory Sync',       icon: 'refresh', admin: true, view: viewDirectorySync },
 
   /* ── Admin > Access Model ── */
-  roles:        { primary: 'admin', group: 'Access Model', label: 'Business Roles',  admin: true, view: viewRoles },
-  birthright:   { primary: 'admin', group: 'Access Model', label: 'Birthright Rules', admin: true, view: viewBirthright },
+  roles:        { primary: 'admin', group: 'Access Model', label: 'Business Roles',   icon: 'tag',      admin: true, view: viewRoles },
+  birthright:   { primary: 'admin', group: 'Access Model', label: 'Birthright Rules', icon: 'triangle', admin: true, view: viewBirthright },
 
   /* ── Admin > Privileged Access ── */
-  pamResources: { primary: 'admin', group: 'Privileged Access', label: 'Privileged Resources', admin: true, view: viewPamResources },
-  pamSessions:  { primary: 'admin', group: 'Privileged Access', label: 'Privileged Sessions',  admin: true, view: viewPamSessions },
-  pamVault:     { primary: 'admin', group: 'Privileged Access', label: 'Credential Vault',     admin: true, view: viewPamVault },
+  pamResources: { primary: 'admin', group: 'Privileged Access', label: 'Privileged Resources', icon: 'server',   admin: true, view: viewPamResources },
+  pamSessions:  { primary: 'admin', group: 'Privileged Access', label: 'Privileged Sessions',  icon: 'activity', admin: true, view: viewPamSessions },
+  pamVault:     { primary: 'admin', group: 'Privileged Access', label: 'Credential Vault',     icon: 'vault',    admin: true, view: viewPamVault },
 
   /* ── Admin > Identity Governance ── */
-  reviews: { primary: 'admin', group: 'Identity Governance', label: 'Certifications',           admin: true, view: viewReviews },
-  sod:     { primary: 'admin', group: 'Identity Governance', label: 'Segregation of Duties',    admin: true, view: viewSod },
-  risk:    { primary: 'admin', group: 'Identity Governance', label: 'Risk',                     admin: true, view: viewRisk },
+  reviews: { primary: 'admin', group: 'Identity Governance', label: 'Certifications',        icon: 'certificate', admin: true, view: viewReviews },
+  sod:     { primary: 'admin', group: 'Identity Governance', label: 'Segregation of Duties', icon: 'split',       admin: true, view: viewSod },
+  risk:    { primary: 'admin', group: 'Identity Governance', label: 'Risk',                  icon: 'alert',       admin: true, view: viewRisk },
 
   /* ── Admin > Workflows & Automation ── */
-  workflowLibrary: { primary: 'admin', group: 'Workflows', label: 'Workflow Library', admin: true, view: viewWorkflowLibrary },
-  eventTriggers:   { primary: 'admin', group: 'Workflows', label: 'Event Triggers',   admin: true, view: viewEventTriggers },
-  notifications:   { primary: 'admin', group: 'Workflows', label: 'Notifications',    admin: true, view: viewNotifications },
+  workflowLibrary: { primary: 'admin', group: 'Workflows', label: 'Workflow Library', icon: 'flow', admin: true, view: viewWorkflowLibrary },
+  eventTriggers:   { primary: 'admin', group: 'Workflows', label: 'Event Triggers',   icon: 'bolt', admin: true, view: viewEventTriggers },
+  notifications:   { primary: 'admin', group: 'Workflows', label: 'Notifications',    icon: 'bell', admin: true, view: viewNotifications },
 
   /* ── Admin > Reports ── */
-  audit:      { primary: 'admin', group: 'Reports', label: 'Audit Log',          admin: true, view: viewAudit },
-  ssoReports: { primary: 'admin', group: 'Reports', label: 'SSO Reports',        admin: true, view: viewSsoReports },
-  reports:    { primary: 'admin', group: 'Reports', label: 'Compliance Reports', admin: true, view: viewReports },
+  audit:      { primary: 'admin', group: 'Reports', label: 'Audit Log',          icon: 'list',        admin: true, view: viewAudit },
+  ssoReports: { primary: 'admin', group: 'Reports', label: 'SSO Reports',        icon: 'chart',       admin: true, view: viewSsoReports },
+  reports:    { primary: 'admin', group: 'Reports', label: 'Compliance Reports', icon: 'certificate', admin: true, view: viewReports },
 
   /* ── Admin > Settings ── */
-  generalSettings:  { primary: 'admin', group: 'Settings', label: 'General',         admin: true, view: viewGeneralSettings },
-  branding:         { primary: 'admin', group: 'Settings', label: 'Branding',        admin: true, view: viewBranding },
-  license:          { primary: 'admin', group: 'Settings', label: 'License',         super: true, view: viewLicense },
-  tickets:          { primary: 'admin', group: 'Settings', label: 'Tickets',         admin: true, view: viewTickets },
-  systemHealth:     { primary: 'admin', group: 'Settings', label: 'System Health',   admin: true, view: viewSystemHealth },
+  generalSettings:  { primary: 'admin', group: 'Settings', label: 'General',         icon: 'cog',         admin: true, view: viewGeneralSettings },
+  branding:         { primary: 'admin', group: 'Settings', label: 'Branding',        icon: 'paint',       admin: true, view: viewBranding },
+  license:          { primary: 'admin', group: 'Settings', label: 'License',         icon: 'certificate', super: true, view: viewLicense },
+  tickets:          { primary: 'admin', group: 'Settings', label: 'Tickets',         icon: 'ticket',      admin: true, view: viewTickets },
+  systemHealth:     { primary: 'admin', group: 'Settings', label: 'System Health',   icon: 'pulse',       admin: true, view: viewSystemHealth },
 };
 
-/* Order of groups in the admin sidebar */
-const ADMIN_GROUP_ORDER = [
-  'Overview', 'Identity', 'Authentication', 'Applications', 'Connections',
-  'Access Model', 'Privileged Access', 'Identity Governance', 'Workflows',
-  'Reports', 'Settings',
+/* Order of groups in the admin sidebar + their group icon */
+const ADMIN_GROUPS = [
+  { name: 'Overview',            icon: 'dashboard' },
+  { name: 'Identity',            icon: 'users' },
+  { name: 'Authentication',      icon: 'shieldCheck' },
+  { name: 'Applications',        icon: 'app' },
+  { name: 'Connections',         icon: 'plug' },
+  { name: 'Access Model',        icon: 'tag' },
+  { name: 'Privileged Access',   icon: 'server' },
+  { name: 'Identity Governance', icon: 'certificate' },
+  { name: 'Workflows',           icon: 'flow' },
+  { name: 'Reports',             icon: 'chart' },
+  { name: 'Settings',            icon: 'cog' },
 ];
+const ADMIN_GROUP_ORDER = ADMIN_GROUPS.map((g) => g.name);
 
 /* Order of items in the primary top nav */
 const PRIMARY_NAV_ORDER = ['home', 'request', 'tasks', 'myaccess'];
@@ -128,23 +138,25 @@ function buildShell() {
     return `<button data-key="${key}" class="user-nav-btn">${esc(r.label)}</button>`;
   }).join('');
 
-  const adminButton = isAdmin ? `<button data-key="dashboard">Admin</button>` : '';
+  const adminButton = isAdmin
+    ? `<button data-key="dashboard" class="admin-pill"><span class="i-wrap">${icon('dashboard')}</span>Admin</button>`
+    : '';
 
   /* Build admin sidebar grouped */
   const collapseState = localStorage.getItem('idp_sidebar_collapsed') === '1';
-  const groups = new Map();
+  const groupMap = new Map();
   for (const [key, r] of Object.entries(ROUTES)) {
     if (r.primary !== 'admin') continue;
     if (r.super && !isSuper) continue;
-    if (!groups.has(r.group)) groups.set(r.group, []);
-    groups.get(r.group).push({ key, ...r });
+    if (!groupMap.has(r.group)) groupMap.set(r.group, []);
+    groupMap.get(r.group).push({ key, ...r });
   }
-  const sidebarHtml = `<div class="sidebar-toggle-btn"><button id="sidebar-toggle" title="Toggle sidebar">◀</button></div>` +
-    ADMIN_GROUP_ORDER.map((g) => {
-      const items = groups.get(g);
+  const sidebarHtml = `<div class="sidebar-toggle-btn"><button id="sidebar-toggle" title="Toggle sidebar" aria-label="Collapse sidebar">${icon('chevronLeft')}</button></div>` +
+    ADMIN_GROUPS.map((g) => {
+      const items = groupMap.get(g.name);
       if (!items) return '';
-      return `<div class="nav-section"><span class="label-text">${esc(g)}</span></div>` +
-        items.map((i) => `<button data-key="${esc(i.key)}"><span class="label-text">${esc(i.label)}</span></button>`).join('');
+      return `<div class="nav-section"><span class="nav-section-icon">${icon(g.icon)}</span><span class="label-text">${esc(g.name)}</span></div>` +
+        items.map((i) => `<button data-key="${esc(i.key)}" title="${esc(i.label)}"><span class="nav-icon">${icon(i.icon || 'grid')}</span><span class="label-text">${esc(i.label)}</span></button>`).join('');
     }).join('');
 
   const root = el(`
@@ -183,11 +195,11 @@ function buildShell() {
           <div class="user-sidebar-header">
             <span>My Portal</span>
           </div>
-          <button data-key="home"><span class="nav-icon">🏠</span><span class="label-text">All Applications</span></button>
-          <button data-key="request"><span class="nav-icon">📋</span><span class="label-text">Request Access</span></button>
-          <button data-key="tasks"><span class="nav-icon">✅</span><span class="label-text">Approvals</span><span class="task-badge hidden" id="us-task-badge"></span></button>
-          <button data-key="myaccess"><span class="nav-icon">🔑</span><span class="label-text">My Access</span></button>
-          <button data-key="settings"><span class="nav-icon">🛡️</span><span class="label-text">Security</span></button>
+          <button data-key="home"><span class="nav-icon">${icon('grid')}</span><span class="label-text">All Applications</span></button>
+          <button data-key="request"><span class="nav-icon">${icon('catalog')}</span><span class="label-text">Request Access</span></button>
+          <button data-key="tasks"><span class="nav-icon">${icon('check')}</span><span class="label-text">Approvals</span><span class="task-badge hidden" id="us-task-badge"></span></button>
+          <button data-key="myaccess"><span class="nav-icon">${icon('key')}</span><span class="label-text">My Access</span></button>
+          <button data-key="settings"><span class="nav-icon">${icon('shield')}</span><span class="label-text">Security</span></button>
         </aside>
         <aside class="admin-sidebar hidden" id="admin-sidebar">${sidebarHtml}</aside>
         <main class="content" id="content"><div class="loading-row"><span class="spinner"></span></div></main>
@@ -221,13 +233,13 @@ function buildShell() {
   if (collapseState) {
     adminSidebar.classList.add('collapsed');
     shellEl.classList.add('sidebar-collapsed');
-    toggleBtn.textContent = '▶';
+    toggleBtn.innerHTML = icon('chevronRight');
   }
 
   toggleBtn.addEventListener('click', () => {
     const isCollapsed = adminSidebar.classList.toggle('collapsed');
     shellEl.classList.toggle('sidebar-collapsed', isCollapsed);
-    toggleBtn.textContent = isCollapsed ? '▶' : '◀';
+    toggleBtn.innerHTML = isCollapsed ? icon('chevronRight') : icon('chevronLeft');
     localStorage.setItem('idp_sidebar_collapsed', isCollapsed ? '1' : '0');
   });
 

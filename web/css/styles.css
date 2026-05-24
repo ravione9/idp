@@ -463,6 +463,29 @@ button { font-family: inherit; cursor: pointer; }
   font-weight: 700;
 }
 
+/* Admin pill — Entrust-style separator + accented chip in the dark topnav */
+.primary-nav .admin-pill {
+  margin-left: auto;
+  align-self: center;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  color: var(--topnav-active);
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0.35rem 0.95rem;
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  height: 32px;
+}
+.primary-nav .admin-pill .i-wrap { display: inline-flex; }
+.primary-nav .admin-pill .i { width: 16px; height: 16px; }
+.primary-nav .admin-pill:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.24); }
+.primary-nav .admin-pill.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+.primary-nav .admin-pill.active::after { display: none; }
+
 .topnav-actions {
   display: flex; align-items: center; gap: 0.5rem;
   padding-left: 1rem;
@@ -589,21 +612,27 @@ button { font-family: inherit; cursor: pointer; }
 
 .admin-sidebar.hidden { display: none; }
 
+/* SVG icons (Lucide-style) used across the shell */
+.i { width: 18px; height: 18px; flex-shrink: 0; display: inline-block; vertical-align: middle; }
+
 .admin-sidebar .nav-section {
+  display: flex; align-items: center; gap: 0.55rem;
   font-size: 0.68rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-dim);
-  padding: 1rem 1.25rem 0.4rem;
+  padding: 1.1rem 1.25rem 0.4rem 1.5rem;
   font-weight: 600;
 }
-.admin-sidebar .nav-section:first-child { padding-top: 0.25rem; }
+.admin-sidebar .nav-section:first-child { padding-top: 0.5rem; }
+.admin-sidebar .nav-section .i { width: 14px; height: 14px; opacity: 0.85; }
+.admin-sidebar .nav-section-icon { display: inline-flex; align-items: center; justify-content: center; }
 
 .admin-sidebar button {
-  display: flex; align-items: center; gap: 0.6rem;
-  padding: 0.55rem 1.25rem 0.55rem 1.5rem;
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.5rem 1.25rem 0.5rem 1.5rem;
   font-size: 0.82rem;
-  color: var(--text);
+  color: var(--text-muted);
   background: transparent;
   border: none;
   width: 100%;
@@ -611,20 +640,52 @@ button { font-family: inherit; cursor: pointer; }
   cursor: pointer;
   font-family: inherit;
   position: relative;
+  border-left: 3px solid transparent;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.admin-sidebar button:hover { background: var(--surface-2); }
+.admin-sidebar button .nav-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  transition: color 0.12s;
+}
+.admin-sidebar button:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.admin-sidebar button:hover .nav-icon { color: var(--primary); }
 .admin-sidebar button.active {
   color: var(--primary);
   background: var(--primary-soft);
-  font-weight: 500;
+  font-weight: 600;
+  border-left-color: var(--primary);
 }
-.admin-sidebar button.active::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 3px;
-  background: var(--primary);
+.admin-sidebar button.active .nav-icon { color: var(--primary); }
+
+/* Sidebar collapse button at the top of the rail */
+.sidebar-toggle-btn {
+  display: flex; justify-content: flex-end;
+  padding: 0.4rem 0.75rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.4rem;
 }
+.sidebar-toggle-btn button {
+  width: 28px; height: 28px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.sidebar-toggle-btn button:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.sidebar-toggle-btn button .i { width: 14px; height: 14px; }
 
 /* ============================================================
    CONTENT  — scrolls independently of sidebar
@@ -721,6 +782,7 @@ button { font-family: inherit; cursor: pointer; }
   font-size: 1.1rem; font-weight: 700;
   flex-shrink: 0;
 }
+.stat-card .stat-icon .i { width: 22px; height: 22px; stroke-width: 1.7; }
 .stat-icon.primary { background: var(--primary-soft); color: var(--primary); }
 .stat-icon.accent  { background: var(--accent-soft); color: var(--accent); }
 .stat-icon.success { background: var(--success-soft); color: var(--success); }
@@ -1259,12 +1321,14 @@ td code, .td-code { font-size: 0.78rem; }
   border-radius: 0 3px 3px 0;
 }
 .user-sidebar .nav-icon {
-  font-size: 1.05rem;
-  line-height: 1;
-  width: 22px;
-  text-align: center;
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-dim);
   flex-shrink: 0;
+  transition: color 0.12s;
 }
+.user-sidebar button:hover .nav-icon { color: var(--primary); }
+.user-sidebar button.active .nav-icon { color: var(--primary); }
 .user-sidebar .task-badge {
   margin-left: auto;
   background: var(--danger);
@@ -1288,13 +1352,16 @@ td code, .td-code { font-size: 0.78rem; }
   transition: width 0.2s ease;
 }
 .admin-sidebar.collapsed {
-  width: 52px;
+  width: 60px;
   overflow: hidden;
 }
-.admin-sidebar.collapsed .nav-section { display: none; }
-.admin-sidebar.collapsed .label-text { display: none; }
+.admin-sidebar.collapsed .nav-section .label-text { display: none; }
+.admin-sidebar.collapsed .nav-section { padding: 0.85rem 1.25rem 0.3rem; justify-content: center; }
+.admin-sidebar.collapsed button .label-text { display: none; }
+.admin-sidebar.collapsed button { padding-left: 0; padding-right: 0; justify-content: center; gap: 0; }
+.admin-sidebar.collapsed .sidebar-toggle-btn { justify-content: center; padding: 0.4rem 0.5rem 0.6rem; }
 .shell.admin-mode.sidebar-collapsed .admin-body {
-  grid-template-columns: 52px 1fr;
+  grid-template-columns: 60px 1fr;
 }
 .sidebar-toggle-btn {
   display: flex;

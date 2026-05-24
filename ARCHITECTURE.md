@@ -683,6 +683,21 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### *(this commit)* — 2026-05-24 — Admin console UI polish: line-icon system + cache-control
+
+**Why** — User reported the admin GUI looked unfinished and asked for miniOrange / Entrust-grade polish. Emoji glyphs (`◍`, `⛨`, `🏠`, etc.) used as nav and stat icons were the most visible quality regression; sidebar items had no icons at all; and deployed UI changes did not show up because static assets were cached aggressively by browsers.
+
+**What changed:**
+
+- **`web/js/icons.js`** *(new)* — Lucide/Phosphor-style inline SVG icon library (≈40 line icons), 24×24 viewBox, 1.6 stroke, `currentColor`. Used by every nav item, stat card, and topnav button.
+- **`web/js/app.js`** — every route in `ROUTES` now declares `icon`; admin sidebar group headers gained a per-group icon; admin top-nav `Admin` button is now an Entrust-style pill with icon; collapsed-sidebar chevron uses SVG.
+- **`web/js/views-admin.js`**, **`web/js/views-stubs.js`** — `statCard` accepts an icon name; dashboard tiles + Risk + MFA Methods cards now use SVG line icons instead of geometric Unicode glyphs. MFA Methods stat card structure aligned with the standard `auto 1fr` grid.
+- **`web/css/styles.css`** — new `.i { 18×18 }` SVG class; refined `.admin-sidebar` typography (text-muted by default, primary on hover/active, 3px left border in active state); user-sidebar nav-icon switched from emoji to SVG; `.admin-sidebar.collapsed` now hides labels but keeps icons centred; new `.admin-pill` topnav pill; `.sidebar-toggle-btn` redesigned as a bordered chip; `.stat-card .stat-icon .i` sized for the 44px tile.
+- **`web/index.html`** — cache-bust query param on entry `app.js` / `styles.css`; theme-color meta.
+- **`src/index.ts`** — `express.static` sends `Cache-Control: no-cache, must-revalidate` for `.js`, `.css`, `.html` so deployed changes always show after a single refresh (no fingerprinting needed for this small SPA).
+
+**Reference:** miniOrange admin console (group sidebar with icons + collapse, KPI tiles), Entrust Identity (dark navy topnav with right-aligned admin pill, line-icon system, generous whitespace).
+
 ### `841dfab` — 2026-05-24 — Admin GUI fix: hidden user sidebar + MFA boolean stat
 
 **Why** — In admin mode both the user sidebar (`#user-sidebar`) and admin sidebar were rendering side-by-side because `.user-sidebar.hidden` had no CSS rule, breaking the 240/1fr admin grid into a 3-cell layout (user nav top-left, admin nav top-right, content below). Separately, the MFA Methods page rendered the literal string `false` because `status?.enrolled ?? 0` does not coerce a boolean.

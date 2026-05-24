@@ -169,11 +169,26 @@ app.use('/api/internal/saml', internalSamlRouter);
 // ---------------------------------------------------------------------------
 // Web UI (login + admin central)
 // ---------------------------------------------------------------------------
-app.use(express.static(WEB_ROOT));
+// Static assets — disable long-lived caching so deployed UI changes show up
+// immediately (small SPA, no fingerprinted bundles). ETag still allows 304s.
+app.use(
+  express.static(WEB_ROOT, {
+    etag: true,
+    lastModified: true,
+    cacheControl: true,
+    maxAge: 0,
+    setHeaders: (res, filePath) => {
+      if (/\.(js|css|html)$/.test(filePath)) {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      }
+    },
+  }),
+);
 
 const spaRoutes = ['/', '/login', '/admin-central'];
 for (const r of spaRoutes) {
   app.get(r, (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-cache, must-revalidate');
     res.sendFile(path.join(WEB_ROOT, 'index.html'));
   });
 }
