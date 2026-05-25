@@ -218,6 +218,7 @@ export class ADAdapter extends BaseAdapter {
       const attrs = [
         'dn', 'sAMAccountName', 'employeeID', 'mail', 'displayName',
         'userPrincipalName', 'userAccountControl', 'cn', 'givenName', 'sn',
+        'department', 'title', 'manager',
       ];
       // Simple filter — objectCategory form often returns 0 rows on some AD forests
       const filter = '(&(objectClass=user)(!(sAMAccountName=*$)))';

@@ -2405,10 +2405,22 @@ function initUsersTab(panel) {
     let profileData = null;
     let activeTab = 'overview';
 
+    function activeLinks() {
+      return (profileData?.identityLinks || []).filter(l => l.status !== 'DELETED');
+    }
+
+    function profileSourceBadges(emp, links) {
+      const fromLinks = [...new Set(links.map(l => l.system))];
+      if (fromLinks.length) return fromLinks;
+      if ((emp.emp_id || '').startsWith('AD-')) return ['AD'];
+      if ((emp.emp_id || '').startsWith('GW-')) return ['GOOGLE'];
+      return [];
+    }
+
     // ── Render header ───────────────────────────────────────────────────────────
     function renderHeader() {
       const emp   = profileData.employee      || {};
-      const links = profileData.identityLinks || [];
+      const links = activeLinks();
       const sessions = profileData.recentLogins || [];
 
       const initial = (emp.full_name || empId).charAt(0).toUpperCase();
@@ -2417,13 +2429,13 @@ function initUsersTab(panel) {
       overlay.querySelector('#pp-sub').textContent    =
         [emp.emp_id, emp.email_corp, emp.dept_id].filter(Boolean).join('  ·  ');
 
-      const activeSources = links.filter(l => l.status === 'ACTIVE').map(l => l.system);
+      const activeSources = profileSourceBadges(emp, links);
       overlay.querySelector('#pp-badges').innerHTML =
         stateBadge(emp.ilg_state) +
         (activeSources.length ? activeSources.map(srcBadge).join('') : srcBadge('LOCAL'));
 
       // Tab counters
-      const idCount = links.filter(l => l.status === 'ACTIVE').length;
+      const idCount = links.length;
       const sessCount = sessions.length;
       const idBadge   = overlay.querySelector('#pp-tab-id-count');
       const sessBadge = overlay.querySelector('#pp-tab-sess-count');
@@ -2477,7 +2489,7 @@ function initUsersTab(panel) {
       }
 
       const emp          = profileData.employee      || {};
-      const links        = profileData.identityLinks || [];
+      const links        = activeLinks();
       const recentLogins = profileData.recentLogins  || [];
       const writebackLog = profileData.writebackLog  || [];
       const body         = overlay.querySelector('#pp-body');
@@ -2532,46 +2544,31 @@ function initUsersTab(panel) {
           ? links.map(l => `<tr>
               <td>${srcBadge(l.system)}</td>
               <td style="font-size:0.8rem;word-break:break-all;max-width:160px">${esc(l.external_id||'—')}</td>
-              <td><span class="badge ${l.status==='ACTIVE'?'badge-success':'badge-neutral'}">${esc(l.status)}</span></td>
+              <td><span class="badge ${l.status==='ACTIVE'?'badge-success':l.status==='DISABLED'?'badge-warning':'badge-neutral'}">${esc(l.status)}</span></td>
               <td style="font-size:0.75rem">${esc(l.auth_kind||'—')}</td>
               <td style="font-size:0.75rem;white-space:nowrap">${l.last_synced_at ? fmtDate(l.last_synced_at) : '—'}</td>
               <td>${l.drift_flag ? '<span class="badge badge-warning" title="Attribute drift detected">⚠ Drift</span>' : ''}</td>
-              <td>
-                ${l.status === 'ACTIVE'
-                  ? `<button class="btn btn-sm btn-danger pp-unlink-btn" data-linkid="${esc(String(l.id))}" data-sys="${esc(l.system)}">Unlink</button>`
-                  : ''}
-              </td>
             </tr>`).join('')
-          : `<tr><td colspan="7"><div class="pp-empty"><div class="pp-empty-icon">🔗</div>No identity links — this user authenticates locally only.</div></td></tr>`;
+          : `<tr><td colspan="6"><div class="pp-empty"><div class="pp-empty-icon">🔗</div>
+              No external identities linked yet.<br>
+              <span class="muted" style="font-size:0.85rem">Run the AD and Google connector sync — links are created automatically (AD, Google, or both).</span>
+            </div></td></tr>`;
 
         body.innerHTML = `
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-            <p class="pp-section-title" style="margin:0">Linked Identity Sources</p>
-            <button class="btn btn-sm btn-secondary" id="pp-link-btn">+ Link Identity</button>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem;gap:1rem">
+            <div>
+              <p class="pp-section-title" style="margin:0">Linked Identity Sources</p>
+              <p class="muted" style="font-size:0.82rem;margin:0.35rem 0 0;line-height:1.5">
+                External identities (Active Directory, Google Workspace, etc.) are managed by connector sync — not manual linking.
+              </p>
+            </div>
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Source</th><th>External ID</th><th>Status</th><th>Auth</th><th>Last Synced</th><th>Drift</th><th></th></tr></thead>
+              <thead><tr><th>Source</th><th>External ID</th><th>Status</th><th>Auth</th><th>Last Synced</th><th>Drift</th></tr></thead>
               <tbody>${linkRows}</tbody>
             </table>
           </div>`;
-
-        body.querySelector('#pp-link-btn').addEventListener('click', () =>
-          openLinkModal(empId, reloadProfile));
-
-        body.querySelectorAll('.pp-unlink-btn').forEach(btn => {
-          btn.addEventListener('click', async () => {
-            if (!confirm(`Remove ${btn.dataset.sys} identity link?\nThe user will no longer be able to authenticate via this source.`)) return;
-            btn.disabled = true; btn.textContent = 'Removing…';
-            try {
-              await api.unlinkIdentity(empId, btn.dataset.linkid);
-              reloadProfile();
-            } catch(e) {
-              btn.disabled = false; btn.textContent = 'Unlink';
-              alert('Failed to remove link: ' + e.message);
-            }
-          });
-        });
       }
 
       // ── Sessions tab ─────────────────────────────────────────────────────────

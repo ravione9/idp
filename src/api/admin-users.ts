@@ -17,6 +17,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole } from '../auth/rbac.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { writebackPassword } from '../services/password-writeback.js';
+import { backfillAdIdentityLinkIfMissing } from '../services/ad-sync.js';
 import logger from '../utils/logger.js';
 import { z } from 'zod';
 
@@ -112,11 +113,27 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
   try {
     identityLinks = await query<Record<string, unknown>>(
       `SELECT id, system, external_id, status, last_synced_at, drift_flag, auth_kind
-         FROM identity_links WHERE emp_id = ? ORDER BY system ASC`,
+         FROM identity_links WHERE emp_id = ? AND status != 'DELETED' ORDER BY system ASC`,
       [empId],
     );
   } catch (err) {
     logger.warn({ empId, err }, 'identity_links query failed (table may not exist yet)');
+  }
+
+  if (
+    identityLinks.every((l) => l['system'] !== 'AD')
+    && empId.startsWith('AD-')
+    && typeof employee['email_corp'] === 'string'
+    && employee['email_corp']
+  ) {
+    const filled = await backfillAdIdentityLinkIfMissing(empId, employee['email_corp']);
+    if (filled) {
+      identityLinks = await query<Record<string, unknown>>(
+        `SELECT id, system, external_id, status, last_synced_at, drift_flag, auth_kind
+           FROM identity_links WHERE emp_id = ? AND status != 'DELETED' ORDER BY system ASC`,
+        [empId],
+      );
+    }
   }
 
   let recentLogins: Record<string, unknown>[] = [];

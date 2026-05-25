@@ -10,7 +10,7 @@
 
 import crypto from 'crypto';
 import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
-import { query, queryOne, execute } from '../db/connection.js';
+import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
@@ -74,6 +74,203 @@ function deriveEmpIdFromAd(adUser: Record<string, unknown>): string {
   return `AD-${hash}`;
 }
 
+/**
+ * Rename an employees row's primary key, cascading to every child table that
+ * has a FK to employees(emp_id). Used when an AD-XXXX placeholder emp_id is
+ * being replaced with the real employeeID returned by Active Directory.
+ *
+ * Why: none of the FK constraints declare ON UPDATE CASCADE, so a plain
+ * UPDATE on the PK would fail. We discover the referencing columns from
+ * information_schema and update each within a single transaction.
+ */
+async function migrateEmpId(oldId: string, newId: string): Promise<void> {
+  if (oldId === newId) return;
+  await transaction(async (conn) => {
+    const fkCols = await query<{ TABLE_NAME: string; COLUMN_NAME: string }>(
+      `SELECT TABLE_NAME, COLUMN_NAME
+         FROM information_schema.KEY_COLUMN_USAGE
+        WHERE REFERENCED_TABLE_SCHEMA = DATABASE()
+          AND REFERENCED_TABLE_NAME   = 'employees'
+          AND REFERENCED_COLUMN_NAME  = 'emp_id'`,
+      [],
+      conn,
+    );
+
+    await execute(`SET FOREIGN_KEY_CHECKS = 0`, [], conn);
+    try {
+      for (const { TABLE_NAME, COLUMN_NAME } of fkCols) {
+        await execute(
+          `UPDATE \`${TABLE_NAME}\` SET \`${COLUMN_NAME}\` = ? WHERE \`${COLUMN_NAME}\` = ?`,
+          [newId, oldId],
+          conn,
+        );
+      }
+      await execute(`UPDATE employees SET emp_id = ? WHERE emp_id = ?`, [newId, oldId], conn);
+      // adapter_outbox holds emp_id but has no FK
+      await execute(`UPDATE adapter_outbox SET emp_id = ? WHERE emp_id = ?`, [newId, oldId], conn);
+    } finally {
+      await execute(`SET FOREIGN_KEY_CHECKS = 1`, [], conn);
+    }
+  });
+}
+
+/**
+ * Resolve the IdP emp_id for an AD user. Order of preference:
+ *   1. AD's employeeID — the canonical AD identifier
+ *   2. corporate email — for accounts that pre-date employeeID being set
+ *   3. derived AD-<hash> — last resort when AD has neither
+ *
+ * When an existing row matched by email has a placeholder emp_id (AD-XXXX)
+ * and AD now reports a real employeeID, the row is migrated to the AD value.
+ * Returns null if a conflict would clobber another employee.
+ */
+async function resolveEmpIdForAdUser(
+  adUser: Record<string, unknown>,
+  email: string,
+  errors: string[],
+): Promise<string | null> {
+  const sam = getLdapAttr(adUser, 'sAMAccountName').trim();
+  const adEmpIdRaw = getLdapAttr(adUser, 'employeeID').trim();
+  const adEmpId = adEmpIdRaw && adEmpIdRaw.length <= 20 ? adEmpIdRaw : '';
+
+  if (adEmpId) {
+    const byAdId = await queryOne<{ emp_id: string; email_corp: string }>(
+      `SELECT emp_id, email_corp FROM employees WHERE emp_id = ?`,
+      [adEmpId],
+    );
+    if (byAdId) {
+      if (
+        email &&
+        byAdId.email_corp &&
+        byAdId.email_corp.toLowerCase() !== email.toLowerCase()
+      ) {
+        errors.push(
+          `${sam || adEmpId}: emp_id ${adEmpId} already used by ${byAdId.email_corp} — skipping to avoid collision`,
+        );
+        return null;
+      }
+      return adEmpId;
+    }
+  }
+
+  if (email) {
+    const byEmail = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM employees WHERE email_corp = ?`,
+      [email],
+    );
+    if (byEmail) {
+      if (adEmpId && byEmail.emp_id.startsWith('AD-') && byEmail.emp_id !== adEmpId) {
+        try {
+          await migrateEmpId(byEmail.emp_id, adEmpId);
+          logger.info(
+            { from: byEmail.emp_id, to: adEmpId, email },
+            'AD sync: migrated placeholder emp_id to AD employeeID',
+          );
+          return adEmpId;
+        } catch (err) {
+          errors.push(
+            `${byEmail.emp_id} -> ${adEmpId}: emp_id migration failed — ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return byEmail.emp_id;
+        }
+      }
+      return byEmail.emp_id;
+    }
+  }
+
+  return adEmpId || deriveEmpIdFromAd(adUser);
+}
+
+/** Insert or revive an AD identity link (handles soft-deleted rows on uk_system_external). */
+async function upsertAdIdentityLink(empId: string, sam: string, linkStatus: string): Promise<void> {
+  await execute(
+    `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind, last_synced_at)
+     VALUES (?, 'AD', ?, ?, 'LDAP', UTC_TIMESTAMP())
+     ON DUPLICATE KEY UPDATE
+       emp_id = VALUES(emp_id),
+       status = VALUES(status),
+       auth_kind = VALUES(auth_kind),
+       last_synced_at = UTC_TIMESTAMP()`,
+    [empId, sam, linkStatus],
+  );
+}
+
+/** Link employees that were imported without an AD identity_link (e.g. after a failed insert). */
+async function repairOrphanAdLinks(
+  adUsers: Record<string, unknown>[],
+  errors: string[],
+): Promise<number> {
+  let repaired = 0;
+  for (const adUser of adUsers) {
+    const sam = getLdapAttr(adUser, 'sAMAccountName').trim();
+    const email = (getLdapAttr(adUser, 'mail') || getLdapAttr(adUser, 'userPrincipalName')).trim().toLowerCase();
+    if (!sam || !email) continue;
+
+    const emp = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM employees WHERE email_corp = ? OR emp_id = ?`,
+      [email, deriveEmpIdFromAd(adUser)],
+    );
+    if (!emp) continue;
+
+    const hasLink = await queryOne<{ id: number }>(
+      `SELECT id FROM identity_links
+        WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'`,
+      [emp.emp_id],
+    );
+    if (hasLink) continue;
+
+    const uac = parseInt(getLdapAttr(adUser, 'userAccountControl') || '512', 10);
+    const linkStatus = (uac & 0x0002) !== 0 ? 'DISABLED' : 'ACTIVE';
+
+    try {
+      await upsertAdIdentityLink(emp.emp_id, sam, linkStatus);
+      repaired++;
+      logger.info({ empId: emp.emp_id, sam }, 'AD sync: repaired missing identity link');
+    } catch (err) {
+      errors.push(`${sam}: link repair failed — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return repaired;
+}
+
+/** Backfill AD links for employees already in DB but missing identity_links (any sync run). */
+async function repairDatabaseOrphanAdLinks(adapter: ADAdapter, errors: string[]): Promise<number> {
+  const orphans = await query<{ emp_id: string; email_corp: string }>(
+    `SELECT e.emp_id, e.email_corp
+       FROM employees e
+      WHERE e.emp_id LIKE 'AD-%'
+        AND e.email_corp IS NOT NULL
+        AND e.email_corp != ''
+        AND NOT EXISTS (
+          SELECT 1 FROM identity_links il
+           WHERE il.emp_id = e.emp_id
+             AND il.\`system\` = 'AD'
+             AND il.status != 'DELETED'
+        )`,
+    [],
+  );
+
+  let repaired = 0;
+  for (const emp of orphans) {
+    try {
+      const result = await adapter.getUserByEmail(emp.email_corp);
+      if (!result.success || !result.data?.externalId) {
+        errors.push(
+          `${emp.emp_id}: AD lookup by email failed — ${result.success ? 'no account' : result.error}`,
+        );
+        continue;
+      }
+      const linkStatus = result.data.active ? 'ACTIVE' : 'DISABLED';
+      await upsertAdIdentityLink(emp.emp_id, result.data.externalId, linkStatus);
+      repaired++;
+      logger.info({ empId: emp.emp_id, sam: result.data.externalId }, 'AD sync: database orphan link repaired');
+    } catch (err) {
+      errors.push(`${emp.emp_id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return repaired;
+}
+
 /** Import person accounts from AD into employees + identity_links. */
 async function importAdDirectoryUsers(
   adapter: ADAdapter,
@@ -87,6 +284,7 @@ async function importAdDirectoryUsers(
   processed: number;
   succeeded: number;
   failed: number;
+  repaired: number;
 }> {
   const listResult = await adapter.listDirectoryUsers();
   if (!listResult.success) {
@@ -105,6 +303,18 @@ async function importAdDirectoryUsers(
     { searchBase: dirConfig.searchBaseDn, count: adUsers.length },
     'AD sync inbound: listing directory users',
   );
+
+  // First pass: build a DN -> email map so the second-pass manager lookup
+  // can resolve `manager` (a DN) without an extra LDAP round-trip per user.
+  const dnToEmail = new Map<string, string>();
+  for (const adUser of adUsers) {
+    const dn = getLdapAttr(adUser, 'dn');
+    const mail = (getLdapAttr(adUser, 'mail') || getLdapAttr(adUser, 'userPrincipalName')).trim().toLowerCase();
+    if (dn && mail) dnToEmail.set(dn.toLowerCase(), mail);
+  }
+
+  // Track (adUser -> resolved empId) so the second pass can write manager_emp_id.
+  const empIdByDn = new Map<string, string>();
 
   for (const adUser of adUsers) {
     processed++;
@@ -132,70 +342,42 @@ async function importAdDirectoryUsers(
       const disabled = (uac & 0x0002) !== 0;
       const linkStatus = disabled ? 'DISABLED' : 'ACTIVE';
       const ilgState = disabled ? 'SUSPENDED_AUTO' : 'ACTIVE';
+      const department = getLdapAttr(adUser, 'department').trim().slice(0, 50) || null;
+      const title      = getLdapAttr(adUser, 'title').trim().slice(0, 100) || null;
 
-      const existingLink = await queryOne<{ id: number; emp_id: string }>(
-        `SELECT id, emp_id FROM identity_links
-          WHERE \`system\` = 'AD' AND external_id = ? AND status NOT IN ('DELETED')`,
-        [sam],
-      );
-
-      if (existingLink) {
-        await execute(
-          `UPDATE identity_links SET status = ?, last_synced_at = UTC_TIMESTAMP() WHERE id = ?`,
-          [linkStatus, existingLink.id],
-        );
-        await execute(
-          `UPDATE employees SET full_name = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
-          [fullName, ilgState, existingLink.emp_id],
-        );
-        linked++;
+      const empId = await resolveEmpIdForAdUser(adUser, email, errors);
+      if (!empId) {
+        skipped++;
         succeeded++;
         continue;
       }
-
-      let empId = deriveEmpIdFromAd(adUser);
-
-      const byEmpId = await queryOne<{ emp_id: string }>(
+      const exists = await queryOne<{ emp_id: string }>(
         `SELECT emp_id FROM employees WHERE emp_id = ?`,
         [empId],
       );
-      const byEmail = await queryOne<{ emp_id: string }>(
-        `SELECT emp_id FROM employees WHERE email_corp = ?`,
-        [email],
-      );
 
-      if (byEmail) {
-        empId = byEmail.emp_id;
+      if (exists) {
         await execute(
           `UPDATE employees
-              SET full_name = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP()
+              SET full_name = ?, email_corp = ?, dept_id = ?, role = ?,
+                  ilg_state = ?, updated_at = UTC_TIMESTAMP()
             WHERE emp_id = ?`,
-          [fullName, ilgState, empId],
-        );
-        linked++;
-      } else if (byEmpId) {
-        await execute(
-          `UPDATE employees
-              SET full_name = ?, email_corp = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP()
-            WHERE emp_id = ?`,
-          [fullName, email, ilgState, empId],
+          [fullName, email, department, title, ilgState, empId],
         );
         linked++;
       } else {
         await execute(
           `INSERT INTO employees
-             (emp_id, full_name, email_corp, ilg_state, hrms_status, hire_date, employment_type)
-           VALUES (?, ?, ?, ?, 'ACTIVE', UTC_DATE(), 'CORPORATE')`,
-          [empId, fullName, email, ilgState],
+             (emp_id, full_name, email_corp, dept_id, role, ilg_state, hrms_status, hire_date, employment_type)
+           VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', UTC_DATE(), 'CORPORATE')`,
+          [empId, fullName, email, department, title, ilgState],
         );
         imported++;
       }
 
-      await execute(
-        `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind, last_synced_at)
-         VALUES (?, 'AD', ?, ?, 'LDAP', UTC_TIMESTAMP())`,
-        [empId, sam, linkStatus],
-      );
+      // Always attach link to the resolved employee (moves link if it was on wrong emp_id)
+      await upsertAdIdentityLink(empId, sam, linkStatus);
+      if (dn) empIdByDn.set(dn.toLowerCase(), empId);
       succeeded++;
     } catch (err) {
       failed++;
@@ -205,7 +387,147 @@ async function importAdDirectoryUsers(
     }
   }
 
-  return { found: adUsers.length, imported, linked, skipped, processed, succeeded, failed };
+  // Second pass: resolve `manager` DN -> manager's emp_id and write it.
+  // Done after the first pass so a manager that appears later in the batch
+  // is already inserted.
+  let managersLinked = 0;
+  for (const adUser of adUsers) {
+    const dn = getLdapAttr(adUser, 'dn');
+    const managerDn = getLdapAttr(adUser, 'manager').trim();
+    if (!dn || !managerDn) continue;
+    const empId = empIdByDn.get(dn.toLowerCase());
+    if (!empId) continue;
+
+    let managerEmpId = empIdByDn.get(managerDn.toLowerCase()) ?? null;
+    if (!managerEmpId) {
+      const managerEmail = dnToEmail.get(managerDn.toLowerCase());
+      if (managerEmail) {
+        const row = await queryOne<{ emp_id: string }>(
+          `SELECT emp_id FROM employees WHERE email_corp = ?`,
+          [managerEmail],
+        );
+        managerEmpId = row?.emp_id ?? null;
+      }
+    }
+    if (!managerEmpId || managerEmpId === empId) continue;
+
+    try {
+      await execute(
+        `UPDATE employees SET manager_emp_id = ? WHERE emp_id = ?`,
+        [managerEmpId, empId],
+      );
+      managersLinked++;
+    } catch (err) {
+      errors.push(`${empId}: manager link failed — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (managersLinked > 0) {
+    logger.info({ managersLinked }, 'AD sync inbound: manager links resolved');
+  }
+
+  const repaired = await repairOrphanAdLinks(adUsers as Record<string, unknown>[], errors);
+  if (repaired > 0) {
+    logger.info({ repaired }, 'AD sync inbound: repaired orphan identity links');
+  }
+
+  const dbRepaired = await repairDatabaseOrphanAdLinks(adapter, errors);
+  if (dbRepaired > 0) {
+    logger.info({ dbRepaired }, 'AD sync inbound: repaired database orphan identity links');
+  }
+
+  return {
+    found: adUsers.length,
+    imported,
+    linked,
+    skipped,
+    processed,
+    succeeded,
+    failed,
+    repaired: repaired + dbRepaired,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Adapter factory + on-demand link backfill
+// ---------------------------------------------------------------------------
+function loadConnectorConfig(connectorId: string): Promise<Record<string, unknown>> {
+  return queryOne<{ config_json: string | Record<string, unknown> }>(
+    `SELECT config_json FROM connectors WHERE id = ?`,
+    [connectorId],
+  ).then((connRow) =>
+    connRow
+      ? typeof connRow.config_json === 'string'
+        ? JSON.parse(connRow.config_json || '{}') as Record<string, unknown>
+        : (connRow.config_json ?? {})
+      : {},
+  );
+}
+
+function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
+  const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
+  const port       = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
+  const useSsl     = cfg['useSsl'] !== undefined ? Boolean(cfg['useSsl']) : config.ad.url.startsWith('ldaps');
+  const startTls   = cfg['startTls'] !== undefined ? Boolean(cfg['startTls']) : false;
+  const bindDn     = (cfg['bindDn']       as string | undefined) || config.ad.bindDn;
+  const bindPass   = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
+  const baseDn     = (cfg['baseDn']       as string | undefined) || config.ad.baseDn;
+  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
+  const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
+
+  return new ADAdapter(
+    redis,
+    adUrl,
+    bindDn,
+    bindPass,
+    baseDn,
+    undefined,
+    startTls,
+    targetOuRaw,
+  );
+}
+
+/** Backfill a missing AD identity link when viewing an AD-imported employee profile. */
+export async function backfillAdIdentityLinkIfMissing(empId: string, emailCorp: string): Promise<boolean> {
+  if (!empId.startsWith('AD-') || !emailCorp) return false;
+
+  const hasLink = await queryOne<{ id: number }>(
+    `SELECT id FROM identity_links
+      WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'`,
+    [empId],
+  );
+  if (hasLink) return false;
+
+  const conn = await queryOne<{ id: string }>(
+    `SELECT id FROM connectors
+      WHERE connector_type IN ('AD', 'LDAP') AND status = 'ACTIVE'
+      ORDER BY last_sync_at DESC
+      LIMIT 1`,
+    [],
+  );
+  if (!conn) return false;
+
+  const cfg = await loadConnectorConfig(conn.id);
+  const adapter = createAdAdapterFromConfig(cfg);
+
+  try {
+    await adapter.resetCircuitBreaker();
+    await adapter.connect();
+    const result = await adapter.getUserByEmail(emailCorp);
+    if (!result.success || !result.data?.externalId) return false;
+
+    await upsertAdIdentityLink(
+      empId,
+      result.data.externalId,
+      result.data.active ? 'ACTIVE' : 'DISABLED',
+    );
+    logger.info({ empId, sam: result.data.externalId }, 'AD identity link backfilled for profile');
+    return true;
+  } catch (err) {
+    logger.warn({ empId, emailCorp, err }, 'AD identity link backfill failed');
+    return false;
+  } finally {
+    await adapter.disconnect().catch(() => undefined);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -228,12 +550,11 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     `SELECT config_json, direction FROM connectors WHERE id = ?`,
     [connectorId],
   );
-  const cfg: Record<string, unknown> =
-    connRow
-      ? typeof connRow.config_json === 'string'
-        ? JSON.parse(connRow.config_json || '{}')
-        : (connRow.config_json ?? {})
-      : {};
+  const cfg: Record<string, unknown> = connRow
+    ? typeof connRow.config_json === 'string'
+      ? JSON.parse(connRow.config_json || '{}') as Record<string, unknown>
+      : (connRow.config_json ?? {})
+    : {};
 
   const direction = (connRow?.direction ?? 'BIDIRECTIONAL').toUpperCase();
   const runInbound  = direction === 'INBOUND' || direction === 'BIDIRECTIONAL';
@@ -243,17 +564,11 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     logger.info({ connectorId, direction }, 'AD sync: OUTBOUND-only — skipping AD directory import');
   }
 
-  const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
-  const port       = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
-  const useSsl     = cfg['useSsl'] !== undefined ? Boolean(cfg['useSsl']) : config.ad.url.startsWith('ldaps');
-  const startTls   = cfg['startTls'] !== undefined ? Boolean(cfg['startTls']) : false;
-  const bindDn     = (cfg['bindDn']       as string | undefined) || config.ad.bindDn;
-  const bindPass   = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
-  const baseDn     = (cfg['baseDn']       as string | undefined) || config.ad.baseDn;
   const upnDomain  = (cfg['upnDomain']    as string | undefined)?.trim()
                   || (cfg['customerDomain'] as string | undefined)?.trim()
                   || undefined;
   const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
+  const baseDn     = (cfg['baseDn']       as string | undefined) || config.ad.baseDn;
   let dirConfig: ReturnType<typeof resolveAdDirectoryConfig>;
   try {
     dirConfig = resolveAdDirectoryConfig(baseDn, targetOuRaw);
@@ -265,23 +580,19 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     );
     throw err;
   }
+
+  const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
+  const port       = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
+  const useSsl     = cfg['useSsl'] !== undefined ? Boolean(cfg['useSsl']) : config.ad.url.startsWith('ldaps');
+  const startTls   = cfg['startTls'] !== undefined ? Boolean(cfg['startTls']) : false;
   const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
   logger.info(
-    { connectorId, adUrl, bindDn, baseDn: dirConfig.searchBaseDn, provisionOu: dirConfig.provisionOuDn, direction, startTls },
+    { connectorId, adUrl, bindDn: cfg['bindDn'], baseDn: dirConfig.searchBaseDn, provisionOu: dirConfig.provisionOuDn, direction, startTls },
     'AD sync: connecting',
   );
 
-  const adapter = new ADAdapter(
-    redis,
-    adUrl,
-    bindDn,
-    bindPass,
-    baseDn,
-    undefined,  // disabledOu — use default
-    startTls,
-    targetOuRaw,
-  );
+  const adapter = createAdAdapterFromConfig(cfg);
 
   // Clear any OPEN circuit from a prior failed run so this sync gets a fresh attempt
   await adapter.resetCircuitBreaker();
@@ -302,7 +613,9 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
       itemsSucceeded += inbound.succeeded;
       itemsFailed += inbound.failed;
       inboundSummary =
-        `Inbound: ${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked, ${inbound.skipped} skipped` +
+        `Inbound: ${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked` +
+        (inbound.repaired ? `, ${inbound.repaired} links repaired` : '') +
+        `, ${inbound.skipped} skipped` +
         (runOutbound ? ` | Outbound: see employee reconcile below` : '');
       logger.info({ connectorId, runId, ...inbound }, 'AD sync inbound complete');
 
@@ -315,7 +628,6 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     }
 
     if (runOutbound) {
-    outboundProcessed = 0;
     // Fetch all employees
     const employees = await query<EmployeeRow>(
       `SELECT emp_id, full_name, email_corp, dept_id, role, ilg_state
@@ -405,12 +717,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
           }
 
           if (existingSam) {
-            // Account already exists in AD — link it without re-provisioning
-            await execute(
-              `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind)
-               VALUES (?, 'AD', ?, 'ACTIVE', 'LDAP')`,
-              [emp.emp_id, existingSam],
-            );
+            await upsertAdIdentityLink(emp.emp_id, existingSam, 'ACTIVE');
             logger.info({ empId: emp.emp_id, existingSam }, 'AD sync: existing AD user reconciled and linked');
             itemsSucceeded++;
           } else {
@@ -431,11 +738,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
             });
 
             if (result.success) {
-              await execute(
-                `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind)
-                 VALUES (?, 'AD', ?, 'ACTIVE', 'LDAP')`,
-                [emp.emp_id, sAMAccountName],
-              );
+              await upsertAdIdentityLink(emp.emp_id, sAMAccountName, 'ACTIVE');
               logger.info({ empId: emp.emp_id, sAMAccountName }, 'AD sync: new user provisioned');
               itemsSucceeded++;
             } else {
