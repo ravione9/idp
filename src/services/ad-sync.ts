@@ -51,7 +51,7 @@ function generateSamAccountName(fullName: string): string {
   const first = parts[0]?.slice(0, 10) ?? 'user';
   const last = parts.length > 1 ? parts[parts.length - 1]?.slice(0, 9) ?? '' : '';
   let sam = last ? `${first}.${last}` : first;
-  sam = sam.replace(/^\.+|\.+$/g, '');
+  sam = sam.replace(/[^a-z0-9._-]/g, '').replace(/^\.+|\.+$/g, '');
   if (!sam) sam = 'user';
   return sam.slice(0, 20);
 }
@@ -116,6 +116,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     baseDn,
     undefined,  // disabledOu — use default
     startTls,
+    targetOu,
   );
 
   // Clear any OPEN circuit from a prior failed run so this sync gets a fresh attempt
@@ -129,13 +130,6 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   try {
     await adapter.connect();
 
-    if (!useSsl && !startTls) {
-      logger.warn(
-        { connectorId },
-        'AD sync: LDAP is unencrypted — user provisioning (unicodePwd) requires LDAPS or StartTLS',
-      );
-    }
-
     // Fetch all employees
     const employees = await query<EmployeeRow>(
       `SELECT emp_id, full_name, email_corp, dept_id, role, ilg_state
@@ -143,6 +137,17 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
         ORDER BY emp_id`,
       [],
     );
+
+    if (!useSsl && !startTls) {
+      const needsProvision = employees.some((e) =>
+        e.ilg_state === 'ACTIVE' || e.ilg_state === 'REACTIVATED',
+      );
+      if (needsProvision) {
+        throw new Error(
+          'AD sync cannot provision users over plain LDAP. Set connector Protocol to LDAPS or LDAP+StartTLS.',
+        );
+      }
+    }
 
     logger.info({ connectorId, runId, count: employees.length }, 'AD sync: processing employees');
 

@@ -457,8 +457,29 @@ router.post(
             await client.startTLS(tlsOpts);
           }
           await client.bind(bindDn!, bindPass!);
+
+          const baseDn   = (cfg['baseDn'] as string | undefined)?.trim();
+          const targetOu = (cfg['targetOu'] as string | undefined)?.trim() || 'OU=Employees';
+          const warnings: string[] = [];
+
+          if (baseDn) {
+            const ouDn = `${targetOu},${baseDn}`;
+            try {
+              await client.search(ouDn, { scope: 'base', filter: '(objectClass=*)', attributes: ['dn'] });
+            } catch {
+              warnings.push(`Target OU not found: ${ouDn} — create it in AD or update "New User OU" in connector config`);
+            }
+          }
+
+          if (!useSsl && !startTls) {
+            warnings.push('Protocol is plain LDAP — user provisioning requires LDAPS or LDAP+StartTLS');
+          }
+
           await client.unbind();
-          res.json({ success: true, message: `${protocol} bind succeeded — connected to ${url} as ${bindDn}` });
+          const msg = warnings.length
+            ? `${protocol} bind succeeded, but: ${warnings.join('; ')}`
+            : `${protocol} bind succeeded — connected to ${url} as ${bindDn}`;
+          res.json({ success: warnings.length === 0, message: msg, warnings: warnings.length ? warnings : undefined });
         } catch (ldapErr) {
           const raw  = ldapErr instanceof Error ? ldapErr.message : String(ldapErr);
           const code = (ldapErr as Record<string, unknown>)['code'];

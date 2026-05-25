@@ -41,9 +41,15 @@ export class ADAdapter extends BaseAdapter {
     private readonly baseDn: string,
     private readonly disabledOu = 'OU=Disabled,',
     private readonly startTls = false,
+    private readonly provisionOu = 'OU=Employees',
   ) {
     super(redis, 'AD', { minRequests: 10, errorThreshold: 75 });
     this.client = this.createClient();
+  }
+
+  /** LDAPS or StartTLS — required before writing unicodePwd. */
+  connectionIsSecure(): boolean {
+    return this.url.startsWith('ldaps://') || this.startTls;
   }
 
   // ---------------------------------------------------------------------------
@@ -258,9 +264,10 @@ export class ADAdapter extends BaseAdapter {
       });
       await this.client.modify(currentDn, [uacChange]);
 
-      // 2. Move back to original OU if extensionAttribute2 is set
-      const targetOu = (entry.extensionAttribute2 as string | undefined);
-      if (targetOu && currentDn.toUpperCase().includes(this.disabledOu.toUpperCase())) {
+      // 2. Move back to active OU when coming from Disabled OU
+      const targetOu = (entry.extensionAttribute2 as string | undefined)
+        || `${this.provisionOu},${this.baseDn}`;
+      if (currentDn.toUpperCase().includes(this.disabledOu.toUpperCase())) {
         const cn     = currentDn.split(',')[0];
         const newRdn = cn;
         await this.client.modifyDN(currentDn, `${newRdn},${targetOu}`);
@@ -339,61 +346,90 @@ export class ADAdapter extends BaseAdapter {
     return this.safe(async () => {
       await this.ensureConnected();
 
-      const cn = escapeRdnValue(params.sAMAccountName);
-      const dn = `CN=${cn},${params.targetOu},${this.baseDn}`;
+      if (!this.connectionIsSecure()) {
+        throw new Error(
+          'AD user provisioning requires LDAPS (port 636) or LDAP+StartTLS — set Protocol in connector config',
+        );
+      }
+
+      const sam = sanitizeSamAccountName(params.sAMAccountName);
+      const cn = escapeRdnValue(sam);
+      const ou = params.targetOu.trim() || this.provisionOu;
+      const dn = `CN=${cn},${ou},${this.baseDn}`;
       const upnDomain = params.upnDomain?.trim() || domainFromBaseDn(this.baseDn);
-      const userPrincipalName = `${params.sAMAccountName}@${upnDomain}`;
+      const userPrincipalName = `${sam}@${upnDomain}`.toLowerCase();
+
+      const existing = await this.findUser(sam, ['dn']);
+      if (existing.length > 0) {
+        throw new Error(`sAMAccountName '${sam}' already exists in AD (${existing[0].dn})`);
+      }
 
       const nameParts = params.fullName.trim().split(/\s+/).filter(Boolean);
-      const givenName = nameParts[0] ?? params.sAMAccountName;
-      const sn = nameParts.length > 1 ? nameParts.slice(1).join(' ') : givenName;
+      const givenName = sanitizeAdString(nameParts[0] ?? sam, 64);
+      const sn = sanitizeAdString(nameParts.length > 1 ? nameParts.slice(1).join(' ') : givenName, 64);
 
-      const entry: Record<string, string | string[] | Buffer> = {
+      const entry: Record<string, string | string[]> = {
         objectClass:        ['top', 'person', 'organizationalPerson', 'user'],
-        cn:                  params.sAMAccountName,
-        sAMAccountName:      params.sAMAccountName,
+        cn:                  sam,
+        sAMAccountName:      sam,
         userPrincipalName,
-        mail:                params.emailCorp,
-        displayName:         params.fullName,
+        mail:                params.emailCorp.trim().toLowerCase(),
+        displayName:         sanitizeAdString(params.fullName, 256),
         givenName,
         sn,
         employeeID:          params.empId,
-        // Store the target OU for re-enable after disable
-        extensionAttribute2: `${params.targetOu},${this.baseDn}`,
-        // AD requires a disabled account when setting unicodePwd on create
+        // Create disabled; password is set via a separate modify (AD rejects unicodePwd on add)
         userAccountControl:  String(UAC_DISABLED_ACCOUNT),
-        unicodePwd:          encodeAdPassword(params.tempPassword),
       };
 
       if (params.department.trim()) {
-        entry['department'] = params.department.trim();
+        entry['department'] = sanitizeAdString(params.department.trim(), 64);
       }
       if (params.title.trim()) {
-        entry['title'] = params.title.trim();
+        entry['title'] = sanitizeAdString(params.title.trim(), 128);
       }
       if (params.manager) {
         entry['manager'] = params.manager;
       }
 
-      await this.client.add(dn, entry as Record<string, string[]>);
+      logger.info({ empId: params.empId, dn, userPrincipalName }, 'AD createUser: adding entry');
 
-      // Enable account and force password change on first logon
-      await this.client.modify(dn, [
-        new Change({
-          operation: 'replace',
-          modification: new Attribute({
-            type: 'userAccountControl',
-            values: [String(UAC_NORMAL_ACCOUNT)],
+      try {
+        await this.client.add(dn, entry);
+
+        // Step 2 — set password over encrypted connection
+        await this.client.modify(dn, [
+          new Change({
+            operation: 'replace',
+            modification: new Attribute({
+              type: 'unicodePwd',
+              values: [encodeAdPassword(params.tempPassword)],
+            }),
           }),
-        }),
-        new Change({
-          operation: 'replace',
-          modification: new Attribute({
-            type: 'pwdLastSet',
-            values: ['0'],
+        ]);
+
+        // Step 3 — enable and force password change on first logon
+        await this.client.modify(dn, [
+          new Change({
+            operation: 'replace',
+            modification: new Attribute({
+              type: 'userAccountControl',
+              values: [String(UAC_NORMAL_ACCOUNT)],
+            }),
           }),
-        }),
-      ]);
+          new Change({
+            operation: 'replace',
+            modification: new Attribute({
+              type: 'pwdLastSet',
+              values: ['0'],
+            }),
+          }),
+        ]);
+      } catch (err) {
+        // Roll back a partially created entry so the next sync can retry cleanly
+        try { await this.client.del(dn); } catch { /* best effort */ }
+        throw new Error(formatLdapError(err));
+      }
 
       logger.info({ empId: params.empId, dn, userPrincipalName }, 'AD user created');
     });
@@ -437,6 +473,28 @@ function domainFromBaseDn(baseDn: string): string {
     .filter((part) => /^DC=/i.test(part))
     .map((part) => part.slice(3))
     .join('.');
+}
+
+/** Strip control chars and enforce AD string length limits. */
+function sanitizeAdString(value: string, maxLen: number): string {
+  return value.replace(/[\x00-\x1F\x7F]/g, '').trim().slice(0, maxLen);
+}
+
+/** Enforce sAMAccountName rules: max 20 chars, no trailing dot. */
+function sanitizeSamAccountName(value: string): string {
+  let sam = value.toLowerCase().replace(/[^a-z0-9._-]/g, '').replace(/^\.+|\.+$/g, '');
+  if (!sam) sam = 'user';
+  return sam.slice(0, 20);
+}
+
+/** Format ldapts / AD LDAP errors for operator-readable sync logs. */
+function formatLdapError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const extra = err as Error & { code?: unknown; lde_message?: string };
+  const bits = [err.message];
+  if (extra.lde_message && extra.lde_message !== err.message) bits.push(extra.lde_message);
+  if (extra.code !== undefined) bits.push(`code=${String(extra.code)}`);
+  return bits.join(' — ');
 }
 
 /** Encode a plain-text password for the AD unicodePwd attribute (UTF-16LE, quoted) */
