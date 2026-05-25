@@ -9,7 +9,7 @@
  */
 
 import crypto from 'crypto';
-import { ADAdapter, normalizeOuRdn } from '../adapters/ad-adapter.js';
+import { ADAdapter, resolveOuRdn } from '../adapters/ad-adapter.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
@@ -103,7 +103,8 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const upnDomain  = (cfg['upnDomain']    as string | undefined)?.trim()
                   || (cfg['customerDomain'] as string | undefined)?.trim()
                   || undefined;
-  const targetOu   = normalizeOuRdn((cfg['targetOu'] as string | undefined) || 'OU=Employees');
+  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
+  const targetOu    = targetOuRaw ? resolveOuRdn(targetOuRaw, baseDn) : '';
   const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
   logger.info({ connectorId, adUrl, bindDn, baseDn, startTls }, 'AD sync: connecting');
@@ -163,6 +164,9 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     })();
 
     if (needsProvisioning) {
+      if (!targetOu) {
+        throw new Error('New User OU is not configured — set "New User OU" to an existing OU (e.g. OU=IT) in the connector settings.');
+      }
       const ouCheck = await adapter.validateProvisioningOu(targetOu);
       if (!ouCheck.ok) {
         const hint = ouCheck.suggestions.length

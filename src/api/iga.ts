@@ -459,14 +459,23 @@ router.post(
           await client.bind(bindDn!, bindPass!);
 
           const baseDn   = (cfg['baseDn'] as string | undefined)?.trim();
-          const targetOu = (cfg['targetOu'] as string | undefined)?.trim() || 'OU=Employees';
-          const { normalizeOuRdn } = await import('../adapters/ad-adapter.js');
-          const ouRdn = normalizeOuRdn(targetOu);
+          const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
+          const { resolveOuRdn } = await import('../adapters/ad-adapter.js');
           const warnings: string[] = [];
           let suggestions: string[] = [];
 
           if (baseDn) {
-            const ouDn = `${ouRdn},${baseDn}`;
+            if (!targetOuRaw) {
+              warnings.push('New User OU is not set — enter an existing OU (e.g. OU=IT); Base DN is appended automatically');
+            } else {
+              let ouRdn: string;
+              try {
+                ouRdn = resolveOuRdn(targetOuRaw, baseDn);
+              } catch (err) {
+                warnings.push(err instanceof Error ? err.message : String(err));
+                ouRdn = targetOuRaw;
+              }
+              const ouDn = `${ouRdn},${baseDn}`;
             try {
               await client.search(ouDn, { scope: 'base', filter: '(objectClass=organizationalUnit)', attributes: ['dn'] });
             } catch {
@@ -483,6 +492,7 @@ router.post(
               } catch { /* ignore */ }
               const hint = suggestions.length ? ` Existing OUs: ${suggestions.slice(0, 6).join('; ')}` : '';
               warnings.push(`Target OU not found: ${ouDn} — create it in AD or update "New User OU".${hint}`);
+            }
             }
           }
 

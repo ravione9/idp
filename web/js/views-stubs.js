@@ -1751,7 +1751,7 @@ const FIELD_LABELS = {
   bindDn:             'Bind DN',
   bindPassword:       'Bind Password',
   baseDn:             'Base DN',
-  targetOu:           'New User OU (e.g. OU=Employees)',
+  targetOu:           'New User OU (relative to Base DN, e.g. OU=IT)',
   upnDomain:          'UPN Suffix (e.g. lenskart.com — optional)',
   useSsl:             'Protocol',
   customerDomain:     'Customer Domain',
@@ -2026,7 +2026,7 @@ function initSourcesTab(panel) {
       }
       const type = (f.toLowerCase().includes('password')||f.toLowerCase().includes('token')||f.toLowerCase().includes('secret')||f.toLowerCase().includes('key')) ? 'password' : 'text';
       const ph = { host:'ldap.company.com', port:'389', bindDn:'CN=svc-idp,DC=company,DC=com',
-        baseDn:'DC=company,DC=com', customerDomain:'company.com', tenantId:'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+        baseDn:'DC=company,DC=com', targetOu:'OU=IT', upnDomain:'company.com', customerDomain:'company.com', tenantId:'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
         clientId:'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', domain:'company.okta.com',
         baseUrl:'https://scim.app.com/v2', apiKey:'sk_...', orgId:'12345' }[f] || '';
       return `<div class="form-group">

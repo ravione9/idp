@@ -41,7 +41,7 @@ export class ADAdapter extends BaseAdapter {
     private readonly baseDn: string,
     private readonly disabledOu = 'OU=Disabled,',
     private readonly startTls = false,
-    private readonly provisionOu = 'OU=Employees',
+    private readonly provisionOu = '',
   ) {
     super(redis, 'AD', { minRequests: 10, errorThreshold: 75 });
     this.client = this.createClient();
@@ -101,7 +101,7 @@ export class ADAdapter extends BaseAdapter {
 
   /** Build full DN for an OU RDN relative to baseDn. */
   buildOuDn(ouRdn: string): string {
-    return `${normalizeOuRdn(ouRdn)},${this.baseDn}`;
+    return `${resolveOuRdn(ouRdn, this.baseDn)},${this.baseDn}`;
   }
 
   /** Verify the provisioning OU exists before attempting user creates. */
@@ -111,7 +111,13 @@ export class ADAdapter extends BaseAdapter {
     ouDn: string;
     suggestions: string[];
   }> {
-    const normalized = normalizeOuRdn(ouRdn?.trim() || this.provisionOu);
+    const raw = ouRdn?.trim() || this.provisionOu.trim();
+    if (!raw) {
+      const suggestions = await this.listOrganizationalUnits(12);
+      return { ok: false, ouRdn: '', ouDn: '', suggestions };
+    }
+
+    const normalized = resolveOuRdn(raw, this.baseDn);
     const ouDn = `${normalized},${this.baseDn}`;
     await this.ensureConnected();
 
@@ -404,7 +410,7 @@ export class ADAdapter extends BaseAdapter {
 
       const sam = sanitizeSamAccountName(params.sAMAccountName);
       const cn = escapeRdnValue(sam);
-      const ou = normalizeOuRdn(params.targetOu.trim() || this.provisionOu);
+      const ou = resolveOuRdn(params.targetOu.trim() || this.provisionOu, this.baseDn);
       const dn = `CN=${cn},${ou},${this.baseDn}`;
       const upnDomain = params.upnDomain?.trim() || domainFromBaseDn(this.baseDn);
       const userPrincipalName = `${sam}@${upnDomain}`.toLowerCase();
@@ -496,10 +502,40 @@ class ADNotFoundError extends Error {
   }
 }
 
-/** Accept "IT" or "OU=IT" and return a proper OU RDN. */
+/** Resolve a user-supplied OU to an RDN path relative to baseDn (no extra defaults). */
+export function resolveOuRdn(raw: string | undefined, baseDn: string): string {
+  let v = (raw ?? '').trim();
+  if (!v) {
+    throw new Error('New User OU is required — set it in connector config (e.g. OU=IT)');
+  }
+
+  // User pasted a full DN — strip the base suffix so we store only the relative OU path
+  const suffix = `,${baseDn}`;
+  if (v.toUpperCase().endsWith(suffix.toUpperCase())) {
+    v = v.slice(0, v.length - suffix.length);
+  }
+
+  // Already one or more OU= components — use exactly as given (comma-separated relative path)
+  if (/^OU=/i.test(v)) {
+    return v.split(',').map((part) => part.trim()).filter(Boolean).join(',');
+  }
+
+  // Bare name without OU= prefix, e.g. "IT" → "OU=IT"
+  if (!v.includes(',')) {
+    return `OU=${v}`;
+  }
+
+  // Mixed segments — prefix each part that lacks OU=
+  return v.split(',').map((part) => {
+    const t = part.trim();
+    return /^OU=/i.test(t) ? t : `OU=${t}`;
+  }).filter(Boolean).join(',');
+}
+
+/** @deprecated use resolveOuRdn */
 export function normalizeOuRdn(value: string): string {
   const v = value.trim();
-  if (!v) return 'OU=Employees';
+  if (!v) return '';
   if (/^OU=/i.test(v)) return v;
   return `OU=${v}`;
 }
