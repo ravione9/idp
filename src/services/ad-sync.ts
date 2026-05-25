@@ -66,9 +66,23 @@ function generateTempPassword(): string {
   return pw;
 }
 
+/**
+ * Read the employee ID from AD, trying the standard attributes in order:
+ *   employeeID, employeeNumber, extensionAttribute1, extensionAttribute2.
+ * Returns '' when no source is populated (caller falls back to AD-<hash>).
+ */
+function readAdEmployeeId(adUser: Record<string, unknown>): string {
+  const candidates = ['employeeID', 'employeeNumber', 'extensionAttribute1', 'extensionAttribute2'];
+  for (const attr of candidates) {
+    const v = getLdapAttr(adUser, attr).trim();
+    if (v && v.length <= 20) return v;
+  }
+  return '';
+}
+
 function deriveEmpIdFromAd(adUser: Record<string, unknown>): string {
-  const fromAd = getLdapAttr(adUser, 'employeeID').trim();
-  if (fromAd && fromAd.length <= 20) return fromAd;
+  const fromAd = readAdEmployeeId(adUser);
+  if (fromAd) return fromAd;
   const sam = getLdapAttr(adUser, 'sAMAccountName') || 'user';
   const hash = crypto.createHash('md5').update(sam).digest('hex').slice(0, 12).toUpperCase();
   return `AD-${hash}`;
@@ -130,8 +144,7 @@ async function resolveEmpIdForAdUser(
   errors: string[],
 ): Promise<string | null> {
   const sam = getLdapAttr(adUser, 'sAMAccountName').trim();
-  const adEmpIdRaw = getLdapAttr(adUser, 'employeeID').trim();
-  const adEmpId = adEmpIdRaw && adEmpIdRaw.length <= 20 ? adEmpIdRaw : '';
+  const adEmpId = readAdEmployeeId(adUser);
 
   if (adEmpId) {
     const byAdId = await queryOne<{ emp_id: string; email_corp: string }>(
@@ -303,6 +316,27 @@ async function importAdDirectoryUsers(
     { searchBase: dirConfig.searchBaseDn, count: adUsers.length },
     'AD sync inbound: listing directory users',
   );
+
+  // One-time diagnostic: dump the first user's attribute keys + emp-id candidates
+  // so we can see whether AD is populating employeeID / employeeNumber / etc.
+  if (adUsers.length > 0) {
+    const sample = adUsers[0] as Record<string, unknown>;
+    logger.info(
+      {
+        sam: getLdapAttr(sample, 'sAMAccountName'),
+        mail: getLdapAttr(sample, 'mail'),
+        attrKeys: Object.keys(sample),
+        employeeID: getLdapAttr(sample, 'employeeID'),
+        employeeNumber: getLdapAttr(sample, 'employeeNumber'),
+        extensionAttribute1: getLdapAttr(sample, 'extensionAttribute1'),
+        extensionAttribute2: getLdapAttr(sample, 'extensionAttribute2'),
+        department: getLdapAttr(sample, 'department'),
+        title: getLdapAttr(sample, 'title'),
+        manager: getLdapAttr(sample, 'manager'),
+      },
+      'AD sync inbound: first user raw attrs (diagnostic)',
+    );
+  }
 
   // First pass: build a DN -> email map so the second-pass manager lookup
   // can resolve `manager` (a DN) without an extra LDAP round-trip per user.

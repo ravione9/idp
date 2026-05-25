@@ -216,7 +216,9 @@ export class ADAdapter extends BaseAdapter {
   async listDirectoryUsers(): Promise<AdapterResult<ADUser[]>> {
     return this.safe(async () => {
       const attrs = [
-        'dn', 'sAMAccountName', 'employeeID', 'mail', 'displayName',
+        'dn', 'sAMAccountName', 'employeeID', 'employeeNumber',
+        'extensionAttribute1', 'extensionAttribute2',
+        'mail', 'displayName',
         'userPrincipalName', 'userAccountControl', 'cn', 'givenName', 'sn',
         'department', 'title', 'manager',
       ];
