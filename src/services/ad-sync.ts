@@ -47,10 +47,13 @@ interface IdentityLinkRow {
 // Helpers
 // ---------------------------------------------------------------------------
 function generateSamAccountName(fullName: string): string {
-  const parts = fullName.toLowerCase().replace(/[^a-z\s]/g, '').trim().split(/\s+/);
+  const parts = fullName.toLowerCase().replace(/[^a-z\s]/g, '').trim().split(/\s+/).filter(Boolean);
   const first = parts[0]?.slice(0, 10) ?? 'user';
-  const last = parts[parts.length - 1]?.slice(0, 9) ?? '';
-  return `${first}.${last}`.slice(0, 20);
+  const last = parts.length > 1 ? parts[parts.length - 1]?.slice(0, 9) ?? '' : '';
+  let sam = last ? `${first}.${last}` : first;
+  sam = sam.replace(/^\.+|\.+$/g, '');
+  if (!sam) sam = 'user';
+  return sam.slice(0, 20);
 }
 
 function generateTempPassword(): string {
@@ -97,6 +100,9 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const bindDn     = (cfg['bindDn']       as string | undefined) || config.ad.bindDn;
   const bindPass   = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
   const baseDn     = (cfg['baseDn']       as string | undefined) || config.ad.baseDn;
+  const upnDomain  = (cfg['upnDomain']    as string | undefined)?.trim()
+                  || (cfg['customerDomain'] as string | undefined)?.trim()
+                  || undefined;
   const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
   logger.info({ connectorId, adUrl, bindDn, baseDn, startTls }, 'AD sync: connecting');
@@ -186,6 +192,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
               department:   emp.dept_id ?? '',
               title:        emp.role ?? '',
               targetOu:     'OU=Employees',
+              ...(upnDomain ? { upnDomain } : {}),
               tempPassword: tempPass,
             });
 

@@ -176,15 +176,26 @@ export class ADAdapter extends BaseAdapter {
     };
   }
 
+  /** Resolve a user by sAMAccountName (identity_links external_id) or employeeID. */
+  private async findUser(externalId: string, attributes: string[]): Promise<ADUser[]> {
+    const bySam = await this.search(
+      `(&(objectClass=user)(sAMAccountName=${ldapEscape(externalId)}))`,
+      attributes,
+    );
+    if (bySam.length > 0) return bySam;
+
+    return this.search(
+      `(&(objectClass=user)(employeeID=${ldapEscape(externalId)}))`,
+      attributes,
+    );
+  }
+
   /**
    * Disable: set userAccountControl to DISABLED (514) and move to Disabled OU.
    */
   async disable(externalId: string, _evidence?: Record<string, unknown>): Promise<AdapterResult<void>> {
     return this.safe(async () => {
-      const entries = await this.search(
-        `(&(objectClass=user)(employeeID=${ldapEscape(externalId)}))`,
-        ['dn', 'userAccountControl', 'extensionAttribute2'],
-      );
+      const entries = await this.findUser(externalId, ['dn', 'userAccountControl', 'extensionAttribute2']);
 
       if (entries.length === 0) {
         logger.warn({ externalId }, 'AD disable: user not found, treating as already removed');
@@ -225,10 +236,7 @@ export class ADAdapter extends BaseAdapter {
    */
   async enable(externalId: string): Promise<AdapterResult<void>> {
     return this.safe(async () => {
-      const entries = await this.search(
-        `(&(objectClass=user)(employeeID=${ldapEscape(externalId)}))`,
-        ['dn', 'userAccountControl', 'extensionAttribute2'],
-      );
+      const entries = await this.findUser(externalId, ['dn', 'userAccountControl', 'extensionAttribute2']);
 
       if (entries.length === 0) {
         logger.warn({ externalId }, 'AD enable: user not found');
@@ -268,10 +276,7 @@ export class ADAdapter extends BaseAdapter {
    */
   async delete(externalId: string): Promise<AdapterResult<void>> {
     return this.safe(async () => {
-      const entries = await this.search(
-        `(&(objectClass=user)(employeeID=${ldapEscape(externalId)}))`,
-        ['dn'],
-      );
+      const entries = await this.findUser(externalId, ['dn']);
 
       if (entries.length === 0) {
         logger.warn({ externalId }, 'AD delete: user not found, treating as gone');
@@ -298,10 +303,7 @@ export class ADAdapter extends BaseAdapter {
    */
   async listBindings(externalId: string): Promise<AdapterResult<Binding[]>> {
     return this.safe(async () => {
-      const entries = await this.search(
-        `(&(objectClass=user)(employeeID=${ldapEscape(externalId)}))`,
-        ['memberOf'],
-      );
+      const entries = await this.findUser(externalId, ['memberOf']);
 
       if (entries.length === 0) {
         return [];
@@ -330,37 +332,70 @@ export class ADAdapter extends BaseAdapter {
     department: string;
     title: string;
     targetOu: string;
+    upnDomain?: string;
     manager?: string;
     tempPassword: string;
   }): Promise<AdapterResult<void>> {
     return this.safe(async () => {
       await this.ensureConnected();
 
-      const dn = `CN=${params.fullName},${params.targetOu},${this.baseDn}`;
+      const cn = escapeRdnValue(params.sAMAccountName);
+      const dn = `CN=${cn},${params.targetOu},${this.baseDn}`;
+      const upnDomain = params.upnDomain?.trim() || domainFromBaseDn(this.baseDn);
+      const userPrincipalName = `${params.sAMAccountName}@${upnDomain}`;
 
-      const entry: Record<string, string | string[]> = {
+      const nameParts = params.fullName.trim().split(/\s+/).filter(Boolean);
+      const givenName = nameParts[0] ?? params.sAMAccountName;
+      const sn = nameParts.length > 1 ? nameParts.slice(1).join(' ') : givenName;
+
+      const entry: Record<string, string | string[] | Buffer> = {
         objectClass:        ['top', 'person', 'organizationalPerson', 'user'],
-        cn:                  params.fullName,
+        cn:                  params.sAMAccountName,
         sAMAccountName:      params.sAMAccountName,
-        userPrincipalName:   params.emailCorp,
+        userPrincipalName,
         mail:                params.emailCorp,
         displayName:         params.fullName,
+        givenName,
+        sn,
         employeeID:          params.empId,
-        department:          params.department,
-        title:               params.title,
         // Store the target OU for re-enable after disable
         extensionAttribute2: `${params.targetOu},${this.baseDn}`,
-        userAccountControl:  String(UAC_NORMAL_ACCOUNT),
+        // AD requires a disabled account when setting unicodePwd on create
+        userAccountControl:  String(UAC_DISABLED_ACCOUNT),
         unicodePwd:          encodeAdPassword(params.tempPassword),
-        pwdLastSet:          '0', // Force password change on next logon
       };
 
+      if (params.department.trim()) {
+        entry['department'] = params.department.trim();
+      }
+      if (params.title.trim()) {
+        entry['title'] = params.title.trim();
+      }
       if (params.manager) {
         entry['manager'] = params.manager;
       }
 
       await this.client.add(dn, entry as Record<string, string[]>);
-      logger.info({ empId: params.empId, dn }, 'AD user created');
+
+      // Enable account and force password change on first logon
+      await this.client.modify(dn, [
+        new Change({
+          operation: 'replace',
+          modification: new Attribute({
+            type: 'userAccountControl',
+            values: [String(UAC_NORMAL_ACCOUNT)],
+          }),
+        }),
+        new Change({
+          operation: 'replace',
+          modification: new Attribute({
+            type: 'pwdLastSet',
+            values: ['0'],
+          }),
+        }),
+      ]);
+
+      logger.info({ empId: params.empId, dn, userPrincipalName }, 'AD user created');
     });
   }
 }
@@ -380,9 +415,31 @@ function ldapEscape(value: string): string {
   return value.replace(/[\\*()\x00/]/g, (c) => `\\${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
 }
 
-/** Encode a plain-text password for the AD unicodePwd attribute */
-function encodeAdPassword(password: string): string {
-  const quoted = `"${password}"`;
-  const buf = Buffer.from(quoted, 'utf16le');
-  return buf.toString('binary');
+/** Escape RDN attribute values (RFC 4514) — commas in display names break CN= DNs. */
+function escapeRdnValue(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/,/g, '\\,')
+    .replace(/\+/g, '\\+')
+    .replace(/"/g, '\\"')
+    .replace(/</g, '\\<')
+    .replace(/>/g, '\\>')
+    .replace(/;/g, '\\;')
+    .replace(/^ /, '\\ ')
+    .replace(/ $/, '\\ ');
+}
+
+/** Derive DNS-style domain from base DN, e.g. DC=lenskart,DC=local → lenskart.local */
+function domainFromBaseDn(baseDn: string): string {
+  return baseDn
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => /^DC=/i.test(part))
+    .map((part) => part.slice(3))
+    .join('.');
+}
+
+/** Encode a plain-text password for the AD unicodePwd attribute (UTF-16LE, quoted) */
+function encodeAdPassword(password: string): Buffer {
+  return Buffer.from(`"${password}"`, 'utf16le');
 }
