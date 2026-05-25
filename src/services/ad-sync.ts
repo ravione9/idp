@@ -1,15 +1,15 @@
 /**
  * AD Sync Service
  * ---------------
- * Full reconciliation sync between the IDP employee database and Active Directory.
- * - Provisions new AD users for ACTIVE employees with no AD identity link
- * - Disables AD accounts for SUSPENDED/TERMINATED employees
- * - Re-enables AD accounts for ACTIVE employees whose link is DISABLED
- * - Records all runs in connector_runs table
+ * Reconciliation between the IDP employee database and Active Directory.
+ *
+ * INBOUND  — import AD users under the search base into employees + identity_links
+ * OUTBOUND — provision / disable / re-enable AD accounts for IdP employees
+ * BIDIRECTIONAL — both phases (default connector direction)
  */
 
 import crypto from 'crypto';
-import { ADAdapter, resolveAdDirectoryConfig } from '../adapters/ad-adapter.js';
+import { ADAdapter, resolveAdDirectoryConfig, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
@@ -66,6 +66,143 @@ function generateTempPassword(): string {
   return pw;
 }
 
+function deriveEmpIdFromAd(adUser: { employeeID?: string; sAMAccountName?: string }): string {
+  const fromAd = String(adUser.employeeID ?? '').trim();
+  if (fromAd && fromAd.length <= 20) return fromAd;
+  const sam = String(adUser.sAMAccountName ?? 'user').trim();
+  const hash = crypto.createHash('md5').update(sam).digest('hex').slice(0, 12).toUpperCase();
+  return `AD-${hash}`;
+}
+
+/** Import person accounts from AD into employees + identity_links. */
+async function importAdDirectoryUsers(
+  adapter: ADAdapter,
+  dirConfig: AdDirectoryConfig,
+  errors: string[],
+): Promise<{
+  found: number;
+  imported: number;
+  linked: number;
+  skipped: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+}> {
+  const listResult = await adapter.listDirectoryUsers();
+  if (!listResult.success) {
+    throw new Error(listResult.error ?? 'Failed to list AD users');
+  }
+
+  const adUsers = listResult.data;
+  let imported = 0;
+  let linked = 0;
+  let skipped = 0;
+  let processed = 0;
+  let succeeded = 0;
+  let failed = 0;
+
+  logger.info(
+    { searchBase: dirConfig.searchBaseDn, count: adUsers.length },
+    'AD sync inbound: listing directory users',
+  );
+
+  for (const adUser of adUsers) {
+    processed++;
+    const sam = String(adUser.sAMAccountName ?? '').trim();
+
+    try {
+      if (!sam) {
+        skipped++;
+        succeeded++;
+        continue;
+      }
+
+      const email = String(adUser.mail ?? adUser.userPrincipalName ?? '').trim().toLowerCase();
+      if (!email) {
+        throw new Error('missing mail and userPrincipalName');
+      }
+
+      const fullName = String(adUser.displayName ?? adUser.cn ?? sam).trim() || sam;
+      const uac = parseInt(String(adUser.userAccountControl ?? '512'), 10);
+      const disabled = (uac & 0x0002) !== 0;
+      const linkStatus = disabled ? 'DISABLED' : 'ACTIVE';
+      const ilgState = disabled ? 'SUSPENDED_AUTO' : 'ACTIVE';
+
+      const existingLink = await queryOne<{ id: number; emp_id: string }>(
+        `SELECT id, emp_id FROM identity_links
+          WHERE \`system\` = 'AD' AND external_id = ? AND status NOT IN ('DELETED')`,
+        [sam],
+      );
+
+      if (existingLink) {
+        await execute(
+          `UPDATE identity_links SET status = ?, last_synced_at = UTC_TIMESTAMP() WHERE id = ?`,
+          [linkStatus, existingLink.id],
+        );
+        await execute(
+          `UPDATE employees SET full_name = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+          [fullName, ilgState, existingLink.emp_id],
+        );
+        linked++;
+        succeeded++;
+        continue;
+      }
+
+      let empId = deriveEmpIdFromAd(adUser);
+
+      const byEmpId = await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM employees WHERE emp_id = ?`,
+        [empId],
+      );
+      const byEmail = await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM employees WHERE email_corp = ?`,
+        [email],
+      );
+
+      if (byEmail) {
+        empId = byEmail.emp_id;
+        await execute(
+          `UPDATE employees
+              SET full_name = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP()
+            WHERE emp_id = ?`,
+          [fullName, ilgState, empId],
+        );
+        linked++;
+      } else if (byEmpId) {
+        await execute(
+          `UPDATE employees
+              SET full_name = ?, email_corp = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP()
+            WHERE emp_id = ?`,
+          [fullName, email, ilgState, empId],
+        );
+        linked++;
+      } else {
+        await execute(
+          `INSERT INTO employees
+             (emp_id, full_name, email_corp, ilg_state, hrms_status, hire_date, employment_type)
+           VALUES (?, ?, ?, ?, 'ACTIVE', UTC_DATE(), 'CORPORATE')`,
+          [empId, fullName, email, ilgState],
+        );
+        imported++;
+      }
+
+      await execute(
+        `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind, last_synced_at)
+         VALUES (?, 'AD', ?, ?, 'LDAP', UTC_TIMESTAMP())`,
+        [empId, sam, linkStatus],
+      );
+      succeeded++;
+    } catch (err) {
+      failed++;
+      const msg = `${sam || adUser.dn}: ${err instanceof Error ? err.message : String(err)}`;
+      errors.push(msg);
+      logger.error({ sam, dn: adUser.dn, err }, 'AD sync inbound: user import failed');
+    }
+  }
+
+  return { found: adUsers.length, imported, linked, skipped, processed, succeeded, failed };
+}
+
 // ---------------------------------------------------------------------------
 // Main sync function
 // ---------------------------------------------------------------------------
@@ -82,8 +219,8 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
 
   // ── Build ADAdapter from connector's stored config_json ──────────────────
   // Falls back to env vars so existing deployments keep working.
-  const connRow = await queryOne<{ config_json: string | Record<string, unknown> }>(
-    `SELECT config_json FROM connectors WHERE id = ?`,
+  const connRow = await queryOne<{ config_json: string | Record<string, unknown>; direction: string }>(
+    `SELECT config_json, direction FROM connectors WHERE id = ?`,
     [connectorId],
   );
   const cfg: Record<string, unknown> =
@@ -92,6 +229,10 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
         ? JSON.parse(connRow.config_json || '{}')
         : (connRow.config_json ?? {})
       : {};
+
+  const direction = (connRow?.direction ?? 'BIDIRECTIONAL').toUpperCase();
+  const runInbound  = direction === 'INBOUND' || direction === 'BIDIRECTIONAL';
+  const runOutbound = direction === 'OUTBOUND' || direction === 'BIDIRECTIONAL';
 
   const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
   const port       = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
@@ -118,7 +259,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
   logger.info(
-    { connectorId, adUrl, bindDn, baseDn: dirConfig.searchBaseDn, provisionOu: dirConfig.provisionOuDn, startTls },
+    { connectorId, adUrl, bindDn, baseDn: dirConfig.searchBaseDn, provisionOu: dirConfig.provisionOuDn, direction, startTls },
     'AD sync: connecting',
   );
 
@@ -140,10 +281,22 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   let itemsSucceeded = 0;
   let itemsFailed = 0;
   const errors: string[] = [];
+  let inboundSummary = '';
 
   try {
     await adapter.connect();
 
+    if (runInbound) {
+      const inbound = await importAdDirectoryUsers(adapter, dirConfig, errors);
+      itemsProcessed += inbound.processed;
+      itemsSucceeded += inbound.succeeded;
+      itemsFailed += inbound.failed;
+      inboundSummary =
+        `Inbound: ${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked, ${inbound.skipped} skipped`;
+      logger.info({ connectorId, runId, ...inbound }, 'AD sync inbound complete');
+    }
+
+    if (runOutbound) {
     // Fetch all employees
     const employees = await query<EmployeeRow>(
       `SELECT emp_id, full_name, email_corp, dept_id, role, ilg_state
@@ -306,6 +459,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
         logger.error({ empId: emp.emp_id, err }, 'AD sync: per-employee error (non-fatal)');
       }
     }
+    } // runOutbound
 
     await adapter.disconnect();
   } catch (fatalErr) {
@@ -322,7 +476,9 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   }
 
   const finalStatus = itemsFailed > 0 ? 'PARTIAL' : 'SUCCESS';
-  const errorSummary = errors.length > 0 ? errors.slice(0, 10).join('; ') : null;
+  const errorSummary = errors.length > 0
+    ? errors.slice(0, 10).join('; ')
+    : inboundSummary || null;
 
   await execute(
     `UPDATE connector_runs

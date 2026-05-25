@@ -210,6 +210,20 @@ export class ADAdapter extends BaseAdapter {
   // BaseAdapter implementation
   // ---------------------------------------------------------------------------
 
+  /** List person accounts under the LDAP search base (inbound directory import). */
+  async listDirectoryUsers(): Promise<AdapterResult<ADUser[]>> {
+    return this.safe(async () => {
+      const entries = await this.search(
+        '(&(objectClass=user)(objectCategory=CN=Person,CN=Schema,CN=Configuration,*))',
+        ['dn', 'sAMAccountName', 'employeeID', 'mail', 'displayName', 'userPrincipalName', 'userAccountControl', 'cn'],
+      );
+      return entries.filter((e) => {
+        const sam = String(e.sAMAccountName ?? '');
+        return sam.length > 0 && !sam.endsWith('$');
+      });
+    });
+  }
+
   /**
    * Find an AD user by employeeID attribute (maps to emp_id in LILG).
    */
