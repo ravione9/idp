@@ -32,9 +32,8 @@ interface EmployeeRow {
   emp_id: string;
   full_name: string;
   email_corp: string;
-  department: string | null;
-  title: string | null;
-  role: string;
+  dept_id: string | null;
+  role: string | null;
   ilg_state: string;
 }
 
@@ -122,7 +121,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
 
     // Fetch all employees
     const employees = await query<EmployeeRow>(
-      `SELECT emp_id, full_name, email_corp, department, title, role, ilg_state
+      `SELECT emp_id, full_name, email_corp, dept_id, role, ilg_state
          FROM employees
         ORDER BY emp_id`,
       [],
@@ -142,8 +141,12 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
           [emp.emp_id],
         );
 
-        const isActive = emp.ilg_state === 'ACTIVE';
-        const isInactive = emp.ilg_state === 'SUSPENDED' || emp.ilg_state === 'TERMINATED';
+        const isActive   = emp.ilg_state === 'ACTIVE' || emp.ilg_state === 'REACTIVATED';
+        // Disable AD for hard-stop states; leave PENDING_MGR / ESCALATED_HRBP untouched
+        const isInactive = emp.ilg_state === 'SUSPENDED_HR'
+                        || emp.ilg_state === 'SUSPENDED_AUTO'
+                        || emp.ilg_state === 'DEPARTED'
+                        || emp.ilg_state === 'DEPROVISIONED';
 
         if (isActive && !link) {
           // Provision new AD user
@@ -155,8 +158,8 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
             fullName:       emp.full_name,
             emailCorp:      emp.email_corp,
             sAMAccountName,
-            department:     emp.department ?? '',
-            title:          emp.title ?? '',
+            department:     emp.dept_id ?? '',   // dept_id is the department identifier
+            title:          emp.role ?? '',       // role maps to AD title attribute
             targetOu:       'OU=Employees',
             tempPassword:   tempPass,
           });
