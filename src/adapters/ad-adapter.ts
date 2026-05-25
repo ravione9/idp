@@ -137,21 +137,43 @@ export class ADAdapter extends BaseAdapter {
         throw new ADNotFoundError(`AD user not found for employeeID=${externalId}`);
       }
 
-      const entry = entries[0];
-      const uac = parseInt(entry.userAccountControl as string ?? '512', 10);
-      const disabled = (uac & UAC_ACCOUNTDISABLE) !== 0;
-
-      return {
-        externalId,
-        email:       (entry.mail as string | undefined) ?? '',
-        displayName: (entry.displayName as string | undefined) ?? (entry.sAMAccountName as string | undefined) ?? '',
-        active:      !disabled,
-        dn:          entry.dn,
-        sAMAccountName: entry.sAMAccountName,
-        uac,
-        memberOf:    Array.isArray(entry.memberOf) ? entry.memberOf : entry.memberOf ? [entry.memberOf as string] : [],
-      };
+      return this.buildUserInfo(externalId, entries[0]);
     });
+  }
+
+  /**
+   * Find an AD user by their corporate email (mail attribute).
+   * Used for reconciliation when employeeID is not yet set on existing accounts.
+   */
+  async getUserByEmail(email: string): Promise<AdapterResult<UserInfo>> {
+    return this.safe(async () => {
+      const entries = await this.search(
+        `(&(objectClass=user)(mail=${ldapEscape(email)}))`,
+        ['dn', 'sAMAccountName', 'employeeID', 'mail', 'displayName', 'userAccountControl', 'memberOf', 'extensionAttribute1', 'extensionAttribute2'],
+      );
+
+      if (entries.length === 0) {
+        throw new ADNotFoundError(`AD user not found for mail=${email}`);
+      }
+
+      const samName = String(entries[0].sAMAccountName ?? '');
+      return this.buildUserInfo(samName, entries[0]);
+    });
+  }
+
+  private buildUserInfo(externalId: string, entry: ADUser): UserInfo {
+    const uac = parseInt(entry.userAccountControl as string ?? '512', 10);
+    const disabled = (uac & UAC_ACCOUNTDISABLE) !== 0;
+    return {
+      externalId,
+      email:          (entry.mail as string | undefined) ?? '',
+      displayName:    (entry.displayName as string | undefined) ?? (entry.sAMAccountName as string | undefined) ?? '',
+      active:         !disabled,
+      dn:             entry.dn,
+      sAMAccountName: entry.sAMAccountName,
+      uac,
+      memberOf:       Array.isArray(entry.memberOf) ? entry.memberOf : entry.memberOf ? [entry.memberOf as string] : [],
+    };
   }
 
   /**

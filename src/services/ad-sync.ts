@@ -137,7 +137,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
         const link = await queryOne<IdentityLinkRow>(
           `SELECT id, external_id, status
              FROM identity_links
-            WHERE emp_id = ? AND system = 'AD' AND status NOT IN ('DELETED')`,
+            WHERE emp_id = ? AND \`system\` = 'AD' AND status NOT IN ('DELETED')`,
           [emp.emp_id],
         );
 
@@ -149,31 +149,57 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
                         || emp.ilg_state === 'DEPROVISIONED';
 
         if (isActive && !link) {
-          // Provision new AD user
-          const sAMAccountName = generateSamAccountName(emp.full_name);
-          const tempPass = generateTempPassword();
+          // ── Reconciliation: check if user already exists in AD ──────────────
+          // Try by employeeID first; fall back to corporate email for accounts
+          // that were created before LILG and don't have employeeID set yet.
+          let existingSam: string | null = null;
 
-          const result = await adapter.createUser({
-            empId:          emp.emp_id,
-            fullName:       emp.full_name,
-            emailCorp:      emp.email_corp,
-            sAMAccountName,
-            department:     emp.dept_id ?? '',   // dept_id is the department identifier
-            title:          emp.role ?? '',       // role maps to AD title attribute
-            targetOu:       'OU=Employees',
-            tempPassword:   tempPass,
-          });
+          const byId = await adapter.getUser(emp.emp_id);
+          if (byId.success) {
+            existingSam = String((byId.data as Record<string, unknown>)['sAMAccountName'] ?? '');
+          } else {
+            const byMail = await adapter.getUserByEmail(emp.email_corp);
+            if (byMail.success) {
+              existingSam = String((byMail.data as Record<string, unknown>)['sAMAccountName'] ?? '');
+            }
+          }
 
-          if (result.success) {
+          if (existingSam) {
+            // Account already exists in AD — link it without re-provisioning
             await execute(
-              `INSERT INTO identity_links (emp_id, system, external_id, status, auth_kind)
+              `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind)
                VALUES (?, 'AD', ?, 'ACTIVE', 'LDAP')`,
-              [emp.emp_id, sAMAccountName],
+              [emp.emp_id, existingSam],
             );
-            logger.info({ empId: emp.emp_id, sAMAccountName }, 'AD sync: user provisioned');
+            logger.info({ empId: emp.emp_id, existingSam }, 'AD sync: existing AD user reconciled and linked');
             itemsSucceeded++;
           } else {
-            throw new Error(result.error ?? 'createUser failed');
+            // No AD account found — provision a new one
+            const sAMAccountName = generateSamAccountName(emp.full_name);
+            const tempPass = generateTempPassword();
+
+            const result = await adapter.createUser({
+              empId:        emp.emp_id,
+              fullName:     emp.full_name,
+              emailCorp:    emp.email_corp,
+              sAMAccountName,
+              department:   emp.dept_id ?? '',
+              title:        emp.role ?? '',
+              targetOu:     'OU=Employees',
+              tempPassword: tempPass,
+            });
+
+            if (result.success) {
+              await execute(
+                `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind)
+                 VALUES (?, 'AD', ?, 'ACTIVE', 'LDAP')`,
+                [emp.emp_id, sAMAccountName],
+              );
+              logger.info({ empId: emp.emp_id, sAMAccountName }, 'AD sync: new user provisioned');
+              itemsSucceeded++;
+            } else {
+              throw new Error(result.error ?? 'createUser failed');
+            }
           }
         } else if (isInactive && link && link.status === 'ACTIVE') {
           // Disable AD account

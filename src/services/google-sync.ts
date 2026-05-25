@@ -126,12 +126,15 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
         const link = await queryOne<IdentityLinkRow>(
           `SELECT id, external_id, status
              FROM identity_links
-            WHERE emp_id = ? AND system = 'GOOGLE' AND status NOT IN ('DELETED')`,
+            WHERE emp_id = ? AND `system` = 'GOOGLE' AND status NOT IN ('DELETED')`,
           [emp.emp_id],
         );
 
-        const isActive = emp.ilg_state === 'ACTIVE';
-        const isInactive = emp.ilg_state === 'SUSPENDED' || emp.ilg_state === 'TERMINATED';
+        const isActive   = emp.ilg_state === 'ACTIVE' || emp.ilg_state === 'REACTIVATED';
+        const isInactive = emp.ilg_state === 'SUSPENDED_HR'
+                        || emp.ilg_state === 'SUSPENDED_AUTO'
+                        || emp.ilg_state === 'DEPARTED'
+                        || emp.ilg_state === 'DEPROVISIONED';
 
         if (isActive && !link) {
           // Provision new Google user
@@ -151,8 +154,8 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
           const googleId = res.data.id ?? emp.email_corp;
 
           await execute(
-            `INSERT INTO identity_links (emp_id, system, external_id, status, auth_kind, created_at)
-             VALUES (?, 'GOOGLE', ?, 'ACTIVE', 'GOOGLE_OAUTH', UTC_TIMESTAMP())`,
+            `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind)
+             VALUES (?, 'GOOGLE', ?, 'ACTIVE', 'GOOGLE_OAUTH')`,
             [emp.emp_id, googleId],
           );
 
