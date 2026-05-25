@@ -9,7 +9,7 @@
  */
 
 import crypto from 'crypto';
-import { ADAdapter, resolveAdDirectoryConfig, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
+import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
@@ -66,10 +66,10 @@ function generateTempPassword(): string {
   return pw;
 }
 
-function deriveEmpIdFromAd(adUser: { employeeID?: string; sAMAccountName?: string }): string {
-  const fromAd = String(adUser.employeeID ?? '').trim();
+function deriveEmpIdFromAd(adUser: Record<string, unknown>): string {
+  const fromAd = getLdapAttr(adUser, 'employeeID').trim();
   if (fromAd && fromAd.length <= 20) return fromAd;
-  const sam = String(adUser.sAMAccountName ?? 'user').trim();
+  const sam = getLdapAttr(adUser, 'sAMAccountName') || 'user';
   const hash = crypto.createHash('md5').update(sam).digest('hex').slice(0, 12).toUpperCase();
   return `AD-${hash}`;
 }
@@ -108,7 +108,8 @@ async function importAdDirectoryUsers(
 
   for (const adUser of adUsers) {
     processed++;
-    const sam = String(adUser.sAMAccountName ?? '').trim();
+    const sam = getLdapAttr(adUser, 'sAMAccountName').trim();
+    const dn = getLdapAttr(adUser, 'dn');
 
     try {
       if (!sam) {
@@ -117,13 +118,17 @@ async function importAdDirectoryUsers(
         continue;
       }
 
-      const email = String(adUser.mail ?? adUser.userPrincipalName ?? '').trim().toLowerCase();
+      const email = (getLdapAttr(adUser, 'mail') || getLdapAttr(adUser, 'userPrincipalName')).trim().toLowerCase();
       if (!email) {
         throw new Error('missing mail and userPrincipalName');
       }
 
-      const fullName = String(adUser.displayName ?? adUser.cn ?? sam).trim() || sam;
-      const uac = parseInt(String(adUser.userAccountControl ?? '512'), 10);
+      const fullName =
+        getLdapAttr(adUser, 'displayName')
+        || [getLdapAttr(adUser, 'givenName'), getLdapAttr(adUser, 'sn')].filter(Boolean).join(' ')
+        || getLdapAttr(adUser, 'cn')
+        || sam;
+      const uac = parseInt(getLdapAttr(adUser, 'userAccountControl') || '512', 10);
       const disabled = (uac & 0x0002) !== 0;
       const linkStatus = disabled ? 'DISABLED' : 'ACTIVE';
       const ilgState = disabled ? 'SUSPENDED_AUTO' : 'ACTIVE';
@@ -194,9 +199,9 @@ async function importAdDirectoryUsers(
       succeeded++;
     } catch (err) {
       failed++;
-      const msg = `${sam || adUser.dn}: ${err instanceof Error ? err.message : String(err)}`;
+      const msg = `${sam || dn}: ${err instanceof Error ? err.message : String(err)}`;
       errors.push(msg);
-      logger.error({ sam, dn: adUser.dn, err }, 'AD sync inbound: user import failed');
+      logger.error({ sam, dn, err }, 'AD sync inbound: user import failed');
     }
   }
 
@@ -233,6 +238,10 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const direction = (connRow?.direction ?? 'BIDIRECTIONAL').toUpperCase();
   const runInbound  = direction === 'INBOUND' || direction === 'BIDIRECTIONAL';
   const runOutbound = direction === 'OUTBOUND' || direction === 'BIDIRECTIONAL';
+
+  if (!runInbound && direction === 'OUTBOUND') {
+    logger.info({ connectorId, direction }, 'AD sync: OUTBOUND-only — skipping AD directory import');
+  }
 
   const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
   const port       = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
@@ -282,6 +291,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   let itemsFailed = 0;
   const errors: string[] = [];
   let inboundSummary = '';
+  let outboundProcessed = 0;
 
   try {
     await adapter.connect();
@@ -292,11 +302,20 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
       itemsSucceeded += inbound.succeeded;
       itemsFailed += inbound.failed;
       inboundSummary =
-        `Inbound: ${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked, ${inbound.skipped} skipped`;
+        `Inbound: ${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked, ${inbound.skipped} skipped` +
+        (runOutbound ? ` | Outbound: see employee reconcile below` : '');
       logger.info({ connectorId, runId, ...inbound }, 'AD sync inbound complete');
+
+      if (inbound.found === 0) {
+        errors.push(
+          `Inbound: 0 users returned from AD under ${dirConfig.searchBaseDn}. ` +
+          `Set Base DN to domain root (DC=Lenskart,DC=in) or the OU containing users (OU=IT,DC=Lenskart,DC=in).`,
+        );
+      }
     }
 
     if (runOutbound) {
+    outboundProcessed = 0;
     // Fetch all employees
     const employees = await query<EmployeeRow>(
       `SELECT emp_id, full_name, email_corp, dept_id, role, ilg_state
@@ -351,6 +370,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
 
     for (const emp of employees) {
       itemsProcessed++;
+      outboundProcessed++;
 
       try {
         // Look up existing identity link
@@ -476,9 +496,13 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   }
 
   const finalStatus = itemsFailed > 0 ? 'PARTIAL' : 'SUCCESS';
+  const summaryParts = [
+    inboundSummary,
+    runOutbound && outboundProcessed > 0 ? `Outbound: ${outboundProcessed} IdP employees reconciled` : '',
+  ].filter(Boolean);
   const errorSummary = errors.length > 0
-    ? errors.slice(0, 10).join('; ')
-    : inboundSummary || null;
+    ? [...summaryParts, errors.slice(0, 8).join('; ')].filter(Boolean).join(' | ')
+    : summaryParts.join(' | ') || null;
 
   await execute(
     `UPDATE connector_runs

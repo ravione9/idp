@@ -183,27 +183,29 @@ export class ADAdapter extends BaseAdapter {
   // ---------------------------------------------------------------------------
   // Search helper with auto-reconnect
   // ---------------------------------------------------------------------------
-  private async search(filter: string, attributes: string[]): Promise<ADUser[]> {
+  private async searchAt(baseDn: string, filter: string, attributes: string[]): Promise<ADUser[]> {
     await this.ensureConnected();
-    try {
-      const result = await this.client.search(this.baseDn, {
-        scope:  'sub',
+    const run = () =>
+      this.client.search(baseDn, {
+        scope:      'sub',
         filter,
         attributes,
+        sizeLimit:  2000,
       });
+    try {
+      const result = await run();
       return result.searchEntries as unknown as ADUser[];
     } catch (err) {
-      // Try to reconnect once on LDAP connection errors
       this.connected = false;
       this.client = this.createClient();
       await this.connect();
-      const result = await this.client.search(this.baseDn, {
-        scope:  'sub',
-        filter,
-        attributes,
-      });
+      const result = await run();
       return result.searchEntries as unknown as ADUser[];
     }
+  }
+
+  private async search(filter: string, attributes: string[]): Promise<ADUser[]> {
+    return this.searchAt(this.baseDn, filter, attributes);
   }
 
   // ---------------------------------------------------------------------------
@@ -213,14 +215,37 @@ export class ADAdapter extends BaseAdapter {
   /** List person accounts under the LDAP search base (inbound directory import). */
   async listDirectoryUsers(): Promise<AdapterResult<ADUser[]>> {
     return this.safe(async () => {
-      const entries = await this.search(
-        '(&(objectClass=user)(objectCategory=CN=Person,CN=Schema,CN=Configuration,*))',
-        ['dn', 'sAMAccountName', 'employeeID', 'mail', 'displayName', 'userPrincipalName', 'userAccountControl', 'cn'],
-      );
-      return entries.filter((e) => {
-        const sam = String(e.sAMAccountName ?? '');
+      const attrs = [
+        'dn', 'sAMAccountName', 'employeeID', 'mail', 'displayName',
+        'userPrincipalName', 'userAccountControl', 'cn', 'givenName', 'sn',
+      ];
+      // Simple filter — objectCategory form often returns 0 rows on some AD forests
+      const filter = '(&(objectClass=user)(!(sAMAccountName=*$)))';
+
+      const bases: string[] = [];
+      for (const b of [this.dir.provisionOuDn, this.dir.searchBaseDn, this.dir.domainRoot]) {
+        if (b && !bases.includes(b)) bases.push(b);
+      }
+
+      let rawEntries: ADUser[] = [];
+      let usedBase = '';
+      for (const base of bases) {
+        const batch = await this.searchAt(base, filter, attrs);
+        logger.info({ base, rawCount: batch.length }, 'AD listDirectoryUsers: LDAP search');
+        if (batch.length > 0) {
+          rawEntries = batch;
+          usedBase = base;
+          break;
+        }
+      }
+
+      const users = rawEntries.filter((e) => {
+        const sam = getLdapAttr(e, 'sAMAccountName');
         return sam.length > 0 && !sam.endsWith('$');
       });
+
+      logger.info({ usedBase, rawCount: rawEntries.length, userCount: users.length }, 'AD listDirectoryUsers: filtered');
+      return users;
     });
   }
 
@@ -541,6 +566,19 @@ class ADNotFoundError extends Error {
     super(message);
     this.name = 'ADNotFoundError';
   }
+}
+
+/** Read an LDAP entry attribute (case-insensitive; handles array values from ldapts). */
+export function getLdapAttr(entry: Record<string, unknown>, name: string): string {
+  if (name.toLowerCase() === 'dn') {
+    return entry['dn'] != null ? String(entry['dn']) : '';
+  }
+  const key = Object.keys(entry).find((k) => k.toLowerCase() === name.toLowerCase());
+  if (!key) return '';
+  const val = entry[key];
+  if (Array.isArray(val)) return val[0] != null ? String(val[0]) : '';
+  if (Buffer.isBuffer(val)) return val.toString('utf8');
+  return val != null ? String(val) : '';
 }
 
 /** Split a DN into domain root (DC=…) and any OU= prefix. */
