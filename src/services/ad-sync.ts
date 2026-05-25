@@ -298,6 +298,7 @@ async function importAdDirectoryUsers(
   succeeded: number;
   failed: number;
   repaired: number;
+  diag: string;
 }> {
   const listResult = await adapter.listDirectoryUsers();
   if (!listResult.success) {
@@ -319,6 +320,9 @@ async function importAdDirectoryUsers(
 
   // One-time diagnostic: dump every populated attribute for the first user
   // so we can identify which AD attribute actually holds the employee ID.
+  // The same content is surfaced in the run's error_summary so it's visible
+  // in the connector UI without having to grep server logs.
+  let diag = '';
   if (adUsers.length > 0) {
     const sample = adUsers[0] as Record<string, unknown>;
     const populated: Record<string, string> = {};
@@ -330,6 +334,11 @@ async function importAdDirectoryUsers(
       { sam: getLdapAttr(sample, 'sAMAccountName'), populated },
       'AD sync inbound: first user — all populated attrs (diagnostic)',
     );
+    diag =
+      `Diag (first user ${getLdapAttr(sample, 'sAMAccountName') || '?'}): ` +
+      Object.entries(populated)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(' | ');
   }
 
   // First pass: build a DN -> email map so the second-pass manager lookup
@@ -472,6 +481,7 @@ async function importAdDirectoryUsers(
     succeeded,
     failed,
     repaired: repaired + dbRepaired,
+    diag,
   };
 }
 
@@ -644,6 +654,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
         `Inbound: ${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked` +
         (inbound.repaired ? `, ${inbound.repaired} links repaired` : '') +
         `, ${inbound.skipped} skipped` +
+        (inbound.diag ? ` || ${inbound.diag}` : '') +
         (runOutbound ? ` | Outbound: see employee reconcile below` : '');
       logger.info({ connectorId, runId, ...inbound }, 'AD sync inbound complete');
 
