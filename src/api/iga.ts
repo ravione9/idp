@@ -460,39 +460,42 @@ router.post(
 
           const baseDn   = (cfg['baseDn'] as string | undefined)?.trim();
           const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-          const { resolveOuRdn } = await import('../adapters/ad-adapter.js');
+          const { resolveAdDirectoryConfig } = await import('../adapters/ad-adapter.js');
           const warnings: string[] = [];
+          const infos: string[] = [];
           let suggestions: string[] = [];
 
           if (baseDn) {
-            if (!targetOuRaw) {
-              warnings.push('New User OU is not set — enter an existing OU (e.g. OU=IT); Base DN is appended automatically');
-            } else {
-              let ouRdn: string;
-              try {
-                ouRdn = resolveOuRdn(targetOuRaw, baseDn);
-              } catch (err) {
-                warnings.push(err instanceof Error ? err.message : String(err));
-                ouRdn = targetOuRaw;
-              }
-              const ouDn = `${ouRdn},${baseDn}`;
             try {
-              await client.search(ouDn, { scope: 'base', filter: '(objectClass=organizationalUnit)', attributes: ['dn'] });
-            } catch {
+              const dir = resolveAdDirectoryConfig(baseDn, targetOuRaw);
+              if (dir.inferredProvisionOu) {
+                infos.push(
+                  `New User OU inferred as ${dir.provisionOuRdn} from Base DN. Recommended: Base DN = ${dir.domainRoot}, New User OU = ${dir.provisionOuRdn}`,
+                );
+              }
               try {
-                const ouResult = await client.search(baseDn, {
-                  scope: 'sub',
+                await client.search(dir.provisionOuDn, {
+                  scope: 'base',
                   filter: '(objectClass=organizationalUnit)',
                   attributes: ['dn'],
-                  sizeLimit: 12,
                 });
-                suggestions = (ouResult.searchEntries as Array<{ dn?: string }>)
-                  .map((e) => e.dn ?? '')
-                  .filter(Boolean);
-              } catch { /* ignore */ }
-              const hint = suggestions.length ? ` Existing OUs: ${suggestions.slice(0, 6).join('; ')}` : '';
-              warnings.push(`Target OU not found: ${ouDn} — create it in AD or update "New User OU".${hint}`);
-            }
+              } catch {
+                try {
+                  const ouResult = await client.search(dir.searchBaseDn, {
+                    scope: 'sub',
+                    filter: '(objectClass=organizationalUnit)',
+                    attributes: ['dn'],
+                    sizeLimit: 12,
+                  });
+                  suggestions = (ouResult.searchEntries as Array<{ dn?: string }>)
+                    .map((e) => e.dn ?? '')
+                    .filter(Boolean);
+                } catch { /* ignore */ }
+                const hint = suggestions.length ? ` Existing OUs: ${suggestions.slice(0, 6).join('; ')}` : '';
+                warnings.push(`Target OU not found: ${dir.provisionOuDn} — create it in AD or update connector settings.${hint}`);
+              }
+            } catch (err) {
+              warnings.push(err instanceof Error ? err.message : String(err));
             }
           }
 
@@ -501,13 +504,15 @@ router.post(
           }
 
           await client.unbind();
-          const msg = warnings.length
-            ? `${protocol} bind succeeded, but: ${warnings.join('; ')}`
+          const detail = [...infos, ...warnings].join('; ');
+          const msg = detail
+            ? `${protocol} bind succeeded${warnings.length ? ', but' : ''}: ${detail}`
             : `${protocol} bind succeeded — connected to ${url} as ${bindDn}`;
           res.status(warnings.length ? 422 : 200).json({
             success: warnings.length === 0,
             message: msg,
             warnings: warnings.length ? warnings : undefined,
+            info: infos.length ? infos : undefined,
             ouSuggestions: suggestions.length ? suggestions : undefined,
           });
         } catch (ldapErr) {

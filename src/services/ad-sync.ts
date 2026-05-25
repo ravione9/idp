@@ -9,7 +9,7 @@
  */
 
 import crypto from 'crypto';
-import { ADAdapter, resolveOuRdn } from '../adapters/ad-adapter.js';
+import { ADAdapter, resolveAdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
@@ -104,10 +104,23 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
                   || (cfg['customerDomain'] as string | undefined)?.trim()
                   || undefined;
   const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-  const targetOu    = targetOuRaw ? resolveOuRdn(targetOuRaw, baseDn) : '';
+  let dirConfig: ReturnType<typeof resolveAdDirectoryConfig>;
+  try {
+    dirConfig = resolveAdDirectoryConfig(baseDn, targetOuRaw);
+  } catch (err) {
+    const runErr = err instanceof Error ? err.message : String(err);
+    await execute(
+      `UPDATE connector_runs SET status = 'FAILED', ended_at = UTC_TIMESTAMP(), error_summary = ? WHERE id = ?`,
+      [runErr, runId],
+    );
+    throw err;
+  }
   const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
-  logger.info({ connectorId, adUrl, bindDn, baseDn, startTls }, 'AD sync: connecting');
+  logger.info(
+    { connectorId, adUrl, bindDn, baseDn: dirConfig.searchBaseDn, provisionOu: dirConfig.provisionOuDn, startTls },
+    'AD sync: connecting',
+  );
 
   const adapter = new ADAdapter(
     redis,
@@ -117,7 +130,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     baseDn,
     undefined,  // disabledOu — use default
     startTls,
-    targetOu,
+    targetOuRaw,
   );
 
   // Clear any OPEN circuit from a prior failed run so this sync gets a fresh attempt
@@ -164,16 +177,19 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     })();
 
     if (needsProvisioning) {
-      if (!targetOu) {
-        throw new Error('New User OU is not configured — set "New User OU" to an existing OU (e.g. OU=IT) in the connector settings.');
-      }
-      const ouCheck = await adapter.validateProvisioningOu(targetOu);
+      const ouCheck = await adapter.validateProvisioningOu();
       if (!ouCheck.ok) {
         const hint = ouCheck.suggestions.length
           ? ` Existing OUs: ${ouCheck.suggestions.slice(0, 6).join('; ')}`
           : '';
         throw new Error(
           `Target OU does not exist: ${ouCheck.ouDn}. Create it in Active Directory or update connector "New User OU".${hint}`,
+        );
+      }
+      if (ouCheck.inferredProvisionOu) {
+        logger.info(
+          { provisionOuDn: ouCheck.ouDn },
+          'AD sync: New User OU inferred from Base DN — consider setting Base DN to domain root and New User OU explicitly',
         );
       }
     }
@@ -236,7 +252,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
               sAMAccountName,
               department:   emp.dept_id ?? '',
               title:        emp.role ?? '',
-              targetOu,
+              targetOu: dirConfig.provisionOuRdn,
               ...(upnDomain ? { upnDomain } : {}),
               tempPassword: tempPass,
             });

@@ -26,25 +26,41 @@ interface ADUser {
   [key: string]: unknown;
 }
 
+/** Resolved LDAP naming context from connector Base DN + New User OU fields. */
+export interface AdDirectoryConfig {
+  searchBaseDn: string;
+  domainRoot: string;
+  provisionOuRdn: string;
+  provisionOuDn: string;
+  inferredProvisionOu: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // ADAdapter
 // ---------------------------------------------------------------------------
 export class ADAdapter extends BaseAdapter {
   private client: Client;
   private connected = false;
+  private readonly dir: AdDirectoryConfig;
 
   constructor(
     redis: Redis,
     private readonly url: string,
     private readonly bindDn: string,
     private readonly bindPassword: string,
-    private readonly baseDn: string,
+    baseDn: string,
     private readonly disabledOu = 'OU=Disabled,',
     private readonly startTls = false,
-    private readonly provisionOu = '',
+    targetOuRaw = '',
   ) {
     super(redis, 'AD', { minRequests: 10, errorThreshold: 75 });
+    this.dir = resolveAdDirectoryConfig(baseDn, targetOuRaw);
     this.client = this.createClient();
+  }
+
+  /** LDAP search base from connector config. */
+  private get baseDn(): string {
+    return this.dir.searchBaseDn;
   }
 
   /** LDAPS or StartTLS — required before writing unicodePwd. */
@@ -99,9 +115,14 @@ export class ADAdapter extends BaseAdapter {
     }
   }
 
-  /** Build full DN for an OU RDN relative to baseDn. */
-  buildOuDn(ouRdn: string): string {
-    return `${resolveOuRdn(ouRdn, this.baseDn)},${this.baseDn}`;
+  /** Build full DN for an OU RDN relative to the domain root. */
+  buildOuDn(ouRdn?: string): string {
+    if (!ouRdn?.trim()) return this.dir.provisionOuDn;
+    return `${resolveOuRdn(ouRdn, this.dir.domainRoot)},${this.dir.domainRoot}`;
+  }
+
+  getDirectoryConfig(): AdDirectoryConfig {
+    return this.dir;
   }
 
   /** Verify the provisioning OU exists before attempting user creates. */
@@ -110,15 +131,13 @@ export class ADAdapter extends BaseAdapter {
     ouRdn: string;
     ouDn: string;
     suggestions: string[];
+    inferredProvisionOu: boolean;
   }> {
-    const raw = ouRdn?.trim() || this.provisionOu.trim();
-    if (!raw) {
-      const suggestions = await this.listOrganizationalUnits(12);
-      return { ok: false, ouRdn: '', ouDn: '', suggestions };
-    }
+    const normalized = ouRdn?.trim()
+      ? resolveOuRdn(ouRdn, this.dir.domainRoot)
+      : this.dir.provisionOuRdn;
+    const ouDn = `${normalized},${this.dir.domainRoot}`;
 
-    const normalized = resolveOuRdn(raw, this.baseDn);
-    const ouDn = `${normalized},${this.baseDn}`;
     await this.ensureConnected();
 
     let ok = false;
@@ -134,7 +153,13 @@ export class ADAdapter extends BaseAdapter {
     }
 
     const suggestions = ok ? [] : await this.listOrganizationalUnits(12);
-    return { ok, ouRdn: normalized, ouDn, suggestions };
+    return {
+      ok,
+      ouRdn: normalized,
+      ouDn,
+      suggestions,
+      inferredProvisionOu: this.dir.inferredProvisionOu,
+    };
   }
 
   /** List organizational units under baseDn (full DNs). */
@@ -283,7 +308,7 @@ export class ADAdapter extends BaseAdapter {
       if (!currentDn.toUpperCase().includes(this.disabledOu.toUpperCase())) {
         const cn      = currentDn.split(',')[0];          // e.g. CN=John Doe
         const newRdn  = cn;
-        const newSup  = `${this.disabledOu}${this.baseDn}`;
+        const newSup  = `${this.disabledOu}${this.dir.domainRoot}`;
         await this.client.modifyDN(currentDn, `${newRdn},${newSup}`);
         logger.info({ externalId, newDn: `${newRdn},${newSup}` }, 'AD user moved to Disabled OU');
       }
@@ -322,7 +347,7 @@ export class ADAdapter extends BaseAdapter {
 
       // 2. Move back to active OU when coming from Disabled OU
       const targetOu = (entry.extensionAttribute2 as string | undefined)
-        || `${this.provisionOu},${this.baseDn}`;
+        || `${this.dir.provisionOuRdn},${this.dir.domainRoot}`;
       if (currentDn.toUpperCase().includes(this.disabledOu.toUpperCase())) {
         const cn     = currentDn.split(',')[0];
         const newRdn = cn;
@@ -410,9 +435,11 @@ export class ADAdapter extends BaseAdapter {
 
       const sam = sanitizeSamAccountName(params.sAMAccountName);
       const cn = escapeRdnValue(sam);
-      const ou = resolveOuRdn(params.targetOu.trim() || this.provisionOu, this.baseDn);
-      const dn = `CN=${cn},${ou},${this.baseDn}`;
-      const upnDomain = params.upnDomain?.trim() || domainFromBaseDn(this.baseDn);
+      const ou = params.targetOu.trim()
+        ? resolveOuRdn(params.targetOu.trim(), this.dir.domainRoot)
+        : this.dir.provisionOuRdn;
+      const dn = `CN=${cn},${ou},${this.dir.domainRoot}`;
+      const upnDomain = params.upnDomain?.trim() || domainFromBaseDn(this.dir.domainRoot);
       const userPrincipalName = `${sam}@${upnDomain}`.toLowerCase();
 
       const existing = await this.findUser(sam, ['dn']);
@@ -502,7 +529,55 @@ class ADNotFoundError extends Error {
   }
 }
 
-/** Resolve a user-supplied OU to an RDN path relative to baseDn (no extra defaults). */
+/** Split a DN into domain root (DC=…) and any OU= prefix. */
+export function splitDomainRoot(baseDn: string): { domainRoot: string; ouPrefix: string | null } {
+  const parts = baseDn.split(',').map((p) => p.trim()).filter(Boolean);
+  const dcParts = parts.filter((p) => /^DC=/i.test(p));
+  const ouParts = parts.filter((p) => /^OU=/i.test(p));
+  return {
+    domainRoot: dcParts.join(','),
+    ouPrefix: ouParts.length > 0 ? ouParts.join(',') : null,
+  };
+}
+
+/**
+ * Resolve connector Base DN + optional New User OU into search/provision paths.
+ * If New User OU is blank but Base DN is an OU (e.g. OU=IT,DC=…), that OU is used.
+ */
+export function resolveAdDirectoryConfig(baseDn: string, targetOuRaw?: string): AdDirectoryConfig {
+  const searchBaseDn = baseDn.trim();
+  if (!searchBaseDn) {
+    throw new Error('Base DN is required (e.g. DC=Lenskart,DC=in)');
+  }
+
+  const { domainRoot, ouPrefix } = splitDomainRoot(searchBaseDn);
+  const root = domainRoot || searchBaseDn;
+
+  let provisionOuRdn: string;
+  let inferredProvisionOu = false;
+
+  if (targetOuRaw?.trim()) {
+    provisionOuRdn = resolveOuRdn(targetOuRaw.trim(), root);
+  } else if (ouPrefix) {
+    provisionOuRdn = ouPrefix;
+    inferredProvisionOu = true;
+  } else {
+    throw new Error(
+      'New User OU is not set. Enter where new accounts should be created (e.g. OU=IT). ' +
+      'Base DN should be the domain root (DC=Lenskart,DC=in), not the OU itself.',
+    );
+  }
+
+  return {
+    searchBaseDn,
+    domainRoot: root,
+    provisionOuRdn,
+    provisionOuDn: `${provisionOuRdn},${root}`,
+    inferredProvisionOu,
+  };
+}
+
+/** Resolve a user-supplied OU to an RDN path relative to the domain root. */
 export function resolveOuRdn(raw: string | undefined, baseDn: string): string {
   let v = (raw ?? '').trim();
   if (!v) {
