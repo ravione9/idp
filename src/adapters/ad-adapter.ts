@@ -42,7 +42,7 @@ export class ADAdapter extends BaseAdapter {
     private readonly disabledOu = 'OU=Disabled,',
     private readonly startTls = false,
   ) {
-    super(redis, 'AD');
+    super(redis, 'AD', { minRequests: 10, errorThreshold: 75 });
     this.client = this.createClient();
   }
 
@@ -138,7 +138,7 @@ export class ADAdapter extends BaseAdapter {
       }
 
       return this.buildUserInfo(externalId, entries[0]);
-    });
+    }, (err) => err instanceof ADNotFoundError);
   }
 
   /**
@@ -158,7 +158,7 @@ export class ADAdapter extends BaseAdapter {
 
       const samName = String(entries[0].sAMAccountName ?? '');
       return this.buildUserInfo(samName, entries[0]);
-    });
+    }, (err) => err instanceof ADNotFoundError);
   }
 
   private buildUserInfo(externalId: string, entry: ADUser): UserInfo {

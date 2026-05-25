@@ -103,6 +103,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const upnDomain  = (cfg['upnDomain']    as string | undefined)?.trim()
                   || (cfg['customerDomain'] as string | undefined)?.trim()
                   || undefined;
+  const targetOu   = (cfg['targetOu']     as string | undefined)?.trim() || 'OU=Employees';
   const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
   logger.info({ connectorId, adUrl, bindDn, baseDn, startTls }, 'AD sync: connecting');
@@ -117,6 +118,9 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     startTls,
   );
 
+  // Clear any OPEN circuit from a prior failed run so this sync gets a fresh attempt
+  await adapter.resetCircuitBreaker();
+
   let itemsProcessed = 0;
   let itemsSucceeded = 0;
   let itemsFailed = 0;
@@ -124,6 +128,13 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
 
   try {
     await adapter.connect();
+
+    if (!useSsl && !startTls) {
+      logger.warn(
+        { connectorId },
+        'AD sync: LDAP is unencrypted — user provisioning (unicodePwd) requires LDAPS or StartTLS',
+      );
+    }
 
     // Fetch all employees
     const employees = await query<EmployeeRow>(
@@ -191,7 +202,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
               sAMAccountName,
               department:   emp.dept_id ?? '',
               title:        emp.role ?? '',
-              targetOu:     'OU=Employees',
+              targetOu,
               ...(upnDomain ? { upnDomain } : {}),
               tempPassword: tempPass,
             });

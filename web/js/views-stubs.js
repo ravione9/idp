@@ -1734,7 +1734,7 @@ export async function viewAppDiscovery(content) {
 // ─── 10. Directory Sync ───────────────────────────────────────────────────────
 // ─── connector type metadata ─────────────────────────────────────────────────
 const CONNECTOR_TYPES = {
-  AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',           fields: ['host','port','bindDn','bindPassword','baseDn','useSsl'] },
+  AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',           fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl'] },
   LDAP:             { label: 'LDAP',             icon: '📂', badge: 'badge-info',    desc: 'Generic LDAP v3 directory server',             fields: ['host','port','bindDn','bindPassword','baseDn','useSsl'] },
   GOOGLE_WORKSPACE: { label: 'Google Workspace', icon: '🔵', badge: 'badge-success', desc: 'Google Workspace / G Suite directory',          fields: ['customerDomain','serviceAccountEmail','serviceAccountKey','adminEmail'] },
   AZURE_AD:         { label: 'Azure AD / Entra', icon: '☁️', badge: 'badge-info',    desc: 'Microsoft Entra ID (Azure AD)',                 fields: ['tenantId','clientId','clientSecret','domain'] },
@@ -1751,6 +1751,8 @@ const FIELD_LABELS = {
   bindDn:             'Bind DN',
   bindPassword:       'Bind Password',
   baseDn:             'Base DN',
+  targetOu:           'New User OU (e.g. OU=Employees)',
+  upnDomain:          'UPN Suffix (e.g. lenskart.com — optional)',
   useSsl:             'Protocol',
   customerDomain:     'Customer Domain',
   serviceAccountEmail:'Service Account Email',

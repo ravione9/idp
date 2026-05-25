@@ -52,6 +52,12 @@ export class CircuitBreaker {
     this.minRequests     = options.minRequests     ?? 5;
   }
 
+  /** Clear OPEN state and counters — call before a fresh batch sync run. */
+  async reset(): Promise<void> {
+    await this.redis.del(this.keyState, this.keyErrorCount, this.keyTotalCount, this.keyOpenedAt);
+    logger.info({ circuit: this.name }, 'Circuit breaker reset');
+  }
+
   async getState(): Promise<CircuitState> {
     const raw = await this.redis.get(this.keyState);
     const state = (raw ?? CircuitState.CLOSED) as CircuitState;
@@ -113,8 +119,9 @@ export class CircuitBreaker {
   /**
    * Wrap a remote call with circuit-breaker logic.
    * Throws `CircuitOpenError` when the breaker is OPEN.
+   * Benign errors (e.g. expected not-found) do not increment failure counters.
    */
-  async call<T>(fn: () => Promise<T>): Promise<T> {
+  async call<T>(fn: () => Promise<T>, isBenign?: (err: unknown) => boolean): Promise<T> {
     const state = await this.getState();
 
     if (state === CircuitState.OPEN) {
@@ -126,7 +133,9 @@ export class CircuitBreaker {
       await this.recordSuccess();
       return result;
     } catch (err) {
-      await this.recordFailure();
+      if (!isBenign?.(err)) {
+        await this.recordFailure();
+      }
       throw err;
     }
   }
@@ -164,13 +173,9 @@ export abstract class BaseAdapter {
   constructor(
     protected readonly redis: Redis,
     protected readonly systemName: string,
-    errorThreshold?: number,
+    cbOptions?: { errorThreshold?: number; minRequests?: number; halfOpenDelayMs?: number },
   ) {
-    const cbOpts: { errorThreshold?: number } = {};
-    if (errorThreshold !== undefined) {
-      cbOpts.errorThreshold = errorThreshold;
-    }
-    this.cb = new CircuitBreaker(redis, systemName, cbOpts);
+    this.cb = new CircuitBreaker(redis, systemName, cbOptions ?? {});
   }
 
   /** Retrieve a user's information from the target system. */
@@ -207,9 +212,12 @@ export abstract class BaseAdapter {
   }
 
   /** Helper: wrap a remote call with circuit breaker, converting errors to AdapterResult */
-  protected async safe<T>(fn: () => Promise<T>): Promise<AdapterResult<T>> {
+  protected async safe<T>(
+    fn: () => Promise<T>,
+    isBenign?: (err: unknown) => boolean,
+  ): Promise<AdapterResult<T>> {
     try {
-      const data = await this.cb.call(fn);
+      const data = await this.cb.call(fn, isBenign);
       return { success: true, data };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -217,5 +225,10 @@ export abstract class BaseAdapter {
       logger.error({ system: this.systemName, error: message }, 'Adapter call failed');
       return { success: false, error: message, retryable };
     }
+  }
+
+  /** Reset the circuit breaker — use before batch sync jobs. */
+  async resetCircuitBreaker(): Promise<void> {
+    await this.cb.reset();
   }
 }
