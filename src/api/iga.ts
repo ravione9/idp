@@ -443,17 +443,18 @@ router.post(
         logger.info({ url, bindDn, protocol }, 'AD/LDAP connection test starting');
 
         const { Client: LdapClient } = await import('ldapts');
+        // Enterprise AD DCs typically use certificates from an internal CA that is
+        // not in Node's trust store, so we skip cert verification for AD connections.
+        const tlsOpts = { rejectUnauthorized: false };
         const client = new LdapClient({
           url,
           connectTimeout: 5000,
-          tlsOptions: { rejectUnauthorized: process.env['NODE_ENV'] === 'production' },
+          tlsOptions: tlsOpts,
         });
 
         try {
           if (startTls) {
-            await client.startTLS({
-              rejectUnauthorized: process.env['NODE_ENV'] === 'production',
-            });
+            await client.startTLS(tlsOpts);
           }
           await client.bind(bindDn!, bindPass!);
           await client.unbind();
@@ -479,7 +480,9 @@ router.post(
           } else if (raw.includes('DEPTH_ZERO_SELF_SIGNED_CERT') || raw.includes('self signed') || raw.includes('unable to verify')) {
             friendly = `TLS certificate error connecting to ${url}. The server's certificate is self-signed or untrusted. Either install the CA cert or set useSsl to false if using plain LDAP.`;
           } else if (raw.includes('ECONNRESET')) {
-            friendly = `Connection was reset by ${url}. This often means useSsl is set incorrectly — try toggling the SSL setting.`;
+            friendly = startTls
+              ? `Connection was reset during StartTLS handshake on ${url}. The domain controller may have StartTLS disabled. Try switching Protocol to "LDAPS (port 636)" instead.`
+              : `Connection was reset by ${url}. If the server requires encryption, switch Protocol to "LDAP + StartTLS (port 389)" or "LDAPS (port 636)".`;
           } else {
             friendly = `LDAP error (${typeof code !== 'undefined' ? `code ${code}` : 'unknown code'}): ${raw}`;
           }

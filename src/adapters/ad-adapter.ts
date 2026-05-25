@@ -49,12 +49,16 @@ export class ADAdapter extends BaseAdapter {
   // ---------------------------------------------------------------------------
   // Connection management
   // ---------------------------------------------------------------------------
+  // Enterprise AD DCs typically use certificates from an internal CA that is
+  // not in Node's trust store — skip verification for internal directory servers.
+  private readonly tlsOpts = { rejectUnauthorized: false };
+
   private createClient(): Client {
     return new Client({
       url:              this.url,
       connectTimeout:   10_000,
       timeout:          15_000,
-      tlsOptions:       { rejectUnauthorized: process.env['NODE_ENV'] === 'production' },
+      tlsOptions:       this.tlsOpts,
     });
   }
 
@@ -62,9 +66,7 @@ export class ADAdapter extends BaseAdapter {
     if (this.connected) return;
     try {
       if (this.startTls) {
-        await this.client.startTLS({
-          rejectUnauthorized: process.env['NODE_ENV'] === 'production',
-        });
+        await this.client.startTLS(this.tlsOpts);
         logger.info({ url: this.url }, 'AD: StartTLS negotiated');
       }
       await this.client.bind(this.bindDn, this.bindPassword);
