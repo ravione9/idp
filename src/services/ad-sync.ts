@@ -166,8 +166,8 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
 
           if (result.success) {
             await execute(
-              `INSERT INTO identity_links (emp_id, system, external_id, status, auth_kind, created_at)
-               VALUES (?, 'AD', ?, 'ACTIVE', 'LDAP', UTC_TIMESTAMP())`,
+              `INSERT INTO identity_links (emp_id, system, external_id, status, auth_kind)
+               VALUES (?, 'AD', ?, 'ACTIVE', 'LDAP')`,
               [emp.emp_id, sAMAccountName],
             );
             logger.info({ empId: emp.emp_id, sAMAccountName }, 'AD sync: user provisioned');
@@ -180,7 +180,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
           const result = await adapter.disable(link.external_id);
           if (result.success) {
             await execute(
-              `UPDATE identity_links SET status = 'DISABLED', updated_at = UTC_TIMESTAMP() WHERE id = ?`,
+              `UPDATE identity_links SET status = 'DISABLED' WHERE id = ?`,
               [link.id],
             );
             logger.info({ empId: emp.emp_id, externalId: link.external_id }, 'AD sync: user disabled');
@@ -193,7 +193,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
           const result = await adapter.enable(link.external_id);
           if (result.success) {
             await execute(
-              `UPDATE identity_links SET status = 'ACTIVE', updated_at = UTC_TIMESTAMP() WHERE id = ?`,
+              `UPDATE identity_links SET status = 'ACTIVE' WHERE id = ?`,
               [link.id],
             );
             logger.info({ empId: emp.emp_id, externalId: link.external_id }, 'AD sync: user re-enabled');
