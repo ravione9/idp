@@ -38,8 +38,9 @@ COPY --from=builder --chown=lilg:lilg /app/package.json ./package.json
 COPY --chown=lilg:lilg web ./web
 COPY --chown=lilg:lilg migrations ./migrations
 
-# Expose HTTP port
+# Expose HTTP and HTTPS ports
 EXPOSE 8080
+EXPOSE 8443
 
 # Liveness probe
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \

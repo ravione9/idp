@@ -126,7 +126,7 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
         const link = await queryOne<IdentityLinkRow>(
           `SELECT id, external_id, status
              FROM identity_links
-            WHERE emp_id = ? AND `system` = 'GOOGLE' AND status NOT IN ('DELETED')`,
+            WHERE emp_id = ? AND \`system\` = 'GOOGLE' AND status NOT IN ('DELETED')`,
           [emp.emp_id],
         );
 
