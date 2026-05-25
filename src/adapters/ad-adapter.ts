@@ -215,13 +215,10 @@ export class ADAdapter extends BaseAdapter {
   /** List person accounts under the LDAP search base (inbound directory import). */
   async listDirectoryUsers(): Promise<AdapterResult<ADUser[]>> {
     return this.safe(async () => {
-      const attrs = [
-        'dn', 'sAMAccountName', 'employeeID', 'employeeNumber',
-        'extensionAttribute1', 'extensionAttribute2',
-        'mail', 'displayName',
-        'userPrincipalName', 'userAccountControl', 'cn', 'givenName', 'sn',
-        'department', 'title', 'manager',
-      ];
+      // '*' returns every non-operational user attribute, so a deployment can
+      // store employee ID in any custom field (extensionAttribute5, pager,
+      // description, lenskartEmpId, etc.) without us having to enumerate.
+      const attrs = ['*'];
       // Simple filter — objectCategory form often returns 0 rows on some AD forests
       const filter = '(&(objectClass=user)(!(sAMAccountName=*$)))';
 

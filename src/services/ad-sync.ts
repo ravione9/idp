@@ -317,24 +317,18 @@ async function importAdDirectoryUsers(
     'AD sync inbound: listing directory users',
   );
 
-  // One-time diagnostic: dump the first user's attribute keys + emp-id candidates
-  // so we can see whether AD is populating employeeID / employeeNumber / etc.
+  // One-time diagnostic: dump every populated attribute for the first user
+  // so we can identify which AD attribute actually holds the employee ID.
   if (adUsers.length > 0) {
     const sample = adUsers[0] as Record<string, unknown>;
+    const populated: Record<string, string> = {};
+    for (const k of Object.keys(sample)) {
+      const v = getLdapAttr(sample, k);
+      if (v) populated[k] = v.length > 80 ? v.slice(0, 80) + '…' : v;
+    }
     logger.info(
-      {
-        sam: getLdapAttr(sample, 'sAMAccountName'),
-        mail: getLdapAttr(sample, 'mail'),
-        attrKeys: Object.keys(sample),
-        employeeID: getLdapAttr(sample, 'employeeID'),
-        employeeNumber: getLdapAttr(sample, 'employeeNumber'),
-        extensionAttribute1: getLdapAttr(sample, 'extensionAttribute1'),
-        extensionAttribute2: getLdapAttr(sample, 'extensionAttribute2'),
-        department: getLdapAttr(sample, 'department'),
-        title: getLdapAttr(sample, 'title'),
-        manager: getLdapAttr(sample, 'manager'),
-      },
-      'AD sync inbound: first user raw attrs (diagnostic)',
+      { sam: getLdapAttr(sample, 'sAMAccountName'), populated },
+      'AD sync inbound: first user — all populated attrs (diagnostic)',
     );
   }
 
