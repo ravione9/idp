@@ -460,14 +460,29 @@ router.post(
 
           const baseDn   = (cfg['baseDn'] as string | undefined)?.trim();
           const targetOu = (cfg['targetOu'] as string | undefined)?.trim() || 'OU=Employees';
+          const { normalizeOuRdn } = await import('../adapters/ad-adapter.js');
+          const ouRdn = normalizeOuRdn(targetOu);
           const warnings: string[] = [];
+          let suggestions: string[] = [];
 
           if (baseDn) {
-            const ouDn = `${targetOu},${baseDn}`;
+            const ouDn = `${ouRdn},${baseDn}`;
             try {
-              await client.search(ouDn, { scope: 'base', filter: '(objectClass=*)', attributes: ['dn'] });
+              await client.search(ouDn, { scope: 'base', filter: '(objectClass=organizationalUnit)', attributes: ['dn'] });
             } catch {
-              warnings.push(`Target OU not found: ${ouDn} — create it in AD or update "New User OU" in connector config`);
+              try {
+                const ouResult = await client.search(baseDn, {
+                  scope: 'sub',
+                  filter: '(objectClass=organizationalUnit)',
+                  attributes: ['dn'],
+                  sizeLimit: 12,
+                });
+                suggestions = (ouResult.searchEntries as Array<{ dn?: string }>)
+                  .map((e) => e.dn ?? '')
+                  .filter(Boolean);
+              } catch { /* ignore */ }
+              const hint = suggestions.length ? ` Existing OUs: ${suggestions.slice(0, 6).join('; ')}` : '';
+              warnings.push(`Target OU not found: ${ouDn} — create it in AD or update "New User OU".${hint}`);
             }
           }
 
@@ -479,7 +494,12 @@ router.post(
           const msg = warnings.length
             ? `${protocol} bind succeeded, but: ${warnings.join('; ')}`
             : `${protocol} bind succeeded — connected to ${url} as ${bindDn}`;
-          res.json({ success: warnings.length === 0, message: msg, warnings: warnings.length ? warnings : undefined });
+          res.status(warnings.length ? 422 : 200).json({
+            success: warnings.length === 0,
+            message: msg,
+            warnings: warnings.length ? warnings : undefined,
+            ouSuggestions: suggestions.length ? suggestions : undefined,
+          });
         } catch (ldapErr) {
           const raw  = ldapErr instanceof Error ? ldapErr.message : String(ldapErr);
           const code = (ldapErr as Record<string, unknown>)['code'];

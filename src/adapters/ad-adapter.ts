@@ -99,6 +99,56 @@ export class ADAdapter extends BaseAdapter {
     }
   }
 
+  /** Build full DN for an OU RDN relative to baseDn. */
+  buildOuDn(ouRdn: string): string {
+    return `${normalizeOuRdn(ouRdn)},${this.baseDn}`;
+  }
+
+  /** Verify the provisioning OU exists before attempting user creates. */
+  async validateProvisioningOu(ouRdn?: string): Promise<{
+    ok: boolean;
+    ouRdn: string;
+    ouDn: string;
+    suggestions: string[];
+  }> {
+    const normalized = normalizeOuRdn(ouRdn?.trim() || this.provisionOu);
+    const ouDn = `${normalized},${this.baseDn}`;
+    await this.ensureConnected();
+
+    let ok = false;
+    try {
+      await this.client.search(ouDn, {
+        scope:  'base',
+        filter: '(objectClass=organizationalUnit)',
+        attributes: ['dn'],
+      });
+      ok = true;
+    } catch {
+      ok = false;
+    }
+
+    const suggestions = ok ? [] : await this.listOrganizationalUnits(12);
+    return { ok, ouRdn: normalized, ouDn, suggestions };
+  }
+
+  /** List organizational units under baseDn (full DNs). */
+  async listOrganizationalUnits(max = 12): Promise<string[]> {
+    await this.ensureConnected();
+    try {
+      const result = await this.client.search(this.baseDn, {
+        scope:  'sub',
+        filter: '(objectClass=organizationalUnit)',
+        attributes: ['dn'],
+        sizeLimit: max,
+      });
+      return (result.searchEntries as Array<{ dn?: string }>)
+        .map((e) => e.dn ?? '')
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Search helper with auto-reconnect
   // ---------------------------------------------------------------------------
@@ -354,7 +404,7 @@ export class ADAdapter extends BaseAdapter {
 
       const sam = sanitizeSamAccountName(params.sAMAccountName);
       const cn = escapeRdnValue(sam);
-      const ou = params.targetOu.trim() || this.provisionOu;
+      const ou = normalizeOuRdn(params.targetOu.trim() || this.provisionOu);
       const dn = `CN=${cn},${ou},${this.baseDn}`;
       const upnDomain = params.upnDomain?.trim() || domainFromBaseDn(this.baseDn);
       const userPrincipalName = `${sam}@${upnDomain}`.toLowerCase();
@@ -446,6 +496,14 @@ class ADNotFoundError extends Error {
   }
 }
 
+/** Accept "IT" or "OU=IT" and return a proper OU RDN. */
+export function normalizeOuRdn(value: string): string {
+  const v = value.trim();
+  if (!v) return 'OU=Employees';
+  if (/^OU=/i.test(v)) return v;
+  return `OU=${v}`;
+}
+
 /** Escape special characters in LDAP filter values (RFC 4515) */
 function ldapEscape(value: string): string {
   return value.replace(/[\\*()\x00/]/g, (c) => `\\${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
@@ -494,7 +552,11 @@ function formatLdapError(err: unknown): string {
   const bits = [err.message];
   if (extra.lde_message && extra.lde_message !== err.message) bits.push(extra.lde_message);
   if (extra.code !== undefined) bits.push(`code=${String(extra.code)}`);
-  return bits.join(' — ');
+  const text = bits.join(' — ');
+  if (extra.code === 32 || text.includes('NO_OBJECT') || text.includes('0000208D')) {
+    return `${text} — the target OU path does not exist; set "New User OU" to an existing OU under Base DN`;
+  }
+  return text;
 }
 
 /** Encode a plain-text password for the AD unicodePwd attribute (UTF-16LE, quoted) */

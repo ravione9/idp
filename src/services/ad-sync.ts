@@ -9,7 +9,7 @@
  */
 
 import crypto from 'crypto';
-import { ADAdapter } from '../adapters/ad-adapter.js';
+import { ADAdapter, normalizeOuRdn } from '../adapters/ad-adapter.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
@@ -103,7 +103,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const upnDomain  = (cfg['upnDomain']    as string | undefined)?.trim()
                   || (cfg['customerDomain'] as string | undefined)?.trim()
                   || undefined;
-  const targetOu   = (cfg['targetOu']     as string | undefined)?.trim() || 'OU=Employees';
+  const targetOu   = normalizeOuRdn((cfg['targetOu'] as string | undefined) || 'OU=Employees');
   const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
   logger.info({ connectorId, adUrl, bindDn, baseDn, startTls }, 'AD sync: connecting');
@@ -145,6 +145,31 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
       if (needsProvision) {
         throw new Error(
           'AD sync cannot provision users over plain LDAP. Set connector Protocol to LDAPS or LDAP+StartTLS.',
+        );
+      }
+    }
+
+    const needsProvisioning = await (async () => {
+      for (const emp of employees) {
+        if (emp.ilg_state !== 'ACTIVE' && emp.ilg_state !== 'REACTIVATED') continue;
+        const link = await queryOne<{ id: number }>(
+          `SELECT id FROM identity_links
+            WHERE emp_id = ? AND \`system\` = 'AD' AND status NOT IN ('DELETED')`,
+          [emp.emp_id],
+        );
+        if (!link) return true;
+      }
+      return false;
+    })();
+
+    if (needsProvisioning) {
+      const ouCheck = await adapter.validateProvisioningOu(targetOu);
+      if (!ouCheck.ok) {
+        const hint = ouCheck.suggestions.length
+          ? ` Existing OUs: ${ouCheck.suggestions.slice(0, 6).join('; ')}`
+          : '';
+        throw new Error(
+          `Target OU does not exist: ${ouCheck.ouDn}. Create it in Active Directory or update connector "New User OU".${hint}`,
         );
       }
     }
