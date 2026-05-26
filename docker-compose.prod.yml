@@ -1,0 +1,23 @@
+# -----------------------------------------------------------------------------
+# Production overlay — Cloudflare WAF proxied at https://idp.lenskart.com
+#
+#   cp env.prod.example .env
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# -----------------------------------------------------------------------------
+version: "3.9"
+
+services:
+  lilg-api:
+    environment:
+      PUBLIC_BASE_URL: https://idp.lenskart.com
+      SAML_IDP_BASE_URL: https://idp.lenskart.com
+      SAML_IDP_ENTITY_ID: https://idp.lenskart.com/saml/metadata
+      COOKIE_SECURE: "true"
+      TRUST_PROXY: "true"
+      SAML_KEY_DIR: /app/data/saml
+    ports:
+      - "8080:8080"
+
+  lilg-worker:
+    environment:
+      TRUST_PROXY: "true"

@@ -102,7 +102,9 @@ export function ensureSamlKeys(logger?: { info: (msg: string) => void; warn: (ms
   log.info('SAML keys not configured — auto-generating RSA-2048 self-signed cert (3 years)…');
   const cn = process.env['SAML_IDP_BASE_URL']
     ? new URL(process.env['SAML_IDP_BASE_URL']).hostname
-    : (process.env['HOST'] ?? '192.168.24.254');
+    : (process.env['PUBLIC_BASE_URL']
+      ? new URL(process.env['PUBLIC_BASE_URL']).hostname
+      : 'idp.lenskart.com');
 
   const { keyPem, certPem } = generateSelfSignedCert(cn);
 
@@ -120,8 +122,8 @@ export function ensureSamlKeys(logger?: { info: (msg: string) => void; warn: (ms
   process.env['SAML_IDP_PRIVATE_KEY_PEM'] = keyPem;
   process.env['SAML_IDP_CERT_PEM']        = certPem;
   if (!process.env['SAML_IDP_BASE_URL']) {
-    const port = process.env['PORT'] ?? '8080';
-    process.env['SAML_IDP_BASE_URL'] = `http://192.168.24.254:${port}`;
+    const pub = (process.env['PUBLIC_BASE_URL'] ?? 'https://idp.lenskart.com').replace(/\/$/, '');
+    process.env['SAML_IDP_BASE_URL'] = pub;
   }
 
   // Print fingerprint so admin can pin it in SP configs

@@ -9,6 +9,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import { pinoHttp } from 'pino-http';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from './config.js';
+import { getClientIp, getPublicOrigin, isRequestSecure } from './utils/request-context.js';
 import logger from './utils/logger.js';
 import { closePool, queryOne } from './db/connection.js';
 import { redis as sessionRedis } from './auth/session-store.js';
@@ -67,8 +68,8 @@ const WEB_ROOT = path.join(process.cwd(), 'web');
 // ---------------------------------------------------------------------------
 const app = express();
 
-// Trust proxy headers (X-Forwarded-For, X-Real-IP) — required behind ALB/NGINX
-app.set('trust proxy', 1);
+// Trust X-Forwarded-* from Cloudflare WAF / ALB / NGINX (required for req.secure, cookies, OAuth)
+app.set('trust proxy', config.app.trustProxy);
 
 // ---------------------------------------------------------------------------
 // Request logging
@@ -98,9 +99,9 @@ app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 // ---------------------------------------------------------------------------
 app.use((req: Request, res: Response, next: NextFunction) => {
   const tls = getPortalTlsState();
-  if (tls.httpsEnabled && !tls.allowHttp && !req.secure) {
-    const host = (req.headers['host'] ?? '').replace(/:\d+$/, '');
-    return res.redirect(301, `https://${host}:${tls.httpsPort}${req.url}`);
+  if (tls.httpsEnabled && !tls.allowHttp && !isRequestSecure(req)) {
+    const origin = getPublicOrigin(req);
+    return res.redirect(301, `${origin}${req.url}`);
   }
   next();
 });
@@ -113,6 +114,9 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-XSS-Protection', '0'); // disabled in favour of CSP
+  if (config.app.publicBaseUrl?.startsWith('https://')) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   next();
 });
 
@@ -134,7 +138,7 @@ app.post('/auth/logout',         requireAuth, (req, res) => { void logoutHandler
 const loginRateLimiter = rateLimit({
   max:      10,
   windowMs: 60_000,
-  keyFn:    (req) => `${req.ip}:${(req.body && req.body.email) || 'unknown'}`,
+  keyFn:    (req) => `${getClientIp(req)}:${(req.body && req.body.email) || 'unknown'}`,
 });
 app.post('/auth/local/login',            loginRateLimiter, (req, res) => { void localLoginHandler(req, res); });
 app.post('/auth/local/login/mfa-verify', loginRateLimiter, (req, res) => { void localLoginMfaVerifyHandler(req, res); });

@@ -8,15 +8,10 @@
 
 import { Request, Response } from 'express';
 import { config } from '../config.js';
+import { getPublicOrigin } from '../utils/request-context.js';
 
-/** Public origin for OAuth redirects — prefers PUBLIC_BASE_URL / SAML_IDP_BASE_URL (idp.lenskart.com). */
 function baseUrl(req: Request): string {
-  if (config.app.publicBaseUrl) {
-    return config.app.publicBaseUrl;
-  }
-  const proto = req.get('x-forwarded-proto') ?? req.protocol;
-  const host  = req.get('x-forwarded-host') ?? req.get('host') ?? 'localhost:8080';
-  return `${proto}://${host}`;
+  return getPublicOrigin(req);
 }
 
 function safeReturnTo(raw: string | undefined): string {

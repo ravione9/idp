@@ -9,6 +9,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { getPublicOrigin } from '../utils/request-context.js';
 import { config } from '../config.js';
 import { query, queryOne } from '../db/connection.js';
 import { redis } from './session-store.js';
@@ -161,7 +162,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
         code,
         client_id:     config.google.clientId,
         client_secret: config.google.clientSecret,
-        redirect_uri:  `${config.app.publicBaseUrl ?? `${req.protocol}://${req.get('host')}`}/auth/google/callback`,
+        redirect_uri:  `${getPublicOrigin(req)}/auth/google/callback`,
         grant_type:    'authorization_code',
       }).toString(),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 10_000 },

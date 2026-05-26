@@ -104,6 +104,21 @@ const ConfigSchema = z.object({
   // Public URL — relaxed for dev IPs (e.g. http://192.168.24.254:8080)
   PUBLIC_BASE_URL: z.string().min(1).optional(),
 
+  /**
+   * Express trust proxy setting — required behind Cloudflare / ALB / NGINX.
+   * Use `true` for Cloudflare orange-cloud (proxied). Default: true when PUBLIC_BASE_URL is https.
+   */
+  TRUST_PROXY: z.preprocess(
+    (v) => {
+      if (v === undefined || (typeof v === 'string' && v.trim() === '')) return undefined;
+      if (v === 'true' || v === true) return true;
+      if (v === 'false' || v === false) return false;
+      const n = parseInt(String(v), 10);
+      return Number.isNaN(n) ? true : n;
+    },
+    z.union([z.boolean(), z.number().int().nonnegative()]).optional(),
+  ),
+
   // SAML IdP (optional — production host: https://idp.lenskart.com)
   SAML_IDP_BASE_URL: z.string().min(1).optional(),
   SAML_IDP_ENTITY_ID: z.string().min(1).optional(),
@@ -213,6 +228,13 @@ export const config = {
         : undefined,
     /** Canonical public origin (e.g. https://idp.lenskart.com). Falls back to request Host when unset. */
     publicBaseUrl: (parsed.PUBLIC_BASE_URL ?? parsed.SAML_IDP_BASE_URL)?.replace(/\/$/, ''),
+    /** Express `trust proxy` — true/number for Cloudflare WAF and other reverse proxies. */
+    trustProxy: (() => {
+      if (parsed.TRUST_PROXY !== undefined) return parsed.TRUST_PROXY;
+      const pub = (parsed.PUBLIC_BASE_URL ?? parsed.SAML_IDP_BASE_URL ?? '').toLowerCase();
+      if (pub.startsWith('https://')) return true;
+      return parsed.NODE_ENV === 'production' ? 1 : false;
+    })(),
   },
   saml:
     parsed.SAML_IDP_BASE_URL &&
