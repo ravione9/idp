@@ -27,7 +27,9 @@ FROM node:22-alpine AS runner
 # Security hardening
 RUN apk add --no-cache dumb-init wget \
     && addgroup -g 1001 lilg \
-    && adduser -u 1001 -G lilg -s /sbin/nologin -D lilg
+    && adduser -u 1001 -G lilg -s /sbin/nologin -D lilg \
+    && mkdir -p /app/data/saml \
+    && chown -R lilg:lilg /app/data
 
 WORKDIR /app
 

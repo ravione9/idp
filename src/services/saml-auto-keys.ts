@@ -7,9 +7,8 @@
  * strings directly into process.env so the rest of the application
  * sees them as if they had been configured manually.
  *
- * Keys are also persisted to /opt/idp/.saml-auto-keys (inside the
- * container volume mount) so they survive container restarts without
- * changing — important because SPs pin the IdP certificate fingerprint.
+ * Keys are persisted under SAML_KEY_DIR (default /app/data/saml in Docker)
+ * so they survive container restarts — important because SPs pin the IdP certificate fingerprint.
  *
  * Usage: call ensureSamlKeys() once, before config is accessed.
  */
@@ -18,7 +17,7 @@ import fs   from 'node:fs';
 import path from 'node:path';
 import forge from 'node-forge';
 
-const PERSIST_DIR  = process.env['SAML_KEY_DIR'] ?? '/opt/idp';
+const PERSIST_DIR  = process.env['SAML_KEY_DIR'] ?? '/app/data/saml';
 const KEY_FILE     = path.join(PERSIST_DIR, '.saml-auto-keys.key');
 const CERT_FILE    = path.join(PERSIST_DIR, '.saml-auto-keys.crt');
 const VALIDITY_DAYS = 1095; // 3 years

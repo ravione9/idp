@@ -101,6 +101,7 @@ services:
       PORT: 8080
       HTTPS_PORT: 8443
       DB_HOST: mysql
+      SAML_KEY_DIR: /app/data/saml
       REDIS_URL: redis://redis:6379/0
       AWS_ENDPOINT_URL: http://localstack:4566
       # Production: set in .env — PUBLIC_BASE_URL=https://idp.lenskart.com
@@ -119,7 +120,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 90s
     networks:
       - lilg-net
 

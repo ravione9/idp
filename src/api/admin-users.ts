@@ -93,7 +93,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
   const { empId } = req.params;
 
-  const employee = await queryOne<Record<string, unknown>>(
+  const employeeRow = await queryOne<Record<string, unknown>>(
     `SELECT e.*,
             m.full_name  AS manager_name,
             m.email_corp AS manager_email,
@@ -106,7 +106,9 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
       WHERE e.emp_id = ?`,
     [empId],
   );
-  if (!employee) { res.status(404).json({ error: 'Employee not found' }); return; }
+  if (!employeeRow) { res.status(404).json({ error: 'Employee not found' }); return; }
+
+  let employee = employeeRow;
 
   // Secondary queries are wrapped individually — a missing table never breaks the profile.
   let identityLinks: Record<string, unknown>[] = [];
@@ -121,20 +123,38 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
   }
 
   if (
-    identityLinks.every((l) => l['system'] !== 'AD')
-    && empId.startsWith('AD-')
-    && typeof employee['email_corp'] === 'string'
+    typeof employee['email_corp'] === 'string'
     && employee['email_corp']
+    && (empId.startsWith('AD-') || identityLinks.every((l) => l['system'] !== 'AD'))
   ) {
-    const filled = await backfillAdIdentityLinkIfMissing(empId, employee['email_corp']);
-    if (filled) {
+    const backfill = await backfillAdIdentityLinkIfMissing(empId, employee['email_corp']);
+    if (backfill.changed) {
+      const effectiveEmpId = backfill.empId;
+      if (effectiveEmpId !== empId) {
+        const migrated = await queryOne<Record<string, unknown>>(
+          `SELECT e.*,
+                  m.full_name  AS manager_name,
+                  m.email_corp AS manager_email,
+                  la.role      AS admin_role,
+                  la.last_login_at,
+                  la.active    AS local_active
+             FROM employees e
+             LEFT JOIN employees    m  ON m.emp_id = e.manager_emp_id
+             LEFT JOIN local_accounts la ON la.emp_id = e.emp_id AND la.active = 1
+            WHERE e.emp_id = ?`,
+          [effectiveEmpId],
+        );
+        if (migrated) employee = migrated;
+      }
       identityLinks = await query<Record<string, unknown>>(
         `SELECT id, system, external_id, status, last_synced_at, drift_flag, auth_kind
            FROM identity_links WHERE emp_id = ? AND status != 'DELETED' ORDER BY system ASC`,
-        [empId],
+        [backfill.empId],
       );
     }
   }
+
+  const profileEmpId = String(employee['emp_id'] ?? empId);
 
   let recentLogins: Record<string, unknown>[] = [];
   try {
@@ -142,10 +162,10 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
       `SELECT session_id, iss, ip, user_agent, created_at AS started_at, last_active_at
          FROM idp_sessions WHERE emp_id = ? AND revoked_at IS NULL
          ORDER BY created_at DESC LIMIT 10`,
-      [empId],
+      [profileEmpId],
     );
   } catch (err) {
-    logger.warn({ empId, err }, 'idp_sessions query failed');
+    logger.warn({ empId: profileEmpId, err }, 'idp_sessions query failed');
   }
 
   let writebackLog: Record<string, unknown>[] = [];
@@ -153,10 +173,10 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
     writebackLog = await query<Record<string, unknown>>(
       `SELECT target_system, status, error, initiated_by, created_at
          FROM password_writeback_log WHERE emp_id = ? ORDER BY created_at DESC LIMIT 10`,
-      [empId],
+      [profileEmpId],
     );
   } catch (err) {
-    logger.warn({ empId, err }, 'password_writeback_log query failed');
+    logger.warn({ empId: profileEmpId, err }, 'password_writeback_log query failed');
   }
 
   res.json({
@@ -164,6 +184,7 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
     identityLinks,
     recentLogins,
     writebackLog,
+    ...(profileEmpId !== empId ? { migratedFrom: empId } : {}),
   });
 });
 

@@ -65,15 +65,42 @@ async function ensureTrackingTable(conn: mysql.Connection): Promise<void> {
 }
 
 export async function runMigrations(): Promise<void> {
-  // Use a dedicated connection that can handle multi-statement SQL files.
-  const conn = await mysql.createConnection({
+  const connectOpts = {
     host:               config.db.host,
     port:               config.db.port,
     user:               config.db.user,
     password:           config.db.password,
     database:           config.db.database,
     multipleStatements: true,
-  });
+  };
+
+  const maxAttempts = parseInt(process.env['DB_CONNECT_RETRIES'] ?? '30', 10);
+  const delayMs     = parseInt(process.env['DB_CONNECT_DELAY_MS'] ?? '2000', 10);
+
+  let conn: mysql.Connection | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      conn = await mysql.createConnection(connectOpts);
+      break;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      const retryable = ['EAI_AGAIN', 'ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'EHOSTUNREACH'].includes(code);
+      if (!retryable || attempt === maxAttempts) {
+        logger.fatal(
+          { err, host: config.db.host, attempt, maxAttempts },
+          'Could not connect to MySQL — ensure the mysql service is running on the same Docker network (docker-compose.dev.yml)',
+        );
+        throw err;
+      }
+      logger.warn(
+        { attempt, maxAttempts, code, host: config.db.host },
+        'MySQL not reachable yet — retrying connection',
+      );
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+
+  if (!conn) throw new Error('MySQL connection failed');
 
   try {
     await ensureTrackingTable(conn);

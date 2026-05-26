@@ -9,7 +9,7 @@
  */
 
 import crypto from 'crypto';
-import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
+import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
@@ -64,20 +64,6 @@ function generateTempPassword(): string {
     pw += chars[buf[i] % chars.length];
   }
   return pw;
-}
-
-/**
- * Read the employee ID from AD, trying the standard attributes in order:
- *   employeeID, employeeNumber, extensionAttribute1, extensionAttribute2.
- * Returns '' when no source is populated (caller falls back to AD-<hash>).
- */
-function readAdEmployeeId(adUser: Record<string, unknown>): string {
-  const candidates = ['employeeID', 'employeeNumber', 'extensionAttribute1', 'extensionAttribute2'];
-  for (const attr of candidates) {
-    const v = getLdapAttr(adUser, attr).trim();
-    if (v && v.length <= 20) return v;
-  }
-  return '';
 }
 
 function deriveEmpIdFromAd(adUser: Record<string, unknown>): string {
@@ -246,6 +232,66 @@ async function repairOrphanAdLinks(
   return repaired;
 }
 
+/** Migrate AD-XXXX placeholder emp_ids to real AD employee IDs (inbound batch). */
+async function repairPlaceholderEmpIds(
+  adUsers: Record<string, unknown>[],
+  errors: string[],
+): Promise<number> {
+  let migrated = 0;
+  for (const adUser of adUsers) {
+    const email = (getLdapAttr(adUser, 'mail') || getLdapAttr(adUser, 'userPrincipalName')).trim().toLowerCase();
+    const adEmpId = readAdEmployeeId(adUser);
+    if (!email || !adEmpId) continue;
+
+    const row = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM employees WHERE email_corp = ?`,
+      [email],
+    );
+    if (!row || !row.emp_id.startsWith('AD-') || row.emp_id === adEmpId) continue;
+
+    try {
+      await migrateEmpId(row.emp_id, adEmpId);
+      migrated++;
+      logger.info({ from: row.emp_id, to: adEmpId, email }, 'AD sync: migrated placeholder emp_id from AD attributes');
+    } catch (err) {
+      errors.push(
+        `${row.emp_id} -> ${adEmpId}: emp_id migration failed — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  return migrated;
+}
+
+/** Migrate all AD-XXXX rows in DB when AD reports a real employee id for that email. */
+async function repairDatabasePlaceholderEmpIds(adapter: ADAdapter, errors: string[]): Promise<number> {
+  const placeholders = await query<{ emp_id: string; email_corp: string }>(
+    `SELECT emp_id, email_corp FROM employees
+      WHERE emp_id LIKE 'AD-%' AND email_corp IS NOT NULL AND email_corp != ''`,
+    [],
+  );
+
+  let migrated = 0;
+  for (const emp of placeholders) {
+    try {
+      const entryResult = await adapter.getDirectoryEntryByEmail(emp.email_corp);
+      if (!entryResult.success) continue;
+
+      const adEmpId = readAdEmployeeId(entryResult.data as Record<string, unknown>);
+      if (!adEmpId || adEmpId === emp.emp_id) continue;
+
+      await migrateEmpId(emp.emp_id, adEmpId);
+      migrated++;
+      logger.info(
+        { from: emp.emp_id, to: adEmpId, email: emp.email_corp },
+        'AD sync: database placeholder emp_id migrated',
+      );
+    } catch (err) {
+      errors.push(`${emp.emp_id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return migrated;
+}
+
 /** Backfill AD links for employees already in DB but missing identity_links (any sync run). */
 async function repairDatabaseOrphanAdLinks(adapter: ADAdapter, errors: string[]): Promise<number> {
   const orphans = await query<{ emp_id: string; email_corp: string }>(
@@ -298,6 +344,7 @@ async function importAdDirectoryUsers(
   succeeded: number;
   failed: number;
   repaired: number;
+  migrated: number;
   diag: string;
 }> {
   const listResult = await adapter.listDirectoryUsers();
@@ -370,11 +417,7 @@ async function importAdDirectoryUsers(
         throw new Error('missing mail and userPrincipalName');
       }
 
-      const fullName =
-        getLdapAttr(adUser, 'displayName')
-        || [getLdapAttr(adUser, 'givenName'), getLdapAttr(adUser, 'sn')].filter(Boolean).join(' ')
-        || getLdapAttr(adUser, 'cn')
-        || sam;
+      const fullName = cleanAdDisplayName(adUser, sam);
       const uac = parseInt(getLdapAttr(adUser, 'userAccountControl') || '512', 10);
       const disabled = (uac & 0x0002) !== 0;
       const linkStatus = disabled ? 'DISABLED' : 'ACTIVE';
@@ -472,6 +515,16 @@ async function importAdDirectoryUsers(
     logger.info({ dbRepaired }, 'AD sync inbound: repaired database orphan identity links');
   }
 
+  const migrated = await repairPlaceholderEmpIds(adUsers as Record<string, unknown>[], errors);
+  if (migrated > 0) {
+    logger.info({ migrated }, 'AD sync inbound: migrated placeholder emp_ids');
+  }
+
+  const dbMigrated = await repairDatabasePlaceholderEmpIds(adapter, errors);
+  if (dbMigrated > 0) {
+    logger.info({ dbMigrated }, 'AD sync inbound: migrated database placeholder emp_ids');
+  }
+
   return {
     found: adUsers.length,
     imported,
@@ -481,6 +534,7 @@ async function importAdDirectoryUsers(
     succeeded,
     failed,
     repaired: repaired + dbRepaired,
+    migrated: migrated + dbMigrated,
     diag,
   };
 }
@@ -524,16 +578,12 @@ function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
   );
 }
 
-/** Backfill a missing AD identity link when viewing an AD-imported employee profile. */
-export async function backfillAdIdentityLinkIfMissing(empId: string, emailCorp: string): Promise<boolean> {
-  if (!empId.startsWith('AD-') || !emailCorp) return false;
-
-  const hasLink = await queryOne<{ id: number }>(
-    `SELECT id FROM identity_links
-      WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'`,
-    [empId],
-  );
-  if (hasLink) return false;
+/** Backfill AD identity link and correct placeholder emp_id when viewing a profile. */
+export async function backfillAdIdentityLinkIfMissing(
+  empId: string,
+  emailCorp: string,
+): Promise<{ empId: string; changed: boolean }> {
+  if (!emailCorp) return { empId, changed: false };
 
   const conn = await queryOne<{ id: string }>(
     `SELECT id FROM connectors
@@ -542,7 +592,7 @@ export async function backfillAdIdentityLinkIfMissing(empId: string, emailCorp: 
       LIMIT 1`,
     [],
   );
-  if (!conn) return false;
+  if (!conn) return { empId, changed: false };
 
   const cfg = await loadConnectorConfig(conn.id);
   const adapter = createAdAdapterFromConfig(cfg);
@@ -550,19 +600,48 @@ export async function backfillAdIdentityLinkIfMissing(empId: string, emailCorp: 
   try {
     await adapter.resetCircuitBreaker();
     await adapter.connect();
-    const result = await adapter.getUserByEmail(emailCorp);
-    if (!result.success || !result.data?.externalId) return false;
 
-    await upsertAdIdentityLink(
-      empId,
-      result.data.externalId,
-      result.data.active ? 'ACTIVE' : 'DISABLED',
+    const entryResult = await adapter.getDirectoryEntryByEmail(emailCorp);
+    if (!entryResult.success) return { empId, changed: false };
+
+    const entry = entryResult.data as Record<string, unknown>;
+    const adEmpId = readAdEmployeeId(entry);
+    const sam = getLdapAttr(entry, 'sAMAccountName');
+    if (!sam) return { empId, changed: false };
+
+    let targetEmpId = empId;
+    let changed = false;
+
+    if (adEmpId && empId.startsWith('AD-') && empId !== adEmpId) {
+      await migrateEmpId(empId, adEmpId);
+      targetEmpId = adEmpId;
+      changed = true;
+      logger.info({ from: empId, to: adEmpId, emailCorp }, 'AD emp_id migrated on profile load');
+    }
+
+    const hasLink = await queryOne<{ id: number }>(
+      `SELECT id FROM identity_links
+        WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'`,
+      [targetEmpId],
     );
-    logger.info({ empId, sam: result.data.externalId }, 'AD identity link backfilled for profile');
-    return true;
+    if (!hasLink) {
+      const uac = parseInt(getLdapAttr(entry, 'userAccountControl') || '512', 10);
+      const linkStatus = (uac & 0x0002) !== 0 ? 'DISABLED' : 'ACTIVE';
+      await upsertAdIdentityLink(targetEmpId, sam, linkStatus);
+      changed = true;
+      logger.info({ empId: targetEmpId, sam }, 'AD identity link backfilled for profile');
+    }
+
+    const cleanName = cleanAdDisplayName(entry, sam);
+    await execute(
+      `UPDATE employees SET full_name = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+      [cleanName, targetEmpId],
+    );
+
+    return { empId: targetEmpId, changed };
   } catch (err) {
     logger.warn({ empId, emailCorp, err }, 'AD identity link backfill failed');
-    return false;
+    return { empId, changed: false };
   } finally {
     await adapter.disconnect().catch(() => undefined);
   }
@@ -653,6 +732,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
       inboundSummary =
         `Inbound: ${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked` +
         (inbound.repaired ? `, ${inbound.repaired} links repaired` : '') +
+        (inbound.migrated ? `, ${inbound.migrated} emp_ids corrected` : '') +
         `, ${inbound.skipped} skipped` +
         (inbound.diag ? ` || ${inbound.diag}` : '') +
         (runOutbound ? ` | Outbound: see employee reconcile below` : '');

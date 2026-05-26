@@ -274,8 +274,8 @@ export class ADAdapter extends BaseAdapter {
   async getUserByEmail(email: string): Promise<AdapterResult<UserInfo>> {
     return this.safe(async () => {
       const entries = await this.search(
-        `(&(objectClass=user)(mail=${ldapEscape(email)}))`,
-        ['dn', 'sAMAccountName', 'employeeID', 'mail', 'displayName', 'userAccountControl', 'memberOf', 'extensionAttribute1', 'extensionAttribute2'],
+        `(&(objectClass=user)(|(mail=${ldapEscape(email)})(userPrincipalName=${ldapEscape(email)})))`,
+        ['*'],
       );
 
       if (entries.length === 0) {
@@ -284,6 +284,22 @@ export class ADAdapter extends BaseAdapter {
 
       const samName = String(entries[0].sAMAccountName ?? '');
       return this.buildUserInfo(samName, entries[0]);
+    }, (err) => err instanceof ADNotFoundError);
+  }
+
+  /** Full LDAP entry by corporate email (all attributes) — used for emp_id resolution. */
+  async getDirectoryEntryByEmail(email: string): Promise<AdapterResult<ADUser>> {
+    return this.safe(async () => {
+      const entries = await this.search(
+        `(&(objectClass=user)(|(mail=${ldapEscape(email)})(userPrincipalName=${ldapEscape(email)})))`,
+        ['*'],
+      );
+
+      if (entries.length === 0) {
+        throw new ADNotFoundError(`AD user not found for mail=${email}`);
+      }
+
+      return entries[0];
     }, (err) => err instanceof ADNotFoundError);
   }
 
@@ -579,6 +595,75 @@ export function getLdapAttr(entry: Record<string, unknown>, name: string): strin
   if (Array.isArray(val)) return val[0] != null ? String(val[0]) : '';
   if (Buffer.isBuffer(val)) return val.toString('utf8');
   return val != null ? String(val) : '';
+}
+
+/** True when a string looks like a usable Lenskart employee id (not a hash placeholder). */
+function isValidAdEmpId(value: string): boolean {
+  const v = value.trim();
+  if (!v || v.length > 20) return false;
+  if (/^AD-[A-F0-9]{8,}$/i.test(v)) return false;
+  return /^[A-Za-z0-9._-]+$/.test(v);
+}
+
+/** Pull LSP##### (or similar) codes embedded in display names. */
+function extractEmpIdFromText(text: string): string {
+  const lsp = text.match(/\b(LSP\d{4,8})\b/i);
+  if (lsp?.[1]) return lsp[1].toUpperCase();
+  return '';
+}
+
+/**
+ * Resolve the canonical employee id from an AD LDAP entry.
+ * Order: employeeID → employeeNumber → extensionAttribute* → pager/description → displayName/cn.
+ */
+export function readAdEmployeeId(adUser: Record<string, unknown>): string {
+  const priorityAttrs = [
+    'employeeID', 'employeeNumber',
+    'extensionAttribute1', 'extensionAttribute2', 'extensionAttribute3',
+    'extensionAttribute4', 'extensionAttribute5', 'extensionAttribute6',
+    'extensionAttribute7', 'extensionAttribute8', 'extensionAttribute9',
+    'extensionAttribute10', 'extensionAttribute11', 'extensionAttribute12',
+    'extensionAttribute13', 'extensionAttribute14', 'extensionAttribute15',
+    'pager', 'initials', 'info', 'description',
+  ];
+
+  for (const attr of priorityAttrs) {
+    const v = getLdapAttr(adUser, attr).trim();
+    if (isValidAdEmpId(v)) return v;
+  }
+
+  for (const key of Object.keys(adUser)) {
+    const kl = key.toLowerCase();
+    if (kl === 'dn' || kl === 'objectclass' || kl.includes('guid') || kl.includes('sid')) continue;
+    if (!kl.includes('employee') && !kl.startsWith('extensionattribute') && kl !== 'pager' && kl !== 'description') {
+      continue;
+    }
+    const v = getLdapAttr(adUser, key).trim();
+    if (isValidAdEmpId(v)) return v;
+  }
+
+  for (const attr of ['displayName', 'cn', 'name']) {
+    const parsed = extractEmpIdFromText(getLdapAttr(adUser, attr));
+    if (parsed) return parsed;
+  }
+
+  return '';
+}
+
+/** Build a clean full name without trailing employee-id tokens (e.g. "Hemant Sharma LSP01649"). */
+export function cleanAdDisplayName(adUser: Record<string, unknown>, fallback = ''): string {
+  let name =
+    getLdapAttr(adUser, 'displayName')
+    || [getLdapAttr(adUser, 'givenName'), getLdapAttr(adUser, 'sn')].filter(Boolean).join(' ')
+    || getLdapAttr(adUser, 'cn')
+    || fallback;
+
+  const empId = readAdEmployeeId(adUser);
+  if (empId) {
+    name = name.replace(new RegExp(`\\s*${empId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i'), '').trim();
+  }
+  name = name.replace(/\s+LSP\d{4,8}\s*$/i, '').trim();
+  return name || fallback;
 }
 
 /** Split a DN into domain root (DC=…) and any OU= prefix. */

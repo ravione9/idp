@@ -52,7 +52,26 @@ idp_rm_stale_api() {
   done < <(docker ps -aq --filter "name=lilg-api" 2>/dev/null || true)
 }
 
+# Ensure MySQL, Redis, and LocalStack are up before API (fixes EAI_AGAIN mysql on fresh servers).
+idp_ensure_stack_deps() {
+  echo "==> Starting MySQL, Redis, LocalStack (if not already running)..."
+  "${IDP_COMPOSE[@]}" up -d mysql redis localstack 2>/dev/null || "${IDP_COMPOSE[@]}" up -d mysql redis
+
+  echo "==> Waiting for MySQL to accept connections..."
+  local mysql_cid=""
+  for i in $(seq 1 36); do
+    mysql_cid=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(idp-mysql|lilg-mysql)$' | head -1 || true)
+    if [[ -n "$mysql_cid" ]] && docker exec "$mysql_cid" mysqladmin ping -h 127.0.0.1 -u root -prootpassword --silent 2>/dev/null; then
+      echo "    MySQL is ready ($mysql_cid)."
+      return 0
+    fi
+    sleep 5
+  done
+  echo "WARN: MySQL not healthy yet — API will retry DB connection for up to ~60s"
+}
+
 idp_compose_start_api() {
+  idp_ensure_stack_deps
   idp_rm_stale_api
   echo "==> Starting lilg-api..."
   if [[ ${IDP_COMPOSE_V2:-0} -eq 1 ]]; then

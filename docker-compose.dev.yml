@@ -79,6 +79,7 @@ services:
       PORT: 8080
       HTTPS_PORT: 8443
       DB_HOST: mysql
+      SAML_KEY_DIR: /app/data/saml
       REDIS_URL: redis://redis:6379/0
       AWS_ENDPOINT_URL: http://localstack:4566
     ports:
@@ -113,6 +114,7 @@ services:
     environment:
       NODE_ENV: production
       DB_HOST: mysql
+      SAML_KEY_DIR: /app/data/saml
       REDIS_URL: redis://redis:6379/0
       AWS_ENDPOINT_URL: http://localstack:4566
     depends_on:
