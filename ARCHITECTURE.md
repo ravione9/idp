@@ -705,7 +705,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### `(pending)` — 2026-06-07 — Groups: member management + Google/AD directory sync
+### `e8d525f` — 2026-06-07 — Groups: member management + Google/AD directory sync
 
 **Why** — Identity Groups page had no way to add members; operators expected groups to mirror Google Workspace and Active Directory.
 
