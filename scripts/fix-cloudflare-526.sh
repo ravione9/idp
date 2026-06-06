@@ -53,8 +53,14 @@ fi
 rm -f "acme-webroot/${TESTFILE}"
 
 echo ""
-echo "==> Step 3: Request Let's Encrypt certificate"
-bash scripts/enable-origin-letsencrypt.sh "$EMAIL"
+if [[ -n "${ORIGIN_CERT:-}" && -n "${ORIGIN_KEY:-}" && -f "$ORIGIN_CERT" && -f "$ORIGIN_KEY" ]]; then
+  echo "==> Step 3: Install provided origin certificate"
+  bash scripts/install-origin-cert.sh "$ORIGIN_CERT" "$ORIGIN_KEY" "${ORIGIN_CA:-}"
+else
+  echo "==> Step 3: Request Let's Encrypt certificate"
+  echo "    (Have a wildcard cert? Use: ORIGIN_CERT=cert.pem ORIGIN_KEY=key.pem bash scripts/fix-cloudflare-526.sh)"
+  bash scripts/enable-origin-letsencrypt.sh "$EMAIL"
+fi
 
 echo ""
 echo "==> Step 4: Verify issuer is no longer self-signed"
