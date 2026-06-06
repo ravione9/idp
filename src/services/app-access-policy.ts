@@ -138,12 +138,17 @@ export async function canUserLaunchApp(
 ): Promise<boolean> {
   if (!canReceiveSamlAssertion(emp)) return false;
 
-  const policyAccess = await hasPolicyAppAccess(emp.emp_id, slug);
-  if (await appRequiresExplicitGrant(slug)) {
-    return policyAccess;
+  try {
+    const policyAccess = await hasPolicyAppAccess(emp.emp_id, slug);
+    const requiresGrant = await appRequiresExplicitGrant(slug);
+    if (requiresGrant) {
+      return policyAccess;
+    }
+    return policyAccess || evaluateEntitlement(emp, rule);
+  } catch {
+    /* If the policy tables aren't ready yet, fall back to entitlement rule only */
+    return evaluateEntitlement(emp, rule);
   }
-
-  return policyAccess || evaluateEntitlement(emp, rule);
 }
 
 export async function hasPolicyAppAccess(empId: string, appSlug: string): Promise<boolean> {

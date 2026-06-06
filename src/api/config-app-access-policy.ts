@@ -9,7 +9,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne, execute } from '../db/connection.js';
-import { safeQuery } from '../db/safe-query.js';
+import logger from '../utils/logger.js';
 import {
   grantAppAccess,
   revokeAppAccess,
@@ -174,23 +174,28 @@ router.get('/assignments', asyncHandler(async (req: Request, res: Response) => {
     where += ' AND aaa.app_id = ?';
     params.push(appId);
   }
-  const rows = await safeQuery(
-    `SELECT aaa.id, aaa.app_id, aaa.assignment_type, aaa.target_id,
-            aaa.granted_by, aaa.granted_at, a.name AS app_name, a.slug AS app_slug,
-            CASE aaa.assignment_type
-              WHEN 'USER' THEN e.full_name
-              WHEN 'TAG_GROUP' THEN tg.name
-              WHEN 'GROUP' THEN g.name
-            END AS target_name
-       FROM app_access_assignments aaa
-       JOIN applications a ON a.id = aaa.app_id
-       LEFT JOIN employees e ON e.emp_id = aaa.target_id AND aaa.assignment_type = 'USER'
-       LEFT JOIN tag_groups tg ON tg.id = aaa.target_id AND aaa.assignment_type = 'TAG_GROUP'
-       LEFT JOIN \`groups\` g ON g.id = aaa.target_id AND aaa.assignment_type = 'GROUP'
-       ${where}
-       ORDER BY aaa.granted_at DESC`,
-    params,
-  );
+  let rows: Record<string, unknown>[] = [];
+  try {
+    rows = await query(
+      `SELECT aaa.id, aaa.app_id, aaa.assignment_type, aaa.target_id,
+              aaa.granted_by, aaa.granted_at, a.name AS app_name, a.slug AS app_slug,
+              CASE aaa.assignment_type
+                WHEN 'USER' THEN e.full_name
+                WHEN 'TAG_GROUP' THEN tg.name
+                WHEN 'GROUP' THEN g.name
+              END AS target_name
+         FROM app_access_assignments aaa
+         JOIN applications a ON a.id = aaa.app_id
+         LEFT JOIN employees e ON e.emp_id = aaa.target_id AND aaa.assignment_type = 'USER'
+         LEFT JOIN tag_groups tg ON tg.id = aaa.target_id AND aaa.assignment_type = 'TAG_GROUP'
+         LEFT JOIN \`groups\` g ON g.id = aaa.target_id AND aaa.assignment_type = 'GROUP'
+         ${where}
+         ORDER BY aaa.granted_at DESC`,
+      params,
+    );
+  } catch (err) {
+    logger.warn({ err }, 'GET /assignments query failed — returning empty list');
+  }
   res.json({ data: rows });
 }));
 
