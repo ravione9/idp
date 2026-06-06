@@ -153,7 +153,7 @@ router.get('/metadata', (_req: Request, res: Response): void => {
     samlUnavailable(res);
     return;
   }
-  res.setHeader('Content-Type', 'application/xml');
+  res.setHeader('Content-Type', 'application/samlmetadata+xml; charset=utf-8');
   res.send(getIdpMetadataXml());
 });
 

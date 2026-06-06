@@ -43,6 +43,11 @@ function spMetadataUploadHtml(pfx) {
         <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem;line-height:1.45">
           Download the SP metadata XML from Zoho / AWS / GitHub and upload it here — Entity ID, ACS URL, and SLO will auto-fill.
         </p>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
+          <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-idp-meta-dl">⬇ Download our IdP metadata.xml</button>
+          <a class="btn btn-secondary btn-sm" id="${pfx}-idp-meta-open" target="_blank" rel="noopener">Open metadata URL</a>
+        </div>
+        <p class="muted" style="font-size:0.74rem;margin:0 0 0.75rem">Use this file in the third-party app to establish trust with this portal IdP.</p>
         <div id="${pfx}-meta-drop" style="border:2px dashed var(--border);border-radius:8px;padding:1rem;text-align:center;background:var(--bg);margin-bottom:0.75rem">
           <div style="font-size:1.5rem;margin-bottom:0.35rem">📄</div>
           <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0">
@@ -64,6 +69,13 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
   const fileEl = bd.querySelector(`#${pfx}-meta-file`);
   const pasteEl = bd.querySelector(`#${pfx}-meta-paste`);
   const parseBtn = bd.querySelector(`#${pfx}-meta-parse`);
+  const idpMetaDownloadBtn = bd.querySelector(`#${pfx}-idp-meta-dl`);
+  const idpMetaOpenLink = bd.querySelector(`#${pfx}-idp-meta-open`);
+  const idpMetaUrl = `${window.location.origin}/saml/metadata`;
+
+  if (idpMetaOpenLink) {
+    idpMetaOpenLink.href = idpMetaUrl;
+  }
 
   function applyParsed(data) {
     if (data.entityId) bd.querySelector(`#${pfx}-entity`).value = data.entityId;
@@ -144,6 +156,35 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
         await doParse(text);
       } catch (err) {
         if (errEl) errEl.innerHTML = errHtml('Could not read dropped file: ' + err.message);
+      }
+    });
+  }
+
+  if (idpMetaDownloadBtn) {
+    idpMetaDownloadBtn.addEventListener('click', async () => {
+      const oldLabel = idpMetaDownloadBtn.textContent;
+      idpMetaDownloadBtn.disabled = true;
+      idpMetaDownloadBtn.textContent = 'Downloading…';
+      try {
+        const res = await fetch('/saml/metadata', { credentials: 'include' });
+        const xml = await res.text();
+        if (!res.ok || !xml.includes('<EntityDescriptor')) {
+          throw new Error('Could not fetch valid IdP metadata XML from /saml/metadata');
+        }
+        const blob = new Blob([xml], { type: 'application/samlmetadata+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'idp-metadata.xml';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        if (errEl) errEl.innerHTML = errHtml(e.message || 'Failed to download IdP metadata.');
+      } finally {
+        idpMetaDownloadBtn.disabled = false;
+        idpMetaDownloadBtn.textContent = oldLabel || '⬇ Download our IdP metadata.xml';
       }
     });
   }

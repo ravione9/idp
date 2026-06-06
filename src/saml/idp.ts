@@ -85,7 +85,12 @@ function buildUserInfo(emp: EmployeeSamlContext, sp: SamlServiceProviderRow): {
 }
 
 export function getIdpMetadataXml(): string {
-  return getIdp().getMetadata();
+  const xml = getIdp().getMetadata().trim();
+  if (xml.startsWith('<?xml')) {
+    return xml;
+  }
+  // Some SP validators expect an explicit XML declaration.
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${xml}`;
 }
 
 export type SamlBinding = 'redirect' | 'post';
