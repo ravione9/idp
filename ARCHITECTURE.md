@@ -705,6 +705,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### `2de9f80` — 2026-06-07 — App Access Policy: populate application dropdown from SAML catalog
+
+**Why** — Assign Application Access modal showed an empty application list because SAML SPs lived only in `saml_service_providers`, not `applications`.
+
+**What changed:**
+
+- **`src/services/app-access-policy.ts`** — `syncSamlAppsToCatalog()` mirrors SAML SPs into `applications` on read; `listAssignableApplications()` powers the admin dropdown.
+- **`GET /api/admin/app-access-policy/applications`** — returns assignable apps for the policy UI.
+- **`web/js/views-stubs.js`** — modal reloads catalog on open; empty-state hints for apps and tag groups.
+
 ### `91d4afa` — 2026-06-06 — Application Access Policy admin page
 
 **Why** — Administrators needed a dedicated page to grant application access by user or tag group, configure group-access approval workflows, and retain an audit trail for requests, approvals, provisioning, and revocations.
