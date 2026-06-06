@@ -631,7 +631,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Birthright entitlement engine** — `src/services/birthright.ts` assigns/revokes birthright entitlements on lifecycle events (JOINER/LEAVER)
 - ✅ **Connector dispatcher** — `src/services/connector-dispatcher.ts` routes `POST /api/iga/connectors/:id/sync` to the right sync service (AD or Google)
 - ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); tracks runs in `connector_runs`
-- ✅ **Google Workspace Sync** — `src/services/google-sync.ts` same pattern for Google Workspace via googleapis Admin SDK
+- ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import and outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank scope syncs the full directory; non-empty filters combine with AND logic
 - ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); wired into `PUT /api/me/password`; logs to `password_writeback_log`
 - ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate` — revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`
 - ✅ **Access review campaign generator** — `POST /api/iga/access-reviews` + `POST /api/iga/access-reviews/:id/items/:itemId/decision` in `src/services/access-review.ts` (scopes: ALL_USERS, APP_SPECIFIC, HIGH_RISK; auto-closes campaign when all items reviewed; REVOKE triggers user_entitlement revocation)
@@ -684,6 +684,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(pending)* — 2026-06-06 — Google Workspace connector: OU / group / user sync scope
+
+**Why** — Directory Sync imported every Google user with no way to limit inbound sync to specific organisational units, groups, or named accounts (AD already had `targetOu`).
+
+**What changed:**
+
+- **`src/services/google-directory-config.ts`** — `resolveGoogleSyncScope()`, `buildGoogleJwtAuth()`, `listScopedGoogleUsers()` (AND across non-empty OU / group / user filters; optional `includeSubOrgUnits`).
+- **`src/services/google-sync.ts`** — reads per-connector `config_json` instead of global `.env` SA key; inbound uses scoped user list; outbound provisions to `provisionOrgUnit`.
+- **`src/api/iga.ts`** — `POST /api/iga/connectors/:id/test` for `GOOGLE_WORKSPACE` performs a live Admin SDK probe and reports how many users match the configured scope.
+- **`web/js/views-stubs.js`** — Google connector modal adds **Sync Scope** fields: OUs, groups, users, provision OU, include sub-OUs checkbox.
 
 ### `97424f5` — 2026-05-24 — Integration setup wizard (SAML + OIDC) replaces ad-hoc "+ Add" modals
 
@@ -993,7 +1004,8 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/services/birthright.ts`** — `assignBirthrightEntitlements` / `revokeBirthrightEntitlements`. Driven by `entitlements.is_birthright`.
 - **`src/services/connector-dispatcher.ts`** — fans out `triggerConnectorSync()` to type-specific handlers; today routes LDAP → `ad-sync`, Google → `google-sync`. Returns immediately with a `STARTED` reference; callers poll `connector_runs` for outcomes.
 - **`src/services/ad-sync.ts`** — Active Directory inbound + outbound reconciliation against `employees` and `identity_links`.
-- **`src/services/google-sync.ts`** — Google Workspace Directory API sync.
+- **`src/services/google-sync.ts`** — Google Workspace Directory API sync (reads connector `config_json`; scoped inbound via `google-directory-config.ts`).
+- **`src/services/google-directory-config.ts`** — resolves Google connector scope (OUs / groups / users), builds domain-wide-delegation JWT, lists matching directory users.
 - **`src/services/password-writeback.ts`** — propagate password changes from local accounts to AD / Google / Zoho with per-system audit (`password_writeback_log`).
 - **`src/services/access-request-workflow.ts`** — `submitAccessRequest` + `processDecision`. Multi-level approval-chain resolver, SoD pre-flight, automatic fulfillment by writing to `user_entitlements` + outbox.
 - **`src/services/access-review.ts`** — campaign creation + reviewer-decision handler.

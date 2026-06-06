@@ -80,7 +80,8 @@ if ! openssl x509 -in "$CERT_FILE" -noout -text 2>/dev/null | grep -qE "DNS:\*\.
 fi
 
 CN=$(openssl x509 -in "$CERT_FILE" -noout -subject 2>/dev/null | sed -n 's/.*CN\s*=\s*\([^,/]*\).*/\1/p' | head -1)
-EXPIRY=$(openssl x509 -in "$CERT_FILE" -noout -enddate 2>/dev/null | cut -d= -f2-)
+EXPIRY_RAW=$(openssl x509 -in "$CERT_FILE" -noout -enddate 2>/dev/null | cut -d= -f2-)
+EXPIRY_MYSQL=$(date -u -d "$EXPIRY_RAW" '+%Y-%m-%d %H:%i:%s' 2>/dev/null || echo "")
 SANS=$(openssl x509 -in "$CERT_FILE" -noout -ext subjectAltName 2>/dev/null | tr -d ' ' || true)
 
 CERT_B64=$(base64 -w0 "$CERT_FILE")
@@ -103,7 +104,7 @@ UPDATE general_settings SET
   portal_ssl_key  = CAST(FROM_BASE64('${KEY_B64}') AS CHAR),
   portal_ssl_ca   = ${CA_SQL},
   portal_ssl_cn   = '${CN_ESC:-$HOSTNAME}',
-  portal_ssl_expiry = STR_TO_DATE('${EXPIRY}', '%b %d %H:%M:%S %Y %Z'),
+  portal_ssl_expiry = $([ -n "$EXPIRY_MYSQL" ] && echo "'${EXPIRY_MYSQL}'" || echo 'NULL'),
   portal_ssl_sans = '${SANS_ESC}',
   portal_https_enabled = 1,
   portal_allow_http    = 1,

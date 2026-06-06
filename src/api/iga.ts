@@ -19,6 +19,12 @@ import { safeQuery } from '../db/safe-query.js';
 import logger from '../utils/logger.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { triggerConnectorSync } from '../services/connector-dispatcher.js';
+import {
+  buildGoogleJwtAuth,
+  listScopedGoogleUsers,
+  resolveGoogleSyncScope,
+} from '../services/google-directory-config.js';
+import { google } from 'googleapis';
 import { submitAccessRequest, processDecision } from '../services/access-request-workflow.js';
 import { createCampaign, submitReviewDecision } from '../services/access-review.js';
 import { evaluateSodForGrant } from '../services/sod-evaluator.js';
@@ -547,18 +553,36 @@ router.post(
           res.status(422).json({ success: false, code: `LDAP_${code ?? 'ERROR'}`, message: friendly, detail: raw });
         }
       } else if (type === 'GOOGLE_WORKSPACE') {
-        // Just validate that config fields are present
-        const required = ['customerDomain', 'serviceAccountEmail'];
-        const missing = required.filter((k) => !cfg[k]);
+        const required = ['customerDomain', 'adminEmail'];
+        const missing = required.filter((k) => !String(cfg[k] ?? '').trim());
+        if (!String(cfg['serviceAccountKey'] ?? '').trim()) {
+          missing.push('serviceAccountKey');
+        }
         if (missing.length) {
           res.status(422).json({
             success: false,
             code:    'MISSING_CONFIG',
             message: `Missing required Google Workspace config field(s): ${missing.join(', ')}`,
           });
-        } else {
-          res.json({ success: true, message: `Google Workspace config looks valid for ${cfg['customerDomain']}` });
+          return;
         }
+
+        const auth = buildGoogleJwtAuth(cfg);
+        const directory = google.admin({ version: 'directory_v1', auth });
+        await directory.users.list({ customer: 'my_customer', maxResults: 1 });
+
+        const scope = resolveGoogleSyncScope(cfg);
+        const scopedUsers = await listScopedGoogleUsers(directory, scope);
+        const scopeParts: string[] = [];
+        if (scope.orgUnits.length) scopeParts.push(`${scope.orgUnits.length} OU(s)`);
+        if (scope.groups.length) scopeParts.push(`${scope.groups.length} group(s)`);
+        if (scope.users.length) scopeParts.push(`${scope.users.length} explicit user(s)`);
+        const scopeLabel = scopeParts.length ? scopeParts.join(', ') : 'entire directory';
+
+        res.json({
+          success: true,
+          message: `Connected to Google Workspace (${scope.customerDomain}). Sync scope: ${scopeLabel} — ${scopedUsers.length} user(s) matched.`,
+        });
       } else {
         // Generic: just confirm config is non-empty and connector exists
         res.json({ success: true, message: `Connector "${type}" configuration saved. Full test on next sync.` });

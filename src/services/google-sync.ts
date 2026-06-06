@@ -7,13 +7,17 @@
  */
 
 import crypto from 'crypto';
-import { google } from 'googleapis';
 import type { admin_directory_v1 } from 'googleapis';
-import type { JWT } from 'google-auth-library';
+import { google } from 'googleapis';
 import { query, queryOne, execute } from '../db/connection.js';
-import { config } from '../config.js';
 import logger from '../utils/logger.js';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  buildGoogleJwtAuth,
+  listScopedGoogleUsers,
+  resolveGoogleSyncScope,
+  type GoogleSyncScope,
+} from './google-directory-config.js';
 
 // ---------------------------------------------------------------------------
 // Re-export SyncResult type (same shape as ad-sync)
@@ -66,24 +70,6 @@ function parseNameParts(fullName: string): { givenName: string; familyName: stri
   return { givenName, familyName };
 }
 
-function buildJwtAuth(saKeyJson: string): JWT {
-  let key: Record<string, string>;
-  try {
-    key = JSON.parse(saKeyJson) as Record<string, string>;
-  } catch {
-    key = JSON.parse(Buffer.from(saKeyJson, 'base64').toString('utf8')) as Record<string, string>;
-  }
-
-  return new google.auth.JWT({
-    email:   key['client_email'],
-    key:     key['private_key'],
-    scopes:  [
-      'https://www.googleapis.com/auth/admin.directory.user',
-    ],
-    subject: key['client_email'],
-  });
-}
-
 function deriveEmpIdFromGoogle(gUser: admin_directory_v1.Schema$User): string {
   const extId = gUser.id ?? gUser.primaryEmail ?? 'user';
   const hash = crypto.createHash('md5').update(extId).digest('hex').slice(0, 12).toUpperCase();
@@ -104,32 +90,10 @@ async function upsertGoogleIdentityLink(empId: string, googleId: string, linkSta
   );
 }
 
-async function listGoogleDirectoryUsers(
-  directory: admin_directory_v1.Admin,
-): Promise<admin_directory_v1.Schema$User[]> {
-  const users: admin_directory_v1.Schema$User[] = [];
-  let pageToken: string | undefined;
-
-  do {
-    const params: admin_directory_v1.Params$Resource$Users$List = {
-      customer:    'my_customer',
-      maxResults:  500,
-      orderBy:     'email',
-      projection:  'full',
-    };
-    if (pageToken) params.pageToken = pageToken;
-
-    const res = await directory.users.list(params);
-    users.push(...(res.data.users ?? []));
-    pageToken = res.data.nextPageToken ?? undefined;
-  } while (pageToken);
-
-  return users;
-}
-
 /** Import Google Workspace users into employees + identity_links (merge by email). */
 async function importGoogleDirectoryUsers(
   directory: admin_directory_v1.Admin,
+  scope: GoogleSyncScope,
   errors: string[],
 ): Promise<{
   found: number;
@@ -141,7 +105,7 @@ async function importGoogleDirectoryUsers(
   failed: number;
   repaired: number;
 }> {
-  const googleUsers = await listGoogleDirectoryUsers(directory);
+  const googleUsers = await listScopedGoogleUsers(directory, scope);
   let imported = 0;
   let linked = 0;
   let skipped = 0;
@@ -149,7 +113,16 @@ async function importGoogleDirectoryUsers(
   let succeeded = 0;
   let failed = 0;
 
-  logger.info({ count: googleUsers.length }, 'Google sync inbound: listing directory users');
+  logger.info(
+    {
+      count: googleUsers.length,
+      orgUnits: scope.orgUnits,
+      groups: scope.groups,
+      users: scope.users.length,
+      includeSubOrgUnits: scope.includeSubOrgUnits,
+    },
+    'Google sync inbound: listing scoped directory users',
+  );
 
   for (const gUser of googleUsers) {
     processed++;
@@ -290,15 +263,25 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
     [runId, connectorId],
   );
 
-  const connRow = await queryOne<{ direction: string }>(
-    `SELECT direction FROM connectors WHERE id = ?`,
+  const connRow = await queryOne<{ direction: string; config_json: string | Record<string, unknown> }>(
+    `SELECT direction, config_json FROM connectors WHERE id = ?`,
     [connectorId],
   );
-  const direction = (connRow?.direction ?? 'BIDIRECTIONAL').toUpperCase();
+  if (!connRow) {
+    throw new Error(`Connector not found: ${connectorId}`);
+  }
+
+  const cfg: Record<string, unknown> =
+    typeof connRow.config_json === 'string'
+      ? JSON.parse(connRow.config_json || '{}') as Record<string, unknown>
+      : (connRow.config_json ?? {});
+
+  const scope = resolveGoogleSyncScope(cfg);
+  const direction = (connRow.direction ?? 'BIDIRECTIONAL').toUpperCase();
   const runInbound  = direction === 'INBOUND' || direction === 'BIDIRECTIONAL';
   const runOutbound = direction === 'OUTBOUND' || direction === 'BIDIRECTIONAL';
 
-  const auth = buildJwtAuth(config.google.saKeyJson);
+  const auth = buildGoogleJwtAuth(cfg);
   const directory = google.admin({ version: 'directory_v1', auth });
 
   let itemsProcessed = 0;
@@ -309,7 +292,7 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
 
   try {
     if (runInbound) {
-      const inbound = await importGoogleDirectoryUsers(directory, errors);
+      const inbound = await importGoogleDirectoryUsers(directory, scope, errors);
       itemsProcessed += inbound.processed;
       itemsSucceeded += inbound.succeeded;
       itemsFailed += inbound.failed;
@@ -370,7 +353,7 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
                   name: { givenName, familyName },
                   password: tempPass,
                   changePasswordAtNextLogin: true,
-                  orgUnitPath: '/Employees',
+                  orgUnitPath: scope.provisionOrgUnit,
                 },
               });
 

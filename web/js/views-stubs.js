@@ -1736,7 +1736,7 @@ export async function viewAppDiscovery(content) {
 const CONNECTOR_TYPES = {
   AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',           fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl'] },
   LDAP:             { label: 'LDAP',             icon: '📂', badge: 'badge-info',    desc: 'Generic LDAP v3 directory server',             fields: ['host','port','bindDn','bindPassword','baseDn','useSsl'] },
-  GOOGLE_WORKSPACE: { label: 'Google Workspace', icon: '🔵', badge: 'badge-success', desc: 'Google Workspace / G Suite directory',          fields: ['customerDomain','serviceAccountEmail','serviceAccountKey','adminEmail'] },
+  GOOGLE_WORKSPACE: { label: 'Google Workspace', icon: '🔵', badge: 'badge-success', desc: 'Google Workspace / G Suite directory',          fields: ['customerDomain','serviceAccountEmail','serviceAccountKey','adminEmail','syncOrgUnits','syncGroups','syncUsers','provisionOrgUnit','includeSubOrgUnits'] },
   AZURE_AD:         { label: 'Azure AD / Entra', icon: '☁️', badge: 'badge-info',    desc: 'Microsoft Entra ID (Azure AD)',                 fields: ['tenantId','clientId','clientSecret','domain'] },
   OKTA:             { label: 'Okta',             icon: '🔑', badge: 'badge-warning', desc: 'Okta Universal Directory',                      fields: ['domain','apiToken'] },
   SCIM:             { label: 'SCIM 2.0',         icon: '⚙️', badge: 'badge-neutral', desc: 'Any SCIM 2.0-compliant directory',              fields: ['baseUrl','bearerToken','syncMode'] },
@@ -1758,6 +1758,11 @@ const FIELD_LABELS = {
   serviceAccountEmail:'Service Account Email',
   serviceAccountKey:  'Service Account JSON Key',
   adminEmail:         'Admin Email (for impersonation)',
+  syncOrgUnits:       'Sync OUs (one per line, e.g. /Sales — blank = all OUs)',
+  syncGroups:         'Sync Groups (one per line, group email — optional filter)',
+  syncUsers:          'Sync Users (one per line, user email — optional filter)',
+  provisionOrgUnit:   'Provision OU (outbound new users, e.g. /Employees)',
+  includeSubOrgUnits: 'Include sub-OUs',
   tenantId:           'Tenant ID',
   clientId:           'Client ID',
   clientSecret:       'Client Secret',
@@ -2016,6 +2021,36 @@ function initSourcesTab(panel) {
           <textarea class="form-textarea" id="cfg-${f}" rows="4" placeholder='{"type":"service_account","project_id":"..."}'>${val}</textarea>
         </div>`;
       }
+      if (f === 'syncOrgUnits' && connectorType === 'GOOGLE_WORKSPACE') {
+        return `<hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 1rem;grid-column:1/-1">
+        <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:0.75rem;color:var(--text-dim);grid-column:1/-1">SYNC SCOPE <span class="muted" style="font-weight:400;font-size:0.78rem">— leave blank to sync entire directory</span></h3>
+        <div class="form-group" style="grid-column:1/-1">
+          <label class="form-label">${esc(label)}</label>
+          <textarea class="form-textarea" id="cfg-${f}" rows="3" placeholder="/Sales&#10;/Engineering">${val}</textarea>
+        </div>`;
+      }
+      if (f === 'syncGroups' && connectorType === 'GOOGLE_WORKSPACE') {
+        return `<div class="form-group" style="grid-column:1/-1">
+          <label class="form-label">${esc(label)}</label>
+          <textarea class="form-textarea" id="cfg-${f}" rows="2" placeholder="sales-team@company.com&#10;it-admins@company.com">${val}</textarea>
+        </div>`;
+      }
+      if (f === 'syncUsers' && connectorType === 'GOOGLE_WORKSPACE') {
+        return `<div class="form-group" style="grid-column:1/-1">
+          <label class="form-label">${esc(label)}</label>
+          <textarea class="form-textarea" id="cfg-${f}" rows="2" placeholder="alice@company.com&#10;bob@company.com">${val}</textarea>
+        </div>`;
+      }
+      if (f === 'includeSubOrgUnits' && connectorType === 'GOOGLE_WORKSPACE') {
+        const checked = defaults[f] !== false && defaults[f] !== 'false';
+        return `<div class="form-group" style="grid-column:1/-1">
+          <label class="form-label" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+            <input type="checkbox" id="cfg-${f}" ${checked ? 'checked' : ''}>
+            ${esc(label)}
+            <span class="muted" style="font-size:0.75rem">— when OUs are set, also sync users in child OUs</span>
+          </label>
+        </div>`;
+      }
       if (f === 'syncMode') {
         return `<div class="form-group"><label class="form-label">${esc(label)}</label>
           <select class="form-select" id="cfg-${f}">
@@ -2026,7 +2061,8 @@ function initSourcesTab(panel) {
       }
       const type = (f.toLowerCase().includes('password')||f.toLowerCase().includes('token')||f.toLowerCase().includes('secret')||f.toLowerCase().includes('key')) ? 'password' : 'text';
       const ph = { host:'ldap.company.com', port:'389', bindDn:'CN=svc-idp,DC=company,DC=com',
-        baseDn:'DC=company,DC=com', targetOu:'OU=IT', upnDomain:'company.com', customerDomain:'company.com', tenantId:'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+        baseDn:'DC=company,DC=com', targetOu:'OU=IT', upnDomain:'company.com', customerDomain:'company.com',
+        provisionOrgUnit:'/Employees', tenantId:'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
         clientId:'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', domain:'company.okta.com',
         baseUrl:'https://scim.app.com/v2', apiKey:'sk_...', orgId:'12345' }[f] || '';
       return `<div class="form-group">
