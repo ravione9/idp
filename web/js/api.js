@@ -88,6 +88,7 @@ Object.assign(api, {
 Object.assign(api, {
   // Groups
   listGroups:       () => f('/api/admin/groups'),
+  syncDirectoryGroups: () => f('/api/admin/groups/sync', { method: 'POST' }),
   getGroup:         (id) => f(`/api/admin/groups/${id}`),
   createGroup:      (data) => f('/api/admin/groups', { method: 'POST', body: JSON.stringify(data) }),
   updateGroup:      (id, data) => f(`/api/admin/groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),

@@ -744,6 +744,15 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
           `Set Base DN to domain root (DC=Lenskart,DC=in) or the OU containing users (OU=IT,DC=Lenskart,DC=in).`,
         );
       }
+
+      const { syncAdDirectoryGroups } = await import('./group-sync.js');
+      const gs = await syncAdDirectoryGroups(connectorId, cfg as Record<string, unknown>);
+      if (gs.groupsSynced > 0 || gs.errors.length > 0) {
+        inboundSummary +=
+          ` | Groups: ${gs.groupsSynced} synced, ${gs.membersSynced} members` +
+          (gs.errors.length ? ` (${gs.errors.length} errors)` : '');
+        errors.push(...gs.errors);
+      }
     }
 
     if (runOutbound) {

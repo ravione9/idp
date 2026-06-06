@@ -200,7 +200,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET  /saml/metadata` | IdP metadata XML (give to every SP admin) |
+| `GET  /saml/metadata` | IdP metadata XML (ADMIN+ session required; shared with SP admins during onboarding) |
 | `GET/POST /saml/sso` | SP-initiated SSO (`AuthnRequest` via Redirect or POST binding) |
 | `GET  /saml/launch/:slug` | IdP-initiated launch (browser → app tile click) |
 
@@ -333,7 +333,6 @@ To add a new migration:
 | `GET` | `/healthz` | Liveness |
 | `GET` | `/readyz` | Readiness (DB + Redis) |
 | `GET` | `/metrics` | Prometheus metrics |
-| `GET` | `/saml/metadata` | IdP metadata XML |
 
 ### 8.2 Auth
 
@@ -378,6 +377,7 @@ To add a new migration:
 | `DELETE` | `/api/admin/users/:empId/identity-links/:linkId` | Remove an identity link |
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD |
 | `GET`/`POST`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry |
+| `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
 | `GET` | `/api/admin/audit/saml` | SAML assertions log |
 | `GET` | `/api/admin/audit/system` | `audit_log` rows |
@@ -474,7 +474,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 **Account** (everyone) — top-right profile dropdown
 - Account settings (Profile / Security / Sessions / Two-factor)
 - Audit logs (admins)
-- SAML metadata link
+- SAML metadata link (admins only)
 - Sign out
 
 ### 9.3 Routing
@@ -705,6 +705,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### `(pending)` — 2026-06-07 — Groups: member management + Google/AD directory sync
+
+**Why** — Identity Groups page had no way to add members; operators expected groups to mirror Google Workspace and Active Directory.
+
+**What changed:**
+
+- **`migrations/014_group_directory_sync.sql`** — `groups.source_system`, `external_id`, `connector_id`, `last_synced_at`.
+- **`src/services/group-sync.ts`** — mirrors configured Google / AD groups into `groups` + `group_members`; hooked into `google-sync` and `ad-sync`.
+- **`src/adapters/ad-adapter.ts`** — `findGroup`, `listGroupMemberUsers` for AD group membership import.
+- **`POST /api/admin/groups/sync`** — manual directory group sync from admin UI.
+- **`web/js/views-stubs.js`** — Groups page: Manage Members (search + add/remove), Sync from Directory, source badges; AD connector **Sync Groups** field.
+
 ### `2de9f80` — 2026-06-07 — App Access Policy: populate application dropdown from SAML catalog
 
 **Why** — Assign Application Access modal showed an empty application list because SAML SPs lived only in `saml_service_providers`, not `applications`.
@@ -747,6 +759,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/api/admin-users.ts`** — adds admin MFA endpoints per user (`/mfa`, `/mfa/enroll`, `/mfa/confirm`, `/mfa/disable`, `/mfa/regenerate-codes`) and includes `mfaStatus` in `GET /api/admin/users/:empId`.
 - **`web/js/api.js`** — adds `adminMfa*` client methods.
 - **`web/js/views-stubs.js`** — profile drawer adds new **MFA** tab with enrollment QR, confirm code, disable, and regenerate backup codes.
+
+### `pending` — 2026-06-06 — Restrict IdP metadata to ADMIN+
+
+**Why** — Regular users (USER role) could open `/saml/metadata` and see the metadata URL in Account → Capabilities and the profile dropdown.
+
+**What changed:**
+
+- **`GET /saml/metadata`** — requires authenticated ADMIN+ session (no longer public).
+- **`GET /api/me`** — `capabilities.metadataUrl` omitted unless caller is ADMIN+.
+- Profile dropdown and Account capabilities panel hide SAML metadata for non-admins automatically.
 
 ### `9599c4b` — 2026-06-06 — SAML SP registration: metadata XML upload
 

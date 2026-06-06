@@ -120,7 +120,10 @@ export function resolveGoogleSyncScope(cfg: Record<string, unknown>): GoogleSync
     groups: parseCsvList(cfg['syncGroups']).map((g) => g.toLowerCase()),
     users: parseCsvList(cfg['syncUsers']).map((u) => u.toLowerCase()),
     includeSubOrgUnits: cfg['includeSubOrgUnits'] !== false && cfg['includeSubOrgUnits'] !== 'false',
-    syncGroupMemberships: cfg['syncGroupMemberships'] === true || cfg['syncGroupMemberships'] === 'true',
+    syncGroupMemberships:
+      cfg['syncGroupMemberships'] === true
+      || cfg['syncGroupMemberships'] === 'true'
+      || (parseCsvList(cfg['syncGroups']).length > 0 && cfg['syncGroupMemberships'] !== false && cfg['syncGroupMemberships'] !== 'false'),
   };
 }
 

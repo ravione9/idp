@@ -442,6 +442,83 @@ export class ADAdapter extends BaseAdapter {
   }
 
   /**
+   * Resolve an AD group by CN, sAMAccountName, or distinguished name.
+   */
+  async findGroup(
+    groupKey: string,
+  ): Promise<AdapterResult<{ dn: string; name: string; mail?: string } | null>> {
+    return this.safe(async () => {
+      const key = groupKey.trim();
+      if (!key) return null;
+
+      if (key.includes('=') && key.includes(',')) {
+        const baseEntries = await this.searchAt(key, '(objectClass=group)', ['dn', 'cn', 'mail', 'displayName']);
+        if (baseEntries.length > 0) {
+          const e = baseEntries[0];
+          const mail = getLdapAttr(e, 'mail');
+          return {
+            dn:   e.dn,
+            name: getLdapAttr(e, 'displayName') || getLdapAttr(e, 'cn') || key,
+            ...(mail ? { mail } : {}),
+          };
+        }
+      }
+
+      const esc = key.replace(/[\\*()\\x00]/g, (c) => `\\${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+      const filter = `(&(objectClass=group)(|(cn=${esc})(sAMAccountName=${esc})))`;
+      const entries = await this.search(filter, ['dn', 'cn', 'mail', 'displayName', 'sAMAccountName']);
+      if (!entries.length) return null;
+
+      const e = entries[0];
+      const mail = getLdapAttr(e, 'mail');
+      return {
+        dn:   e.dn,
+        name: getLdapAttr(e, 'displayName') || getLdapAttr(e, 'cn') || key,
+        ...(mail ? { mail } : {}),
+      };
+    });
+  }
+
+  /** List enabled user members of a group (by group DN). */
+  async listGroupMemberUsers(
+    groupDn: string,
+  ): Promise<AdapterResult<Array<{ sam: string; mail?: string }>>> {
+    return this.safe(async () => {
+      const groupEntries = await this.searchAt(groupDn, '(objectClass=group)', ['member']);
+      if (!groupEntries.length) return [];
+
+      const raw = groupEntries[0].member;
+      const memberDns: string[] = Array.isArray(raw)
+        ? (raw as string[])
+        : (raw ? [String(raw)] : []);
+
+      const users: Array<{ sam: string; mail?: string }> = [];
+      for (const memberDn of memberDns.slice(0, 1000)) {
+        try {
+          const uEntries = await this.searchAt(
+            memberDn,
+            '(&(objectClass=user)(!(sAMAccountName=*$)))',
+            ['sAMAccountName', 'mail', 'userAccountControl'],
+          );
+          if (!uEntries.length) continue;
+          const u = uEntries[0];
+          const uac = Number(getLdapAttr(u, 'userAccountControl') || '0');
+          if (uac & UAC_ACCOUNTDISABLE) continue;
+          const sam = getLdapAttr(u, 'sAMAccountName');
+          if (!sam) continue;
+          const mail = getLdapAttr(u, 'mail');
+          const row: { sam: string; mail?: string } = { sam };
+          if (mail) row.mail = mail;
+          users.push(row);
+        } catch {
+          // skip unresolved member DNs (nested groups, contacts, etc.)
+        }
+      }
+      return users;
+    });
+  }
+
+  /**
    * List all AD security groups the user is a member of (via memberOf attribute).
    */
   async listBindings(externalId: string): Promise<AdapterResult<Binding[]>> {

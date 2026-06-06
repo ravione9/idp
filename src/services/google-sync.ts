@@ -18,6 +18,7 @@ import {
   resolveGoogleSyncScope,
   type GoogleSyncScope,
 } from './google-directory-config.js';
+import { syncGoogleDirectoryGroups } from './group-sync.js';
 
 // ---------------------------------------------------------------------------
 // Re-export SyncResult type (same shape as ad-sync)
@@ -296,10 +297,20 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
       itemsProcessed += inbound.processed;
       itemsSucceeded += inbound.succeeded;
       itemsFailed += inbound.failed;
+      let groupSummary = '';
+      if (scope.groups.length > 0) {
+        const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope);
+        groupSummary =
+          ` | Groups: ${gs.groupsSynced} synced, ${gs.membersSynced} members` +
+          (gs.errors.length ? ` (${gs.errors.length} errors)` : '');
+        errors.push(...gs.errors);
+      }
+
       inboundSummary =
         `Inbound: ${inbound.found} Google users found, ${inbound.imported} imported, ${inbound.linked} linked` +
         (inbound.repaired ? `, ${inbound.repaired} links repaired` : '') +
         `, ${inbound.skipped} skipped` +
+        groupSummary +
         (runOutbound ? ' | Outbound: see employee reconcile below' : '');
       logger.info({ connectorId, runId, inbound }, 'Google sync inbound phase complete');
     }

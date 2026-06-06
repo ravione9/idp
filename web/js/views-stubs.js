@@ -1,4 +1,4 @@
-import { api } from './api.js?v=2026-06-07-app-access-apps';
+import { api } from './api.js?v=2026-06-07-groups-sync';
 import { el, esc, fmtDate } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 
@@ -56,29 +56,146 @@ const norm = r => Array.isArray(r) ? r : (r?.data ?? []);
 
 // ─── 1. Groups ────────────────────────────────────────────────────────────────
 export async function viewGroups(content) {
-  content.replaceChildren(el(`<div>${header('Groups', 'Manage static and dynamic groups', `<button class="btn btn-primary" id="new-group-btn">+ New Group</button>`)}<div id="list-area">${loading()}</div></div>`));
+  content.replaceChildren(el(`<div>${header('Groups', 'Local groups, plus Google Workspace and AD groups synced from connectors', `<div style="display:flex;gap:0.5rem"><button class="btn btn-secondary" id="sync-groups-btn">⟳ Sync from Directory</button><button class="btn btn-primary" id="new-group-btn">+ New Group</button></div>`)}<div id="grp-msg" style="margin-bottom:0.75rem"></div><div id="list-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
+
+  const sourceBadge = (src) => ({
+    LOCAL:  '<span class="badge badge-neutral">Local</span>',
+    GOOGLE: '<span class="badge badge-info">Google</span>',
+    AD:     '<span class="badge badge-success">AD</span>',
+  }[src || 'LOCAL'] || `<span class="badge badge-neutral">${esc(src)}</span>`);
+
+  async function openGroupMembersModal(groupId, groupName, isSynced) {
+    const bd = openModal(`<div class="modal modal-wide"><div class="modal-header"><h2>${esc(groupName)} — Members</h2></div>
+      <div class="modal-body">
+        ${isSynced ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">Membership is synced from Google Workspace or Active Directory. Run <strong>Sync from Directory</strong> or trigger a connector sync to refresh.</div>' : ''}
+        <div id="gm-list">${loading()}</div>
+        ${isSynced ? '' : `<div class="form-group" style="margin-top:1rem">
+          <label class="form-label">Add member</label>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+            <input class="form-input" id="gm-search" placeholder="Search name or email…" style="flex:1;min-width:180px">
+            <input class="form-input" id="gm-emp" placeholder="Or enter Employee ID" style="width:160px">
+            <button class="btn btn-primary" id="gm-add">Add</button>
+          </div>
+          <div id="gm-pick" style="margin-top:0.5rem"></div>
+        </div>`}
+        <div id="gm-err"></div>
+      </div><div class="modal-footer"><button class="btn btn-secondary" id="gm-close">Close</button></div></div>`);
+
+    async function loadMembers() {
+      try {
+        const g = await api.getGroup(groupId);
+        const members = g.members || [];
+        const rows = members.length ? members.map(m => `
+          <tr>
+            <td class="cell-strong">${esc(m.full_name || m.emp_id)}</td>
+            <td class="muted">${esc(m.email_corp || '—')}</td>
+            <td class="muted">${esc(m.emp_id)}</td>
+            ${isSynced ? '<td></td>' : `<td><button class="btn btn-sm btn-danger gm-rm" data-emp="${esc(m.emp_id)}">Remove</button></td>`}
+          </tr>`).join('')
+          : `<tr><td colspan="4"><p class="muted">No members yet.</p></td></tr>`;
+        bd.querySelector('#gm-list').innerHTML = `<div class="table-wrap"><table>
+          <thead><tr><th>Name</th><th>Email</th><th>Employee ID</th>${isSynced ? '' : '<th></th>'}</tr></thead>
+          <tbody>${rows}</tbody></table></div>`;
+        if (!isSynced) {
+          bd.querySelectorAll('.gm-rm').forEach(btn => {
+            btn.addEventListener('click', async () => {
+              try { await api.removeGroupMember(groupId, btn.dataset.emp); await loadMembers(); await load(); }
+              catch (e) { alert(e.message); }
+            });
+          });
+        }
+      } catch (e) { bd.querySelector('#gm-list').innerHTML = errHtml(e.message); }
+    }
+
+    bd.querySelector('#gm-close').addEventListener('click', () => bd.remove());
+
+    if (!isSynced) {
+      let searchTimer;
+      bd.querySelector('#gm-search').addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(async () => {
+          const q = bd.querySelector('#gm-search').value.trim();
+          const pick = bd.querySelector('#gm-pick');
+          if (q.length < 2) { pick.innerHTML = ''; return; }
+          try {
+            const users = norm(await api.listUsersUnified(q, 'ACTIVE', '', 15));
+            pick.innerHTML = users.length ? users.map(u => `
+              <button type="button" class="btn btn-sm btn-secondary gm-pick" style="margin:0.25rem 0.25rem 0 0"
+                data-emp="${esc(u.emp_id)}" data-label="${esc(u.full_name || u.emp_id)}">
+                ${esc(u.full_name || u.emp_id)} <span class="muted">(${esc(u.email_corp || u.emp_id)})</span>
+              </button>`).join('') : '<span class="muted">No users found</span>';
+            pick.querySelectorAll('.gm-pick').forEach(btn => {
+              btn.addEventListener('click', () => {
+                bd.querySelector('#gm-emp').value = btn.dataset.emp;
+                bd.querySelector('#gm-search').value = btn.dataset.label;
+                pick.innerHTML = '';
+              });
+            });
+          } catch { pick.innerHTML = ''; }
+        }, 300);
+      });
+      bd.querySelector('#gm-add').addEventListener('click', async () => {
+        const empId = bd.querySelector('#gm-emp').value.trim();
+        if (!empId) return;
+        try {
+          await api.addGroupMember(groupId, empId);
+          bd.querySelector('#gm-emp').value = '';
+          bd.querySelector('#gm-search').value = '';
+          await loadMembers(); await load();
+        } catch (e) { bd.querySelector('#gm-err').innerHTML = errHtml(e.message); }
+      });
+    }
+
+    await loadMembers();
+  }
 
   async function load() {
     try {
       const groups = norm(await api.listGroups());
-      const rows = groups.length ? groups.map(g => `
-        <tr>
+      const rows = groups.length ? groups.map(g => {
+        const synced = g.source_system && g.source_system !== 'LOCAL';
+        return `<tr>
           <td class="cell-strong">${esc(g.name)}</td>
-          <td>${g.type === 'STATIC' ? '<span class="badge badge-info">STATIC</span>' : '<span class="badge badge-success">DYNAMIC</span>'}</td>
+          <td>${g.type === 'DYNAMIC' ? '<span class="badge badge-success">DYNAMIC</span>' : '<span class="badge badge-info">STATIC</span>'}</td>
+          <td>${sourceBadge(g.source_system)}</td>
           <td>${g.member_count ?? 0}</td>
-          <td>${g.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
-          <td><button class="btn btn-sm btn-danger del-group" data-id="${esc(String(g.id))}">Delete</button></td>
-        </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No groups yet.</p></div></td></tr>`;
-      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Members</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+          <td>${g.last_synced_at ? `<span class="muted" style="font-size:0.78rem">${fmtDate(g.last_synced_at)}</span>` : '—'}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary mgr-group" data-id="${esc(String(g.id))}" data-name="${esc(g.name)}" data-synced="${synced ? '1' : '0'}">${synced ? 'View Members' : 'Manage Members'}</button>
+            ${synced ? '' : `<button class="btn btn-sm btn-danger del-group" data-id="${esc(String(g.id))}">Delete</button>`}
+          </td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No groups yet. Create a local group or sync from Google / AD connectors.</p></div></td></tr>`;
+      wrap.querySelector('#list-area').innerHTML = `
+        <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">Configure <strong>Sync Groups</strong> on your Google or AD connector (Connections → Directory Sync), then click <strong>Sync from Directory</strong>.</p>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Source</th><th>Members</th><th>Last Sync</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
       wrap.querySelectorAll('.del-group').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Delete this group?')) return;
           try { await api.deleteGroup(btn.dataset.id); await load(); } catch(e) { alert(e.message); }
         });
       });
+      wrap.querySelectorAll('.mgr-group').forEach(btn => {
+        btn.addEventListener('click', () => openGroupMembersModal(btn.dataset.id, btn.dataset.name, btn.dataset.synced === '1'));
+      });
     } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
   }
+
+  wrap.querySelector('#sync-groups-btn').addEventListener('click', async () => {
+    const btn = wrap.querySelector('#sync-groups-btn');
+    btn.disabled = true; btn.textContent = 'Syncing…';
+    wrap.querySelector('#grp-msg').innerHTML = '';
+    try {
+      const r = await api.syncDirectoryGroups();
+      const errNote = r.errors?.length ? ` (${r.errors.length} warnings — check connector config)` : '';
+      wrap.querySelector('#grp-msg').innerHTML = `<div class="alert alert-success">Synced <strong>${r.groupsSynced ?? 0}</strong> groups, <strong>${r.membersSynced ?? 0}</strong> members.${errNote}</div>`;
+      await load();
+    } catch (e) {
+      wrap.querySelector('#grp-msg').innerHTML = errHtml(e.message);
+    }
+    btn.disabled = false; btn.textContent = '⟳ Sync from Directory';
+  });
 
   wrap.querySelector('#new-group-btn').addEventListener('click', () => {
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>New Group</h2></div><div class="modal-body">
@@ -1799,9 +1916,9 @@ export async function viewAppDiscovery(content) {
 const GOOGLE_WS_META = {
   label: 'Google Workspace', icon: '🔵', badge: 'badge-success',
   desc: 'Google Workspace / G Suite directory',
-  fields: ['customerDomain','serviceAccountEmail','serviceAccountKey','adminEmail','syncOrgUnits','syncGroups','syncUsers','provisionOrgUnit','includeSubOrgUnits'],
+  fields: ['customerDomain','serviceAccountEmail','serviceAccountKey','adminEmail','syncOrgUnits','syncGroups','syncGroupMemberships','syncUsers','provisionOrgUnit','includeSubOrgUnits'],
   connectionFields: ['customerDomain','serviceAccountEmail','serviceAccountKey','adminEmail'],
-  scopeFields: ['syncOrgUnits','syncGroups','syncUsers','provisionOrgUnit','includeSubOrgUnits'],
+  scopeFields: ['syncOrgUnits','syncGroups','syncUsers','syncGroupMemberships','provisionOrgUnit','includeSubOrgUnits'],
 };
 
 function normalizeConnectorType(t) {
@@ -1809,7 +1926,7 @@ function normalizeConnectorType(t) {
 }
 
 const CONNECTOR_TYPES = {
-  AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',           fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl'] },
+  AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',           fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl','syncGroups'], scopeFields: ['syncGroups'] },
   LDAP:             { label: 'LDAP',             icon: '📂', badge: 'badge-info',    desc: 'Generic LDAP v3 directory server',             fields: ['host','port','bindDn','bindPassword','baseDn','useSsl'] },
   GOOGLE_WORKSPACE: GOOGLE_WS_META,
   GOOGLE:           GOOGLE_WS_META,
@@ -1835,7 +1952,8 @@ const FIELD_LABELS = {
   serviceAccountKey:  'Service Account JSON Key',
   adminEmail:         'Admin Email (Workspace super admin — required for domain-wide delegation)',
   syncOrgUnits:       'Sync OUs (one per line, e.g. /Sales — blank = all OUs)',
-  syncGroups:         'Sync Groups (one per line, group email — optional filter)',
+  syncGroups:         'Sync Groups (Google: group email per line; AD: CN or sAMAccountName per line)',
+  syncGroupMemberships: 'Mirror group membership into IdP Groups (recommended when Sync Groups is set)',
   syncUsers:          'Sync Users (one per line, user email — optional filter)',
   provisionOrgUnit:   'Provision OU (outbound new users, e.g. /Employees)',
   includeSubOrgUnits: 'Include sub-OUs',
@@ -2112,10 +2230,22 @@ function initSourcesTab(panel) {
           <textarea class="form-textarea" id="cfg-${f}" rows="3" placeholder="/Sales&#10;/Engineering">${val}</textarea>
         </div>`;
       }
-      if (f === 'syncGroups' && isGoogle) {
+      if (f === 'syncGroups' && (isGoogle || connectorType === 'AD')) {
+        const ph = isGoogle
+          ? 'sales-team@company.com&#10;it-admins@company.com'
+          : 'IT-Admins&#10;VPN-Users';
         return `<div class="form-group" style="grid-column:1/-1">
           <label class="form-label">${esc(label)}</label>
-          <textarea class="form-textarea" id="cfg-${f}" rows="2" placeholder="sales-team@company.com&#10;it-admins@company.com">${val}</textarea>
+          <textarea class="form-textarea" id="cfg-${f}" rows="2" placeholder="${ph}">${val}</textarea>
+        </div>`;
+      }
+      if (f === 'syncGroupMemberships' && isGoogle) {
+        const checked = defaults[f] !== false && defaults[f] !== 'false';
+        return `<div class="form-group" style="grid-column:1/-1">
+          <label class="form-label" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+            <input type="checkbox" id="cfg-${f}" ${checked ? 'checked' : ''}>
+            ${esc(label)}
+          </label>
         </div>`;
       }
       if (f === 'syncUsers' && isGoogle) {
