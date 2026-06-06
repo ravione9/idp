@@ -10,6 +10,7 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { isSamlEnabled } from '../config.js';
 import { requireAuth } from '../auth/middleware.js';
+import { requireRole } from '../auth/rbac.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
 import {
@@ -158,9 +159,9 @@ async function issueAssertion(
 }
 
 // ---------------------------------------------------------------------------
-// IdP metadata (public — SP admins use this to configure trust)
+// IdP metadata (ADMIN+ only — SP onboarding via admin console)
 // ---------------------------------------------------------------------------
-router.get('/metadata', (_req: Request, res: Response): void => {
+router.get('/metadata', requireAuth, requireRole('ADMIN'), (_req: Request, res: Response): void => {
   if (!isSamlEnabled()) {
     samlUnavailable(res);
     return;
