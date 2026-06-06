@@ -705,6 +705,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### `ada22b6` — 2026-06-07 — Groups list: fix connector_id collation mismatch
+
+**Why** — `GET /api/admin/groups` failed with `ER_CANT_AGGREGATE_2COLLATIONS` because migration 014 added `groups.connector_id` with MySQL 8 default `utf8mb4_0900_ai_ci` while `connectors.id` uses `utf8mb4_unicode_ci`.
+
+**What changed:**
+
+- **`migrations/015_groups_collation_fix.sql`** — align `groups.connector_id` and `external_id` to `utf8mb4_unicode_ci`.
+- **`src/api/config-groups.ts`** — COLLATE on connectors JOIN; treat collation errors as fallback to legacy list.
+
+---
+
 ### `f15db28` — 2026-06-07 — Groups API: hardened list fallback
 
 **Why** — `/api/admin/groups` could still return 500 when migration 014 columns were missing or the extended JOIN query failed on a long-lived DB volume.

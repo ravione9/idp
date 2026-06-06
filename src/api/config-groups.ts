@@ -32,7 +32,7 @@ const GROUP_LIST_SQL = `
          c.name AS connector_name,
     (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS member_count
    FROM \`groups\` g
-   LEFT JOIN connectors c ON c.id = g.connector_id
+   LEFT JOIN connectors c ON c.id = (g.connector_id COLLATE utf8mb4_unicode_ci)
   WHERE g.active = 1
   ORDER BY g.source_system, g.name`;
 
@@ -57,7 +57,11 @@ async function listGroups(): Promise<Record<string, unknown>[]> {
       return normalizeGroupRows(rows);
     } catch (err) {
       const code = (err as { code?: string }).code;
-      if (code !== 'ER_BAD_FIELD_ERROR' && code !== 'ER_NO_SUCH_TABLE') throw err;
+      if (
+        code !== 'ER_BAD_FIELD_ERROR'
+        && code !== 'ER_NO_SUCH_TABLE'
+        && code !== 'ER_CANT_AGGREGATE_2COLLATIONS'
+      ) throw err;
       logger.warn({ err }, 'Groups list: extended query failed — falling back to legacy');
     }
   }
