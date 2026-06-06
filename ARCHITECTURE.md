@@ -705,7 +705,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### `0f6ee22` — 2026-06-07 — Admin password reset: local + AD/Google writeback fixes
+### `60ec800` — 2026-06-07 — Admin password reset: local + AD/Google writeback fixes
 
 **Why** — Password reset appeared to succeed but did not change login credentials; AD writeback searched by `employeeID` instead of identity link `external_id`, and Google writeback ignored connector admin impersonation.
 
