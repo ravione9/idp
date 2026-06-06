@@ -712,6 +712,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### (pending) — 2026-06-07 — Migration 019: force Zoho Mail policy-gated in DB
+
+**Why** — Migration `017` ran on the server but its `WHERE JSON_EXTRACT(...) = true` clause did not match on the running MySQL version, leaving `applications.visibility = 'PUBLIC'` and `entitlement_rule.all_active = true`. The migration runner skips already-applied files by name even when content changes, so `017` can never re-run. `019` fixes the data unconditionally.
+
+**What changed:**
+
+- **`migrations/019_fix_zoho_restricted.sql`** — unconditionally sets `saml_service_providers.entitlement_rule = {all_active:false}` and `applications.visibility = 'RESTRICTED'` for `zoho-mail`.
+
+---
+
 ### `07bc5c9` — 2026-06-07 — Application Access Policy: identity group assignments
 
 **Why** — Admins created groups under **Identity → Groups** (e.g. "zoho mail") but the **Assign Application Access** modal only listed tag groups, so the group never appeared in the dropdown.
