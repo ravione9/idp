@@ -705,7 +705,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### `ada22b6` — 2026-06-07 — Groups list: fix connector_id collation mismatch
+### `534b531` — 2026-06-07 — Groups list: fix connector_id collation mismatch
 
 **Why** — `GET /api/admin/groups` failed with `ER_CANT_AGGREGATE_2COLLATIONS` because migration 014 added `groups.connector_id` with MySQL 8 default `utf8mb4_0900_ai_ci` while `connectors.id` uses `utf8mb4_unicode_ci`.
 
