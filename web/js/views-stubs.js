@@ -1,4 +1,4 @@
-import { api } from './api.js?v=2026-06-07-groups-sync';
+import { api } from './api.js?v=2026-06-07-ad-groups-sync';
 import { el, esc, fmtDate } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 
@@ -1926,7 +1926,10 @@ function normalizeConnectorType(t) {
 }
 
 const CONNECTOR_TYPES = {
-  AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',           fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl','syncGroups'], scopeFields: ['syncGroups'] },
+  AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',
+    fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl','syncGroups'],
+    connectionFields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl'],
+    scopeFields: ['syncGroups'] },
   LDAP:             { label: 'LDAP',             icon: '📂', badge: 'badge-info',    desc: 'Generic LDAP v3 directory server',             fields: ['host','port','bindDn','bindPassword','baseDn','useSsl'] },
   GOOGLE_WORKSPACE: GOOGLE_WS_META,
   GOOGLE:           GOOGLE_WS_META,
@@ -1952,7 +1955,7 @@ const FIELD_LABELS = {
   serviceAccountKey:  'Service Account JSON Key',
   adminEmail:         'Admin Email (Workspace super admin — required for domain-wide delegation)',
   syncOrgUnits:       'Sync OUs (one per line, e.g. /Sales — blank = all OUs)',
-  syncGroups:         'Sync Groups (Google: group email per line; AD: CN or sAMAccountName per line)',
+  syncGroups:         'Sync Groups (Google: group email; AD: CN, sAMAccountName, full DN, or * for all security groups)',
   syncGroupMemberships: 'Mirror group membership into IdP Groups (recommended when Sync Groups is set)',
   syncUsers:          'Sync Users (one per line, user email — optional filter)',
   provisionOrgUnit:   'Provision OU (outbound new users, e.g. /Employees)',
@@ -2191,6 +2194,8 @@ function initSourcesTab(panel) {
     const meta = CONNECTOR_TYPES[connectorType] || { label: connectorType, fields: [] };
     const isEdit = !!existingId;
     const isGoogle = connectorType === 'GOOGLE_WORKSPACE';
+    const isAd = connectorType === 'AD';
+    const useScopeTabs = isGoogle || isAd;
 
     function renderConfigField(f) {
       const label = FIELD_LABELS[f] || f;
@@ -2233,10 +2238,14 @@ function initSourcesTab(panel) {
       if (f === 'syncGroups' && (isGoogle || connectorType === 'AD')) {
         const ph = isGoogle
           ? 'sales-team@company.com&#10;it-admins@company.com'
-          : 'IT-Admins&#10;VPN-Users';
+          : 'IT-Admins&#10;VPN-Users&#10;*';
+        const hint = connectorType === 'AD'
+          ? '<p class="muted" style="font-size:0.75rem;margin-top:0.35rem">One group per line. Members appear after users are linked in AD sync. Use <code>*</code> to mirror all security groups (max 200).</p>'
+          : '';
         return `<div class="form-group" style="grid-column:1/-1">
           <label class="form-label">${esc(label)}</label>
-          <textarea class="form-textarea" id="cfg-${f}" rows="2" placeholder="${ph}">${val}</textarea>
+          <textarea class="form-textarea" id="cfg-${f}" rows="3" placeholder="${ph}">${val}</textarea>
+          ${hint}
         </div>`;
       }
       if (f === 'syncGroupMemberships' && isGoogle) {
@@ -2289,24 +2298,28 @@ function initSourcesTab(panel) {
     const googleConnFields = (meta.connectionFields || fieldList).map(renderConfigField).join('');
     const googleScopeFields = (meta.scopeFields || []).map(renderConfigField).join('');
 
-    const googleFieldsBlock = isGoogle ? `
+    const adConnFields = (meta.connectionFields || fieldList).map(renderConfigField).join('');
+    const adScopeFields = (meta.scopeFields || []).map(renderConfigField).join('');
+    const scopedFieldsBlock = useScopeTabs ? `
         <div class="cfg-tab-bar" style="display:flex;gap:0.5rem;margin-bottom:1rem;border-bottom:1px solid var(--border)">
           <button type="button" class="cfg-tab btn btn-sm btn-secondary active" data-pane="conn" style="border-radius:6px 6px 0 0;margin-bottom:-1px">🔌 Connection</button>
           <button type="button" class="cfg-tab btn btn-sm btn-secondary" data-pane="scope" style="border-radius:6px 6px 0 0;margin-bottom:-1px">🎯 Sync Scope</button>
         </div>
         <div id="cfg-pane-conn" class="cfg-pane">
-          ${connectorType === 'GOOGLE_WORKSPACE' ? `<div class="alert alert-info" style="font-size:0.8rem;margin-bottom:1rem;line-height:1.45">
+          ${isGoogle ? `<div class="alert alert-info" style="font-size:0.8rem;margin-bottom:1rem;line-height:1.45">
             <strong>Domain-wide delegation setup</strong> (one-time in Google):<br>
             1) Cloud Console → Service account → enable <em>Domain-wide delegation</em><br>
             2) Admin Console → Security → API controls → Domain-wide delegation → add the SA <strong>Client ID</strong> with scope:
             <code style="font-size:0.72rem">https://www.googleapis.com/auth/admin.directory.user</code>
             (add <code style="font-size:0.72rem">...group.readonly</code> only if you filter by Sync Groups)
           </div>` : ''}
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">${googleConnFields}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">${isGoogle ? googleConnFields : adConnFields}</div>
         </div>
         <div id="cfg-pane-scope" class="cfg-pane" style="display:none">
-          <p class="muted" style="font-size:0.82rem;margin:0 0 1rem">Choose which OUs, groups, and users to import. Leave all blank to sync the <strong>entire</strong> Google directory.</p>
-          <div style="display:grid;grid-template-columns:1fr;gap:0">${googleScopeFields}</div>
+          ${isGoogle
+            ? '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">Choose which OUs, groups, and users to import. Leave all blank to sync the <strong>entire</strong> Google directory.</p>'
+            : '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">List AD groups to mirror into <strong>Identity → Groups</strong>. User sync must run first so members can be linked. Leave blank to skip group sync.</p>'}
+          <div style="display:grid;grid-template-columns:1fr;gap:0">${isGoogle ? googleScopeFields : adScopeFields}</div>
         </div>` : `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">${configFields}</div>`;
 
@@ -2340,7 +2353,7 @@ function initSourcesTab(panel) {
         ${isGoogle ? '' : `<hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 1rem">
         <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:0.75rem;color:var(--text-dim)">CONNECTION SETTINGS</h3>`}
         ${isGoogle ? `<h3 style="font-size:0.9rem;font-weight:600;margin:0.5rem 0 0.75rem;color:var(--text-dim)">GOOGLE WORKSPACE</h3>` : ''}
-        ${googleFieldsBlock}
+        ${scopedFieldsBlock}
         <div id="cfg-err"></div>
       </div>
       <div class="modal-footer" style="gap:0.5rem">
@@ -2354,7 +2367,7 @@ function initSourcesTab(panel) {
     if (!isEdit) bd.querySelector('#cfg-back').addEventListener('click', () => { bd.remove(); openAddWizard(); });
     bd.querySelector('#cfg-cancel').addEventListener('click', () => bd.remove());
 
-    if (isGoogle) {
+    if (useScopeTabs) {
       bd.querySelectorAll('.cfg-tab').forEach(tab => {
         tab.addEventListener('click', () => {
           bd.querySelectorAll('.cfg-tab').forEach(t => {

@@ -466,7 +466,15 @@ export class ADAdapter extends BaseAdapter {
 
       const esc = key.replace(/[\\*()\\x00]/g, (c) => `\\${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
       const filter = `(&(objectClass=group)(|(cn=${esc})(sAMAccountName=${esc})))`;
-      const entries = await this.search(filter, ['dn', 'cn', 'mail', 'displayName', 'sAMAccountName']);
+      const searchBases = [this.baseDn];
+      if (this.dir.domainRoot.toUpperCase() !== this.baseDn.toUpperCase()) {
+        searchBases.push(this.dir.domainRoot);
+      }
+      let entries: ADUser[] = [];
+      for (const base of searchBases) {
+        entries = await this.searchAt(base, filter, ['dn', 'cn', 'mail', 'displayName', 'sAMAccountName']);
+        if (entries.length) break;
+      }
       if (!entries.length) return null;
 
       const e = entries[0];
@@ -476,6 +484,43 @@ export class ADAdapter extends BaseAdapter {
         name: getLdapAttr(e, 'displayName') || getLdapAttr(e, 'cn') || key,
         ...(mail ? { mail } : {}),
       };
+    });
+  }
+
+  /**
+   * List security groups under the domain root (for syncGroups = *).
+   * Skips built-in domain groups; capped at 200.
+   */
+  async listDirectoryGroups(): Promise<AdapterResult<Array<{ dn: string; name: string; sam?: string }>>> {
+    return this.safe(async () => {
+      const skipCn = new Set([
+        'domain users', 'domain computers', 'domain controllers',
+        'domain admins', 'domain guests', 'group policy creator owners',
+        'read-only domain controllers', 'cloneable domain controllers',
+        'dnsadmins', 'enterprise admins', 'schema admins',
+      ]);
+      const filter = '(&(objectClass=group)(sAMAccountName=*))';
+      const entries = await this.searchAt(
+        this.dir.domainRoot,
+        filter,
+        ['dn', 'cn', 'displayName', 'sAMAccountName'],
+      );
+      const out: Array<{ dn: string; name: string; sam?: string }> = [];
+      const seen = new Set<string>();
+      for (const e of entries) {
+        const dn = e.dn;
+        if (!dn || seen.has(dn.toLowerCase())) continue;
+        const cn = (getLdapAttr(e, 'cn') || '').toLowerCase();
+        if (skipCn.has(cn)) continue;
+        seen.add(dn.toLowerCase());
+        const sam = getLdapAttr(e, 'sAMAccountName');
+        const name = getLdapAttr(e, 'displayName') || getLdapAttr(e, 'cn') || sam || dn;
+        const row: { dn: string; name: string; sam?: string } = { dn, name };
+        if (sam) row.sam = sam;
+        out.push(row);
+        if (out.length >= 200) break;
+      }
+      return out;
     });
   }
 

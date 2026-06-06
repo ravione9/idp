@@ -210,17 +210,42 @@ function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
   return new ADAdapter(redis, adUrl, bindDn, bindPass, baseDn, undefined, startTls, targetOuRaw);
 }
 
+async function resolveAdGroupKeys(
+  adapter: ADAdapter,
+  cfg: Record<string, unknown>,
+): Promise<{ keys: string[]; errors: string[] }> {
+  const raw = parseCsvList(cfg['syncGroups']);
+  if (!raw.length) return { keys: [], errors: [] };
+
+  const wildcard = raw.length === 1 && (raw[0] === '*' || raw[0].toUpperCase() === 'ALL');
+  if (!wildcard) return { keys: raw, errors: [] };
+
+  const listed = await adapter.listDirectoryGroups();
+  if (!listed.success) {
+    return { keys: [], errors: [listed.error ?? 'failed to list AD security groups'] };
+  }
+  const dns = (listed.data ?? []).map((g) => g.dn);
+  if (!dns.length) {
+    return { keys: [], errors: ['No AD security groups found under domain root'] };
+  }
+  return { keys: dns, errors: [] };
+}
+
 export async function syncAdDirectoryGroups(
   connectorId: string,
   cfg: Record<string, unknown>,
 ): Promise<GroupSyncSummary> {
   const summary: GroupSyncSummary = { groupsSynced: 0, membersSynced: 0, errors: [] };
-  const groupKeys = parseCsvList(cfg['syncGroups']);
-  if (!groupKeys.length) return summary;
+  if (!parseCsvList(cfg['syncGroups']).length) return summary;
 
   const adapter = createAdAdapterFromConfig(cfg);
   try {
     await adapter.connect();
+
+    const resolved = await resolveAdGroupKeys(adapter, cfg);
+    summary.errors.push(...resolved.errors);
+    const groupKeys = resolved.keys;
+    if (!groupKeys.length) return summary;
 
     for (const groupKey of groupKeys) {
       try {

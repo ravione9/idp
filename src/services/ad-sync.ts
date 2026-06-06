@@ -10,6 +10,8 @@
 
 import crypto from 'crypto';
 import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
+import { parseCsvList } from './google-directory-config.js';
+import type { GroupSyncSummary } from './group-sync.js';
 import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
@@ -54,6 +56,21 @@ function generateSamAccountName(fullName: string): string {
   sam = sam.replace(/[^a-z0-9._-]/g, '').replace(/^\.+|\.+$/g, '');
   if (!sam) sam = 'user';
   return sam.slice(0, 20);
+}
+
+function formatAdGroupSyncSummary(cfg: Record<string, unknown>, gs: GroupSyncSummary): string {
+  const keys = parseCsvList(cfg['syncGroups']);
+  if (!keys.length) {
+    return ' | Groups: skipped (set Sync Groups on the AD connector — CN, sAMAccountName, DN, or *)';
+  }
+  let line = ` | Groups: ${gs.groupsSynced} synced, ${gs.membersSynced} members`;
+  if (gs.errors.length) {
+    const preview = gs.errors.slice(0, 2).join('; ');
+    line += ` (${gs.errors.length} errors: ${preview}${gs.errors.length > 2 ? '…' : ''})`;
+  } else if (gs.groupsSynced === 0) {
+    line += ' (none matched — verify group names or use * for all security groups)';
+  }
+  return line;
 }
 
 function generateTempPassword(): string {
@@ -747,12 +764,8 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
 
       const { syncAdDirectoryGroups } = await import('./group-sync.js');
       const gs = await syncAdDirectoryGroups(connectorId, cfg as Record<string, unknown>);
-      if (gs.groupsSynced > 0 || gs.errors.length > 0) {
-        inboundSummary +=
-          ` | Groups: ${gs.groupsSynced} synced, ${gs.membersSynced} members` +
-          (gs.errors.length ? ` (${gs.errors.length} errors)` : '');
-        errors.push(...gs.errors);
-      }
+      inboundSummary += formatAdGroupSyncSummary(cfg as Record<string, unknown>, gs);
+      if (gs.errors.length) errors.push(...gs.errors);
     }
 
     if (runOutbound) {

@@ -705,6 +705,19 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### `0e0083e` — 2026-06-07 — AD group directory sync: discovery + reporting
+
+**Why** — AD connector sync imported users but groups never appeared; sync history had no group line because `syncGroups` was often unset and group LDAP lookup was limited to the user search base.
+
+**What changed:**
+
+- **`src/adapters/ad-adapter.ts`** — `findGroup` falls back to domain root; `listDirectoryGroups()` for `syncGroups = *`.
+- **`src/services/group-sync.ts`** — resolve `*` / `ALL` to up to 200 security groups.
+- **`src/services/ad-sync.ts`** — always append group sync status to inbound summary (including "skipped" when unset).
+- **`web/js/views-stubs.js`** — AD connector **Sync Scope** tab with Sync Groups help text.
+
+---
+
 ### `65a9351` — 2026-06-07 — Group members modal: fix emp_id collation mismatch
 
 **Why** — `GET /api/admin/groups/:id` (Manage Members modal) failed with `ER_CANT_AGGREGATE_2COLLATIONS` because `group_members.emp_id` used `utf8mb4_0900_ai_ci` while `employees.emp_id` uses `utf8mb4_unicode_ci`.
