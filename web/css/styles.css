@@ -895,11 +895,11 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 .shell.admin-mode .admin-body {
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: 208px minmax(0, 1fr);
 }
 
 .shell.admin-mode.sidebar-collapsed .admin-body {
-  grid-template-columns: 60px minmax(0, 1fr);
+  grid-template-columns: 52px minmax(0, 1fr);
 }
 
 .shell.user-mode .admin-body {
@@ -911,10 +911,10 @@ button { font-family: inherit; cursor: pointer; }
   border-right: 1px solid var(--border);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0.75rem 0;
+  padding: 0.5rem 0;
   height: 100%;
   min-height: 0;
-  width: 240px;
+  width: 208px;
   transition: width 0.2s ease;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
@@ -929,22 +929,22 @@ button { font-family: inherit; cursor: pointer; }
 .i { width: 18px; height: 18px; flex-shrink: 0; display: inline-block; vertical-align: middle; }
 
 .admin-sidebar .nav-section {
-  display: flex; align-items: center; gap: 0.55rem;
-  font-size: 0.68rem;
+  display: flex; align-items: center; gap: 0.45rem;
+  font-size: 0.62rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-dim);
-  padding: 1.1rem 1.25rem 0.4rem 1.5rem;
+  padding: 0.85rem 0.85rem 0.25rem 1rem;
   font-weight: 600;
 }
-.admin-sidebar .nav-section:first-child { padding-top: 0.5rem; }
+.admin-sidebar .nav-section:first-child { padding-top: 0.35rem; }
 .admin-sidebar .nav-section .i { width: 14px; height: 14px; opacity: 0.85; }
 .admin-sidebar .nav-section-icon { display: inline-flex; align-items: center; justify-content: center; }
 
 .admin-sidebar button {
-  display: flex; align-items: center; gap: 0.7rem;
-  padding: 0.5rem 1.25rem 0.5rem 1.5rem;
-  font-size: 0.82rem;
+  display: flex; align-items: center; gap: 0.55rem;
+  padding: 0.38rem 0.85rem 0.38rem 1rem;
+  font-size: 0.78rem;
   color: var(--text-muted);
   background: transparent;
   border: none;
@@ -980,7 +980,7 @@ button { font-family: inherit; cursor: pointer; }
    CONTENT  — scrolls independently of sidebar
    ============================================================ */
 .content {
-  padding: 1.5rem 2rem;
+  padding: 0.85rem 1.15rem;
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--bg);
@@ -997,13 +997,15 @@ button { font-family: inherit; cursor: pointer; }
 .content::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
 .page-header {
-  display: flex; justify-content: space-between; align-items: flex-end;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
   flex-wrap: wrap;
 }
-.page-header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.01em; }
-.page-header .subtitle { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.25rem; }
+.page-header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2; }
+.page-header .subtitle { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.1rem; line-height: 1.35; }
+.page-header-actions { display: flex; gap: 0.5rem; flex-shrink: 0; align-items: center; }
+.page-header--compact { margin-bottom: 0.5rem; }
 
 .welcome-banner {
   background: linear-gradient(135deg, var(--primary-dark), var(--primary), var(--accent));
@@ -1046,28 +1048,28 @@ button { font-family: inherit; cursor: pointer; }
    ============================================================ */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 1rem;
-  margin-bottom: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.65rem;
+  margin-bottom: 0.85rem;
 }
 
 .stat-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1.1rem 1.25rem;
+  padding: 0.75rem 0.9rem;
   box-shadow: var(--shadow-sm);
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 0.85rem;
+  gap: 0.65rem;
   transition: transform 0.15s, box-shadow 0.15s;
 }
 .stat-card:hover { box-shadow: var(--shadow); }
 
 .stat-card .stat-icon {
-  width: 44px; height: 44px;
-  border-radius: 10px;
+  width: 36px; height: 36px;
+  border-radius: 8px;
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 1.1rem; font-weight: 700;
   flex-shrink: 0;
@@ -1090,7 +1092,7 @@ button { font-family: inherit; cursor: pointer; }
   font-weight: 500;
 }
 .stat-card .stat-value {
-  font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em;
+  font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em;
   color: var(--text);
   line-height: 1.1;
 }
@@ -1307,13 +1309,14 @@ td.actions { text-align: right; }
 .tabs {
   display: flex; gap: 0.25rem;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.75rem;
 }
+.tabs--compact { margin-bottom: 0.6rem; }
 .tab {
   background: transparent;
   border: none;
-  padding: 0.7rem 1rem;
-  font-size: 0.875rem;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.8125rem;
   color: var(--text-muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
@@ -1750,7 +1753,7 @@ td code, .td-code { font-size: 0.78rem; }
    ADMIN SIDEBAR COLLAPSE (JumpCloud collapse behaviour)
    ============================================================ */
 .admin-sidebar.collapsed {
-  width: 60px;
+  width: 52px;
   overflow: hidden;
 }
 .admin-sidebar.collapsed .nav-section .label-text { display: none; }
@@ -2223,7 +2226,7 @@ td code, .td-code { font-size: 0.78rem; }
 
 .theme-label { font-weight: 500; }
 
-.content > div { max-width: 1600px; }
+.content > div { max-width: none; width: 100%; }
 
 .stat-grid,
 .chart-row,
@@ -2233,3 +2236,201 @@ td code, .td-code { font-size: 0.78rem; }
 .page-header h1 { line-height: 1.2; }
 
 .auth-card { position: relative; z-index: 1; }
+
+/* ============================================================
+   ENTERPRISE ADMIN DENSITY (laptop-first admin consoles)
+   ============================================================ */
+.admin-page { min-width: 0; }
+
+.page-toolbar {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin-bottom: 0.65rem;
+  flex-wrap: wrap;
+}
+.page-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+.kpi-strip {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.kpi-strip--spaced { margin-bottom: 0.65rem; }
+
+.kpi-strip-item {
+  flex: 1 1 0;
+  min-width: 88px;
+  padding: 0.45rem 0.75rem;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  justify-content: center;
+}
+.kpi-strip-item:last-child { border-right: none; }
+
+.kpi-strip-value {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kpi-strip-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.kpi-strip-item--accent .kpi-strip-value { color: var(--primary); }
+.kpi-strip-item--success .kpi-strip-value { color: var(--success); }
+.kpi-strip-item--danger .kpi-strip-value { color: var(--danger); }
+.kpi-strip-item--info .kpi-strip-value { color: var(--info); }
+.kpi-strip-item--neutral .kpi-strip-value { color: var(--text-muted); }
+
+.filter-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+  padding: 0.45rem 0.65rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+.filter-toolbar .form-select { width: auto; min-width: 118px; max-width: 160px; }
+.filter-toolbar-search {
+  flex: 1 1 180px;
+  min-width: 140px;
+  max-width: 280px;
+}
+.filter-toolbar-spacer { flex: 1 1 auto; min-width: 0.5rem; }
+
+.table-wrap--flat { box-shadow: none; }
+.dense-table { min-width: 680px; font-size: 0.8125rem; }
+.dense-table th {
+  padding: 0.42rem 0.7rem;
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+.dense-table td {
+  padding: 0.48rem 0.7rem;
+  vertical-align: middle;
+}
+.dense-table tbody tr:last-child td { border-bottom: none; }
+
+.connector-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+.connector-cell-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--surface-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+.connector-cell-body { min-width: 0; }
+.connector-cell-name {
+  font-weight: 600;
+  font-size: 0.8125rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.connector-cell-meta {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 0.05rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+.user-cell-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.user-cell-name {
+  font-weight: 600;
+  font-size: 0.8125rem;
+  line-height: 1.25;
+}
+.user-cell-meta {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.row-actions {
+  display: flex;
+  gap: 0.2rem;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+.row-actions .btn-sm { padding: 0.28rem 0.5rem; font-size: 0.72rem; }
+
+.empty-panel {
+  text-align: center;
+  padding: 2rem 1.25rem;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+.empty-panel--compact { padding: 1.5rem 1rem; }
+.empty-panel-icon { font-size: 2rem; margin-bottom: 0.65rem; opacity: 0.7; }
+.empty-panel h2 { font-size: 1rem; margin: 0 0 0.35rem; font-weight: 600; }
+.empty-panel p { margin-bottom: 0.85rem; font-size: 0.85rem; }
+
+@media (min-width: 901px) and (max-width: 1440px) {
+  .topnav { padding: 0 0.85rem; gap: 0.65rem; }
+  .search-global input { width: 168px; }
+  .primary-nav button { padding: 0 0.7rem; font-size: 0.8125rem; }
+  .chart-row { gap: 0.65rem; margin-bottom: 0.85rem; }
+  .card { padding: 1rem 1.1rem; }
+  .card.compact { padding: 0.75rem 0.9rem; }
+  .grid-2, .grid-3 { gap: 0.65rem; }
+}
+
+@media (max-width: 1100px) {
+  .row-actions { flex-wrap: wrap; justify-content: flex-start; }
+  .dense-table { min-width: 560px; }
+}

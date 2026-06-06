@@ -3,7 +3,15 @@ import { el, esc, fmtDate } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 
 function header(title, subtitle, action = '') {
-  return `<div class="page-header"><div><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div>${action}</div>`;
+  return `<div class="page-header page-header--compact"><div><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div>${action ? `<div class="page-header-actions">${action}</div>` : ''}</div>`;
+}
+
+function kpiStrip(items) {
+  return items.map(([value, label, tone]) => `
+    <div class="kpi-strip-item${tone ? ` kpi-strip-item--${tone}` : ''}">
+      <span class="kpi-strip-value">${esc(String(value ?? '—'))}</span>
+      <span class="kpi-strip-label">${esc(label)}</span>
+    </div>`).join('');
 }
 
 function statCard(iconName, label, value, sub = '', cls = 'primary') {
@@ -1985,12 +1993,11 @@ function connectorStatusBadge(status) {
 }
 
 export async function viewDirectorySync(content) {
-  // ── tab shell ────────────────────────────────────────────────────────────────
-  content.replaceChildren(el(`<div>
-    ${header('Universal Directory', 'Manage identity sources and all user identities across AD, Google, local and more')}
-    <div class="tabs" style="margin-bottom:1.5rem">
-      <button class="tab active" data-tab="sources">🔌 Directory Sources</button>
-      <button class="tab" data-tab="users">👤 Users</button>
+  content.replaceChildren(el(`<div class="admin-page">
+    ${header('Universal Directory', 'Identity sources and hybrid users across AD, Google, and local directories', `<button class="btn btn-primary btn-sm" id="ds-add-header-btn">+ Add Source</button>`)}
+    <div class="tabs tabs--compact">
+      <button class="tab active" data-tab="sources">Directory Sources</button>
+      <button class="tab" data-tab="users">Users</button>
     </div>
     <div id="tab-sources"></div>
     <div id="tab-users" style="display:none"></div>
@@ -2017,89 +2024,95 @@ export async function viewDirectorySync(content) {
 // ╚══════════════════════════════════════════════════════════════╝
 function initSourcesTab(panel) {
   panel.innerHTML = `
-    <div style="display:flex;justify-content:flex-end;margin-bottom:1rem">
-      <button class="btn btn-primary" id="ds-add-btn">+ Add Directory Source</button>
+    <div class="page-toolbar" id="ds-toolbar" hidden>
+      <div id="ds-stats" class="kpi-strip"></div>
     </div>
-    <div id="ds-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem"></div>
     <div id="ds-area">${loading()}</div>`;
 
-  // ── render connector cards ──────────────────────────────────────────────────
+  function renderSourceStats(connectors) {
+    const total = connectors.length;
+    const active = connectors.filter((c) => ['CONNECTED', 'ACTIVE'].includes(c.status)).length;
+    const errors = connectors.filter((c) => c.status === 'ERROR').length;
+    const lastSync = connectors.reduce((best, c) => {
+      if (!c.last_sync_at) return best;
+      return !best || new Date(c.last_sync_at) > new Date(best) ? c.last_sync_at : best;
+    }, null);
+    const toolbar = panel.querySelector('#ds-toolbar');
+    toolbar.hidden = false;
+    panel.querySelector('#ds-stats').innerHTML = kpiStrip([
+      [total, 'Sources', 'accent'],
+      [active, 'Connected', 'success'],
+      [errors, 'Errors', errors ? 'danger' : 'neutral'],
+      [lastSync ? fmtDate(lastSync) : '—', 'Last sync', 'neutral'],
+    ]);
+  }
+
+  function renderSourceTable(connectors) {
+    const rows = connectors.map((c) => {
+      const meta = CONNECTOR_TYPES[normalizeConnectorType(c.connector_type)] || { label: c.connector_type, icon: '⚙️', badge: 'badge-neutral' };
+      const errHint = c.last_error
+        ? `<span class="text-danger" title="${esc(c.last_error)}" style="margin-left:0.25rem">⚠</span>`
+        : '';
+      return `<tr data-cid="${esc(String(c.id))}">
+        <td>
+          <div class="connector-cell">
+            <div class="connector-cell-icon">${meta.icon}</div>
+            <div class="connector-cell-body">
+              <div class="connector-cell-name">${esc(c.name)}</div>
+              <div class="connector-cell-meta">${esc(meta.label)} · ${esc(c.sync_mode || 'INCREMENTAL')}</div>
+            </div>
+          </div>
+        </td>
+        <td><span class="badge badge-neutral">${esc(c.direction || '—')}</span></td>
+        <td class="muted">${c.sync_schedule ? esc(c.sync_schedule) : 'Manual'}</td>
+        <td class="muted">${c.last_sync_at ? fmtDate(c.last_sync_at) : 'Never'}</td>
+        <td>${connectorStatusBadge(c.status)}${errHint}</td>
+        <td class="actions">
+          <div class="row-actions">
+            <button class="btn btn-sm btn-primary ds-sync" data-id="${esc(String(c.id))}">Sync</button>
+            <button class="btn btn-sm btn-secondary ds-test" data-id="${esc(String(c.id))}">Test</button>
+            <button class="btn btn-sm btn-ghost ds-edit" data-id="${esc(String(c.id))}" data-type="${esc(c.connector_type)}" data-name="${esc(c.name)}" data-mode="${esc(c.sync_mode || '')}" data-sched="${esc(c.sync_schedule || '')}">Edit</button>
+            <button class="btn btn-sm btn-ghost ds-logs" data-id="${esc(String(c.id))}" data-name="${esc(c.name)}">History</button>
+            <button class="btn btn-sm btn-danger ds-del" data-id="${esc(String(c.id))}">Delete</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
+    panel.querySelector('#ds-area').innerHTML = `
+      <div class="table-wrap table-wrap--flat">
+        <table class="dense-table">
+          <thead><tr>
+            <th>Source</th><th>Direction</th><th>Schedule</th><th>Last sync</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    bindCardActions();
+  }
+
+  // ── render connector list ──────────────────────────────────────────────────
   async function load() {
     try {
       const r = await api.igaConnectors();
       const connectors = (r && r.data) ? r.data : (Array.isArray(r) ? r : []);
 
-      // stats bar
-      const total  = connectors.length;
-      const active = connectors.filter(c => ['CONNECTED','ACTIVE'].includes(c.status)).length;
-      const errors = connectors.filter(c => c.status === 'ERROR').length;
-      const lastSync = connectors.reduce((best, c) => {
-        if (!c.last_sync_at) return best;
-        return !best || new Date(c.last_sync_at) > new Date(best) ? c.last_sync_at : best;
-      }, null);
-      panel.querySelector('#ds-stats').innerHTML = `
-        <div class="card" style="text-align:center;padding:1rem">
-          <div style="font-size:1.75rem;font-weight:700;color:var(--accent)">${total}</div>
-          <div class="muted" style="font-size:0.8rem;margin-top:0.25rem">Total Sources</div>
-        </div>
-        <div class="card" style="text-align:center;padding:1rem">
-          <div style="font-size:1.75rem;font-weight:700;color:var(--success)">${active}</div>
-          <div class="muted" style="font-size:0.8rem;margin-top:0.25rem">Connected</div>
-        </div>
-        <div class="card" style="text-align:center;padding:1rem">
-          <div style="font-size:1.75rem;font-weight:700;color:${errors?'var(--danger)':'var(--text-dim)'}">${errors}</div>
-          <div class="muted" style="font-size:0.8rem;margin-top:0.25rem">Errors</div>
-        </div>
-        <div class="card" style="text-align:center;padding:1rem">
-          <div style="font-size:1rem;font-weight:600;color:var(--text)">${lastSync ? fmtDate(lastSync) : '—'}</div>
-          <div class="muted" style="font-size:0.8rem;margin-top:0.25rem">Last Sync</div>
-        </div>`;
-
       if (!connectors.length) {
+        panel.querySelector('#ds-toolbar').hidden = true;
         panel.querySelector('#ds-area').innerHTML = `
-          <div class="card" style="text-align:center;padding:3rem 2rem">
-            <div style="font-size:3rem;margin-bottom:1rem">🔌</div>
-            <h2 style="margin:0 0 0.5rem">No directory sources configured</h2>
-            <p class="muted" style="margin-bottom:1.5rem">Connect Active Directory, Google Workspace, Azure AD or any SCIM-compatible directory to start syncing identities.</p>
-            <button class="btn btn-primary" id="ds-empty-add">+ Add Your First Directory Source</button>
+          <div class="empty-panel">
+            <div class="empty-panel-icon">🔌</div>
+            <h2>No directory sources configured</h2>
+            <p class="muted">Connect Active Directory, Google Workspace, Azure AD, or any SCIM directory to start syncing identities.</p>
+            <button class="btn btn-primary btn-sm" id="ds-empty-add">+ Add Directory Source</button>
           </div>`;
         panel.querySelector('#ds-empty-add').addEventListener('click', openAddWizard);
         return;
       }
 
-      // connector cards
-      const cards = connectors.map(c => {
-        const meta = CONNECTOR_TYPES[normalizeConnectorType(c.connector_type)] || { label: c.connector_type, icon: '⚙️', badge: 'badge-neutral' };
-        return `<div class="card" style="margin-bottom:1rem" data-cid="${esc(String(c.id))}">
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem">
-            <div style="display:flex;align-items:center;gap:0.75rem">
-              <div style="font-size:2rem;line-height:1">${meta.icon}</div>
-              <div>
-                <div style="font-weight:700;font-size:1.05rem">${esc(c.name)}</div>
-                <div class="muted" style="font-size:0.8rem;margin-top:0.15rem">${esc(meta.label)} · ${esc(c.direction||'—')} · ${esc(c.sync_mode||'—')}</div>
-              </div>
-            </div>
-            <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
-              ${connectorStatusBadge(c.status)}
-              ${c.sync_schedule ? `<span class="badge badge-neutral" title="Cron schedule">${esc(c.sync_schedule)}</span>` : ''}
-            </div>
-          </div>
-          <div style="display:flex;gap:1.5rem;margin-top:0.75rem;flex-wrap:wrap;font-size:0.82rem;color:var(--text-dim)">
-            <span>Last sync: ${c.last_sync_at ? fmtDate(c.last_sync_at) : 'Never'}</span>
-            ${c.last_error ? `<span style="color:var(--danger)" title="${esc(c.last_error)}">⚠ ${esc(c.last_error.slice(0,60))}${c.last_error.length>60?'…':''}</span>` : ''}
-          </div>
-          <div style="display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap">
-            <button class="btn btn-sm btn-primary ds-sync"   data-id="${esc(String(c.id))}">▶ Sync Now</button>
-            <button class="btn btn-sm btn-secondary ds-test" data-id="${esc(String(c.id))}">✓ Test Connection</button>
-            <button class="btn btn-sm btn-secondary ds-edit" data-id="${esc(String(c.id))}" data-type="${esc(c.connector_type)}" data-name="${esc(c.name)}" data-mode="${esc(c.sync_mode||'')}" data-sched="${esc(c.sync_schedule||'')}">✏ Edit</button>
-            <button class="btn btn-sm btn-secondary ds-logs" data-id="${esc(String(c.id))}" data-name="${esc(c.name)}">📋 Sync History</button>
-            <button class="btn btn-sm btn-danger ds-del"     data-id="${esc(String(c.id))}">Delete</button>
-          </div>
-        </div>`;
-      }).join('');
-      panel.querySelector('#ds-area').innerHTML = cards;
-      bindCardActions();
-    } catch(e) { panel.querySelector('#ds-area').innerHTML = errHtml(e.message); }
+      renderSourceStats(connectors);
+      renderSourceTable(connectors);
+    } catch (e) { panel.querySelector('#ds-area').innerHTML = errHtml(e.message); }
   }
 
   // ── bind all card button actions ────────────────────────────────────────────
@@ -2510,7 +2523,8 @@ function initSourcesTab(panel) {
     } catch(e) { bd.querySelector('#logs-body').innerHTML = errHtml(e.message); }
   }
 
-  panel.querySelector('#ds-add-btn').addEventListener('click', openAddWizard);
+  panel.querySelector('#ds-add-btn')?.addEventListener('click', openAddWizard);
+  panel.closest('.admin-page')?.querySelector('#ds-add-header-btn')?.addEventListener('click', openAddWizard);
   load();
 }
 
@@ -2547,9 +2561,9 @@ function initUsersTab(panel) {
 
   // ── Build shell ──────────────────────────────────────────────────────────────
   panel.innerHTML = `
-    <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem">
-      <input class="form-input" id="ud-search" placeholder="Search name, email, ID…" style="flex:1;min-width:200px;max-width:340px">
-      <select class="form-select" id="ud-src-filter" style="min-width:140px">
+    <div class="filter-toolbar">
+      <input class="form-input filter-toolbar-search" id="ud-search" placeholder="Search name, email, ID…">
+      <select class="form-select" id="ud-src-filter">
         <option value="">All Sources</option>
         <option value="AD">Active Directory</option>
         <option value="GOOGLE">Google Workspace</option>
@@ -2560,17 +2574,18 @@ function initUsersTab(panel) {
         <option value="HRMS">HRMS</option>
         <option value="AWS_IDC">AWS IDC</option>
       </select>
-      <select class="form-select" id="ud-state-filter" style="min-width:130px">
+      <select class="form-select" id="ud-state-filter">
         <option value="">All States</option>
         <option value="ACTIVE">Active</option>
         <option value="SUSPENDED">Suspended</option>
         <option value="TERMINATED">Terminated</option>
         <option value="INACTIVE">Inactive</option>
       </select>
-      <button class="btn btn-secondary" id="ud-refresh-btn">⟳ Refresh</button>
-      <button class="btn btn-primary"   id="ud-create-btn">+ Create Local User</button>
+      <div class="filter-toolbar-spacer"></div>
+      <button class="btn btn-secondary btn-sm" id="ud-refresh-btn">Refresh</button>
+      <button class="btn btn-primary btn-sm" id="ud-create-btn">+ Local User</button>
     </div>
-    <div id="ud-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:0.75rem;margin-bottom:1.25rem"></div>
+    <div id="ud-stats" class="kpi-strip kpi-strip--spaced" hidden></div>
     <div id="ud-table-area">${loading()}</div>`;
 
   let allUsers = [];
@@ -2594,23 +2609,21 @@ function initUsersTab(panel) {
     const withAD  = users.filter(u => (u.identity_sources||'').includes('AD')).length;
     const withG   = users.filter(u => (u.identity_sources||'').includes('GOOGLE')).length;
     const local   = users.filter(u => !(u.identity_sources||'').replace(/^,+|,+$/g,'').length || u.local_active).length;
-    panel.querySelector('#ud-stats').innerHTML = [
-      [total,  'Total Users',       'var(--accent)'],
-      [withAD, 'With AD',           '#0078D4'],
-      [withG,  'With Google',       '#34a853'],
-      [local,  'Local / No Source', 'var(--text-dim)'],
-    ].map(([n, lbl, clr]) => `
-      <div class="card" style="text-align:center;padding:0.75rem">
-        <div style="font-size:1.6rem;font-weight:700;color:${clr}">${n}</div>
-        <div class="muted" style="font-size:0.78rem;margin-top:0.2rem">${lbl}</div>
-      </div>`).join('');
+    const statsEl = panel.querySelector('#ud-stats');
+    statsEl.hidden = false;
+    statsEl.innerHTML = kpiStrip([
+      [total, 'Users', 'accent'],
+      [withAD, 'With AD', 'info'],
+      [withG, 'With Google', 'success'],
+      [local, 'Local only', 'neutral'],
+    ]);
   }
 
   function renderTable(users) {
     if (!users.length) {
       panel.querySelector('#ud-table-area').innerHTML = `
-        <div class="card" style="text-align:center;padding:3rem 2rem">
-          <div style="font-size:3rem;margin-bottom:1rem">👤</div>
+        <div class="empty-panel empty-panel--compact">
+          <div class="empty-panel-icon">👤</div>
           <p class="muted">No users match your filter.</p>
         </div>`;
       return;
@@ -2619,31 +2632,30 @@ function initUsersTab(panel) {
     const rows = users.map(u => {
       const sources = (u.identity_sources || '').split(',').filter(Boolean);
       const badges  = sources.length ? sources.map(srcBadge).join('') : srcBadge('LOCAL');
-      const initials = (u.full_name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+      const init = (u.full_name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
       return `<tr style="cursor:pointer" class="ud-row" data-empid="${esc(u.emp_id)}">
         <td>
-          <div style="display:flex;align-items:center;gap:0.6rem">
-            <div style="width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;
-              display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;flex-shrink:0">${esc(initials)}</div>
+          <div class="user-cell">
+            <div class="user-cell-avatar">${esc(init)}</div>
             <div>
-              <div style="font-weight:600;font-size:0.9rem">${esc(u.full_name||'—')}</div>
-              <div class="muted" style="font-size:0.78rem">${esc(u.emp_id)}</div>
+              <div class="user-cell-name">${esc(u.full_name||'—')}</div>
+              <div class="user-cell-meta">${esc(u.emp_id)}</div>
             </div>
           </div>
         </td>
-        <td class="muted" style="font-size:0.85rem">${esc(u.email_corp||'—')}</td>
-        <td class="muted" style="font-size:0.85rem">${esc(u.dept_id||'—')}</td>
+        <td class="muted">${esc(u.email_corp||'—')}</td>
+        <td class="muted">${esc(u.dept_id||'—')}</td>
         <td>${stateBadge(u.ilg_state)}</td>
         <td>${badges}</td>
-        <td>
-          <button class="btn btn-sm btn-secondary ud-profile-btn" data-empid="${esc(u.emp_id)}">View Profile</button>
+        <td class="actions">
+          <button class="btn btn-sm btn-secondary ud-profile-btn" data-empid="${esc(u.emp_id)}">Profile</button>
         </td>
       </tr>`;
     }).join('');
 
     panel.querySelector('#ud-table-area').innerHTML = `
-      <div class="table-wrap">
-        <table>
+      <div class="table-wrap table-wrap--flat">
+        <table class="dense-table">
           <thead><tr><th>User</th><th>Email</th><th>Department</th><th>State</th><th>Sources</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
