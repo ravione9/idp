@@ -367,6 +367,7 @@ To add a new migration:
 | `DELETE` | `/api/admin/users/:empId/identity-links/:linkId` | Remove an identity link |
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD |
 | `GET`/`POST`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry |
+| `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
 | `GET` | `/api/admin/audit/saml` | SAML assertions log |
 | `GET` | `/api/admin/audit/system` | `audit_log` rows |
 
@@ -684,6 +685,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(pending)* — 2026-06-06 — SAML SP registration: metadata XML upload
+
+**Why** — Register SAML Application required hand-typing Entity ID and ACS URL; vendors (Zoho, AWS, etc.) provide a metadata XML file.
+
+**What changed:**
+
+- **`src/saml/parse-sp-metadata.ts`** — parses SP `EntityDescriptor` via samlify; prefers HTTP-POST ACS binding.
+- **`POST /api/admin/saml-apps/parse-metadata`** — super-admin endpoint returns extracted fields.
+- **`web/js/views-admin.js`** — Register/Edit SAML modal: upload `.xml` or paste metadata, auto-fills SP fields.
+- **`web/js/views-stubs.js`** — SAML integration wizard SP step gets the same upload/paste control.
 
 ### `7ab97f3` — 2026-06-06 — Google connector UI: GOOGLE type alias + Sync Scope tab
 

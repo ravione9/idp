@@ -10,6 +10,7 @@ import { requireRole } from '../auth/rbac.js';
 import { config, isSamlEnabled } from '../config.js';
 import { execute, query } from '../db/connection.js';
 import logger from '../utils/logger.js';
+import { parseSpMetadataXml } from '../saml/parse-sp-metadata.js';
 
 const router = Router();
 
@@ -42,6 +43,28 @@ router.get('/status', (_req: Request, res: Response): void => {
     metadataUrl:  base ? `${base}/saml/metadata` : null,
     entityId:     config.saml?.entityId ?? (base ? `${base}/saml/metadata` : null),
   });
+});
+
+const parseMetadataSchema = z.object({
+  metadata: z.string().min(10).max(512_000),
+});
+
+// POST /parse-metadata — extract SP Entity ID, ACS, SLO from uploaded XML
+router.post('/parse-metadata', async (req: Request, res: Response): Promise<void> => {
+  const parsed = parseMetadataSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  try {
+    const result = parseSpMetadataXml(parsed.data.metadata);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ err }, 'SAML SP metadata parse failed');
+    res.status(422).json({ success: false, error: msg });
+  }
 });
 
 // GET / — list all registered SAML applications

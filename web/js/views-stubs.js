@@ -1163,6 +1163,17 @@ function openSamlWizard(app) {
           </p>
           <div class="form-2col">
             <div class="form-group span2">
+              <label class="form-label">SP Metadata XML <span class="muted" style="font-weight:400">— upload or paste</span></label>
+              <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
+                <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
+                  Upload .xml file
+                  <input type="file" id="w-meta-file" accept=".xml,text/xml,application/xml" style="display:none">
+                </label>
+                <button type="button" class="btn btn-secondary btn-sm" id="w-meta-parse">Parse metadata</button>
+              </div>
+              <textarea class="form-textarea" id="w-meta-paste" rows="4" placeholder="Paste SAML SP metadata XML"></textarea>
+            </div>
+            <div class="form-group span2">
               <label class="form-label">Display Name <span style="color:var(--danger)">*</span></label>
               <input class="form-input" id="w-name" value="${esc(d.name)}">
             </div>
@@ -1196,6 +1207,39 @@ function openSamlWizard(app) {
         `,
         bind: (body, d) => {
           body.querySelector('#w-nid').value = d.nameidFormat;
+          const errEl = body.closest('.modal-body')?.querySelector('#wiz-err') || body.querySelector('#wiz-err');
+          async function applyMeta(data) {
+            if (data.entityId) body.querySelector('#w-eid').value = data.entityId;
+            if (data.acsUrl) body.querySelector('#w-acs').value = data.acsUrl;
+            if (data.sloUrl) body.querySelector('#w-slo').value = data.sloUrl;
+            if (data.nameidFormat) {
+              const sel = body.querySelector('#w-nid');
+              if ([...sel.options].some((o) => o.value === data.nameidFormat)) sel.value = data.nameidFormat;
+            }
+          }
+          async function doParse(xml) {
+            const trimmed = (xml || '').trim();
+            if (!trimmed) return;
+            const btn = body.querySelector('#w-meta-parse');
+            btn.disabled = true; btn.textContent = 'Parsing…';
+            try {
+              const r = await api.parseSamlMetadata(trimmed);
+              await applyMeta(r.data || r);
+            } catch (e) {
+              if (errEl) errEl.textContent = e.message || 'Could not parse metadata.';
+            }
+            btn.disabled = false; btn.textContent = 'Parse metadata';
+          }
+          body.querySelector('#w-meta-parse').addEventListener('click', () =>
+            doParse(body.querySelector('#w-meta-paste').value));
+          body.querySelector('#w-meta-file').addEventListener('change', async (ev) => {
+            const file = ev.target.files?.[0];
+            if (!file) return;
+            const text = await file.text();
+            body.querySelector('#w-meta-paste').value = text;
+            await doParse(text);
+            ev.target.value = '';
+          });
         },
         validate: (_d, body) => {
           const v = (sel) => body.querySelector(sel).value.trim();

@@ -38,6 +38,7 @@ Object.assign(api, {
   idpStatus:        () => f('/api/admin/saml-apps/status'),
   listSamlApps:     () => f('/api/admin/saml-apps'),
   createSamlApp:    (data) => f('/api/admin/saml-apps', { method: 'POST', body: JSON.stringify(data) }),
+  parseSamlMetadata:(metadata) => f('/api/admin/saml-apps/parse-metadata', { method: 'POST', body: JSON.stringify({ metadata }) }),
   deactivateSamlApp:(id) => f(`/api/admin/saml-apps/${id}`, { method: 'DELETE' }),
   updateSamlApp:    (id, data) => f(`/api/admin/saml-apps/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   activateSamlApp:  (id) => f(`/api/admin/saml-apps/${id}/activate`, { method: 'PUT' }),

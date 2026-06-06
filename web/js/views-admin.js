@@ -16,6 +16,94 @@ function openModal(html) {
 }
 function errHtml(msg) { return `<div class="alert alert-error">${esc(msg)}</div>`; }
 
+function spMetadataUploadHtml(pfx) {
+  return `
+    <div class="form-group span2">
+      <label class="form-label">SP Metadata XML <span class="muted" style="font-weight:400">— upload or paste to auto-fill</span></label>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
+          Upload .xml file
+          <input type="file" id="${pfx}-meta-file" accept=".xml,text/xml,application/xml" style="display:none">
+        </label>
+        <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-meta-parse">Parse metadata</button>
+      </div>
+      <textarea class="form-textarea" id="${pfx}-meta-paste" rows="4" placeholder="Paste SAML Service Provider metadata XML from Zoho, AWS, GitHub, etc."></textarea>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--border);margin:0.25rem 0 0.75rem" class="span2">
+    <p class="muted span2" style="font-size:0.78rem;margin:0 0 0.5rem">Or enter SP details manually:</p>`;
+}
+
+function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
+  const errEl = bd.querySelector(`#${errId}`);
+  const fileEl = bd.querySelector(`#${pfx}-meta-file`);
+  const pasteEl = bd.querySelector(`#${pfx}-meta-paste`);
+  const parseBtn = bd.querySelector(`#${pfx}-meta-parse`);
+
+  function applyParsed(data) {
+    if (data.entityId) bd.querySelector(`#${pfx}-entity`).value = data.entityId;
+    if (data.acsUrl) bd.querySelector(`#${pfx}-acs`).value = data.acsUrl;
+    if (data.sloUrl) bd.querySelector(`#${pfx}-slo`).value = data.sloUrl;
+    if (data.nameidFormat) {
+      const sel = bd.querySelector(`#${pfx}-nameid`);
+      if (sel && [...sel.options].some((o) => o.value === data.nameidFormat)) {
+        sel.value = data.nameidFormat;
+      }
+    }
+    if (!isEdit && nameId) {
+      const nameEl = bd.querySelector(`#${nameId}`);
+      if (nameEl && !nameEl.value.trim()) {
+        try {
+          const host = new URL(data.entityId).hostname.replace(/^www\./, '');
+          const part = host.split('.')[0] || '';
+          if (part) nameEl.value = part.charAt(0).toUpperCase() + part.slice(1);
+        } catch { /* ignore */ }
+      }
+    }
+    if (!isEdit && slugId) {
+      const slugEl = bd.querySelector(`#${slugId}`);
+      const nameEl2 = nameId ? bd.querySelector(`#${nameId}`) : null;
+      if (slugEl && !slugEl.value.trim() && nameEl2?.value.trim()) {
+        slugEl.value = nameEl2.value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      }
+    }
+    if (errEl) {
+      errEl.innerHTML = '<div class="alert alert-success">Metadata parsed — review the fields below, then save.</div>';
+    }
+  }
+
+  async function doParse(xml) {
+    const trimmed = (xml || '').trim();
+    if (!trimmed) {
+      if (errEl) errEl.innerHTML = errHtml('Paste or upload SP metadata XML first.');
+      return;
+    }
+    parseBtn.disabled = true;
+    parseBtn.textContent = 'Parsing…';
+    try {
+      const r = await api.parseSamlMetadata(trimmed);
+      applyParsed(r.data || r);
+    } catch (e) {
+      if (errEl) errEl.innerHTML = errHtml(e.message || 'Could not parse metadata.');
+    }
+    parseBtn.disabled = false;
+    parseBtn.textContent = 'Parse metadata';
+  }
+
+  parseBtn.addEventListener('click', () => doParse(pasteEl.value));
+  fileEl.addEventListener('change', async () => {
+    const file = fileEl.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      pasteEl.value = text;
+      await doParse(text);
+    } catch (e) {
+      if (errEl) errEl.innerHTML = errHtml('Could not read file: ' + e.message);
+    }
+    fileEl.value = '';
+  });
+}
+
 function header(title, subtitle, action = '') {
   return `<div class="page-header">
     <div><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div>
@@ -252,9 +340,9 @@ export async function viewIgaApps(content, opts = {}) {
       ['urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName', 'X.509 Subject'],
     ];
     const curFormat = sp?.nameid_format || 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
-    const bd = openModal(`<div class="modal" style="width:580px;max-width:96vw">
+    const bd = openModal(`<div class="modal" style="width:640px;max-width:96vw">
       <div class="modal-header"><h2>${isEdit ? 'Edit SAML Application' : 'Register SAML Application'}</h2></div>
-      <div class="modal-body">
+      <div class="modal-body" style="max-height:78vh;overflow-y:auto">
         <div class="form-2col">
           <div class="form-group">
             <label class="form-label">Application Name <span style="color:var(--danger)">*</span></label>
@@ -266,6 +354,7 @@ export async function viewIgaApps(content, opts = {}) {
               placeholder="e.g. darwinbox" pattern="[a-z0-9-]+"
               ${isEdit ? 'readonly title="Slug cannot be changed after creation"' : ''}>
           </div>
+          ${spMetadataUploadHtml('csp')}
           <div class="form-group span2">
             <label class="form-label">SP Entity ID <span style="color:var(--danger)">*</span></label>
             <input class="form-input" id="csp-entity" value="${esc(sp?.entity_id||'')}" placeholder="https://app.example.com/saml/metadata">
@@ -297,6 +386,7 @@ export async function viewIgaApps(content, opts = {}) {
       </div>
     </div>`);
 
+    bindSpMetadataUpload(bd, 'csp', { errId: 'csp-err', nameId: 'csp-name', slugId: 'csp-slug', isEdit });
     bd.querySelector('#csp-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#csp-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#csp-save');
@@ -589,9 +679,9 @@ export async function viewSamlApps(me, content, opts = {}) {
   function openSpModal(sp = null) {
     const isEdit = !!sp;
     const curFormat = sp?.nameid_format || 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
-    const bd = openModal(`<div class="modal" style="width:580px;max-width:96vw">
+    const bd = openModal(`<div class="modal" style="width:640px;max-width:96vw">
       <div class="modal-header"><h2>${isEdit ? 'Edit SAML Application' : 'Register SAML Application'}</h2></div>
-      <div class="modal-body">
+      <div class="modal-body" style="max-height:78vh;overflow-y:auto">
         <div class="form-2col">
           <div class="form-group">
             <label class="form-label">Application Name <span style="color:var(--danger)">*</span></label>
@@ -603,6 +693,7 @@ export async function viewSamlApps(me, content, opts = {}) {
               placeholder="e.g. darwinbox" pattern="[a-z0-9-]+"
               ${isEdit ? 'readonly title="Slug cannot be changed after creation"' : ''}>
           </div>
+          ${spMetadataUploadHtml('sp')}
           <div class="form-group span2">
             <label class="form-label">SP Entity ID <span style="color:var(--danger)">*</span></label>
             <input class="form-input" id="sp-entity" value="${esc(sp?.entity_id||'')}" placeholder="https://app.example.com/saml/metadata">
@@ -634,6 +725,7 @@ export async function viewSamlApps(me, content, opts = {}) {
       </div>
     </div>`);
 
+    bindSpMetadataUpload(bd, 'sp', { errId: 'sp-err', nameId: 'sp-name', slugId: 'sp-slug', isEdit });
     bd.querySelector('#sp-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#sp-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#sp-save');
