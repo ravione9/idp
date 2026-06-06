@@ -218,6 +218,13 @@ Each SAML application is registered in `saml_service_providers`:
 | `attribute_map` | JSON map of SAML attribute → employee field |
 | `entitlement_rule` | JSON ABAC rule (`all_active`, `roles`, `dept_ids`, `deny_ilg_states`) |
 
+**Launch entitlement** (`canUserLaunchApp` in `src/services/app-access-policy.ts`) is evaluated for `GET /api/apps`, `/saml/launch/:slug`, and SP-initiated SSO:
+
+| Condition | Who may launch |
+|---|---|
+| `applications.visibility = RESTRICTED` **or** any active `app_access_assignments` for the app | Only users with an explicit Application Access Policy grant (user, identity group, or tag group) |
+| Otherwise | SAML `entitlement_rule` **or** an Application Access Policy grant |
+
 Apps can be registered:
 - Via UI: **Admin Central → SAML Applications → Register new SAML application** (super admin only)
 - Via internal API: `POST /api/internal/saml` with `X-Internal-Token`
@@ -230,7 +237,7 @@ Every assertion issued is recorded in `saml_assertion_log` (sp_id, emp_id, bindi
 
 | Application | Slug | Entity ID | ACS URL | Notes |
 |---|---|---|---|---|
-| **Zoho Mail** | `zoho-mail` | `zoho.com` | `https://accounts.zoho.in/signin/samlsp` | Seeded in migration `004_seed_zoho_mail_saml_app.sql`. After the IdP signing keys are present in `.env`, paste the metadata at `/saml/metadata` into Zoho's SAML configuration. End users launch via *My Applications* → *Zoho Mail* (`/saml/launch/zoho-mail`). |
+| **Zoho Mail** | `zoho-mail` | `zoho.com` | `https://accounts.zoho.in/signin/samlsp` | Seeded in migration `004_seed_zoho_mail_saml_app.sql`; policy-gated in `017_zoho_policy_gated_access.sql` (`visibility = RESTRICTED`, `entitlement_rule.all_active = false`). Grant access via **Application Access Policy** before users see the tile. After the IdP signing keys are present in `.env`, paste the metadata at `/saml/metadata` into Zoho's SAML configuration. |
 
 Add more apps via **Admin Central → SAML Applications → Register new SAML application** or `POST /api/internal/saml`.
 
@@ -297,7 +304,7 @@ To add a new migration:
 | `access_request_approvals` | **(003)** Multi-level approval chain |
 | `tag_groups` | **(013)** Tag-based groups for application access policy |
 | `tag_group_members` | **(013)** Membership in tag groups |
-| `app_access_assignments` | **(013)** User or tag-group grants to applications |
+| `app_access_assignments` | **(013, 018)** User, identity-group (`GROUP`), or tag-group (`TAG_GROUP`) grants to applications |
 | `app_group_access_workflows` | **(013)** Configurable approval chains for group access requests |
 | `app_access_audit_log` | **(013)** Audit trail for assignments, requests, approvals, provisioning, revocations |
 | `access_review_campaigns` | **(003)** Quarterly certification campaigns |
@@ -357,7 +364,7 @@ To add a new migration:
 | `POST` | `/api/me/mfa/confirm` | Verify code → enable MFA |
 | `POST` | `/api/me/mfa/disable` | Disable MFA |
 | `POST` | `/api/me/mfa/regenerate-codes` | New backup codes |
-| `GET` | `/api/apps` | SAML apps the user is entitled to |
+| `GET` | `/api/apps` | SAML apps the user may launch (policy grants + entitlement rules; see §6.2) |
 
 ### 8.4 Admin (ADMIN / SUPER_ADMIN)
 
@@ -385,7 +392,7 @@ To add a new migration:
 | `GET` | `/api/admin/app-access-policy/applications` | Assignable apps (IGA catalog + auto-mirrored SAML SPs) |
 | `GET`/`POST` | `/api/admin/app-access-policy/tag-groups[/:id]` | Tag group CRUD |
 | `POST`/`DELETE` | `/api/admin/app-access-policy/tag-groups/:id/members[/:empId]` | Tag group membership |
-| `GET`/`POST`/`DELETE` | `/api/admin/app-access-policy/assignments[/:id]` | User or tag-group application grants |
+| `GET`/`POST`/`DELETE` | `/api/admin/app-access-policy/assignments[/:id]` | User, identity-group, or tag-group application grants |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/app-access-policy/workflows[/:id]` | Group access approval workflows |
 | `GET` | `/api/admin/app-access-policy/audit` | Application access policy audit log |
 
@@ -449,7 +456,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Admin** (miniOrange-style) | Grouped admin sections (collapsible via ◀/▶ toggle, persisted in `localStorage`) | Visible only when Admin is active |
 
 **Top primary nav** (always visible, modelled on SailPoint IdentityNow)
-- **Home** — JumpCloud-style app launcher: search bar, All Apps / Favorites tabs, star-to-favorite (stored in `localStorage`), entitled + catalog tiles merged
+- **Home** — JumpCloud-style app launcher: search bar, All Apps / Favorites tabs, star-to-favorite (stored in `localStorage`); shows only apps returned by `GET /api/apps` (no catalog merge)
 - **Request Center** — browse the catalogue, raise an access request
 - **Approvals** — pending approvals + access-review items routed to the user
 - **My Access** — current entitlements & roles
@@ -704,6 +711,32 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### (pending) — 2026-06-07 — Application Access Policy: identity group assignments
+
+**Why** — Admins created groups under **Identity → Groups** (e.g. "zoho mail") but the **Assign Application Access** modal only listed tag groups, so the group never appeared in the dropdown.
+
+**What changed:**
+
+- **`migrations/018_identity_group_app_access.sql`** — `app_access_assignments.assignment_type` adds `GROUP` (targets `groups.id` / `group_members`).
+- **`src/services/app-access-policy.ts`** — policy checks and grants honor identity-group membership; validates assignment targets.
+- **`src/api/config-app-access-policy.ts`** — assignments list resolves identity group names.
+- **`web/js/views-stubs.js`** — group-based assignment dropdown lists **Identity Groups** and tag groups.
+
+---
+
+### (pending) — 2026-06-07 — Fix app launcher showing apps without Application Access Policy grant
+
+**Why** — Users such as `test.a` saw Zoho Mail on *All Applications* even when no assignment existed, because the seeded SAML app used `entitlement_rule.all_active = true` and the home page merged the full IGA catalog into launch tiles.
+
+**What changed:**
+
+- **`src/services/app-access-policy.ts`** — `appRequiresExplicitGrant()`, `canUserLaunchApp()`; mirrored SAML apps default to `visibility = RESTRICTED`.
+- **`src/api/apps.ts`**, **`src/api/saml.ts`** — unified launch entitlement via `canUserLaunchApp`.
+- **`web/js/views-end-user.js`** — home launcher lists only `GET /api/apps` results; catalog browse stays on *Request Access*.
+- **`migrations/017_zoho_policy_gated_access.sql`** — Zoho Mail policy-gated (`RESTRICTED`, `all_active = false`).
+
+---
 
 ### `60ec800` — 2026-06-07 — Admin password reset: local + AD/Google writeback fixes
 

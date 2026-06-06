@@ -5,8 +5,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import { query, queryOne, execute } from '../db/connection.js';
 import logger from '../utils/logger.js';
+import { canReceiveSamlAssertion, evaluateEntitlement } from '../saml/entitlements.js';
+import type { EmployeeSamlContext, EntitlementRule } from '../saml/types.js';
 
-export type AssignmentType = 'USER' | 'TAG_GROUP';
+export type AssignmentType = 'USER' | 'TAG_GROUP' | 'GROUP';
 export type AuditAction =
   | 'ASSIGN_USER' | 'ASSIGN_GROUP' | 'REVOKE'
   | 'REQUEST' | 'APPROVE' | 'REJECT' | 'PROVISION';
@@ -54,7 +56,7 @@ export async function syncSamlAppsToCatalog(): Promise<number> {
     await execute(
       `INSERT INTO applications
          (id, slug, name, icon_url, category, visibility, sso_enabled, provisioning, sort_order, active)
-       VALUES (?, ?, ?, ?, 'SSO', 'PUBLIC', 1, 0, ?, ?)`,
+       VALUES (?, ?, ?, ?, 'SSO', 'RESTRICTED', 1, 0, ?, ?)`,
       [uuidv4(), sp.slug, sp.name, sp.icon_url, sp.sort_order ?? 0, sp.active ? 1 : 0],
     );
     inserted += 1;
@@ -111,6 +113,39 @@ export async function logAppAccessAudit(params: {
 // ---------------------------------------------------------------------------
 // Policy-based app access check (used by SAML launcher + /api/apps)
 // ---------------------------------------------------------------------------
+/** True when launch requires an explicit Application Access Policy grant. */
+export async function appRequiresExplicitGrant(appSlug: string): Promise<boolean> {
+  const row = await queryOne<{ visibility: string; has_assignments: number }>(
+    `SELECT a.visibility,
+            EXISTS (
+              SELECT 1 FROM app_access_assignments x
+               WHERE x.app_id = a.id AND x.active = 1
+            ) AS has_assignments
+       FROM applications a
+      WHERE a.slug = ? AND a.active = 1
+      LIMIT 1`,
+    [appSlug],
+  );
+  if (!row) return false;
+  if (row.visibility === 'RESTRICTED') return true;
+  return (row.has_assignments ?? 0) === 1;
+}
+
+export async function canUserLaunchApp(
+  emp: EmployeeSamlContext,
+  slug: string,
+  rule: EntitlementRule | null,
+): Promise<boolean> {
+  if (!canReceiveSamlAssertion(emp)) return false;
+
+  const policyAccess = await hasPolicyAppAccess(emp.emp_id, slug);
+  if (await appRequiresExplicitGrant(slug)) {
+    return policyAccess;
+  }
+
+  return policyAccess || evaluateEntitlement(emp, rule);
+}
+
 export async function hasPolicyAppAccess(empId: string, appSlug: string): Promise<boolean> {
   const row = await queryOne<{ ok: number }>(
     `SELECT 1 AS ok
@@ -128,9 +163,15 @@ export async function hasPolicyAppAccess(empId: string, appSlug: string): Promis
              WHERE x.app_id = a.id AND x.active = 1
                AND x.assignment_type = 'TAG_GROUP' AND tgm.emp_id = ?
           )
+          OR EXISTS (
+            SELECT 1 FROM app_access_assignments x
+              JOIN group_members gm ON gm.group_id = x.target_id
+             WHERE x.app_id = a.id AND x.active = 1
+               AND x.assignment_type = 'GROUP' AND gm.emp_id = ?
+          )
         )
       LIMIT 1`,
-    [appSlug, empId, empId],
+    [appSlug, empId, empId, empId],
   );
   return (row?.ok ?? 0) === 1;
 }
@@ -152,8 +193,14 @@ export async function getPolicyGrantedAppSlugs(empId: string): Promise<string[]>
              WHERE x.app_id = a.id AND x.active = 1
                AND x.assignment_type = 'TAG_GROUP' AND tgm.emp_id = ?
           )
+          OR EXISTS (
+            SELECT 1 FROM app_access_assignments x
+              JOIN group_members gm ON gm.group_id = x.target_id
+             WHERE x.app_id = a.id AND x.active = 1
+               AND x.assignment_type = 'GROUP' AND gm.emp_id = ?
+          )
         )`,
-    [empId, empId],
+    [empId, empId, empId],
   );
   return rows.map((r) => r.slug);
 }
@@ -161,6 +208,33 @@ export async function getPolicyGrantedAppSlugs(empId: string): Promise<string[]>
 // ---------------------------------------------------------------------------
 // Assignments
 // ---------------------------------------------------------------------------
+async function assertAssignmentTarget(
+  assignmentType: AssignmentType,
+  targetId: string,
+): Promise<void> {
+  if (assignmentType === 'USER') {
+    const emp = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM employees WHERE emp_id = ? AND ilg_state IN ('ACTIVE','REACTIVATED') LIMIT 1`,
+      [targetId],
+    );
+    if (!emp) throw new Error('Employee not found or not active');
+    return;
+  }
+  if (assignmentType === 'GROUP') {
+    const grp = await queryOne<{ id: string }>(
+      `SELECT id FROM \`groups\` WHERE id = ? AND active = 1 LIMIT 1`,
+      [targetId],
+    );
+    if (!grp) throw new Error('Identity group not found or inactive');
+    return;
+  }
+  const tg = await queryOne<{ id: string }>(
+    `SELECT id FROM tag_groups WHERE id = ? AND active = 1 LIMIT 1`,
+    [targetId],
+  );
+  if (!tg) throw new Error('Tag group not found or inactive');
+}
+
 export async function grantAppAccess(params: {
   appId: string;
   assignmentType: AssignmentType;
@@ -169,6 +243,8 @@ export async function grantAppAccess(params: {
   source?: 'ADMIN' | 'REQUEST';
   requestId?: string;
 }): Promise<string> {
+  await assertAssignmentTarget(params.assignmentType, params.targetId);
+
   const existing = await queryOne<{ id: string }>(
     `SELECT id FROM app_access_assignments
       WHERE app_id = ? AND assignment_type = ? AND target_id = ?`,
@@ -190,7 +266,12 @@ export async function grantAppAccess(params: {
       targetEmpId: params.assignmentType === 'USER' ? params.targetId : null,
       tagGroupId: params.assignmentType === 'TAG_GROUP' ? params.targetId : null,
       requestId: params.requestId ?? null,
-      details: { source: params.source ?? 'ADMIN', assignmentId: existing.id },
+      details: {
+        source: params.source ?? 'ADMIN',
+        assignmentId: existing.id,
+        assignmentType: params.assignmentType,
+        groupId: params.assignmentType === 'GROUP' ? params.targetId : undefined,
+      },
     });
     return existing.id;
   }
@@ -210,7 +291,12 @@ export async function grantAppAccess(params: {
     targetEmpId: params.assignmentType === 'USER' ? params.targetId : null,
     tagGroupId: params.assignmentType === 'TAG_GROUP' ? params.targetId : null,
     requestId: params.requestId ?? null,
-    details: { source: params.source ?? 'ADMIN', assignmentId: id },
+    details: {
+      source: params.source ?? 'ADMIN',
+      assignmentId: id,
+      assignmentType: params.assignmentType,
+      groupId: params.assignmentType === 'GROUP' ? params.targetId : undefined,
+    },
   });
 
   return id;
@@ -243,7 +329,11 @@ export async function revokeAppAccess(
     actorEmpId: revokedBy,
     targetEmpId: row.assignment_type === 'USER' ? row.target_id : null,
     tagGroupId: row.assignment_type === 'TAG_GROUP' ? row.target_id : null,
-    details: { assignmentId },
+    details: {
+      assignmentId,
+      assignmentType: row.assignment_type,
+      groupId: row.assignment_type === 'GROUP' ? row.target_id : undefined,
+    },
   });
 }
 

@@ -26,21 +26,9 @@ import {
   getServiceProviderByEntityId,
   getServiceProviderBySlug,
 } from '../saml/sp-registry.js';
-import { evaluateEntitlement } from '../saml/entitlements.js';
-import { hasPolicyAppAccess } from '../services/app-access-policy.js';
-import type { EmployeeSamlContext } from '../saml/types.js';
-import type { EntitlementRule } from '../saml/types.js';
+import { canUserLaunchApp } from '../services/app-access-policy.js';
 
 const router = Router();
-
-async function isEntitledToApp(
-  emp: EmployeeSamlContext,
-  slug: string,
-  rule: EntitlementRule | null,
-): Promise<boolean> {
-  if (evaluateEntitlement(emp, rule)) return true;
-  return hasPolicyAppAccess(emp.emp_id, slug);
-}
 const PENDING_SSO_PREFIX = 'lilg:saml:pending:';
 const PENDING_SSO_TTL_S  = 300;
 
@@ -126,7 +114,7 @@ async function issueAssertion(
     return;
   }
 
-  if (!(await isEntitledToApp(emp, resolved.sp.slug, resolved.sp.entitlement_rule))) {
+  if (!(await canUserLaunchApp(emp, resolved.sp.slug, resolved.sp.entitlement_rule))) {
     res.status(403).json({ error: 'You are not entitled to access this application' });
     return;
   }
@@ -237,7 +225,7 @@ router.get('/launch/:slug', requireAuth, async (req: Request, res: Response): Pr
     return;
   }
 
-  if (!(await isEntitledToApp(emp, sp.slug, sp.entitlement_rule))) {
+  if (!(await canUserLaunchApp(emp, sp.slug, sp.entitlement_rule))) {
     res.status(403).json({ error: 'You are not entitled to access this application' });
     return;
   }

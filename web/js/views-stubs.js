@@ -3493,14 +3493,17 @@ export async function viewAppAccessPolicy(content) {
 
   let appsCache = [];
   let tagGroupsCache = [];
+  let identityGroupsCache = [];
 
   async function loadAppsAndGroups() {
-    const [apps, groups] = await Promise.all([
+    const [apps, tagGroups, identityGroups] = await Promise.all([
       api.listAppAccessApps(),
       api.listTagGroups(),
+      api.listGroups(),
     ]);
     appsCache = norm(apps);
-    tagGroupsCache = norm(groups);
+    tagGroupsCache = norm(tagGroups);
+    identityGroupsCache = norm(identityGroups);
   }
 
   function switchTab(name) {
@@ -3604,19 +3607,28 @@ export async function viewAppAccessPolicy(content) {
     const appOpts = appsCache.length
       ? appsCache.map(a => `<option value="${esc(a.id)}">${esc(a.name)}${a.has_saml ? ' (SAML)' : ''}</option>`).join('')
       : '<option value="" disabled>No applications — register SAML/IGA apps first</option>';
-    const tgOpts = tagGroupsCache.length
-      ? tagGroupsCache.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('')
-      : '<option value="" disabled>No tag groups — use + Tag Group to create one</option>';
+    const hasAnyGroup = identityGroupsCache.length || tagGroupsCache.length;
+    const identityOpts = identityGroupsCache.length
+      ? `<optgroup label="Identity Groups (Identity → Groups)">${identityGroupsCache.map(g =>
+          `<option value="${esc(g.id)}" data-type="GROUP">${esc(g.name)}</option>`).join('')}</optgroup>`
+      : '';
+    const tagOpts = tagGroupsCache.length
+      ? `<optgroup label="Tag Groups">${tagGroupsCache.map(g =>
+          `<option value="${esc(g.id)}" data-type="TAG_GROUP">${esc(g.name)}</option>`).join('')}</optgroup>`
+      : '';
+    const tgOpts = hasAnyGroup
+      ? identityOpts + tagOpts
+      : '<option value="" disabled>No groups — create one under Identity → Groups or + Tag Group</option>';
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Assign Application Access</h2></div><div class="modal-body">
       ${!appsCache.length ? '<div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">No applications in the catalog yet. Register a SAML app under <strong>Applications</strong> or add one in the IGA catalog — it will appear here automatically.</div>' : ''}
-      ${!tagGroupsCache.length ? '<div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">Tag groups are empty. Click <strong>+ Tag Group</strong> on this page before assigning group-based access.</div>' : ''}
+      ${!hasAnyGroup ? '<div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">No groups yet. Create one under <strong>Identity → Groups</strong> (recommended) or click <strong>+ Tag Group</strong> on this page.</div>' : ''}
       <div class="form-group"><label class="form-label">Application</label>
         <select class="form-select" id="aa-app"><option value="">— Select —</option>${appOpts}</select></div>
       <div class="form-group"><label class="form-label">Assignment Type</label>
-        <select class="form-select" id="aa-type"><option value="USER">User-based</option><option value="TAG_GROUP">Tag Group-based</option></select></div>
+        <select class="form-select" id="aa-type"><option value="USER">User-based</option><option value="GROUP">Group-based</option></select></div>
       <div class="form-group" id="aa-user-wrap"><label class="form-label">Employee ID</label>
         <input class="form-input" id="aa-emp" placeholder="e.g. E12345"></div>
-      <div class="form-group" id="aa-tg-wrap" style="display:none"><label class="form-label">Tag Group</label>
+      <div class="form-group" id="aa-tg-wrap" style="display:none"><label class="form-label">Group</label>
         <select class="form-select" id="aa-tg"><option value="">— Select —</option>${tgOpts}</select></div>
       <div id="aa-err"></div>
     </div><div class="modal-footer">
@@ -3632,10 +3644,16 @@ export async function viewAppAccessPolicy(content) {
     bd.querySelector('#aa-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#aa-save').addEventListener('click', async () => {
       const appId = bd.querySelector('#aa-app').value;
-      const assignmentType = typeSel.value;
-      const targetId = assignmentType === 'USER'
-        ? bd.querySelector('#aa-emp').value.trim()
-        : bd.querySelector('#aa-tg').value;
+      let assignmentType = typeSel.value;
+      let targetId = '';
+      if (assignmentType === 'USER') {
+        targetId = bd.querySelector('#aa-emp').value.trim();
+      } else {
+        const tgSel = bd.querySelector('#aa-tg');
+        const selected = tgSel.selectedOptions[0];
+        targetId = tgSel.value;
+        assignmentType = selected?.dataset.type || 'GROUP';
+      }
       if (!appId || !targetId) { bd.querySelector('#aa-err').innerHTML = errHtml('Application and target are required'); return; }
       try {
         await api.createAppAssignment({ appId, assignmentType, targetId });

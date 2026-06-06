@@ -196,25 +196,13 @@ export function renderLogin() {
 export async function viewHome(me, content) {
   const isAdmin = ROLES_ADMIN.includes(me.employee?.role);
 
-  let myApps = [];
-  let catalogApps = [];
+  let allApps = [];
   let samlEnabled = false;
   try {
     const r = await api.apps();
     samlEnabled = !!r.samlEnabled;
-    myApps = r.data || [];
+    allApps = r.data || [];
   } catch { /* ignore */ }
-  try {
-    const r2 = await api.igaApps();
-    catalogApps = (r2.data || []).filter((a) => a.active && a.sso_enabled);
-  } catch { /* ignore */ }
-
-  /* Deduplicate catalog vs entitled apps by slug */
-  const entitledSlugs = new Set(myApps.map((a) => a.slug).filter(Boolean));
-  const dedupedCatalog = catalogApps
-    .filter((a) => !entitledSlugs.has(a.slug))
-    .map((c) => ({ name: c.name, slug: c.slug, iconUrl: c.icon_url }));
-  const allApps = [...myApps, ...dedupedCatalog];
 
   let favs = JSON.parse(localStorage.getItem('idp_fav_apps') || '[]');
   let activeTab = 'all';

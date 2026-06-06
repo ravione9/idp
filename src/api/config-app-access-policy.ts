@@ -179,11 +179,13 @@ router.get('/assignments', asyncHandler(async (req: Request, res: Response) => {
             CASE aaa.assignment_type
               WHEN 'USER' THEN e.full_name
               WHEN 'TAG_GROUP' THEN tg.name
+              WHEN 'GROUP' THEN g.name
             END AS target_name
        FROM app_access_assignments aaa
        JOIN applications a ON a.id = aaa.app_id
        LEFT JOIN employees e ON e.emp_id = aaa.target_id AND aaa.assignment_type = 'USER'
        LEFT JOIN tag_groups tg ON tg.id = aaa.target_id AND aaa.assignment_type = 'TAG_GROUP'
+       LEFT JOIN \`groups\` g ON g.id = aaa.target_id AND aaa.assignment_type = 'GROUP'
        ${where}
        ORDER BY aaa.granted_at DESC`,
     params,
@@ -193,7 +195,7 @@ router.get('/assignments', asyncHandler(async (req: Request, res: Response) => {
 
 const assignmentSchema = z.object({
   appId:          z.string().uuid(),
-  assignmentType: z.enum(['USER', 'TAG_GROUP']),
+  assignmentType: z.enum(['USER', 'TAG_GROUP', 'GROUP']),
   targetId:       z.string().min(1).max(36),
 });
 
