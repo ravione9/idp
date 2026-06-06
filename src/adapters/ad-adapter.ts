@@ -524,6 +524,29 @@ export class ADAdapter extends BaseAdapter {
     });
   }
 
+  /** Set password for a user identified by sAMAccountName (requires LDAPS or StartTLS). */
+  async setUserPassword(samAccountName: string, newPassword: string): Promise<AdapterResult<void>> {
+    return this.safe(async () => {
+      if (!this.connectionIsSecure()) {
+        throw new Error('AD password reset requires LDAPS or LDAP+StartTLS');
+      }
+      const entries = await this.findUser(samAccountName, ['dn']);
+      if (!entries.length) {
+        throw new Error(`AD user not found for sAMAccountName=${samAccountName}`);
+      }
+      await this.client.modify(entries[0].dn, [
+        new Change({
+          operation: 'replace',
+          modification: new Attribute({
+            type: 'unicodePwd',
+            values: [encodeAdPassword(newPassword)],
+          }),
+        }),
+      ]);
+      logger.info({ samAccountName, dn: entries[0].dn }, 'AD user password updated');
+    });
+  }
+
   /** List enabled user members of a group (by group DN). */
   async listGroupMemberUsers(
     groupDn: string,

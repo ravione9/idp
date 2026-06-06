@@ -18,6 +18,8 @@ import { requireRole } from '../auth/rbac.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { writebackPassword } from '../services/password-writeback.js';
 import { backfillAdIdentityLinkIfMissing } from '../services/ad-sync.js';
+import { hashPassword } from '../services/local-admin.js';
+import { asyncHandler } from '../utils/async-handler.js';
 import logger from '../utils/logger.js';
 import { z } from 'zod';
 import qrcode from 'qrcode';
@@ -179,8 +181,8 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
   let writebackLog: Record<string, unknown>[] = [];
   try {
     writebackLog = await query<Record<string, unknown>>(
-      `SELECT target_system, status, error, initiated_by, created_at
-         FROM password_writeback_log WHERE emp_id = ? ORDER BY created_at DESC LIMIT 10`,
+      `SELECT target_system, status, error, initiated_by, ts AS created_at
+         FROM password_writeback_log WHERE emp_id = ? ORDER BY ts DESC LIMIT 10`,
       [profileEmpId],
     );
   } catch (err) {
@@ -359,29 +361,71 @@ const resetPwdSchema = z.object({
   notifyUser:   z.boolean().default(false),
 });
 
-router.post('/:empId/reset-password', async (req: Request, res: Response): Promise<void> => {
+router.post('/:empId/reset-password', asyncHandler(async (req: Request, res: Response) => {
   const { empId } = req.params;
   const parsed = resetPwdSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     return;
   }
-  const { newPassword } = parsed.data;
+  const { newPassword, notifyUser } = parsed.data;
   const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'admin';
 
-  // 1. Update local account password if exists
+  const employee = await queryOne<{ emp_id: string; email_corp: string; role: string | null }>(
+    `SELECT emp_id, email_corp, role FROM employees WHERE emp_id = ?`,
+    [empId],
+  );
+  if (!employee) {
+    res.status(404).json({ error: 'Employee not found' });
+    return;
+  }
+
+  const localResults: { system: string; status: string; error?: string }[] = [];
+
+  // 1. Local IdP password (email/password login at /login)
   const localAccount = await queryOne<{ id: number }>(
     `SELECT id FROM local_accounts WHERE emp_id = ? AND active = 1`, [empId],
   );
-  const localResults: { system: string; status: string; error?: string }[] = [];
+  const passwordHash = await hashPassword(newPassword);
+
   if (localAccount) {
-    const hash = await bcrypt.hash(newPassword, 10);
     await execute(
       `UPDATE local_accounts SET password_hash = ? WHERE emp_id = ? AND active = 1`,
-      [hash, empId],
+      [passwordHash, empId],
     );
     localResults.push({ system: 'LOCAL', status: 'SUCCESS' });
     logger.info({ empId, adminId }, 'Local password reset by admin');
+  } else if (employee.email_corp) {
+    const email = employee.email_corp.toLowerCase().trim();
+    const emailTaken = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM local_accounts WHERE email = ? AND active = 1`,
+      [email],
+    );
+    if (emailTaken && emailTaken.emp_id !== empId) {
+      localResults.push({
+        system: 'LOCAL',
+        status: 'FAILED',
+        error: `Corporate email already tied to local account ${emailTaken.emp_id}`,
+      });
+    } else {
+      const localRole = ['ADMIN', 'SUPER_ADMIN', 'HRBP', 'MANAGER'].includes(employee.role ?? '')
+        ? employee.role!
+        : 'USER';
+      await execute(
+        `INSERT INTO local_accounts (emp_id, email, password_hash, role, created_by, active)
+         VALUES (?, ?, ?, ?, ?, 1)
+         ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), active = 1`,
+        [empId, email, passwordHash, localRole, adminId],
+      );
+      localResults.push({ system: 'LOCAL', status: 'SUCCESS' });
+      logger.info({ empId, adminId }, 'Local account provisioned during admin password reset');
+    }
+  } else {
+    localResults.push({
+      system: 'LOCAL',
+      status: 'SKIPPED',
+      error: 'No local login account and no corporate email on file',
+    });
   }
 
   // 2. Writeback to AD and Google (if linked)
@@ -393,20 +437,31 @@ router.post('/:empId/reset-password', async (req: Request, res: Response): Promi
     writebackResults = [{ system: 'WRITEBACK', status: 'FAILED', error: String(err) }];
   }
 
+  if (notifyUser) {
+    logger.info({ empId, adminId }, 'Password reset notifyUser requested (email delivery not yet implemented)');
+  }
+
   const allResults = [...localResults, ...writebackResults];
-  const allSucceeded = allResults.length > 0 && allResults.every(r => r.status === 'SUCCESS');
-  const anyFailed = allResults.some(r => r.status === 'FAILED');
+  const anySuccess = allResults.some((r) => r.status === 'SUCCESS');
+  const anyFailed = allResults.some((r) => r.status === 'FAILED');
+
+  if (!anySuccess) {
+    res.status(400).json({
+      success: false,
+      results: allResults,
+      summary: 'Password was not updated in any system — check results below',
+    });
+    return;
+  }
 
   res.json({
     success: !anyFailed,
     results: allResults,
-    summary: allSucceeded
+    summary: !anyFailed
       ? 'Password reset across all linked systems'
-      : anyFailed
-        ? 'Password reset with some failures — check results'
-        : 'Password reset (no linked external systems found)',
+      : 'Password reset with some failures — check results',
   });
-});
+}));
 
 // ---------------------------------------------------------------------------
 // POST /:empId/link-identity  — manually attach an identity link

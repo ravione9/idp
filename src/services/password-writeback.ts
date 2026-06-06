@@ -2,107 +2,123 @@
  * Password Writeback Service
  * --------------------------
  * Writes a new password to all active identity systems (AD, Google) for a given employee.
- * Logs each attempt to password_writeback_log.
+ * Uses connector config from the connectors table (not legacy .env-only settings).
  */
 
 import { google } from 'googleapis';
-import { Client, Attribute, Change } from 'ldapts';
+import { query, queryOne } from '../db/connection.js';
 import { config } from '../config.js';
-import { query } from '../db/connection.js';
+import { redis } from '../auth/session-store.js';
+import { ADAdapter } from '../adapters/ad-adapter.js';
 import logger from '../utils/logger.js';
 import { getIdentityLinksForEmp } from '../utils/outbox.js';
+import {
+  buildGoogleJwtAuth,
+  parseGoogleServiceAccountKey,
+  resolveGoogleImpersonationEmail,
+} from './google-directory-config.js';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 export interface WritebackResult {
-  system: 'AD' | 'GOOGLE' | 'ZOHO';
+  system: string;
   status: 'SUCCESS' | 'FAILED' | 'SKIPPED';
   error?: string;
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Connector config helpers
 // ---------------------------------------------------------------------------
-
-/** Encode a plain-text password for the AD unicodePwd attribute (UTF-16LE, quoted) */
-function encodeAdPassword(password: string): string {
-  const quoted = `"${password}"`;
-  const buf = Buffer.from(quoted, 'utf16le');
-  return buf.toString('binary');
+function parseConnectorConfig(raw: string | Record<string, unknown>): Record<string, unknown> {
+  return typeof raw === 'string'
+    ? JSON.parse(raw || '{}') as Record<string, unknown>
+    : (raw ?? {});
 }
 
-async function writebackToGoogle(externalId: string, newPassword: string): Promise<void> {
-  const rawKey = config.google.saKeyJson;
-  // Support both raw JSON and base64-encoded JSON
-  let key: Record<string, string>;
-  try {
-    key = JSON.parse(rawKey) as Record<string, string>;
-  } catch {
-    key = JSON.parse(Buffer.from(rawKey, 'base64').toString('utf8')) as Record<string, string>;
-  }
+async function loadConnectorConfig(
+  types: string[],
+): Promise<Record<string, unknown> | null> {
+  const placeholders = types.map(() => '?').join(',');
+  const row = await queryOne<{ config_json: string | Record<string, unknown> }>(
+    `SELECT config_json FROM connectors
+      WHERE connector_type IN (${placeholders}) AND status = 'ACTIVE'
+      ORDER BY updated_at DESC LIMIT 1`,
+    types,
+  );
+  if (!row) return null;
+  return parseConnectorConfig(row.config_json);
+}
 
+function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
+  const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
+  const port = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
+  const useSsl = cfg['useSsl'] !== undefined ? Boolean(cfg['useSsl']) : config.ad.url.startsWith('ldaps');
+  const startTls = cfg['startTls'] !== undefined ? Boolean(cfg['startTls']) : false;
+  const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
+  const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
+  const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
+  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
+  const adUrl = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
+  return new ADAdapter(redis, adUrl, bindDn, bindPass, baseDn, undefined, startTls, targetOuRaw);
+}
+
+async function writebackToGoogle(
+  externalId: string,
+  newPassword: string,
+  cfg: Record<string, unknown>,
+): Promise<void> {
+  const auth = buildGoogleJwtAuth(cfg);
+  const directory = google.admin({ version: 'directory_v1', auth });
+  await directory.users.update({
+    userKey: externalId,
+    requestBody: {
+      password: newPassword,
+      changePasswordAtNextLogin: true,
+    },
+  });
+}
+
+async function writebackToGoogleFallback(
+  externalId: string,
+  newPassword: string,
+): Promise<void> {
+  const rawKey = config.google.saKeyJson?.trim();
+  if (!rawKey) {
+    throw new Error('No active Google connector and GOOGLE_SA_KEY_JSON is not configured');
+  }
+  const key = parseGoogleServiceAccountKey(rawKey);
   const auth = new google.auth.JWT({
     email:   key['client_email'],
     key:     key['private_key'],
     scopes:  ['https://www.googleapis.com/auth/admin.directory.user'],
     subject: key['client_email'],
   });
-
   const directory = google.admin({ version: 'directory_v1', auth });
-
   await directory.users.update({
     userKey: externalId,
-    requestBody: {
-      password: newPassword,
-      changePasswordAtNextLogin: false,
-    },
+    requestBody: { password: newPassword, changePasswordAtNextLogin: true },
   });
 }
 
-async function writebackToAD(empId: string, newPassword: string): Promise<void> {
-  const client = new Client({
-    url: config.ad.url,
-    connectTimeout: 10_000,
-    timeout: 15_000,
-    tlsOptions: { rejectUnauthorized: process.env['NODE_ENV'] === 'production' },
-  });
-
-  await client.bind(config.ad.bindDn, config.ad.bindPassword);
-
-  try {
-    // Search for user by employeeID
-    const result = await client.search(config.ad.baseDn, {
-      scope: 'sub',
-      filter: `(&(objectClass=user)(employeeID=${ldapEscape(empId)}))`,
-      attributes: ['dn'],
-    });
-
-    if (result.searchEntries.length === 0) {
-      throw new Error(`AD user not found for employeeID=${empId}`);
-    }
-
-    const dn = result.searchEntries[0].dn;
-    const encodedPassword = encodeAdPassword(newPassword);
-
-    const pwdChange = new Change({
-      operation: 'replace',
-      modification: new Attribute({
-        type: 'unicodePwd',
-        values: [encodedPassword],
-      }),
-    });
-
-    await client.modify(dn, [pwdChange]);
-    logger.info({ empId, dn }, 'AD password writeback successful');
-  } finally {
-    await client.unbind();
+async function writebackToAD(
+  externalId: string,
+  newPassword: string,
+  cfg: Record<string, unknown> | null,
+): Promise<void> {
+  if (!cfg) {
+    throw new Error('No active Active Directory connector configured');
   }
-}
-
-/** Escape special characters in LDAP filter values (RFC 4515) */
-function ldapEscape(value: string): string {
-  return value.replace(/[\\*()\x00/]/g, (c) => `\\${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+  const adapter = createAdAdapterFromConfig(cfg);
+  try {
+    await adapter.connect();
+    const result = await adapter.setUserPassword(externalId, newPassword);
+    if (!result.success) {
+      throw new Error(result.error ?? 'AD password writeback failed');
+    }
+  } finally {
+    await adapter.disconnect().catch(() => undefined);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -123,20 +139,33 @@ export async function writebackPassword(
     return [];
   }
 
+  const adCfg = await loadConnectorConfig(['AD', 'LDAP']);
+  const googleCfg = await loadConnectorConfig(['GOOGLE', 'GOOGLE_WORKSPACE']);
+
   const results: WritebackResult[] = [];
 
   for (const link of activeLinks) {
-    const system = link.system as 'AD' | 'GOOGLE';
-    let status: 'SUCCESS' | 'FAILED' | 'SKIPPED' = 'SKIPPED';
+    const system = link.system;
+    let status: WritebackResult['status'] = 'FAILED';
     let error: string | undefined;
 
     try {
       if (system === 'GOOGLE') {
-        await writebackToGoogle(link.external_id, newPassword);
+        if (googleCfg) {
+          resolveGoogleImpersonationEmail(googleCfg, parseGoogleServiceAccountKey(
+            String(googleCfg['serviceAccountKey'] ?? config.google.saKeyJson ?? ''),
+          ));
+          await writebackToGoogle(link.external_id, newPassword, googleCfg);
+        } else {
+          await writebackToGoogleFallback(link.external_id, newPassword);
+        }
         status = 'SUCCESS';
       } else if (system === 'AD') {
-        await writebackToAD(empId, newPassword);
+        await writebackToAD(link.external_id, newPassword, adCfg);
         status = 'SUCCESS';
+      } else {
+        status = 'SKIPPED';
+        error = 'Unsupported system';
       }
       logger.info({ empId, system, externalId: link.external_id }, 'Password writeback succeeded');
     } catch (err) {
@@ -145,15 +174,16 @@ export async function writebackPassword(
       logger.error({ empId, system, externalId: link.external_id, err }, 'Password writeback failed');
     }
 
-    // Log to password_writeback_log
-    try {
-      await query(
-        `INSERT INTO password_writeback_log (emp_id, target_system, status, error, initiated_by)
-         VALUES (?, ?, ?, ?, ?)`,
-        [empId, system, status, error ?? null, initiatedBy],
-      );
-    } catch (logErr) {
-      logger.warn({ empId, system, logErr }, 'Failed to insert password_writeback_log row');
+    if (system === 'AD' || system === 'GOOGLE') {
+      try {
+        await query(
+          `INSERT INTO password_writeback_log (emp_id, target_system, status, error, initiated_by)
+           VALUES (?, ?, ?, ?, ?)`,
+          [empId, system, status, error ?? null, initiatedBy],
+        );
+      } catch (logErr) {
+        logger.warn({ empId, system, logErr }, 'Failed to insert password_writeback_log row');
+      }
     }
 
     results.push({ system, status, ...(error ? { error } : {}) });

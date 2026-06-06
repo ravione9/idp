@@ -705,6 +705,19 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### `0f6ee22` — 2026-06-07 — Admin password reset: local + AD/Google writeback fixes
+
+**Why** — Password reset appeared to succeed but did not change login credentials; AD writeback searched by `employeeID` instead of identity link `external_id`, and Google writeback ignored connector admin impersonation.
+
+**What changed:**
+
+- **`src/api/admin-users.ts`** — `asyncHandler` on reset route; auto-provision `local_accounts` when missing; fail clearly when nothing updated; fix `password_writeback_log` column (`ts`).
+- **`src/services/password-writeback.ts`** — use active AD/Google connector config; AD reset via `sAMAccountName` from identity link.
+- **`src/adapters/ad-adapter.ts`** — `setUserPassword()` (LDAPS/StartTLS required).
+- **`web/js/views-stubs.js`** — password tab clarifies local `/login` vs SSO targets.
+
+---
+
 ### `ec07102` — 2026-06-07 — AD group directory sync: discovery + reporting
 
 **Why** — AD connector sync imported users but groups never appeared; sync history had no group line because `syncGroups` was often unset and group LDAP lookup was limited to the user search base.

@@ -3019,15 +3019,19 @@ function initUsersTab(panel) {
 
       // ── Password Reset tab ───────────────────────────────────────────────────
       else if (tab === 'password') {
+        const emp = profileData.employee || {};
         const activeSystems = links.filter(l => l.status === 'ACTIVE').map(l => l.system);
-        const systemsList   = ['LOCAL', ...activeSystems];
+        const hasLocalLogin = emp.local_active === 1 || emp.local_active === true
+          || /^LOC/i.test(emp.emp_id || '') || !!emp.email_corp;
+        const systemsList   = hasLocalLogin ? ['LOCAL', ...activeSystems] : activeSystems;
 
         body.innerHTML = `
           <p class="pp-section-title">Reset Password</p>
           <p style="font-size:0.875rem;color:var(--text-muted);margin-bottom:1.25rem;line-height:1.6">
             The new password will be pushed to <strong>all linked systems simultaneously</strong>:
-            ${systemsList.map(s => srcBadge(s)).join('')}
+            ${systemsList.length ? systemsList.map(s => srcBadge(s)).join('') : '<span class="muted">No targets — add identity links or a corporate email</span>'}
           </p>
+          ${hasLocalLogin ? `<p class="muted" style="font-size:0.8rem;margin:-0.75rem 0 1rem">Local password applies to <strong>/login</strong> (email + password). Google / AD SSO is separate unless linked below.</p>` : ''}
 
           <div class="form-group">
             <label class="form-label">New Password <span style="color:var(--danger)">*</span></label>
@@ -3082,11 +3086,13 @@ function initUsersTab(panel) {
             const results = r.results || [];
 
             const rows = results.map(res => `
-              <div class="pp-reset-result ${res.status === 'SUCCESS' ? 'success' : 'fail'}">
+              <div class="pp-reset-result ${res.status === 'SUCCESS' ? 'success' : res.status === 'SKIPPED' ? '' : 'fail'}">
                 ${srcBadge(res.system)}
                 <span style="flex:1">${res.status === 'SUCCESS'
                   ? '✓ Updated successfully'
-                  : `✗ ${esc(res.error || 'Failed')}`}</span>
+                  : res.status === 'SKIPPED'
+                    ? `— ${esc(res.error || 'Skipped')}`
+                    : `✗ ${esc(res.error || 'Failed')}`}</span>
               </div>`).join('');
 
             const banner = r.success
