@@ -712,7 +712,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### (pending) — 2026-06-07 — Application Access Policy: identity group assignments
+### `07bc5c9` — 2026-06-07 — Application Access Policy: identity group assignments
 
 **Why** — Admins created groups under **Identity → Groups** (e.g. "zoho mail") but the **Assign Application Access** modal only listed tag groups, so the group never appeared in the dropdown.
 
@@ -725,7 +725,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
-### (pending) — 2026-06-07 — Fix app launcher showing apps without Application Access Policy grant
+### `07bc5c9` — 2026-06-07 — Fix app launcher showing apps without Application Access Policy grant
 
 **Why** — Users such as `test.a` saw Zoho Mail on *All Applications* even when no assignment existed, because the seeded SAML app used `entitlement_rule.all_active = true` and the home page merged the full IGA catalog into launch tiles.
 
