@@ -148,6 +148,7 @@ Lenskart IdP is a unified platform that delivers **enterprise SSO + Identity Gov
 | `idp-localstack` | `localstack/localstack:3` | internal 4566 | SQS in dev |
 
 Only `idp-api:8080` is exposed to the host network.
+The IdP signing keys used by SAML are stored on named volume `saml-keys` mounted at `/app/data/saml` to keep certificate fingerprints stable across API container rebuilds.
 
 ---
 
@@ -596,6 +597,7 @@ docker exec -i idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg < migrations/<
 | `Table 'lilg.lilg_sessions' doesn't exist` | Pre-migration MySQL volume | Restart API — migrations apply automatically |
 | `getaddrinfo EAI_AGAIN mysql` / API crash-loop, container named `lilg-api` while DB is `idp-mysql` | API started with root `docker-compose.yml` instead of `docker-compose.dev.yml` — `lilg-api` lands on a different network and cannot resolve hostname `mysql` | `docker rm -f lilg-api` then `./dev-up.sh up -d --build lilg-api` or `bash scripts/restart-api.sh` (never use bare `docker-compose up` on pam-2) |
 | `No such container: idp-api` after deploy | Same mismatch — API container is `lilg-api` from wrong compose file | Use `./dev-up.sh` / `docker-compose -f docker-compose.dev.yml`; logs: `docker logs idp-api` |
+| Zoho / SP says "Signature verification failed" after deploy | IdP signing cert changed (auto-generated key was not persisted) | Re-upload current IdP metadata/certificate to SP, then ensure `saml-keys` volume is mounted at `/app/data/saml` so cert does not rotate on rebuild |
 
 ---
 
@@ -690,6 +692,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(pending)* — 2026-06-06 — Persist SAML signing keys across container rebuilds
+
+**Why** — Zoho SAML launch failed with signature verification mismatch because the IdP signing certificate rotated after API container recreation.
+
+**What changed:**
+
+- **`docker-compose.dev.yml`**, **`docker-compose.yml`**, **`docker-compose.prod.yml`** — mount named volume `saml-keys` at `/app/data/saml` for `lilg-api`.
+- Added deployment/runbook notes that SAML key material must persist to keep SP trust intact.
 
 ### `9bc181e` — 2026-06-06 — User Directory: admin MFA management for local users
 

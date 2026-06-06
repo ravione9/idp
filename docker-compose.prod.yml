@@ -22,6 +22,7 @@ services:
       ACME_WEBROOT: /app/acme-webroot
     volumes:
       - ./acme-webroot:/app/acme-webroot
+      - saml-keys:/app/data/saml
     ports:
       # Cloudflare Flexible SSL → origin HTTP :80
       - "0.0.0.0:80:8080"

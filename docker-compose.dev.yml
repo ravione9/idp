@@ -92,6 +92,8 @@ services:
         condition: service_healthy
       localstack:
         condition: service_healthy
+    volumes:
+      - saml-keys:/app/data/saml
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 10s
@@ -133,3 +135,4 @@ volumes:
   mysql-data:
   redis-data:
   localstack-data:
+  saml-keys:
