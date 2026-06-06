@@ -693,7 +693,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(pending)* — 2026-06-06 — Persist SAML signing keys across container rebuilds
+### `e54e47d` — 2026-06-06 — Persist SAML signing keys across container rebuilds
 
 **Why** — Zoho SAML launch failed with signature verification mismatch because the IdP signing certificate rotated after API container recreation.
 
