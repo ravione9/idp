@@ -3,7 +3,7 @@
 import { api } from './api.js?v=2026-06-07-groups-sync';
 import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut } from './ui.js';
 import { icon as svgIcon } from './icons.js';
-import { viewOidcApps } from './views-stubs.js';
+import { viewOidcApps, viewPrebuiltApps } from './views-stubs.js';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
@@ -360,27 +360,30 @@ export async function viewDashboard(content) {
 /* ---------- Applications (unified: Catalog + SAML + OIDC) ---------- */
 export async function viewApplications(me, content, initialTab = 'catalog') {
   const tabs = [
-    { id: 'catalog', label: 'Application Catalog' },
-    { id: 'saml',    label: 'SAML Applications' },
-    { id: 'oidc',    label: 'OIDC / OAuth' },
+    { id: 'catalog',  label: 'Application Catalog' },
+    { id: 'saml',     label: 'SAML Applications' },
+    { id: 'oidc',     label: 'OIDC / OAuth' },
+    { id: 'prebuilt', label: 'Pre-built Integrations' },
   ];
   const validTab = tabs.some((t) => t.id === initialTab) ? initialTab : 'catalog';
 
   const wrap = el(`<div>
-    ${header('Applications', 'Application catalog, SAML service providers, and OIDC / OAuth clients')}
+    ${header('Applications', 'Application catalog, SAML service providers, OIDC / OAuth clients, and pre-built integrations')}
     <div class="inline-tabs" id="apps-tabs">
       ${tabs.map((t) => `<button type="button" class="inline-tab${t.id === validTab ? ' active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('')}
     </div>
     <div id="apps-panel-catalog"></div>
     <div id="apps-panel-saml" hidden></div>
     <div id="apps-panel-oidc" hidden></div>
+    <div id="apps-panel-prebuilt" hidden></div>
   </div>`);
   content.replaceChildren(wrap);
 
   const panels = {
-    catalog: wrap.querySelector('#apps-panel-catalog'),
-    saml:    wrap.querySelector('#apps-panel-saml'),
-    oidc:    wrap.querySelector('#apps-panel-oidc'),
+    catalog:  wrap.querySelector('#apps-panel-catalog'),
+    saml:     wrap.querySelector('#apps-panel-saml'),
+    oidc:     wrap.querySelector('#apps-panel-oidc'),
+    prebuilt: wrap.querySelector('#apps-panel-prebuilt'),
   };
 
   async function showTab(tabId) {
@@ -405,6 +408,9 @@ export async function viewApplications(me, content, initialTab = 'catalog') {
     } else if (tabId === 'oidc' && !panels.oidc.dataset.loaded) {
       panels.oidc.dataset.loaded = '1';
       await viewOidcApps(panels.oidc, { embed: true });
+    } else if (tabId === 'prebuilt' && !panels.prebuilt.dataset.loaded) {
+      panels.prebuilt.dataset.loaded = '1';
+      await viewPrebuiltApps(panels.prebuilt, { embed: true });
     }
   }
 

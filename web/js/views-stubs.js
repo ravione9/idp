@@ -1637,24 +1637,6 @@ export async function viewOidcApps(content, opts = {}) {
     <!-- ── Registered Clients ───────────────────────────────────────────── -->
     <div id="list-area" style="margin-bottom:2.5rem">${loading()}</div>
 
-    <!-- ── Pre-built Integrations Catalog ──────────────────────────────── -->
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-      <div>
-        <h2 style="margin:0;font-size:1.05rem;font-weight:700">Pre-built Integrations</h2>
-        <p class="muted" style="margin:0.2rem 0 0;font-size:0.82rem">
-          ${SSO_CATALOG.length} integrations — click to auto-configure
-        </p>
-      </div>
-      <div style="display:flex;gap:0.6rem;align-items:center">
-        <input class="form-input" id="cat-search" placeholder="Search integrations…" style="max-width:220px">
-      </div>
-    </div>
-    <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:1rem" id="cat-filters">
-      ${['All',...new Set(SSO_CATALOG.map(a=>a.cat))].map(c =>
-        `<button class="btn btn-sm ${c==='All'?'btn-primary':'btn-secondary'} cat-filter" data-cat="${esc(c)}">${esc(c)}</button>`
-      ).join('')}
-    </div>
-    <div id="cat-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:0.85rem"></div>
   </div>`));
   const wrap = content.firstChild;
 
@@ -1689,7 +1671,7 @@ export async function viewOidcApps(content, opts = {}) {
             <button class="btn btn-sm btn-danger del-oidc" data-id="${esc(String(c.id))}">Delete</button>
           </td>
         </tr>`).join('')
-        : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No OIDC clients registered yet — use the pre-built integrations below or register a custom app.</p></div></td></tr>`;
+        : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No OIDC clients registered yet — use the Pre-built Integrations tab or register a custom app.</p></div></td></tr>`;
 
       const clientCount = clients.length;
       wrap.querySelector('#list-area').innerHTML = `
@@ -1819,7 +1801,34 @@ export async function viewOidcApps(content, opts = {}) {
     bd.querySelector('#sec-done').addEventListener('click', () => { bd.remove(); if (onDone) onDone(); });
   }
 
-  // ── Inline Pre-built Integrations catalog ──────────────────────────────────
+  await load();
+}
+
+// ─── 8b. Pre-built Integrations ───────────────────────────────────────────────
+export async function viewPrebuiltApps(content, opts = {}) {
+  const embed = !!opts.embed;
+  content.replaceChildren(el(`<div>
+    ${embed ? '' : header('Pre-built Integrations', `${SSO_CATALOG.length} integrations — click any card to auto-configure`)}
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <div>
+        <h2 style="margin:0;font-size:1.05rem;font-weight:700">Pre-built Integrations</h2>
+        <p class="muted" style="margin:0.2rem 0 0;font-size:0.82rem">
+          ${SSO_CATALOG.length} integrations — click to auto-configure
+        </p>
+      </div>
+      <div style="display:flex;gap:0.6rem;align-items:center">
+        <input class="form-input" id="pbi-search" placeholder="Search integrations…" style="max-width:220px">
+      </div>
+    </div>
+    <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:1rem" id="pbi-filters">
+      ${['All',...new Set(SSO_CATALOG.map(a=>a.cat))].map(c =>
+        `<button class="btn btn-sm ${c==='All'?'btn-primary':'btn-secondary'} pbi-filter" data-cat="${esc(c)}">${esc(c)}</button>`
+      ).join('')}
+    </div>
+    <div id="pbi-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:0.85rem"></div>
+  </div>`));
+  const wrap = content.firstChild;
+
   const ICON_COLOURS = ['#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#6366f1'];
   function catalogIcon(app) {
     const bg = ICON_COLOURS[(app.name||' ').charCodeAt(0) % ICON_COLOURS.length];
@@ -1839,7 +1848,7 @@ export async function viewOidcApps(content, opts = {}) {
       (!q || a.name.toLowerCase().includes(q) || a.cat.toLowerCase().includes(q))
     );
 
-    wrap.querySelector('#cat-grid').innerHTML = visible.map(app => `
+    wrap.querySelector('#pbi-grid').innerHTML = visible.map(app => `
       <div class="card" style="padding:1rem;cursor:default;position:relative">
         <div style="display:flex;align-items:center;gap:0.65rem;margin-bottom:0.6rem">
           ${catalogIcon(app)}
@@ -1851,7 +1860,7 @@ export async function viewOidcApps(content, opts = {}) {
         <div class="muted" style="font-size:0.72rem;margin-bottom:0.65rem;line-height:1.45;min-height:2.5em">${esc((app.hint||'').slice(0,80))}${(app.hint||'').length>80?'…':''}</div>
         <button class="btn btn-primary btn-sm" style="width:100%;font-size:0.78rem" data-app="${esc(app.id)}">+ Add</button>
       </div>`).join('')
-      || `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">🔍</div><p>No integrations match "${esc(q)}"</p></div>`;
+      || `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">🔍</div><p>No integrations match "${esc(searchQ)}"</p></div>`;
 
     wrap.querySelectorAll('[data-app]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1863,12 +1872,11 @@ export async function viewOidcApps(content, opts = {}) {
     });
   }
 
-  // Wire catalog search + category filters
-  wrap.querySelector('#cat-search').addEventListener('input', e => { searchQ = e.target.value; renderGrid(); });
-  wrap.querySelectorAll('.cat-filter').forEach(btn => {
+  wrap.querySelector('#pbi-search').addEventListener('input', e => { searchQ = e.target.value; renderGrid(); });
+  wrap.querySelectorAll('.pbi-filter').forEach(btn => {
     btn.addEventListener('click', () => {
       activeCat = btn.dataset.cat;
-      wrap.querySelectorAll('.cat-filter').forEach(b => {
+      wrap.querySelectorAll('.pbi-filter').forEach(b => {
         b.classList.toggle('btn-primary',   b.dataset.cat === activeCat);
         b.classList.toggle('btn-secondary', b.dataset.cat !== activeCat);
       });
@@ -1877,7 +1885,6 @@ export async function viewOidcApps(content, opts = {}) {
   });
 
   renderGrid();
-  await load();
 }
 
 // ─── 9. App Discovery ─────────────────────────────────────────────────────────
