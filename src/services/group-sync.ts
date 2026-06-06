@@ -21,14 +21,20 @@ let groupSyncSchemaReady: boolean | null = null;
 
 export async function isGroupSyncSchemaReady(): Promise<boolean> {
   if (groupSyncSchemaReady !== null) return groupSyncSchemaReady;
-  const row = await queryOne<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM information_schema.columns
-      WHERE table_schema = DATABASE()
-        AND table_name = 'groups'
-        AND column_name = 'source_system'`,
-    [],
-  );
-  groupSyncSchemaReady = (row?.n ?? 0) > 0;
+  try {
+    // Probe the live table — avoids information_schema permission quirks and
+    // matches what the extended list query actually needs.
+    await query(`SELECT source_system FROM \`groups\` LIMIT 0`, []);
+    groupSyncSchemaReady = true;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'ER_BAD_FIELD_ERROR' || code === 'ER_NO_SUCH_TABLE') {
+      groupSyncSchemaReady = false;
+    } else {
+      logger.warn({ err }, 'Group sync schema probe failed — treating as not ready');
+      groupSyncSchemaReady = false;
+    }
+  }
   return groupSyncSchemaReady;
 }
 

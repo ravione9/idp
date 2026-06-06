@@ -10,7 +10,8 @@ import { requireRole } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { safeQuery } from '../db/safe-query.js';
-import { syncAllDirectoryGroups, isGroupSyncSchemaReady } from '../services/group-sync.js';
+import { isGroupSyncSchemaReady } from '../services/group-sync.js';
+import logger from '../utils/logger.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -35,12 +36,33 @@ const GROUP_LIST_SQL = `
   WHERE g.active = 1
   ORDER BY g.source_system, g.name`;
 
+function normalizeGroupRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  return rows.map((row) => {
+    const out: Record<string, unknown> = { ...row };
+    if (typeof out['member_count'] === 'bigint') {
+      out['member_count'] = Number(out['member_count']);
+    }
+    for (const key of ['created_at', 'last_synced_at'] as const) {
+      const v = out[key];
+      if (v instanceof Date) out[key] = v.toISOString();
+    }
+    return out;
+  });
+}
+
 async function listGroups(): Promise<Record<string, unknown>[]> {
-  const schemaReady = await isGroupSyncSchemaReady();
-  if (!schemaReady) {
-    return safeQuery<Record<string, unknown>>(LEGACY_GROUP_LIST_SQL, []);
+  if (await isGroupSyncSchemaReady()) {
+    try {
+      const rows = await query<Record<string, unknown>>(GROUP_LIST_SQL, []);
+      return normalizeGroupRows(rows);
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code !== 'ER_BAD_FIELD_ERROR' && code !== 'ER_NO_SUCH_TABLE') throw err;
+      logger.warn({ err }, 'Groups list: extended query failed — falling back to legacy');
+    }
   }
-  return safeQuery<Record<string, unknown>>(GROUP_LIST_SQL, []);
+  const rows = await safeQuery<Record<string, unknown>>(LEGACY_GROUP_LIST_SQL, []);
+  return normalizeGroupRows(rows);
 }
 
 async function groupSourceSystem(groupId: string): Promise<string> {
@@ -61,6 +83,7 @@ router.post('/sync', asyncHandler(async (_req: Request, res: Response) => {
     });
     return;
   }
+  const { syncAllDirectoryGroups } = await import('../services/group-sync.js');
   const result = await syncAllDirectoryGroups();
   res.json({
     success: true,

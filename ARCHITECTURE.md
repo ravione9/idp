@@ -705,6 +705,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### `b8b2190` — 2026-06-07 — Groups API: hardened list fallback
+
+**Why** — `/api/admin/groups` could still return 500 when migration 014 columns were missing or the extended JOIN query failed on a long-lived DB volume.
+
+**What changed:**
+
+- **`src/api/config-groups.ts`** — extended list uses raw `query` with explicit fallback to legacy SQL; normalizes `member_count` / dates for JSON; lazy-imports sync service on `POST /sync` only.
+- **`src/services/group-sync.ts`** — `isGroupSyncSchemaReady()` probes `SELECT source_system FROM groups LIMIT 0` instead of `information_schema` (never throws; treats probe errors as not ready).
+
+---
+
 ### `e8d525f` — 2026-06-07 — Groups: member management + Google/AD directory sync
 
 **Why** — Identity Groups page had no way to add members; operators expected groups to mirror Google Workspace and Active Directory.
