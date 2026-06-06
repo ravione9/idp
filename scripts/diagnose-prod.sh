@@ -31,8 +31,22 @@ echo "=== API logs ==="
 docker logs idp-api --tail 50 2>&1 || docker logs lilg-api --tail 50 2>&1 || true
 
 echo ""
+echo "=== AWS / firewall (if :80 still fails after fix-cloudflare-521.sh) ==="
+echo "  Security Group must allow inbound TCP 80 from 0.0.0.0/0 (or Cloudflare IP ranges)"
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q active; then
+  echo "  ufw:"
+  ufw status | grep -E '80|8080' || echo "    port 80 not allowed in ufw — run: ufw allow 80/tcp"
+fi
+
+echo ""
+echo "=== .env duplicates ==="
+if [[ -f .env ]] && [[ $(grep -c '^COOKIE_SECURE=' .env 2>/dev/null || echo 0) -gt 1 ]]; then
+  echo "WARN: .env has multiple COOKIE_SECURE= lines — remove COOKIE_SECURE=false, keep COOKIE_SECURE=true"
+fi
+
+echo ""
 echo "=== Common fixes ==="
-echo "  503 from Cloudflare → origin port 80 not open or API crash-loop"
-echo "    bash scripts/deploy-prod.sh"
+echo "  521 from Cloudflare → origin port 80 not open:"
+echo "    bash scripts/fix-cloudflare-521.sh"
 echo "  403 from Cloudflare → WAF/Bot Fight blocking — add bypass for /healthz /login"
 echo "  SSL error → Cloudflare SSL mode: Flexible (origin is HTTP on :80)"

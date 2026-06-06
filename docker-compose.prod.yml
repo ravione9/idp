@@ -20,10 +20,10 @@ services:
       TRUST_PROXY: "true"
       SAML_KEY_DIR: /app/data/saml
     ports:
-      # Cloudflare origin (required for proxied DNS)
+      # Cloudflare origin (required for proxied DNS — fixes error 521)
       - "0.0.0.0:80:8080"
-      # Local health checks / SSH tunnel
-      - "127.0.0.1:8080:8080"
+      # Keep 8080 for local checks (matches existing dev deploys)
+      - "0.0.0.0:8080:8080"
     depends_on:
       mysql:
         condition: service_healthy

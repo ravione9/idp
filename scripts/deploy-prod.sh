@@ -9,14 +9,18 @@ cd "$(dirname "$0")/.."
 # shellcheck source=compose-lib.sh
 source "$(dirname "$0")/compose-lib.sh"
 
-COMPOSE_FILE="docker-compose.yml"
-export COMPOSE_FILE
+# Auto-detect compose file from running containers
+if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE '^(idp-api|idp-mysql)$'; then
+  export COMPOSE_FILE="docker-compose.dev.yml"
+else
+  export COMPOSE_FILE="docker-compose.yml"
+fi
 
 idp_ensure_compose_v2
 idp_compose_init
 
 echo "==> Production deploy for https://idp.lenskart.com"
-echo "    Compose: docker-compose.yml + docker-compose.prod.yml"
+echo "    Compose: ${COMPOSE_FILE} + docker-compose.prod.yml"
 
 if [[ ! -f .env ]]; then
   cp env.prod.example .env
@@ -57,13 +61,12 @@ for i in $(seq 1 36); do
     curl -sf http://127.0.0.1:80/healthz && echo
     echo ""
     echo "Public URL:  https://idp.lenskart.com/login"
-    echo "Origin test: curl -H 'Host: idp.lenskart.com' http://$(curl -4 -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')/healthz"
     echo ""
     echo "Cloudflare checklist:"
-    echo "  1. DNS A record idp.lenskart.com → this server IP, Proxied ON"
+    echo "  1. DNS A record idp.lenskart.com → this server public IP, Proxied ON"
     echo "  2. SSL/TLS mode: Flexible (CF HTTPS → origin HTTP :80)"
-    echo "  3. Security → WAF: allow /healthz /login /auth/* /api/* /saml/*"
-    echo "  4. Firewall: allow TCP 80 from internet (or Cloudflare IPs only)"
+    echo "  3. AWS Security Group: inbound TCP 80 open"
+    echo "  4. WAF: allow /healthz /login /auth/* /api/* /saml/*"
     docker ps --filter name=idp- --filter name=lilg-
     exit 0
   fi
@@ -71,6 +74,6 @@ for i in $(seq 1 36); do
 done
 
 echo ""
-echo "=== FAILED — API not healthy ==="
-bash scripts/diagnose.sh
+echo "=== FAILED — API not healthy on port 80 ==="
+bash scripts/diagnose-prod.sh
 exit 1
