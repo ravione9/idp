@@ -18,19 +18,26 @@ function errHtml(msg) { return `<div class="alert alert-error">${esc(msg)}</div>
 
 function spMetadataUploadHtml(pfx) {
   return `
-    <div class="form-group span2">
-      <label class="form-label">SP Metadata XML <span class="muted" style="font-weight:400">— upload or paste to auto-fill</span></label>
-      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
-        <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
-          Upload .xml file
-          <input type="file" id="${pfx}-meta-file" accept=".xml,text/xml,application/xml" style="display:none">
-        </label>
-        <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-meta-parse">Parse metadata</button>
+    <div class="span2" style="grid-column:1/-1;margin-bottom:0.25rem">
+      <div class="alert alert-info" style="margin:0;padding:1rem 1.1rem">
+        <div style="font-weight:600;margin-bottom:0.35rem">Upload application metadata (recommended)</div>
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem;line-height:1.45">
+          Download the SP metadata XML from Zoho / AWS / GitHub and upload it here — Entity ID, ACS URL, and SLO will auto-fill.
+        </p>
+        <div id="${pfx}-meta-drop" style="border:2px dashed var(--border);border-radius:8px;padding:1rem;text-align:center;background:var(--bg);margin-bottom:0.75rem">
+          <div style="font-size:1.5rem;margin-bottom:0.35rem">📄</div>
+          <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0">
+            Choose metadata .xml file
+            <input type="file" id="${pfx}-meta-file" accept=".xml,text/xml,application/xml" style="display:none">
+          </label>
+          <div class="muted" style="font-size:0.75rem;margin-top:0.5rem">or paste XML below</div>
+        </div>
+        <textarea class="form-textarea" id="${pfx}-meta-paste" rows="4" placeholder="&lt;EntityDescriptor xmlns=&quot;urn:oasis:names:tc:SAML:2.0:metadata&quot; entityID=&quot;...&quot;&gt;..."></textarea>
+        <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-meta-parse" style="margin-top:0.5rem">Parse metadata &amp; fill fields</button>
       </div>
-      <textarea class="form-textarea" id="${pfx}-meta-paste" rows="4" placeholder="Paste SAML Service Provider metadata XML from Zoho, AWS, GitHub, etc."></textarea>
     </div>
-    <hr style="border:none;border-top:1px solid var(--border);margin:0.25rem 0 0.75rem" class="span2">
-    <p class="muted span2" style="font-size:0.78rem;margin:0 0 0.5rem">Or enter SP details manually:</p>`;
+    <hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 0.75rem" class="span2">
+    <p class="muted span2" style="font-size:0.78rem;margin:0 0 0.5rem;font-weight:600">Application details</p>`;
 }
 
 function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
@@ -102,6 +109,25 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
     }
     fileEl.value = '';
   });
+
+  const dropEl = bd.querySelector(`#${pfx}-meta-drop`);
+  if (dropEl) {
+    dropEl.addEventListener('dragover', (e) => { e.preventDefault(); dropEl.style.borderColor = 'var(--accent)'; });
+    dropEl.addEventListener('dragleave', () => { dropEl.style.borderColor = 'var(--border)'; });
+    dropEl.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dropEl.style.borderColor = 'var(--border)';
+      const file = e.dataTransfer?.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        pasteEl.value = text;
+        await doParse(text);
+      } catch (err) {
+        if (errEl) errEl.innerHTML = errHtml('Could not read dropped file: ' + err.message);
+      }
+    });
+  }
 }
 
 function header(title, subtitle, action = '') {
@@ -344,17 +370,17 @@ export async function viewIgaApps(content, opts = {}) {
       <div class="modal-header"><h2>${isEdit ? 'Edit SAML Application' : 'Register SAML Application'}</h2></div>
       <div class="modal-body" style="max-height:78vh;overflow-y:auto">
         <div class="form-2col">
+          ${spMetadataUploadHtml('csp')}
           <div class="form-group">
             <label class="form-label">Application Name <span style="color:var(--danger)">*</span></label>
-            <input class="form-input" id="csp-name" value="${esc(sp?.name||'')}" placeholder="e.g. Darwinbox HRMS">
+            <input class="form-input" id="csp-name" value="${esc(sp?.name||'')}" placeholder="e.g. Zoho Mail">
           </div>
           <div class="form-group">
             <label class="form-label">Slug <span style="color:var(--danger)">*</span></label>
             <input class="form-input" id="csp-slug" value="${esc(sp?.slug||'')}"
-              placeholder="e.g. darwinbox" pattern="[a-z0-9-]+"
+              placeholder="e.g. zoho-mail" pattern="[a-z0-9-]+"
               ${isEdit ? 'readonly title="Slug cannot be changed after creation"' : ''}>
           </div>
-          ${spMetadataUploadHtml('csp')}
           <div class="form-group span2">
             <label class="form-label">SP Entity ID <span style="color:var(--danger)">*</span></label>
             <input class="form-input" id="csp-entity" value="${esc(sp?.entity_id||'')}" placeholder="https://app.example.com/saml/metadata">
@@ -683,17 +709,17 @@ export async function viewSamlApps(me, content, opts = {}) {
       <div class="modal-header"><h2>${isEdit ? 'Edit SAML Application' : 'Register SAML Application'}</h2></div>
       <div class="modal-body" style="max-height:78vh;overflow-y:auto">
         <div class="form-2col">
+          ${spMetadataUploadHtml('sp')}
           <div class="form-group">
             <label class="form-label">Application Name <span style="color:var(--danger)">*</span></label>
-            <input class="form-input" id="sp-name" value="${esc(sp?.name||'')}" placeholder="e.g. Darwinbox HRMS">
+            <input class="form-input" id="sp-name" value="${esc(sp?.name||'')}" placeholder="e.g. Zoho Mail">
           </div>
           <div class="form-group">
             <label class="form-label">Slug <span style="color:var(--danger)">*</span></label>
             <input class="form-input" id="sp-slug" value="${esc(sp?.slug||'')}"
-              placeholder="e.g. darwinbox" pattern="[a-z0-9-]+"
+              placeholder="e.g. zoho-mail" pattern="[a-z0-9-]+"
               ${isEdit ? 'readonly title="Slug cannot be changed after creation"' : ''}>
           </div>
-          ${spMetadataUploadHtml('sp')}
           <div class="form-group span2">
             <label class="form-label">SP Entity ID <span style="color:var(--danger)">*</span></label>
             <input class="form-input" id="sp-entity" value="${esc(sp?.entity_id||'')}" placeholder="https://app.example.com/saml/metadata">
