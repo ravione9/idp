@@ -19,6 +19,9 @@ services:
       TRUST_PROXY: "true"
       SAML_KEY_DIR: /app/data/saml
       HTTPS_PORT: 8443
+      ACME_WEBROOT: /app/acme-webroot
+    volumes:
+      - ./acme-webroot:/app/acme-webroot
     ports:
       # Cloudflare Flexible SSL → origin HTTP :80
       - "0.0.0.0:80:8080"

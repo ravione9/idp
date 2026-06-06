@@ -121,6 +121,14 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
 });
 
 // ---------------------------------------------------------------------------
+// ACME HTTP-01 webroot (Let's Encrypt — Cloudflare Full Strict needs CA-signed origin cert)
+// ---------------------------------------------------------------------------
+const acmeWebroot = process.env['ACME_WEBROOT'];
+if (acmeWebroot) {
+  app.use('/.well-known/acme-challenge', express.static(acmeWebroot));
+}
+
+// ---------------------------------------------------------------------------
 // Health / readiness (no auth required)
 // ---------------------------------------------------------------------------
 app.use('/', healthRouter);
