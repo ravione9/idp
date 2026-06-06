@@ -691,7 +691,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(pending)* — 2026-06-06 — User Directory: admin MFA management for local users
+### `9bc181e` — 2026-06-06 — User Directory: admin MFA management for local users
 
 **Why** — Admins needed GUI controls to create local users and manage MFA setup directly from the Unified Directory profile drawer.
 
