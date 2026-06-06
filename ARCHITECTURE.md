@@ -685,6 +685,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### `02b2c14` — 2026-06-06 — Google connector UI: GOOGLE type alias + Sync Scope tab
+
+**Why** — Seeded `google-workspace` connector uses `connector_type = GOOGLE`; the edit modal only registered fields under `GOOGLE_WORKSPACE`, so OU/group/user scope fields never appeared.
+
+**What changed:**
+
+- **`web/js/views-stubs.js`** — `normalizeConnectorType()` maps `GOOGLE` → `GOOGLE_WORKSPACE`; Connection / Sync Scope tabbed modal; cache-bust query string in `index.html`.
+- **`src/api/iga.ts`** — connector test treats `GOOGLE` and `GOOGLE_WORKSPACE` identically.
+
 ### `38f20c6` — 2026-06-06 — Google connector: fix domain-wide delegation auth + clearer errors
 
 **Why** — Test Connection returned `unauthorized_client` when Admin Console delegation only authorized `admin.directory.user` (code requested extra scopes) or when Admin Email was missing / set to the service account.

@@ -1733,10 +1733,23 @@ export async function viewAppDiscovery(content) {
 
 // ─── 10. Directory Sync ───────────────────────────────────────────────────────
 // ─── connector type metadata ─────────────────────────────────────────────────
+const GOOGLE_WS_META = {
+  label: 'Google Workspace', icon: '🔵', badge: 'badge-success',
+  desc: 'Google Workspace / G Suite directory',
+  fields: ['customerDomain','serviceAccountEmail','serviceAccountKey','adminEmail','syncOrgUnits','syncGroups','syncUsers','provisionOrgUnit','includeSubOrgUnits'],
+  connectionFields: ['customerDomain','serviceAccountEmail','serviceAccountKey','adminEmail'],
+  scopeFields: ['syncOrgUnits','syncGroups','syncUsers','provisionOrgUnit','includeSubOrgUnits'],
+};
+
+function normalizeConnectorType(t) {
+  return t === 'GOOGLE' ? 'GOOGLE_WORKSPACE' : t;
+}
+
 const CONNECTOR_TYPES = {
   AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',           fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl'] },
   LDAP:             { label: 'LDAP',             icon: '📂', badge: 'badge-info',    desc: 'Generic LDAP v3 directory server',             fields: ['host','port','bindDn','bindPassword','baseDn','useSsl'] },
-  GOOGLE_WORKSPACE: { label: 'Google Workspace', icon: '🔵', badge: 'badge-success', desc: 'Google Workspace / G Suite directory',          fields: ['customerDomain','serviceAccountEmail','serviceAccountKey','adminEmail','syncOrgUnits','syncGroups','syncUsers','provisionOrgUnit','includeSubOrgUnits'] },
+  GOOGLE_WORKSPACE: GOOGLE_WS_META,
+  GOOGLE:           GOOGLE_WS_META,
   AZURE_AD:         { label: 'Azure AD / Entra', icon: '☁️', badge: 'badge-info',    desc: 'Microsoft Entra ID (Azure AD)',                 fields: ['tenantId','clientId','clientSecret','domain'] },
   OKTA:             { label: 'Okta',             icon: '🔑', badge: 'badge-warning', desc: 'Okta Universal Directory',                      fields: ['domain','apiToken'] },
   SCIM:             { label: 'SCIM 2.0',         icon: '⚙️', badge: 'badge-neutral', desc: 'Any SCIM 2.0-compliant directory',              fields: ['baseUrl','bearerToken','syncMode'] },
@@ -1865,7 +1878,7 @@ function initSourcesTab(panel) {
 
       // connector cards
       const cards = connectors.map(c => {
-        const meta = CONNECTOR_TYPES[c.connector_type] || { label: c.connector_type, icon: '⚙️', badge: 'badge-neutral' };
+        const meta = CONNECTOR_TYPES[normalizeConnectorType(c.connector_type)] || { label: c.connector_type, icon: '⚙️', badge: 'badge-neutral' };
         return `<div class="card" style="margin-bottom:1rem" data-cid="${esc(String(c.id))}">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem">
             <div style="display:flex;align-items:center;gap:0.75rem">
@@ -1993,10 +2006,12 @@ function initSourcesTab(panel) {
 
   // ── step-2: configure ───────────────────────────────────────────────────────
   function openConfigModal(existingId, connectorType, defaults) {
+    connectorType = normalizeConnectorType(connectorType);
     const meta = CONNECTOR_TYPES[connectorType] || { label: connectorType, fields: [] };
     const isEdit = !!existingId;
+    const isGoogle = connectorType === 'GOOGLE_WORKSPACE';
 
-    const configFields = (meta.fields || []).map(f => {
+    function renderConfigField(f) {
       const label = FIELD_LABELS[f] || f;
       const val = esc(String(defaults[f] || ''));
       if (f === 'useSsl') {
@@ -2021,34 +2036,32 @@ function initSourcesTab(panel) {
           <textarea class="form-textarea" id="cfg-${f}" rows="4" placeholder='{"type":"service_account","project_id":"..."}'>${val}</textarea>
         </div>`;
       }
-      if (f === 'adminEmail' && connectorType === 'GOOGLE_WORKSPACE') {
+      if (f === 'adminEmail' && isGoogle) {
         return `<div class="form-group" style="grid-column:1/-1">
           <label class="form-label">${esc(label)} <span style="color:var(--danger)">*</span></label>
           <input type="email" class="form-input" id="cfg-${f}" value="${val}" placeholder="admin@company.com">
           <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">Must be a Google Workspace <strong>super admin</strong> in your domain — not the service account email. Used for domain-wide delegation impersonation.</p>
         </div>`;
       }
-      if (f === 'syncOrgUnits' && connectorType === 'GOOGLE_WORKSPACE') {
-        return `<hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 1rem;grid-column:1/-1">
-        <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:0.75rem;color:var(--text-dim);grid-column:1/-1">SYNC SCOPE <span class="muted" style="font-weight:400;font-size:0.78rem">— leave blank to sync entire directory</span></h3>
-        <div class="form-group" style="grid-column:1/-1">
+      if (f === 'syncOrgUnits' && isGoogle) {
+        return `<div class="form-group" style="grid-column:1/-1">
           <label class="form-label">${esc(label)}</label>
           <textarea class="form-textarea" id="cfg-${f}" rows="3" placeholder="/Sales&#10;/Engineering">${val}</textarea>
         </div>`;
       }
-      if (f === 'syncGroups' && connectorType === 'GOOGLE_WORKSPACE') {
+      if (f === 'syncGroups' && isGoogle) {
         return `<div class="form-group" style="grid-column:1/-1">
           <label class="form-label">${esc(label)}</label>
           <textarea class="form-textarea" id="cfg-${f}" rows="2" placeholder="sales-team@company.com&#10;it-admins@company.com">${val}</textarea>
         </div>`;
       }
-      if (f === 'syncUsers' && connectorType === 'GOOGLE_WORKSPACE') {
+      if (f === 'syncUsers' && isGoogle) {
         return `<div class="form-group" style="grid-column:1/-1">
           <label class="form-label">${esc(label)}</label>
           <textarea class="form-textarea" id="cfg-${f}" rows="2" placeholder="alice@company.com&#10;bob@company.com">${val}</textarea>
         </div>`;
       }
-      if (f === 'includeSubOrgUnits' && connectorType === 'GOOGLE_WORKSPACE') {
+      if (f === 'includeSubOrgUnits' && isGoogle) {
         const checked = defaults[f] !== false && defaults[f] !== 'false';
         return `<div class="form-group" style="grid-column:1/-1">
           <label class="form-label" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
@@ -2076,13 +2089,39 @@ function initSourcesTab(panel) {
         <label class="form-label">${esc(label)}${['bindPassword','clientSecret','apiToken','bearerToken','oauthToken','serviceAccountKey'].includes(f)?` <span class="muted" style="font-size:0.75rem">(stored encrypted)</span>`:''}${['bindPassword','clientSecret','apiToken','bearerToken','oauthToken'].includes(f)&&isEdit?` <span class="muted" style="font-size:0.75rem">— leave blank to keep existing</span>`:''}</label>
         <input type="${type}" class="form-input" id="cfg-${f}" value="${val}" placeholder="${esc(ph)}">
       </div>`;
-    }).join('');
+    }
 
-    const bd = openModal(`<div class="modal" style="width:640px;max-width:96vw">
+    const fieldList = meta.fields || [];
+    const configFields = fieldList.map(renderConfigField).join('');
+    const googleConnFields = (meta.connectionFields || fieldList).map(renderConfigField).join('');
+    const googleScopeFields = (meta.scopeFields || []).map(renderConfigField).join('');
+
+    const googleFieldsBlock = isGoogle ? `
+        <div class="cfg-tab-bar" style="display:flex;gap:0.5rem;margin-bottom:1rem;border-bottom:1px solid var(--border)">
+          <button type="button" class="cfg-tab btn btn-sm btn-secondary active" data-pane="conn" style="border-radius:6px 6px 0 0;margin-bottom:-1px">🔌 Connection</button>
+          <button type="button" class="cfg-tab btn btn-sm btn-secondary" data-pane="scope" style="border-radius:6px 6px 0 0;margin-bottom:-1px">🎯 Sync Scope</button>
+        </div>
+        <div id="cfg-pane-conn" class="cfg-pane">
+          ${connectorType === 'GOOGLE_WORKSPACE' ? `<div class="alert alert-info" style="font-size:0.8rem;margin-bottom:1rem;line-height:1.45">
+            <strong>Domain-wide delegation setup</strong> (one-time in Google):<br>
+            1) Cloud Console → Service account → enable <em>Domain-wide delegation</em><br>
+            2) Admin Console → Security → API controls → Domain-wide delegation → add the SA <strong>Client ID</strong> with scope:
+            <code style="font-size:0.72rem">https://www.googleapis.com/auth/admin.directory.user</code>
+            (add <code style="font-size:0.72rem">...group.readonly</code> only if you filter by Sync Groups)
+          </div>` : ''}
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">${googleConnFields}</div>
+        </div>
+        <div id="cfg-pane-scope" class="cfg-pane" style="display:none">
+          <p class="muted" style="font-size:0.82rem;margin:0 0 1rem">Choose which OUs, groups, and users to import. Leave all blank to sync the <strong>entire</strong> Google directory.</p>
+          <div style="display:grid;grid-template-columns:1fr;gap:0">${googleScopeFields}</div>
+        </div>` : `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">${configFields}</div>`;
+
+    const bd = openModal(`<div class="modal" style="width:680px;max-width:96vw">
       <div class="modal-header">
         <h2>${isEdit ? 'Edit' : 'Configure'} — ${esc(meta.icon||'')} ${esc(meta.label||connectorType)}</h2>
       </div>
-      <div class="modal-body">
+      <div class="modal-body" style="max-height:72vh;overflow-y:auto">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">
           <div class="form-group">
             <label class="form-label">Display Name <span style="color:var(--danger)">*</span></label>
@@ -2105,18 +2144,10 @@ function initSourcesTab(panel) {
             <input class="form-input" id="cfg-schedule" value="${esc(defaults.sync_schedule||'0 */6 * * *')}" placeholder="0 */6 * * *">
           </div>
         </div>
-        <hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 1rem">
-        <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:0.75rem;color:var(--text-dim)">CONNECTION SETTINGS</h3>
-        ${connectorType === 'GOOGLE_WORKSPACE' ? `<div class="alert alert-info" style="font-size:0.8rem;margin-bottom:1rem;line-height:1.45">
-          <strong>Domain-wide delegation setup</strong> (one-time in Google):<br>
-          1) Cloud Console → Service account → enable <em>Domain-wide delegation</em><br>
-          2) Admin Console → Security → API controls → Domain-wide delegation → add the SA <strong>Client ID</strong> with scope:
-          <code style="font-size:0.72rem">https://www.googleapis.com/auth/admin.directory.user</code>
-          (add <code style="font-size:0.72rem">...group.readonly</code> only if you filter by Sync Groups)
-        </div>` : ''}
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">
-          ${configFields}
-        </div>
+        ${isGoogle ? '' : `<hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 1rem">
+        <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:0.75rem;color:var(--text-dim)">CONNECTION SETTINGS</h3>`}
+        ${isGoogle ? `<h3 style="font-size:0.9rem;font-weight:600;margin:0.5rem 0 0.75rem;color:var(--text-dim)">GOOGLE WORKSPACE</h3>` : ''}
+        ${googleFieldsBlock}
         <div id="cfg-err"></div>
       </div>
       <div class="modal-footer" style="gap:0.5rem">
@@ -2129,6 +2160,23 @@ function initSourcesTab(panel) {
 
     if (!isEdit) bd.querySelector('#cfg-back').addEventListener('click', () => { bd.remove(); openAddWizard(); });
     bd.querySelector('#cfg-cancel').addEventListener('click', () => bd.remove());
+
+    if (isGoogle) {
+      bd.querySelectorAll('.cfg-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          bd.querySelectorAll('.cfg-tab').forEach(t => {
+            t.classList.remove('active');
+            t.classList.add('btn-secondary');
+            t.classList.remove('btn-primary');
+          });
+          tab.classList.add('active', 'btn-primary');
+          tab.classList.remove('btn-secondary');
+          const pane = tab.dataset.pane;
+          bd.querySelector('#cfg-pane-conn').style.display = pane === 'conn' ? '' : 'none';
+          bd.querySelector('#cfg-pane-scope').style.display = pane === 'scope' ? '' : 'none';
+        });
+      });
+    }
 
     // Auto-generate slug from name
     if (!isEdit) {
@@ -2178,6 +2226,7 @@ function initSourcesTab(panel) {
 
   // ── collect form values from config modal ───────────────────────────────────
   function collectFormData(bd, connectorType) {
+    connectorType = normalizeConnectorType(connectorType);
     const meta = CONNECTOR_TYPES[connectorType] || { fields: [] };
     const configJson = {};
     for (const f of (meta.fields || [])) {

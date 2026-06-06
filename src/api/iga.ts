@@ -553,7 +553,7 @@ router.post(
           logger.warn({ url, bindDn, code, raw }, 'AD/LDAP connection test failed');
           res.status(422).json({ success: false, code: `LDAP_${code ?? 'ERROR'}`, message: friendly, detail: raw });
         }
-      } else if (type === 'GOOGLE_WORKSPACE') {
+      } else if (type === 'GOOGLE' || type === 'GOOGLE_WORKSPACE') {
         const required = ['customerDomain', 'adminEmail'];
         const missing = required.filter((k) => !String(cfg[k] ?? '').trim());
         if (!String(cfg['serviceAccountKey'] ?? '').trim()) {
