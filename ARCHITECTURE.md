@@ -704,7 +704,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### `b59239d` — 2026-06-06 — Application Access Policy admin page
+### `91d4afa` — 2026-06-06 — Application Access Policy admin page
 
 **Why** — Administrators needed a dedicated page to grant application access by user or tag group, configure group-access approval workflows, and retain an audit trail for requests, approvals, provisioning, and revocations.
 
