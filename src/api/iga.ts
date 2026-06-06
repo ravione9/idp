@@ -757,7 +757,7 @@ router.post(
         res.status(404).json({ error: msg });
         return;
       }
-      if (msg.includes('not in PENDING_APPROVAL') || msg.includes('No pending approval')) {
+      if (msg.includes('not in PENDING') || msg.includes('No pending approval')) {
         res.status(409).json({ error: msg });
         return;
       }

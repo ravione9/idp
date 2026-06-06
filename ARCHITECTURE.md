@@ -293,8 +293,13 @@ To add a new migration:
 | `business_roles` | **(003)** Bundled role definitions |
 | `role_entitlements` | **(003)** Role → entitlement bundle mapping |
 | `user_roles` | **(003)** Role assignments |
-| `access_requests` | **(003)** Self-service access requests |
+| `access_requests` | **(003)** Self-service access requests — `item_type` includes `APP_ACCESS` (013) |
 | `access_request_approvals` | **(003)** Multi-level approval chain |
+| `tag_groups` | **(013)** Tag-based groups for application access policy |
+| `tag_group_members` | **(013)** Membership in tag groups |
+| `app_access_assignments` | **(013)** User or tag-group grants to applications |
+| `app_group_access_workflows` | **(013)** Configurable approval chains for group access requests |
+| `app_access_audit_log` | **(013)** Audit trail for assignments, requests, approvals, provisioning, revocations |
 | `access_review_campaigns` | **(003)** Quarterly certification campaigns |
 | `access_review_items` | **(003)** Items routed to a reviewer in a campaign |
 | `sod_policies` | **(003)** Segregation-of-Duties rules (toxic combinations) |
@@ -376,6 +381,12 @@ To add a new migration:
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
 | `GET` | `/api/admin/audit/saml` | SAML assertions log |
 | `GET` | `/api/admin/audit/system` | `audit_log` rows |
+| `GET` | `/api/admin/app-access-policy/summary` | Assignment / workflow / audit counts |
+| `GET`/`POST` | `/api/admin/app-access-policy/tag-groups[/:id]` | Tag group CRUD |
+| `POST`/`DELETE` | `/api/admin/app-access-policy/tag-groups/:id/members[/:empId]` | Tag group membership |
+| `GET`/`POST`/`DELETE` | `/api/admin/app-access-policy/assignments[/:id]` | User or tag-group application grants |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/app-access-policy/workflows[/:id]` | Group access approval workflows |
+| `GET` | `/api/admin/app-access-policy/audit` | Application access policy audit log |
 
 ### 8.5 IGA + multi-protocol AM (live read APIs; write paths return 501 until service layer ships)
 
@@ -452,7 +463,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Authentication** | SSO Configuration · Strong Auth Methods · Adaptive Auth · Password Policies · Login Customization |
 | **Applications** | Application Catalog · SAML Applications · OIDC / OAuth · App Discovery |
 | **Connections** | Connectors / Sources · Directory Sync |
-| **Access Model** | Business Roles · Birthright Rules |
+| **Access Model** | Business Roles · Birthright Rules · Application Access Policy |
 | **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk |
 | **Workflows** | Workflow Library · Event Triggers · Notifications |
@@ -692,6 +703,20 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### `b59239d` — 2026-06-06 — Application Access Policy admin page
+
+**Why** — Administrators needed a dedicated page to grant application access by user or tag group, configure group-access approval workflows, and retain an audit trail for requests, approvals, provisioning, and revocations.
+
+**What changed:**
+
+- **`migrations/013_app_access_policy.sql`** — `tag_groups`, `tag_group_members`, `app_access_assignments`, `app_group_access_workflows`, `app_access_audit_log`; extends `access_requests.item_type` with `APP_ACCESS`.
+- **`src/services/app-access-policy.ts`** — assignments, workflow resolution, SAML policy entitlement checks, fulfillment, audit logging.
+- **`src/api/config-app-access-policy.ts`** — admin REST API at `/api/admin/app-access-policy`.
+- **`src/services/access-request-workflow.ts`** — `APP_ACCESS` uses configured workflows; fixes request status (`PENDING`) and approval decision values (`APPROVED`/`REJECTED`); provisions access on final approval.
+- **`src/api/apps.ts`**, **`src/api/saml.ts`** — honour policy-based assignments alongside entitlement rules.
+- **`web/js/views-stubs.js`** — **Application Access Policy** page (Assignment · Workflow · Audit tabs).
+- **`web/js/api.js`**, **`web/js/app.js`** — route under **Access Model** + API client methods.
 
 ### `e54e47d` — 2026-06-06 — Persist SAML signing keys across container rebuilds
 

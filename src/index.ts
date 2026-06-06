@@ -48,6 +48,7 @@ import configSystemHealthRouter from './api/config-system-health.js';
 import configSsoReportsRouter from './api/config-sso-reports.js';
 import configBusinessRolesRouter from './api/config-business-roles.js';
 import configBirthrightRouter from './api/config-birthright.js';
+import configAppAccessPolicyRouter from './api/config-app-access-policy.js';
 import configNotificationsRouter from './api/config-notifications.js';
 import configPortalSslRouter from './api/config-portal-ssl.js';
 
@@ -185,6 +186,7 @@ app.use('/api/admin/system-health', configSystemHealthRouter);
 app.use('/api/admin/sso-reports', configSsoReportsRouter);
 app.use('/api/admin/business-roles', configBusinessRolesRouter);
 app.use('/api/admin/birthright', configBirthrightRouter);
+app.use('/api/admin/app-access-policy', configAppAccessPolicyRouter);
 app.use('/api/admin/notifications', configNotificationsRouter);
 app.use('/api/admin/portal-ssl',   configPortalSslRouter);
 

@@ -3326,6 +3326,379 @@ export async function viewBirthright(content) {
   } catch(e) { wrap.querySelector('#br-area').innerHTML = errHtml(e.message); }
 }
 
+// ─── Application Access Policy ────────────────────────────────────────────────
+export async function viewAppAccessPolicy(content) {
+  content.replaceChildren(el(`<div>
+    ${header('Application Access Policy', 'Assign application access by user or tag group; configure approval workflows and audit trail')}
+    <div id="aap-stats" class="stats-row" style="margin-bottom:1rem">${loading()}</div>
+    <div class="cfg-tab-bar" style="display:flex;gap:0.5rem;margin-bottom:1rem;border-bottom:1px solid var(--border)">
+      <button type="button" class="cfg-tab btn btn-sm btn-primary active" data-tab="assign">Application Assignment</button>
+      <button type="button" class="cfg-tab btn btn-sm btn-secondary" data-tab="workflow">Group Access Workflow</button>
+      <button type="button" class="cfg-tab btn btn-sm btn-secondary" data-tab="audit">Audit Log</button>
+    </div>
+    <div id="tab-assign"></div>
+    <div id="tab-workflow" style="display:none"></div>
+    <div id="tab-audit" style="display:none"></div>
+  </div>`));
+  const wrap = content.firstChild;
+
+  let appsCache = [];
+  let tagGroupsCache = [];
+
+  async function loadAppsAndGroups() {
+    const [apps, groups] = await Promise.all([api.igaApps(), api.listTagGroups()]);
+    appsCache = norm(apps);
+    tagGroupsCache = norm(groups);
+  }
+
+  function switchTab(name) {
+    wrap.querySelectorAll('.cfg-tab').forEach(t => {
+      const on = t.dataset.tab === name;
+      t.classList.toggle('active', on);
+      t.classList.toggle('btn-primary', on);
+      t.classList.toggle('btn-secondary', !on);
+    });
+    wrap.querySelector('#tab-assign').style.display   = name === 'assign' ? '' : 'none';
+    wrap.querySelector('#tab-workflow').style.display = name === 'workflow' ? '' : 'none';
+    wrap.querySelector('#tab-audit').style.display    = name === 'audit' ? '' : 'none';
+  }
+
+  wrap.querySelectorAll('.cfg-tab').forEach(tab => {
+    tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+  });
+
+  async function loadStats() {
+    try {
+      const s = await api.appAccessSummary();
+      wrap.querySelector('#aap-stats').innerHTML = `
+        ${statCard('key', 'Active Assignments', s.activeAssignments)}
+        ${statCard('users', 'Tag Groups', s.activeTagGroups, '', 'success')}
+        ${statCard('flow', 'Workflows', s.activeWorkflows, '', 'warning')}
+        ${statCard('list', 'Audit (30d)', s.auditEvents30d, '', 'neutral')}`;
+    } catch (e) {
+      wrap.querySelector('#aap-stats').innerHTML = errHtml(e.message);
+    }
+  }
+
+  // ── Tab: Application Assignment ──
+  async function loadAssignTab() {
+    const area = wrap.querySelector('#tab-assign');
+    area.innerHTML = loading();
+    try {
+      await loadAppsAndGroups();
+      const assignments = norm(await api.listAppAssignments());
+      const assignRows = assignments.length ? assignments.map(a => `
+        <tr>
+          <td class="cell-strong">${esc(a.app_name || '—')}</td>
+          <td><span class="badge ${a.assignment_type === 'USER' ? 'badge-info' : 'badge-success'}">${esc(a.assignment_type)}</span></td>
+          <td>${esc(a.target_name || a.target_id)}</td>
+          <td class="muted">${a.granted_at ? fmtDate(a.granted_at) : '—'}</td>
+          <td><button class="btn btn-sm btn-danger revoke-assign" data-id="${esc(String(a.id))}">Revoke</button></td>
+        </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No active assignments.</p></div></td></tr>`;
+
+      const tgRows = tagGroupsCache.length ? tagGroupsCache.map(g => {
+        let tags = '—';
+        try { tags = (typeof g.tags === 'string' ? JSON.parse(g.tags) : g.tags || []).join(', '); } catch {}
+        return `<tr>
+          <td class="cell-strong">${esc(g.name)}</td>
+          <td class="muted" style="font-size:0.82rem">${esc(tags)}</td>
+          <td>${g.member_count ?? 0}</td>
+          <td>
+            <button class="btn btn-sm btn-secondary manage-tg" data-id="${esc(String(g.id))}" data-name="${esc(g.name)}">Members</button>
+            <button class="btn btn-sm btn-danger del-tg" data-id="${esc(String(g.id))}">Delete</button>
+          </td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="4"><div class="empty-state"><p>No tag groups yet.</p></div></td></tr>`;
+
+      area.innerHTML = `
+        <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
+          <button class="btn btn-primary" id="aap-assign-btn">+ Assign Access</button>
+          <button class="btn btn-secondary" id="aap-tg-btn">+ Tag Group</button>
+        </div>
+        <h3 style="font-size:0.95rem;margin:0 0 0.5rem">Active Assignments</h3>
+        <div class="table-wrap" style="margin-bottom:1.5rem"><table>
+          <thead><tr><th>Application</th><th>Type</th><th>Target</th><th>Granted</th><th></th></tr></thead>
+          <tbody>${assignRows}</tbody>
+        </table></div>
+        <h3 style="font-size:0.95rem;margin:0 0 0.5rem">Tag Groups</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Name</th><th>Tags</th><th>Members</th><th></th></tr></thead>
+          <tbody>${tgRows}</tbody>
+        </table></div>`;
+
+      area.querySelector('#aap-assign-btn').addEventListener('click', openAssignModal);
+      area.querySelector('#aap-tg-btn').addEventListener('click', openTagGroupModal);
+      area.querySelectorAll('.revoke-assign').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Revoke this assignment?')) return;
+          try { await api.revokeAppAssignment(btn.dataset.id); await loadAssignTab(); await loadStats(); } catch (e) { alert(e.message); }
+        });
+      });
+      area.querySelectorAll('.del-tg').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Deactivate this tag group?')) return;
+          try { await api.deleteTagGroup(btn.dataset.id); await loadAssignTab(); await loadStats(); } catch (e) { alert(e.message); }
+        });
+      });
+      area.querySelectorAll('.manage-tg').forEach(btn => {
+        btn.addEventListener('click', () => openTagGroupMembersModal(btn.dataset.id, btn.dataset.name));
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  function openAssignModal() {
+    const appOpts = appsCache.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');
+    const tgOpts = tagGroupsCache.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Assign Application Access</h2></div><div class="modal-body">
+      <div class="form-group"><label class="form-label">Application</label>
+        <select class="form-select" id="aa-app"><option value="">— Select —</option>${appOpts}</select></div>
+      <div class="form-group"><label class="form-label">Assignment Type</label>
+        <select class="form-select" id="aa-type"><option value="USER">User-based</option><option value="TAG_GROUP">Tag Group-based</option></select></div>
+      <div class="form-group" id="aa-user-wrap"><label class="form-label">Employee ID</label>
+        <input class="form-input" id="aa-emp" placeholder="e.g. E12345"></div>
+      <div class="form-group" id="aa-tg-wrap" style="display:none"><label class="form-label">Tag Group</label>
+        <select class="form-select" id="aa-tg"><option value="">— Select —</option>${tgOpts}</select></div>
+      <div id="aa-err"></div>
+    </div><div class="modal-footer">
+      <button class="btn btn-primary" id="aa-save">Grant Access</button>
+      <button class="btn btn-secondary" id="aa-cancel">Cancel</button>
+    </div></div>`);
+    const typeSel = bd.querySelector('#aa-type');
+    typeSel.addEventListener('change', () => {
+      const isUser = typeSel.value === 'USER';
+      bd.querySelector('#aa-user-wrap').style.display = isUser ? '' : 'none';
+      bd.querySelector('#aa-tg-wrap').style.display = isUser ? 'none' : '';
+    });
+    bd.querySelector('#aa-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#aa-save').addEventListener('click', async () => {
+      const appId = bd.querySelector('#aa-app').value;
+      const assignmentType = typeSel.value;
+      const targetId = assignmentType === 'USER'
+        ? bd.querySelector('#aa-emp').value.trim()
+        : bd.querySelector('#aa-tg').value;
+      if (!appId || !targetId) { bd.querySelector('#aa-err').innerHTML = errHtml('Application and target are required'); return; }
+      try {
+        await api.createAppAssignment({ appId, assignmentType, targetId });
+        bd.remove(); await loadAssignTab(); await loadStats();
+      } catch (e) { bd.querySelector('#aa-err').innerHTML = errHtml(e.message); }
+    });
+  }
+
+  function openTagGroupModal() {
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>New Tag Group</h2></div><div class="modal-body">
+      <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="tg-name"></div>
+      <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="tg-desc"></div>
+      <div class="form-group"><label class="form-label">Tags (comma-separated)</label>
+        <input class="form-input" id="tg-tags" placeholder="finance, apac, contractors"></div>
+      <div id="tg-err"></div>
+    </div><div class="modal-footer">
+      <button class="btn btn-primary" id="tg-save">Create</button>
+      <button class="btn btn-secondary" id="tg-cancel">Cancel</button>
+    </div></div>`);
+    bd.querySelector('#tg-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#tg-save').addEventListener('click', async () => {
+      const name = bd.querySelector('#tg-name').value.trim();
+      const tags = bd.querySelector('#tg-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+      if (!name || !tags.length) { bd.querySelector('#tg-err').innerHTML = errHtml('Name and at least one tag required'); return; }
+      try {
+        await api.createTagGroup({ name, description: bd.querySelector('#tg-desc').value, tags });
+        bd.remove(); await loadAssignTab(); await loadStats();
+      } catch (e) { bd.querySelector('#tg-err').innerHTML = errHtml(e.message); }
+    });
+  }
+
+  async function openTagGroupMembersModal(groupId, groupName) {
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Tag Group — ${esc(groupName)}</h2></div>
+      <div class="modal-body"><div id="tg-m-list">${loading()}</div>
+        <div class="form-group" style="margin-top:1rem"><label class="form-label">Add member (Employee ID)</label>
+          <div style="display:flex;gap:0.5rem"><input class="form-input" id="tg-m-emp" placeholder="E12345" style="flex:1">
+          <button class="btn btn-primary" id="tg-m-add">Add</button></div></div>
+        <div id="tg-m-err"></div>
+      </div><div class="modal-footer"><button class="btn btn-secondary" id="tg-m-close">Close</button></div></div>`);
+    async function loadMembers() {
+      try {
+        const g = await api.getTagGroup(groupId);
+        const members = g.members || [];
+        const rows = members.length ? members.map(m => `
+          <tr><td class="cell-strong">${esc(m.full_name || m.emp_id)}</td>
+            <td class="muted">${esc(m.email_corp || '—')}</td>
+            <td><button class="btn btn-sm btn-danger rm-m" data-emp="${esc(m.emp_id)}">Remove</button></td></tr>`).join('')
+          : `<tr><td colspan="3"><p class="muted">No members.</p></td></tr>`;
+        bd.querySelector('#tg-m-list').innerHTML = `<div class="table-wrap"><table>
+          <thead><tr><th>Name</th><th>Email</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        bd.querySelectorAll('.rm-m').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            try { await api.removeTagGroupMember(groupId, btn.dataset.emp); await loadMembers(); } catch (e) { alert(e.message); }
+          });
+        });
+      } catch (e) { bd.querySelector('#tg-m-list').innerHTML = errHtml(e.message); }
+    }
+    bd.querySelector('#tg-m-close').addEventListener('click', () => bd.remove());
+    bd.querySelector('#tg-m-add').addEventListener('click', async () => {
+      const empId = bd.querySelector('#tg-m-emp').value.trim();
+      if (!empId) return;
+      try { await api.addTagGroupMember(groupId, empId); bd.querySelector('#tg-m-emp').value = ''; await loadMembers(); }
+      catch (e) { bd.querySelector('#tg-m-err').innerHTML = errHtml(e.message); }
+    });
+    await loadMembers();
+  }
+
+  // ── Tab: Group Access Workflow ──
+  async function loadWorkflowTab() {
+    const area = wrap.querySelector('#tab-workflow');
+    area.innerHTML = loading();
+    try {
+      await loadAppsAndGroups();
+      const workflows = norm(await api.listAppAccessWorkflows());
+      const rows = workflows.length ? workflows.map(w => {
+        let levels = '—';
+        try {
+          const arr = typeof w.approval_levels === 'string' ? JSON.parse(w.approval_levels) : w.approval_levels;
+          levels = Array.isArray(arr) ? arr.map(l => `L${l.level}:${l.approverType}`).join(' → ') : '—';
+        } catch {}
+        return `<tr>
+          <td class="cell-strong">${esc(w.name)}</td>
+          <td>${esc(w.app_name || '—')}</td>
+          <td>${esc(w.tag_group_name || 'Any group')}</td>
+          <td class="muted" style="font-size:0.8rem">${esc(levels)}</td>
+          <td>${w.auto_provision ? '<span class="badge badge-success">Auto</span>' : '<span class="badge badge-neutral">Manual</span>'}</td>
+          <td><button class="btn btn-sm btn-danger del-wf" data-id="${esc(String(w.id))}">Delete</button></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="6"><div class="empty-state"><p>No workflows configured.</p></div></td></tr>`;
+
+      area.innerHTML = `
+        <p class="muted" style="font-size:0.85rem;margin:0 0 1rem">
+          Users requesting access to application tag groups are routed through these approval chains before access is provisioned.
+        </p>
+        <button class="btn btn-primary" id="wf-new" style="margin-bottom:1rem">+ New Workflow</button>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Name</th><th>Application</th><th>Tag Group</th><th>Approval Levels</th><th>Provisioning</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+
+      area.querySelector('#wf-new').addEventListener('click', openWorkflowModal);
+      area.querySelectorAll('.del-wf').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Deactivate this workflow?')) return;
+          try { await api.deleteAppAccessWorkflow(btn.dataset.id); await loadWorkflowTab(); await loadStats(); } catch (e) { alert(e.message); }
+        });
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  function openWorkflowModal() {
+    const appOpts = appsCache.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');
+    const tgOpts = `<option value="">— Any / app-wide —</option>`
+      + tagGroupsCache.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
+    const bd = openModal(`<div class="modal modal-wide"><div class="modal-header"><h2>New Group Access Workflow</h2></div><div class="modal-body">
+      <div class="form-2col">
+        <div class="form-group"><label class="form-label">Workflow Name</label><input class="form-input" id="wf-name"></div>
+        <div class="form-group"><label class="form-label">Application</label><select class="form-select" id="wf-app">${appOpts}</select></div>
+        <div class="form-group"><label class="form-label">Tag Group (optional)</label><select class="form-select" id="wf-tg">${tgOpts}</select></div>
+        <div class="form-group"><label class="form-label">Auto-provision on approval</label>
+          <select class="form-select" id="wf-auto"><option value="1">Yes</option><option value="0">No</option></select></div>
+      </div>
+      <h3 style="font-size:0.9rem;margin:1rem 0 0.5rem">Approval Levels</h3>
+      <div id="wf-levels">
+        <div class="form-check-row wf-level" style="gap:0.5rem;margin-bottom:0.5rem">
+          <input class="form-input" style="width:3rem" value="1" data-f="level" type="number" min="1">
+          <select class="form-select" data-f="type" style="flex:1">
+            <option value="MANAGER">Manager of requester</option>
+            <option value="APP_OWNER">Application owner</option>
+            <option value="ADMIN">Administrator</option>
+            <option value="SPECIFIC">Specific approver</option>
+          </select>
+          <input class="form-input" data-f="emp" placeholder="Emp ID if SPECIFIC" style="flex:1">
+        </div>
+      </div>
+      <button type="button" class="btn btn-sm btn-secondary" id="wf-add-level">+ Add Level</button>
+      <div id="wf-err" style="margin-top:0.75rem"></div>
+    </div><div class="modal-footer">
+      <button class="btn btn-primary" id="wf-save">Create Workflow</button>
+      <button class="btn btn-secondary" id="wf-cancel">Cancel</button>
+    </div></div>`);
+    bd.querySelector('#wf-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#wf-add-level').addEventListener('click', () => {
+      const n = bd.querySelectorAll('.wf-level').length + 1;
+      const row = el(`<div class="form-check-row wf-level" style="gap:0.5rem;margin-bottom:0.5rem">
+        <input class="form-input" style="width:3rem" value="${n}" data-f="level" type="number" min="1">
+        <select class="form-select" data-f="type" style="flex:1">
+          <option value="MANAGER">Manager of requester</option>
+          <option value="APP_OWNER">Application owner</option>
+          <option value="ADMIN">Administrator</option>
+          <option value="SPECIFIC">Specific approver</option>
+        </select>
+        <input class="form-input" data-f="emp" placeholder="Emp ID if SPECIFIC" style="flex:1">
+      </div>`);
+      bd.querySelector('#wf-levels').appendChild(row);
+    });
+    bd.querySelector('#wf-save').addEventListener('click', async () => {
+      const name = bd.querySelector('#wf-name').value.trim();
+      const appId = bd.querySelector('#wf-app').value;
+      const tagGroupId = bd.querySelector('#wf-tg').value || null;
+      const approvalLevels = [...bd.querySelectorAll('.wf-level')].map(row => {
+        const level = parseInt(row.querySelector('[data-f="level"]').value, 10) || 1;
+        const approverType = row.querySelector('[data-f="type"]').value;
+        const emp = row.querySelector('[data-f="emp"]').value.trim();
+        const o = { level, approverType };
+        if (approverType === 'SPECIFIC' && emp) o.approverEmpId = emp;
+        return o;
+      });
+      if (!name || !appId || !approvalLevels.length) {
+        bd.querySelector('#wf-err').innerHTML = errHtml('Name, application, and at least one approval level required');
+        return;
+      }
+      try {
+        await api.createAppAccessWorkflow({
+          appId, tagGroupId, name, approvalLevels,
+          autoProvision: bd.querySelector('#wf-auto').value === '1',
+        });
+        bd.remove(); await loadWorkflowTab(); await loadStats();
+      } catch (e) { bd.querySelector('#wf-err').innerHTML = errHtml(e.message); }
+    });
+  }
+
+  // ── Tab: Audit Log ──
+  async function loadAuditTab() {
+    const area = wrap.querySelector('#tab-audit');
+    area.innerHTML = loading();
+    try {
+      const events = norm(await api.listAppAccessAudit());
+      const actionBadge = a => ({
+        ASSIGN_USER: 'badge-success', ASSIGN_GROUP: 'badge-success', PROVISION: 'badge-info',
+        REQUEST: 'badge-warning', APPROVE: 'badge-success', REJECT: 'badge-danger', REVOKE: 'badge-danger',
+      }[a] || 'badge-neutral');
+      const rows = events.length ? events.map(e => `
+        <tr>
+          <td class="muted" style="white-space:nowrap">${e.created_at ? fmtDate(e.created_at) : '—'}</td>
+          <td><span class="badge ${actionBadge(e.action)}">${esc(e.action)}</span></td>
+          <td>${esc(e.app_name || '—')}</td>
+          <td class="muted">${esc(e.actor_name || e.actor_emp_id || '—')}</td>
+          <td class="muted">${esc(e.target_name || e.target_emp_id || e.tag_group_name || '—')}</td>
+          <td class="muted" style="font-size:0.78rem">${esc(e.request_id || '—')}</td>
+        </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><p>No audit events yet.</p></div></td></tr>`;
+
+      area.innerHTML = `
+        <p class="muted" style="font-size:0.85rem;margin:0 0 1rem">Immutable log of assignments, access requests, approvals, provisioning, and revocations.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>When</th><th>Action</th><th>Application</th><th>Actor</th><th>Target</th><th>Request</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  wrap.querySelectorAll('.cfg-tab').forEach(tab => {
+    tab.addEventListener('click', async () => {
+      if (tab.dataset.tab === 'assign') await loadAssignTab();
+      if (tab.dataset.tab === 'workflow') await loadWorkflowTab();
+      if (tab.dataset.tab === 'audit') await loadAuditTab();
+    });
+  });
+
+  await loadStats();
+  await loadAssignTab();
+}
+
 // ─── 13. PAM Resources ────────────────────────────────────────────────────────
 export async function viewPamResources(content) {
   content.replaceChildren(el(`<div>${header('PAM Resources', 'Privileged access targets — SSH, RDP, databases, web apps', `<button class="btn btn-primary" id="new-pam-btn">+ Add Resource</button>`)}<div id="list-area">${loading()}</div></div>`));

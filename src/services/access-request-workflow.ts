@@ -10,7 +10,16 @@ import { queryOne, execute } from '../db/connection.js';
 import { v4 as uuidv4 } from 'uuid';
 import { evaluateSodForGrant } from './sod-evaluator.js';
 import { sendNotification } from './notification.js';
+import {
+  resolveWorkflowForRequest,
+  parseApprovalLevels,
+  resolveApproversFromWorkflow,
+  fulfillAppAccessRequest,
+  logAppAccessAudit,
+} from './app-access-policy.js';
 import logger from '../utils/logger.js';
+
+const PENDING_STATUS = 'PENDING';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,7 +95,7 @@ export async function submitAccessRequest(params: AccessRequestParams): Promise<
     `INSERT INTO access_requests
        (id, requester_emp_id, target_emp_id, item_type, item_ids, justification,
         status, created_at, sla_due_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'PENDING_APPROVAL', UTC_TIMESTAMP(), ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), ?)`,
     [
       reqId,
       params.requesterEmpId,
@@ -94,56 +103,84 @@ export async function submitAccessRequest(params: AccessRequestParams): Promise<
       params.itemType,
       JSON.stringify(params.itemIds),
       params.justification,
+      PENDING_STATUS,
       slaDue.toISOString().slice(0, 19).replace('T', ' '),
     ],
   );
 
   // Determine approvers
-  const approvers: { level: number; empId: string }[] = [];
+  let approvers: { level: number; empId: string }[] = [];
 
-  // Level 1: manager of target employee (if available)
-  const managerRow = await queryOne<{ manager_emp_id: string | null }>(
-    `SELECT manager_emp_id FROM employees WHERE emp_id = ?`,
-    [params.targetEmpId],
-  ).catch(() => null); // graceful if column doesn't exist
-
-  if (managerRow?.manager_emp_id) {
-    approvers.push({ level: 1, empId: managerRow.manager_emp_id });
+  if (params.itemType === 'APP_ACCESS' && params.itemIds.length > 0) {
+    const appId = params.itemIds[0]!;
+    const tagGroupId = params.itemIds[1] ?? null;
+    const workflow = await resolveWorkflowForRequest(appId, tagGroupId);
+    if (workflow) {
+      const levels = parseApprovalLevels(workflow.approval_levels);
+      approvers = await resolveApproversFromWorkflow(levels, params.targetEmpId, appId);
+    }
+    await logAppAccessAudit({
+      appId,
+      action: 'REQUEST',
+      actorEmpId: params.requesterEmpId,
+      targetEmpId: params.targetEmpId,
+      tagGroupId,
+      requestId: reqId,
+      details: { itemIds: params.itemIds, workflowId: workflow?.id ?? null },
+    });
   }
 
-  // Level 2: app owner for entitlements, or any ADMIN
-  let level2Approver: string | null = null;
-
-  if (params.itemType === 'ENTITLEMENT' && params.itemIds.length > 0) {
-    const appOwner = await queryOne<{ owner_emp_id: string | null }>(
-      `SELECT a.owner_emp_id
-         FROM entitlements e
-         JOIN applications a ON a.id = e.app_id
-        WHERE e.id = ? AND a.owner_emp_id IS NOT NULL`,
-      [params.itemIds[0]],
+  if (approvers.length === 0) {
+    // Level 1: manager of target employee (if available)
+    const managerRow = await queryOne<{ manager_emp_id: string | null }>(
+      `SELECT manager_emp_id FROM employees WHERE emp_id = ?`,
+      [params.targetEmpId],
     ).catch(() => null);
 
-    if (appOwner?.owner_emp_id) {
-      level2Approver = appOwner.owner_emp_id;
+    if (managerRow?.manager_emp_id) {
+      approvers.push({ level: 1, empId: managerRow.manager_emp_id });
     }
-  }
 
-  if (!level2Approver) {
-    // Fallback: any ADMIN
-    const admin = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM employees WHERE role = 'ADMIN' AND ilg_state = 'ACTIVE' LIMIT 1`,
-      [],
-    ).catch(() => null);
-    if (admin) {
-      level2Approver = admin.emp_id;
+    // Level 2: app owner for entitlements / app access, or any ADMIN
+    let level2Approver: string | null = null;
+
+    if (
+      (params.itemType === 'ENTITLEMENT' || params.itemType === 'APP_ACCESS')
+      && params.itemIds.length > 0
+    ) {
+      if (params.itemType === 'ENTITLEMENT') {
+        const appOwner = await queryOne<{ owner_emp_id: string | null }>(
+          `SELECT a.owner_emp_id
+             FROM entitlements e
+             JOIN applications a ON a.id = e.app_id
+            WHERE e.id = ? AND a.owner_emp_id IS NOT NULL`,
+          [params.itemIds[0]],
+        ).catch(() => null);
+        level2Approver = appOwner?.owner_emp_id ?? null;
+      } else {
+        const appOwner = await queryOne<{ owner_emp_id: string | null }>(
+          `SELECT owner_emp_id FROM applications WHERE id = ? AND owner_emp_id IS NOT NULL`,
+          [params.itemIds[0]],
+        ).catch(() => null);
+        level2Approver = appOwner?.owner_emp_id ?? null;
+      }
     }
-  }
 
-  if (level2Approver) {
-    // Avoid duplicate if manager IS the app owner
-    const alreadyAdded = approvers.some((a) => a.empId === level2Approver);
-    if (!alreadyAdded) {
-      approvers.push({ level: approvers.length + 1, empId: level2Approver });
+    if (!level2Approver) {
+      const admin = await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM employees WHERE role = 'ADMIN' AND ilg_state = 'ACTIVE' LIMIT 1`,
+        [],
+      ).catch(() => null);
+      if (admin) {
+        level2Approver = admin.emp_id;
+      }
+    }
+
+    if (level2Approver) {
+      const alreadyAdded = approvers.some((a) => a.empId === level2Approver);
+      if (!alreadyAdded) {
+        approvers.push({ level: approvers.length + 1, empId: level2Approver });
+      }
     }
   }
 
@@ -202,8 +239,8 @@ export async function processDecision(
   if (!request) {
     throw new Error('Access request not found');
   }
-  if (request.status !== 'PENDING_APPROVAL') {
-    throw new Error(`Request is not in PENDING_APPROVAL state (current: ${request.status})`);
+  if (request.status !== PENDING_STATUS) {
+    throw new Error(`Request is not in PENDING state (current: ${request.status})`);
   }
 
   // Fetch the approval row for this approver
@@ -218,13 +255,28 @@ export async function processDecision(
     throw new Error('No pending approval found for this approver on this request');
   }
 
-  // Update approval
+  const decisionDb = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+
   await execute(
     `UPDATE access_request_approvals
         SET decision = ?, comment = ?, decided_at = UTC_TIMESTAMP()
       WHERE id = ?`,
-    [decision, comment ?? null, approval.id],
+    [decisionDb, comment ?? null, approval.id],
   );
+
+  if (request.item_type === 'APP_ACCESS') {
+    let itemIds: string[] = [];
+    try { itemIds = JSON.parse(request.item_ids) as string[]; } catch { /* empty */ }
+    await logAppAccessAudit({
+      appId: itemIds[0] ?? null,
+      action: decision === 'REJECT' ? 'REJECT' : 'APPROVE',
+      actorEmpId: approverId,
+      targetEmpId: request.target_emp_id,
+      tagGroupId: itemIds[1] ?? null,
+      requestId,
+      details: { comment: comment ?? null, level: approval.level },
+    });
+  }
 
   if (decision === 'REJECT') {
     await execute(
@@ -263,15 +315,14 @@ export async function processDecision(
     [requestId],
   );
 
-  // Fulfill entitlements
-  if (request.item_type === 'ENTITLEMENT') {
-    let itemIds: string[];
-    try {
-      itemIds = JSON.parse(request.item_ids) as string[];
-    } catch {
-      itemIds = [];
-    }
+  let itemIds: string[] = [];
+  try {
+    itemIds = JSON.parse(request.item_ids) as string[];
+  } catch {
+    itemIds = [];
+  }
 
+  if (request.item_type === 'ENTITLEMENT') {
     for (const itemId of itemIds) {
       await execute(
         `INSERT IGNORE INTO user_entitlements
@@ -280,6 +331,19 @@ export async function processDecision(
         [uuidv4(), request.target_emp_id, itemId, approverId],
       ).catch((err) => logger.warn({ err, requestId, itemId }, 'Failed to grant entitlement'));
     }
+  }
+
+  if (request.item_type === 'APP_ACCESS' && itemIds.length > 0) {
+    const appId = itemIds[0]!;
+    const tagGroupId = itemIds[1] ?? null;
+    const workflow = await resolveWorkflowForRequest(appId, tagGroupId);
+    await fulfillAppAccessRequest({
+      targetEmpId:   request.target_emp_id,
+      itemIds,
+      grantedBy:     approverId,
+      requestId,
+      autoProvision: workflow ? workflow.auto_provision === 1 : true,
+    });
   }
 
   await execute(

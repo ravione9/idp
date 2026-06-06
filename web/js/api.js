@@ -188,6 +188,25 @@ Object.assign(api, {
   birthrightDryRun:    () => f('/api/admin/birthright/dry-run'),
   runBirthright:       () => f('/api/admin/birthright/run', { method: 'POST' }),
 
+  // Application Access Policy
+  appAccessSummary:     () => f('/api/admin/app-access-policy/summary'),
+  listTagGroups:        () => f('/api/admin/app-access-policy/tag-groups'),
+  getTagGroup:          (id) => f(`/api/admin/app-access-policy/tag-groups/${id}`),
+  createTagGroup:       (data) => f('/api/admin/app-access-policy/tag-groups', { method: 'POST', body: JSON.stringify(data) }),
+  updateTagGroup:       (id, data) => f(`/api/admin/app-access-policy/tag-groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteTagGroup:       (id) => f(`/api/admin/app-access-policy/tag-groups/${id}`, { method: 'DELETE' }),
+  addTagGroupMember:    (id, empId) => f(`/api/admin/app-access-policy/tag-groups/${id}/members`, { method: 'POST', body: JSON.stringify({ empId }) }),
+  removeTagGroupMember: (id, empId) => f(`/api/admin/app-access-policy/tag-groups/${id}/members/${empId}`, { method: 'DELETE' }),
+  listAppAssignments:   (appId = '') => f(`/api/admin/app-access-policy/assignments${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`),
+  createAppAssignment:  (data) => f('/api/admin/app-access-policy/assignments', { method: 'POST', body: JSON.stringify(data) }),
+  revokeAppAssignment:  (id) => f(`/api/admin/app-access-policy/assignments/${id}`, { method: 'DELETE' }),
+  listAppAccessWorkflows: (appId = '') => f(`/api/admin/app-access-policy/workflows${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`),
+  createAppAccessWorkflow: (data) => f('/api/admin/app-access-policy/workflows', { method: 'POST', body: JSON.stringify(data) }),
+  updateAppAccessWorkflow: (id, data) => f(`/api/admin/app-access-policy/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteAppAccessWorkflow: (id) => f(`/api/admin/app-access-policy/workflows/${id}`, { method: 'DELETE' }),
+  listAppAccessAudit:   (appId = '', limit = 100) =>
+    f(`/api/admin/app-access-policy/audit?limit=${limit}${appId ? `&appId=${encodeURIComponent(appId)}` : ''}`),
+
   // Notifications
   listNotifications:     (status='', ch='', limit=50, offset=0) => f(`/api/admin/notifications?status=${status}&channel=${ch}&limit=${limit}&offset=${offset}`),
   notificationStats:     () => f('/api/admin/notifications/stats'),

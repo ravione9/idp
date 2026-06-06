@@ -1,0 +1,328 @@
+/**
+ * Application Access Policy — user/tag-group assignments, workflow config, audit.
+ */
+
+import { v4 as uuidv4 } from 'uuid';
+import { query, queryOne, execute } from '../db/connection.js';
+import logger from '../utils/logger.js';
+
+export type AssignmentType = 'USER' | 'TAG_GROUP';
+export type AuditAction =
+  | 'ASSIGN_USER' | 'ASSIGN_GROUP' | 'REVOKE'
+  | 'REQUEST' | 'APPROVE' | 'REJECT' | 'PROVISION';
+
+export interface ApprovalLevel {
+  level: number;
+  approverType: 'MANAGER' | 'APP_OWNER' | 'ADMIN' | 'SPECIFIC';
+  approverEmpId?: string;
+}
+
+export interface WorkflowRow {
+  id: string;
+  app_id: string;
+  tag_group_id: string | null;
+  name: string;
+  approval_levels: string;
+  auto_provision: number;
+  active: number;
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+export async function logAppAccessAudit(params: {
+  appId?: string | null;
+  action: AuditAction;
+  actorEmpId?: string | null;
+  targetEmpId?: string | null;
+  tagGroupId?: string | null;
+  requestId?: string | null;
+  details?: Record<string, unknown>;
+}): Promise<void> {
+  await execute(
+    `INSERT INTO app_access_audit_log
+       (app_id, action, actor_emp_id, target_emp_id, tag_group_id, request_id, details)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      params.appId ?? null,
+      params.action,
+      params.actorEmpId ?? null,
+      params.targetEmpId ?? null,
+      params.tagGroupId ?? null,
+      params.requestId ?? null,
+      params.details ? JSON.stringify(params.details) : null,
+    ],
+  ).catch((err) => logger.warn({ err, action: params.action }, 'Failed to write app access audit'));
+}
+
+// ---------------------------------------------------------------------------
+// Policy-based app access check (used by SAML launcher + /api/apps)
+// ---------------------------------------------------------------------------
+export async function hasPolicyAppAccess(empId: string, appSlug: string): Promise<boolean> {
+  const row = await queryOne<{ ok: number }>(
+    `SELECT 1 AS ok
+       FROM applications a
+      WHERE a.slug = ? AND a.active = 1
+        AND (
+          EXISTS (
+            SELECT 1 FROM app_access_assignments x
+             WHERE x.app_id = a.id AND x.active = 1
+               AND x.assignment_type = 'USER' AND x.target_id = ?
+          )
+          OR EXISTS (
+            SELECT 1 FROM app_access_assignments x
+              JOIN tag_group_members tgm ON tgm.tag_group_id = x.target_id
+             WHERE x.app_id = a.id AND x.active = 1
+               AND x.assignment_type = 'TAG_GROUP' AND tgm.emp_id = ?
+          )
+        )
+      LIMIT 1`,
+    [appSlug, empId, empId],
+  );
+  return (row?.ok ?? 0) === 1;
+}
+
+export async function getPolicyGrantedAppSlugs(empId: string): Promise<string[]> {
+  const rows = await query<{ slug: string }>(
+    `SELECT DISTINCT a.slug
+       FROM applications a
+      WHERE a.active = 1
+        AND (
+          EXISTS (
+            SELECT 1 FROM app_access_assignments x
+             WHERE x.app_id = a.id AND x.active = 1
+               AND x.assignment_type = 'USER' AND x.target_id = ?
+          )
+          OR EXISTS (
+            SELECT 1 FROM app_access_assignments x
+              JOIN tag_group_members tgm ON tgm.tag_group_id = x.target_id
+             WHERE x.app_id = a.id AND x.active = 1
+               AND x.assignment_type = 'TAG_GROUP' AND tgm.emp_id = ?
+          )
+        )`,
+    [empId, empId],
+  );
+  return rows.map((r) => r.slug);
+}
+
+// ---------------------------------------------------------------------------
+// Assignments
+// ---------------------------------------------------------------------------
+export async function grantAppAccess(params: {
+  appId: string;
+  assignmentType: AssignmentType;
+  targetId: string;
+  grantedBy: string;
+  source?: 'ADMIN' | 'REQUEST';
+  requestId?: string;
+}): Promise<string> {
+  const existing = await queryOne<{ id: string }>(
+    `SELECT id FROM app_access_assignments
+      WHERE app_id = ? AND assignment_type = ? AND target_id = ?`,
+    [params.appId, params.assignmentType, params.targetId],
+  );
+
+  if (existing) {
+    await execute(
+      `UPDATE app_access_assignments
+          SET active = 1, granted_by = ?, granted_at = UTC_TIMESTAMP(),
+              revoked_at = NULL, revoked_by = NULL
+        WHERE id = ?`,
+      [params.grantedBy, existing.id],
+    );
+    await logAppAccessAudit({
+      appId: params.appId,
+      action: params.assignmentType === 'USER' ? 'ASSIGN_USER' : 'ASSIGN_GROUP',
+      actorEmpId: params.grantedBy,
+      targetEmpId: params.assignmentType === 'USER' ? params.targetId : null,
+      tagGroupId: params.assignmentType === 'TAG_GROUP' ? params.targetId : null,
+      requestId: params.requestId ?? null,
+      details: { source: params.source ?? 'ADMIN', assignmentId: existing.id },
+    });
+    return existing.id;
+  }
+
+  const id = uuidv4();
+  await execute(
+    `INSERT INTO app_access_assignments
+       (id, app_id, assignment_type, target_id, active, granted_by, granted_at)
+     VALUES (?, ?, ?, ?, 1, ?, UTC_TIMESTAMP())`,
+    [id, params.appId, params.assignmentType, params.targetId, params.grantedBy],
+  );
+
+  await logAppAccessAudit({
+    appId: params.appId,
+    action: params.assignmentType === 'USER' ? 'ASSIGN_USER' : 'ASSIGN_GROUP',
+    actorEmpId: params.grantedBy,
+    targetEmpId: params.assignmentType === 'USER' ? params.targetId : null,
+    tagGroupId: params.assignmentType === 'TAG_GROUP' ? params.targetId : null,
+    requestId: params.requestId ?? null,
+    details: { source: params.source ?? 'ADMIN', assignmentId: id },
+  });
+
+  return id;
+}
+
+export async function revokeAppAccess(
+  assignmentId: string,
+  revokedBy: string,
+): Promise<void> {
+  const row = await queryOne<{
+    app_id: string;
+    assignment_type: AssignmentType;
+    target_id: string;
+  }>(
+    `SELECT app_id, assignment_type, target_id FROM app_access_assignments WHERE id = ?`,
+    [assignmentId],
+  );
+  if (!row) throw new Error('Assignment not found');
+
+  await execute(
+    `UPDATE app_access_assignments
+        SET active = 0, revoked_at = UTC_TIMESTAMP(), revoked_by = ?
+      WHERE id = ?`,
+    [revokedBy, assignmentId],
+  );
+
+  await logAppAccessAudit({
+    appId: row.app_id,
+    action: 'REVOKE',
+    actorEmpId: revokedBy,
+    targetEmpId: row.assignment_type === 'USER' ? row.target_id : null,
+    tagGroupId: row.assignment_type === 'TAG_GROUP' ? row.target_id : null,
+    details: { assignmentId },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Workflow resolution for access requests
+// ---------------------------------------------------------------------------
+export async function resolveWorkflowForRequest(
+  appId: string,
+  tagGroupId?: string | null,
+): Promise<WorkflowRow | null> {
+  if (tagGroupId) {
+    const specific = await queryOne<WorkflowRow>(
+      `SELECT id, app_id, tag_group_id, name, approval_levels, auto_provision, active
+         FROM app_group_access_workflows
+        WHERE app_id = ? AND tag_group_id = ? AND active = 1
+        ORDER BY updated_at DESC LIMIT 1`,
+      [appId, tagGroupId],
+    );
+    if (specific) return specific;
+  }
+
+  return queryOne<WorkflowRow>(
+    `SELECT id, app_id, tag_group_id, name, approval_levels, auto_provision, active
+       FROM app_group_access_workflows
+      WHERE app_id = ? AND tag_group_id IS NULL AND active = 1
+      ORDER BY updated_at DESC LIMIT 1`,
+    [appId],
+  );
+}
+
+export function parseApprovalLevels(raw: string | unknown): ApprovalLevel[] {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? (parsed as ApprovalLevel[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function resolveApproversFromWorkflow(
+  levels: ApprovalLevel[],
+  targetEmpId: string,
+  appId: string,
+): Promise<{ level: number; empId: string }[]> {
+  const approvers: { level: number; empId: string }[] = [];
+  const seen = new Set<string>();
+
+  for (const lvl of levels.sort((a, b) => a.level - b.level)) {
+    let empId: string | null = null;
+
+    switch (lvl.approverType) {
+      case 'MANAGER': {
+        const mgr = await queryOne<{ manager_emp_id: string | null }>(
+          `SELECT manager_emp_id FROM employees WHERE emp_id = ?`,
+          [targetEmpId],
+        ).catch(() => null);
+        empId = mgr?.manager_emp_id ?? null;
+        break;
+      }
+      case 'APP_OWNER': {
+        const owner = await queryOne<{ owner_emp_id: string | null }>(
+          `SELECT owner_emp_id FROM applications WHERE id = ?`,
+          [appId],
+        );
+        empId = owner?.owner_emp_id ?? null;
+        break;
+      }
+      case 'SPECIFIC':
+        empId = lvl.approverEmpId ?? null;
+        break;
+      case 'ADMIN': {
+        const admin = await queryOne<{ emp_id: string }>(
+          `SELECT emp_id FROM employees
+            WHERE role IN ('ADMIN','SUPER_ADMIN') AND ilg_state = 'ACTIVE'
+            ORDER BY role = 'SUPER_ADMIN' DESC LIMIT 1`,
+          [],
+        );
+        empId = admin?.emp_id ?? null;
+        break;
+      }
+    }
+
+    if (empId && !seen.has(empId)) {
+      seen.add(empId);
+      approvers.push({ level: lvl.level, empId });
+    }
+  }
+
+  return approvers;
+}
+
+// ---------------------------------------------------------------------------
+// Fulfillment after approved APP_ACCESS request
+// itemIds: [appId] or [appId, tagGroupId]
+// ---------------------------------------------------------------------------
+export async function fulfillAppAccessRequest(params: {
+  targetEmpId: string;
+  itemIds: string[];
+  grantedBy: string;
+  requestId: string;
+  autoProvision?: boolean;
+}): Promise<void> {
+  const appId = params.itemIds[0];
+  if (!appId) return;
+
+  const tagGroupId = params.itemIds[1] ?? null;
+
+  if (params.autoProvision !== false) {
+    if (tagGroupId) {
+      await execute(
+        `INSERT IGNORE INTO tag_group_members (tag_group_id, emp_id, added_by) VALUES (?, ?, ?)`,
+        [tagGroupId, params.targetEmpId, params.grantedBy],
+      );
+    } else {
+      await grantAppAccess({
+        appId,
+        assignmentType: 'USER',
+        targetId: params.targetEmpId,
+        grantedBy: params.grantedBy,
+        source: 'REQUEST',
+        requestId: params.requestId,
+      });
+    }
+
+    await logAppAccessAudit({
+      appId,
+      action: 'PROVISION',
+      actorEmpId: params.grantedBy,
+      targetEmpId: params.targetEmpId,
+      tagGroupId,
+      requestId: params.requestId,
+    });
+  }
+}

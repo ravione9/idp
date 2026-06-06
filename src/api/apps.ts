@@ -8,6 +8,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { isSamlEnabled } from '../config.js';
 import { filterEntitledApps, canReceiveSamlAssertion } from '../saml/entitlements.js';
 import { getActiveServiceProviders, getEmployeeForSaml } from '../saml/sp-registry.js';
+import { getPolicyGrantedAppSlugs } from '../services/app-access-policy.js';
 
 const router = Router();
 
@@ -29,7 +30,11 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
   }
 
   const allApps = await getActiveServiceProviders();
-  const entitled = filterEntitledApps(emp, allApps);
+  const ruleEntitled = filterEntitledApps(emp, allApps);
+  const policySlugs = new Set(await getPolicyGrantedAppSlugs(user.empId));
+  const entitled = allApps.filter(
+    (sp) => ruleEntitled.some((r) => r.id === sp.id) || policySlugs.has(sp.slug),
+  );
 
   res.json({
     samlEnabled: true,

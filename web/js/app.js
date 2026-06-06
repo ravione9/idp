@@ -12,18 +12,18 @@ import {
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
   viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
-} from './views-admin.js?v=2026-06-06-saml-ui';
+} from './views-admin.js?v=2026-06-06-app-access';
 import {
   viewGroups, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,
   viewAppDiscovery,
   viewDirectorySync,
-  viewRoles, viewBirthright,
+  viewRoles, viewBirthright, viewAppAccessPolicy,
   viewPamResources, viewPamSessions, viewPamVault,
   viewWorkflowLibrary, viewEventTriggers, viewNotifications,
   viewSsoReports,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
-} from './views-stubs.js?v=2026-06-06-saml-ui';
+} from './views-stubs.js?v=2026-06-06-app-access';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
@@ -69,8 +69,9 @@ const ROUTES = {
   directorySync: { primary: 'admin', group: 'Connections', label: 'Directory Sync',       icon: 'refresh', admin: true, view: viewDirectorySync },
 
   /* ── Admin > Access Model ── */
-  roles:        { primary: 'admin', group: 'Access Model', label: 'Business Roles',   icon: 'tag',      admin: true, view: viewRoles },
-  birthright:   { primary: 'admin', group: 'Access Model', label: 'Birthright Rules', icon: 'triangle', admin: true, view: viewBirthright },
+  roles:            { primary: 'admin', group: 'Access Model', label: 'Business Roles',           icon: 'tag',      admin: true, view: viewRoles },
+  birthright:       { primary: 'admin', group: 'Access Model', label: 'Birthright Rules',         icon: 'triangle', admin: true, view: viewBirthright },
+  appAccessPolicy:  { primary: 'admin', group: 'Access Model', label: 'Application Access Policy', icon: 'key',    admin: true, view: viewAppAccessPolicy },
 
   /* ── Admin > Privileged Access ── */
   pamResources: { primary: 'admin', group: 'Privileged Access', label: 'Privileged Resources', icon: 'server',   admin: true, view: viewPamResources },
