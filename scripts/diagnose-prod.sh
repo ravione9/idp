@@ -55,8 +55,14 @@ echo ""
 echo "=== AWS Security Group / host firewall ==="
 echo "  Inbound TCP 80 required from 0.0.0.0/0 (or https://www.cloudflare.com/ips/)"
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q active; then
-  echo "  ufw:"
-  ufw status | grep -E '80|8080' || echo "    port 80 not allowed in ufw — run: ufw allow 80/tcp"
+  echo "  ufw (host firewall — blocks traffic even when AWS SG allows port 80):"
+  if ufw status 2>/dev/null | grep -qE '80/tcp.*ALLOW'; then
+    ufw status | grep -E '80|8080'
+  else
+    echo "    *** BLOCKED: port 80 not in ufw ALLOW list ***"
+    echo "    FIX:  sudo ufw allow 80/tcp && sudo ufw reload"
+    echo "    Then: curl -sI https://idp.lenskart.com/healthz"
+  fi
 fi
 
 echo ""
