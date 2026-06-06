@@ -685,7 +685,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(pending)* — 2026-06-06 — Google connector: fix domain-wide delegation auth + clearer errors
+### `38f20c6` — 2026-06-06 — Google connector: fix domain-wide delegation auth + clearer errors
 
 **Why** — Test Connection returned `unauthorized_client` when Admin Console delegation only authorized `admin.directory.user` (code requested extra scopes) or when Admin Email was missing / set to the service account.
 
