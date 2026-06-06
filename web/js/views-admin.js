@@ -1,6 +1,6 @@
 /* Admin views: Dashboard, SAML apps, App catalog, Connectors, Users, Admins,
    Reviews, SoD, Risk, Authentication, Audit, Reports. */
-import { api } from './api.js';
+import { api } from './api.js?v=2026-06-07-app-access-api';
 import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 import { viewOidcApps } from './views-stubs.js';

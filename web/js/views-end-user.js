@@ -1,5 +1,5 @@
 /* End-user views: Home (app launcher), My Access, Request Access, My Tasks, Settings. */
-import { api } from './api.js';
+import { api } from './api.js?v=2026-06-07-app-access-api';
 import { el, esc, fmtDate, ilgBadge, initials } from './ui.js';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];

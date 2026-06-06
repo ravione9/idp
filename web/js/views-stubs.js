@@ -1,4 +1,4 @@
-import { api } from './api.js';
+import { api } from './api.js?v=2026-06-07-app-access-api';
 import { el, esc, fmtDate } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 
