@@ -176,25 +176,46 @@ router.get('/assignments', asyncHandler(async (req: Request, res: Response) => {
   }
   let rows: Record<string, unknown>[] = [];
   try {
-    rows = await query(
+    rows = await query<Record<string, unknown>>(
       `SELECT aaa.id, aaa.app_id, aaa.assignment_type, aaa.target_id,
-              aaa.granted_by, aaa.granted_at, a.name AS app_name, a.slug AS app_slug,
+              aaa.granted_by, aaa.granted_at,
+              COALESCE(a.name, '[missing application]') AS app_name, a.slug AS app_slug,
               CASE aaa.assignment_type
                 WHEN 'USER' THEN e.full_name
                 WHEN 'TAG_GROUP' THEN tg.name
                 WHEN 'GROUP' THEN g.name
               END AS target_name
          FROM app_access_assignments aaa
-         JOIN applications a ON a.id = aaa.app_id
-         LEFT JOIN employees e ON e.emp_id = aaa.target_id AND aaa.assignment_type = 'USER'
-         LEFT JOIN tag_groups tg ON tg.id = aaa.target_id AND aaa.assignment_type = 'TAG_GROUP'
-         LEFT JOIN \`groups\` g ON g.id = aaa.target_id AND aaa.assignment_type = 'GROUP'
+         LEFT JOIN applications a ON a.id = aaa.app_id
+         LEFT JOIN employees e
+           ON e.emp_id COLLATE utf8mb4_unicode_ci = aaa.target_id COLLATE utf8mb4_unicode_ci
+          AND aaa.assignment_type = 'USER'
+         LEFT JOIN tag_groups tg
+           ON tg.id COLLATE utf8mb4_unicode_ci = aaa.target_id COLLATE utf8mb4_unicode_ci
+          AND aaa.assignment_type = 'TAG_GROUP'
+         LEFT JOIN \`groups\` g
+           ON g.id COLLATE utf8mb4_unicode_ci = aaa.target_id COLLATE utf8mb4_unicode_ci
+          AND aaa.assignment_type = 'GROUP'
          ${where}
          ORDER BY aaa.granted_at DESC`,
       params,
     );
   } catch (err) {
-    logger.warn({ err }, 'GET /assignments query failed — returning empty list');
+    logger.warn({ err }, 'GET /assignments enriched query failed; trying fallback');
+    rows = await query<Record<string, unknown>>(
+      `SELECT aaa.id, aaa.app_id, aaa.assignment_type, aaa.target_id,
+              aaa.granted_by, aaa.granted_at,
+              COALESCE(a.name, '[missing application]') AS app_name, a.slug AS app_slug,
+              aaa.target_id AS target_name
+         FROM app_access_assignments aaa
+         LEFT JOIN applications a ON a.id = aaa.app_id
+         ${where}
+         ORDER BY aaa.granted_at DESC`,
+      params,
+    ).catch((fallbackErr) => {
+      logger.error({ err: fallbackErr }, 'GET /assignments fallback query failed');
+      return [];
+    });
   }
   res.json({ data: rows });
 }));
