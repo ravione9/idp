@@ -685,7 +685,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### `02b2c14` — 2026-06-06 — Google connector UI: GOOGLE type alias + Sync Scope tab
+### `7ab97f3` — 2026-06-06 — Google connector UI: GOOGLE type alias + Sync Scope tab
 
 **Why** — Seeded `google-workspace` connector uses `connector_type = GOOGLE`; the edit modal only registered fields under `GOOGLE_WORKSPACE`, so OU/group/user scope fields never appeared.
 
