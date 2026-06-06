@@ -436,7 +436,8 @@ export async function viewIgaApps(content, opts = {}) {
     bd.querySelector('#csp-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#csp-save');
       const name     = bd.querySelector('#csp-name').value.trim();
-      const slug     = bd.querySelector('#csp-slug').value.trim();
+      const slugRaw  = bd.querySelector('#csp-slug').value.trim();
+      const slug     = isEdit ? slugRaw : slugRaw.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '');
       const entityId = bd.querySelector('#csp-entity').value.trim();
       const acsUrl   = bd.querySelector('#csp-acs').value.trim();
       const sloUrl   = bd.querySelector('#csp-slo').value.trim();
@@ -444,7 +445,10 @@ export async function viewIgaApps(content, opts = {}) {
       const iconUrl  = bd.querySelector('#csp-icon').value.trim();
 
       if (!name)     { bd.querySelector('#csp-err').innerHTML = errHtml('Name is required.'); return; }
-      if (!isEdit && !slug) { bd.querySelector('#csp-err').innerHTML = errHtml('Slug is required.'); return; }
+      if (!isEdit) {
+        bd.querySelector('#csp-slug').value = slug;
+        if (!slug) { bd.querySelector('#csp-err').innerHTML = errHtml('Slug is required (use lower-case letters, numbers, hyphen).'); return; }
+      }
       if (!entityId) { bd.querySelector('#csp-err').innerHTML = errHtml('SP Entity ID is required.'); return; }
       if (!acsUrl)   { bd.querySelector('#csp-err').innerHTML = errHtml('ACS URL is required.'); return; }
 
@@ -459,7 +463,11 @@ export async function viewIgaApps(content, opts = {}) {
         bd.remove();
         await loadApps();
       } catch (e) {
-        bd.querySelector('#csp-err').innerHTML = errHtml(e.message);
+        const details = e?.body?.details;
+        const detailMsg = Array.isArray(details)
+          ? details.map((d) => d?.message).filter(Boolean).join('; ')
+          : '';
+        bd.querySelector('#csp-err').innerHTML = errHtml(detailMsg || e.message);
         saveBtn.disabled = false; saveBtn.textContent = isEdit ? 'Save Changes' : 'Register';
       }
     });
@@ -775,7 +783,8 @@ export async function viewSamlApps(me, content, opts = {}) {
     bd.querySelector('#sp-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#sp-save');
       const name     = bd.querySelector('#sp-name').value.trim();
-      const slug     = bd.querySelector('#sp-slug').value.trim();
+      const slugRaw  = bd.querySelector('#sp-slug').value.trim();
+      const slug     = isEdit ? slugRaw : slugRaw.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '');
       const entityId = bd.querySelector('#sp-entity').value.trim();
       const acsUrl   = bd.querySelector('#sp-acs').value.trim();
       const sloUrl   = bd.querySelector('#sp-slo').value.trim();
@@ -783,7 +792,10 @@ export async function viewSamlApps(me, content, opts = {}) {
       const iconUrl  = bd.querySelector('#sp-icon').value.trim();
 
       if (!name)     { bd.querySelector('#sp-err').innerHTML = errHtml('Name is required.'); return; }
-      if (!isEdit && !slug) { bd.querySelector('#sp-err').innerHTML = errHtml('Slug is required.'); return; }
+      if (!isEdit) {
+        bd.querySelector('#sp-slug').value = slug;
+        if (!slug) { bd.querySelector('#sp-err').innerHTML = errHtml('Slug is required (use lower-case letters, numbers, hyphen).'); return; }
+      }
       if (!entityId) { bd.querySelector('#sp-err').innerHTML = errHtml('SP Entity ID is required.'); return; }
       if (!acsUrl)   { bd.querySelector('#sp-err').innerHTML = errHtml('ACS URL is required.'); return; }
 
@@ -798,7 +810,11 @@ export async function viewSamlApps(me, content, opts = {}) {
         bd.remove();
         viewSamlApps(me, content, opts);
       } catch (e) {
-        bd.querySelector('#sp-err').innerHTML = errHtml(e.message);
+        const details = e?.body?.details;
+        const detailMsg = Array.isArray(details)
+          ? details.map((d) => d?.message).filter(Boolean).join('; ')
+          : '';
+        bd.querySelector('#sp-err').innerHTML = errHtml(detailMsg || e.message);
         saveBtn.disabled = false; saveBtn.textContent = isEdit ? 'Save Changes' : 'Register';
       }
     });
