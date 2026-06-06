@@ -18,10 +18,13 @@ services:
       COOKIE_SECURE: "true"
       TRUST_PROXY: "true"
       SAML_KEY_DIR: /app/data/saml
+      HTTPS_PORT: 8443
     ports:
-      # Cloudflare origin (required for proxied DNS — fixes error 521)
+      # Cloudflare Flexible SSL → origin HTTP :80
       - "0.0.0.0:80:8080"
-      # Keep 8080 for local checks (matches existing dev deploys)
+      # Cloudflare Full SSL → origin HTTPS :443 (after Origin Certificate uploaded)
+      - "0.0.0.0:443:8443"
+      # Local health checks
       - "0.0.0.0:8080:8080"
     # !reset: dev compose merges depends_on — must drop localstack or compose fails
     depends_on: !reset

@@ -15,8 +15,19 @@ echo "=== Origin :8080 (local) ==="
 curl -sf http://127.0.0.1:8080/healthz && echo || echo "FAIL — API container not healthy"
 
 echo ""
+echo "=== Origin :443 / :8443 (HTTPS — Cloudflare Full SSL) ==="
+H443=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://127.0.0.1/healthz 2>/dev/null || echo "000")
+H8443=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://127.0.0.1:8443/healthz 2>/dev/null || echo "000")
+echo "  https://127.0.0.1/healthz   → HTTP $H443"
+echo "  https://127.0.0.1:8443/healthz → HTTP $H8443"
+if [[ "$H443" != "200" && "$H8443" != "200" ]]; then
+  echo "  WARN: HTTPS not active — use Cloudflare SSL Flexible, or install Origin Certificate"
+  docker logs idp-api --tail 5 2>&1 | grep -i 'https\|ssl' || true
+fi
+
+echo ""
 echo "=== Listening ports ==="
-ss -tlnp 2>/dev/null | grep -E ':80 |:8080 ' || netstat -tlnp 2>/dev/null | grep -E ':80 |:8080 ' || echo "ports 80/8080 not listening"
+ss -tlnp 2>/dev/null | grep -E ':80 |:443 |:8080 |:8443 ' || netstat -tlnp 2>/dev/null | grep -E ':80 |:443 |:8080 |:8443 ' || echo "ports 80/443/8080 not listening"
 
 echo ""
 echo "=== PUBLIC_BASE_URL / TRUST_PROXY ==="
@@ -56,13 +67,15 @@ echo "=== AWS Security Group / host firewall ==="
 echo "  Inbound TCP 80 required from 0.0.0.0/0 (or https://www.cloudflare.com/ips/)"
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q active; then
   echo "  ufw (host firewall — blocks traffic even when AWS SG allows port 80):"
-  if ufw status 2>/dev/null | grep -qE '80/tcp.*ALLOW'; then
-    ufw status | grep -E '80|8080'
-  else
-    echo "    *** BLOCKED: port 80 not in ufw ALLOW list ***"
-    echo "    FIX:  sudo ufw allow 80/tcp && sudo ufw reload"
-    echo "    Then: curl -sI https://idp.lenskart.com/healthz"
-  fi
+  for port in 80 443; do
+    if ufw status 2>/dev/null | grep -qE "${port}/tcp.*ALLOW"; then
+      echo "    port ${port}/tcp: ALLOW"
+    else
+      echo "    *** BLOCKED: port ${port} not in ufw ALLOW list ***"
+      echo "    FIX:  sudo ufw allow ${port}/tcp && sudo ufw reload"
+    fi
+  done
+  echo "    (443 only needed for Cloudflare Full SSL — Flexible uses :80 only)"
 fi
 
 echo ""
