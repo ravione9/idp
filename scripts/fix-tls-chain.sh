@@ -76,12 +76,11 @@ fi
 echo "    Intermediate issuer: $(echo "$INTERMEDIATE_PEM" | openssl x509 -noout -subject 2>/dev/null)"
 
 echo ""
-echo "==> Step 2: Get current leaf cert + key from DB..."
-CURRENT=$(docker exec idp-mysql mysql -u root -prootpassword lilg -N -s -e \
-  "SELECT portal_ssl_cert, portal_ssl_key FROM general_settings WHERE id = 1;" 2>/dev/null)
-LEAF=$(echo "$CURRENT" | awk '{print $1}' | tr '\t' '\n')
+echo "==> Step 2: Check cert in DB..."
+HAS_CERT=$(docker exec idp-mysql mysql -u root -prootpassword lilg -N -e \
+  "SELECT CASE WHEN portal_ssl_cert IS NOT NULL AND portal_ssl_cert != '' THEN 'yes' ELSE 'no' END FROM general_settings WHERE id = 1;" 2>/dev/null | tr -d '[:space:]')
 
-if echo "$LEAF" | grep -q "BEGIN CERTIFICATE"; then
+if [[ "$HAS_CERT" == "yes" ]]; then
   echo "    Leaf cert found in DB"
 else
   echo "ERROR: No certificate in DB — upload via GUI first, then re-run this script"
