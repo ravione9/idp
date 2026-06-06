@@ -16,6 +16,25 @@ function openModal(html) {
 }
 function errHtml(msg) { return `<div class="alert alert-error">${esc(msg)}</div>`; }
 
+async function parseSamlMetadataClient(metadata) {
+  if (typeof api.parseSamlMetadata === 'function') {
+    return api.parseSamlMetadata(metadata);
+  }
+
+  const res = await fetch('/api/admin/saml-apps/parse-metadata', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ metadata }),
+  });
+  const ct = res.headers.get('content-type') || '';
+  const body = ct.includes('json') ? await res.json() : await res.text();
+  if (!res.ok) {
+    throw new Error((body && (body.message || body.error)) || res.statusText);
+  }
+  return body;
+}
+
 function spMetadataUploadHtml(pfx) {
   return `
     <div class="span2" style="grid-column:1/-1;margin-bottom:0.25rem">
@@ -87,7 +106,7 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
     parseBtn.disabled = true;
     parseBtn.textContent = 'Parsing…';
     try {
-      const r = await api.parseSamlMetadata(trimmed);
+      const r = await parseSamlMetadataClient(trimmed);
       applyParsed(r.data || r);
     } catch (e) {
       if (errEl) errEl.innerHTML = errHtml(e.message || 'Could not parse metadata.');

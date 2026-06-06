@@ -32,6 +32,25 @@ function errHtml(msg) {
   return `<div class="alert alert-error">${esc(msg)}</div>`;
 }
 
+async function parseSamlMetadataClient(metadata) {
+  if (typeof api.parseSamlMetadata === 'function') {
+    return api.parseSamlMetadata(metadata);
+  }
+
+  const res = await fetch('/api/admin/saml-apps/parse-metadata', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ metadata }),
+  });
+  const ct = res.headers.get('content-type') || '';
+  const body = ct.includes('json') ? await res.json() : await res.text();
+  if (!res.ok) {
+    throw new Error((body && (body.message || body.error)) || res.statusText);
+  }
+  return body;
+}
+
 /* Normalise backend responses — all list endpoints return {data:[...]} */
 const norm = r => Array.isArray(r) ? r : (r?.data ?? []);
 
@@ -1223,7 +1242,7 @@ function openSamlWizard(app) {
             const btn = body.querySelector('#w-meta-parse');
             btn.disabled = true; btn.textContent = 'Parsing…';
             try {
-              const r = await api.parseSamlMetadata(trimmed);
+              const r = await parseSamlMetadataClient(trimmed);
               await applyMeta(r.data || r);
             } catch (e) {
               if (errEl) errEl.textContent = e.message || 'Could not parse metadata.';
