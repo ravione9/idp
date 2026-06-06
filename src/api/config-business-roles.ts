@@ -16,7 +16,7 @@ router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
 // GET /
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   const rows = await query(
-    `SELECT br.*, COUNT(re.id) AS entitlement_count
+    `SELECT br.*, COUNT(re.entitlement_id) AS entitlement_count
      FROM business_roles br
      LEFT JOIN role_entitlements re ON re.role_id = br.id
      GROUP BY br.id
