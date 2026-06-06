@@ -686,7 +686,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(pending)* — 2026-06-06 — SAML SP registration: metadata XML upload
+### `9599c4b` — 2026-06-06 — SAML SP registration: metadata XML upload
 
 **Why** — Register SAML Application required hand-typing Entity ID and ACS URL; vendors (Zoho, AWS, etc.) provide a metadata XML file.
 
