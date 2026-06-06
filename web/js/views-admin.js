@@ -37,19 +37,25 @@ async function parseSamlMetadataClient(metadata) {
 
 function spMetadataUploadHtml(pfx) {
   return `
-    <div class="span2" style="grid-column:1/-1;margin-bottom:0.25rem">
-      <div class="alert alert-info" style="margin:0;padding:1rem 1.1rem">
-        <div style="font-weight:600;margin-bottom:0.35rem">Upload application metadata (recommended)</div>
-        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem;line-height:1.45">
-          Download the SP metadata XML from Zoho / AWS / GitHub and upload it here — Entity ID, ACS URL, and SLO will auto-fill.
-        </p>
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
-          <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-idp-meta-dl">⬇ Download our IdP metadata.xml</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-idp-cert-dl">⬇ Download our IdP certificate (.pem)</button>
+    <div class="span2 saml-reg-meta">
+      <div class="saml-reg-panel">
+        <span class="saml-reg-panel__title">Step 1 — Share our IdP trust with the vendor</span>
+        <span class="saml-reg-panel__hint">
+          Download and upload these in Zoho / AWS / GitHub so they accept signatures from this portal.
+        </span>
+        <div class="saml-reg-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-idp-meta-dl">⬇ IdP metadata.xml</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-idp-cert-dl">⬇ IdP certificate.pem</button>
           <a class="btn btn-secondary btn-sm" id="${pfx}-idp-meta-open" target="_blank" rel="noopener">Open metadata URL</a>
         </div>
-        <p class="muted" style="font-size:0.74rem;margin:0 0 0.75rem">Use this file in the third-party app to establish trust with this portal IdP.</p>
-        <div id="${pfx}-meta-drop" style="border:2px dashed var(--border);border-radius:8px;padding:1rem;text-align:center;background:var(--bg);margin-bottom:0.75rem">
+      </div>
+
+      <div class="saml-reg-panel">
+        <span class="saml-reg-panel__title">Step 2 — Import their SP metadata (recommended)</span>
+        <span class="saml-reg-panel__hint">
+          Upload or paste the SP metadata XML from the vendor — Entity ID, ACS URL, and SLO will auto-fill.
+        </span>
+        <div id="${pfx}-meta-drop" class="saml-reg-drop">
           <div style="font-size:1.5rem;margin-bottom:0.35rem">📄</div>
           <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0">
             Choose metadata .xml file
@@ -61,8 +67,8 @@ function spMetadataUploadHtml(pfx) {
         <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-meta-parse" style="margin-top:0.5rem">Parse metadata &amp; fill fields</button>
       </div>
     </div>
-    <hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 0.75rem" class="span2">
-    <p class="muted span2" style="font-size:0.78rem;margin:0 0 0.5rem;font-weight:600">Application details</p>`;
+    <hr class="span2" style="border:none;border-top:1px solid var(--border);margin:0.15rem 0 0.35rem">
+    <p class="saml-reg-section-title span2">Application details</p>`;
 }
 
 function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
@@ -469,9 +475,9 @@ export async function viewIgaApps(content, opts = {}) {
       ['urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName', 'X.509 Subject'],
     ];
     const curFormat = sp?.nameid_format || 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
-    const bd = openModal(`<div class="modal" style="width:640px;max-width:96vw">
+    const bd = openModal(`<div class="modal modal-saml-reg">
       <div class="modal-header"><h2>${isEdit ? 'Edit SAML Application' : 'Register SAML Application'}</h2></div>
-      <div class="modal-body" style="max-height:78vh;overflow-y:auto">
+      <div class="modal-body" style="max-height:78vh;overflow-y:auto;overflow-x:hidden">
         <div class="form-2col">
           ${spMetadataUploadHtml('csp')}
           <div class="form-group">
@@ -816,9 +822,9 @@ export async function viewSamlApps(me, content, opts = {}) {
   function openSpModal(sp = null) {
     const isEdit = !!sp;
     const curFormat = sp?.nameid_format || 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
-    const bd = openModal(`<div class="modal" style="width:640px;max-width:96vw">
+    const bd = openModal(`<div class="modal modal-saml-reg">
       <div class="modal-header"><h2>${isEdit ? 'Edit SAML Application' : 'Register SAML Application'}</h2></div>
-      <div class="modal-body" style="max-height:78vh;overflow-y:auto">
+      <div class="modal-body" style="max-height:78vh;overflow-y:auto;overflow-x:hidden">
         <div class="form-2col">
           ${spMetadataUploadHtml('sp')}
           <div class="form-group">
