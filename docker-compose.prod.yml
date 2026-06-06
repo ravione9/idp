@@ -7,7 +7,6 @@
 #   cp env.prod.example .env && nano .env
 #   bash scripts/deploy-prod.sh
 # -----------------------------------------------------------------------------
-version: "3.9"
 
 services:
   lilg-api:
@@ -24,7 +23,8 @@ services:
       - "0.0.0.0:80:8080"
       # Keep 8080 for local checks (matches existing dev deploys)
       - "0.0.0.0:8080:8080"
-    depends_on:
+    # !reset: dev compose merges depends_on — must drop localstack or compose fails
+    depends_on: !reset
       mysql:
         condition: service_healthy
       redis:
@@ -43,8 +43,3 @@ services:
     container_name: idp-worker
     environment:
       TRUST_PROXY: "true"
-
-  # LocalStack not needed in production — drop from API startup deps (see lilg-api above)
-  localstack:
-    profiles:
-      - dev-only

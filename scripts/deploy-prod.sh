@@ -9,15 +9,17 @@ cd "$(dirname "$0")/.."
 # shellcheck source=compose-lib.sh
 source "$(dirname "$0")/compose-lib.sh"
 
+idp_ensure_compose_v2
+
 # Auto-detect compose file from running containers
-if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE '^(idp-api|idp-mysql)$'; then
+if idp_uses_dev_stack; then
   export COMPOSE_FILE="docker-compose.dev.yml"
 else
   export COMPOSE_FILE="docker-compose.yml"
 fi
-
-idp_ensure_compose_v2
 idp_compose_init
+
+PROD_COMPOSE=("${IDP_COMPOSE[@]}" -f docker-compose.prod.yml)
 
 echo "==> Production deploy for https://idp.lenskart.com"
 echo "    Compose: ${COMPOSE_FILE} + docker-compose.prod.yml"
@@ -31,8 +33,11 @@ if ! grep -q '^PUBLIC_BASE_URL=https://idp.lenskart.com' .env 2>/dev/null; then
   echo "WARN: PUBLIC_BASE_URL should be https://idp.lenskart.com in .env"
 fi
 
+echo "==> Validating compose project..."
+"${PROD_COMPOSE[@]}" config -q
+
 echo "==> Building and starting stack (mysql, redis, api)..."
-"${IDP_COMPOSE[@]}" -f docker-compose.prod.yml up -d --build mysql redis lilg-api lilg-worker
+"${PROD_COMPOSE[@]}" up -d --build mysql redis lilg-api lilg-worker
 
 echo "==> Waiting for MySQL..."
 for i in $(seq 1 36); do

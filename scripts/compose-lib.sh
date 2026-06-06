@@ -20,6 +20,11 @@ idp_compose_init() {
   fi
 }
 
+# True when this host runs the idp-* dev stack (pam-2 / cloud with docker-compose.dev.yml).
+idp_uses_dev_stack() {
+  docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE '^(idp-mysql|idp-redis)$'
+}
+
 # Install Compose v2 plugin when only legacy docker-compose v1.29 is present.
 # Returns 0 even if install fails — caller falls back to v1 create+start.
 idp_ensure_compose_v2() {

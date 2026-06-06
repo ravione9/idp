@@ -10,15 +10,15 @@ cd "$(dirname "$0")/.."
 # shellcheck source=compose-lib.sh
 source "$(dirname "$0")/compose-lib.sh"
 
-# Prefer dev compose file (idp-api / idp-mysql) when that stack is already running
-if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^idp-api$'; then
+idp_ensure_compose_v2
+if idp_uses_dev_stack; then
   export COMPOSE_FILE="docker-compose.dev.yml"
 else
   export COMPOSE_FILE="docker-compose.yml"
 fi
-
-idp_ensure_compose_v2
 idp_compose_init
+
+PROD_COMPOSE=("${IDP_COMPOSE[@]}" -f docker-compose.prod.yml)
 
 echo "==> Fix Cloudflare 521 — expose origin port 80"
 echo "    Using: ${COMPOSE_FILE} + docker-compose.prod.yml"
@@ -32,9 +32,16 @@ if grep -q '^PUBLIC_BASE_URL=https://idp.lenskart.com' .env 2>/dev/null; then
   fi
 fi
 
+echo "==> Validating compose project..."
+if ! "${PROD_COMPOSE[@]}" config -q; then
+  echo "ERROR: compose config invalid — not removing idp-api"
+  echo "  Quick restore (8080 only): docker compose -f docker-compose.dev.yml up -d --build lilg-api"
+  exit 1
+fi
+
 echo "==> Recreating API container with ports 80:8080 + 8080:8080..."
 idp_rm_stale_api 2>/dev/null || true
-"${IDP_COMPOSE[@]}" -f docker-compose.prod.yml up -d --build --force-recreate --no-deps lilg-api
+"${PROD_COMPOSE[@]}" up -d --build --force-recreate --no-deps lilg-api
 
 echo "==> Waiting for :80 healthz..."
 for i in $(seq 1 24); do
