@@ -1,13 +1,17 @@
 # -----------------------------------------------------------------------------
 # Production overlay — Cloudflare WAF proxied at https://idp.lenskart.com
 #
-#   cp env.prod.example .env
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Cloudflare orange-cloud connects to origin on port 80 (HTTP) by default.
+# We map host :80 → container :8080 so the IdP is reachable without a reverse proxy.
+#
+#   cp env.prod.example .env && nano .env
+#   bash scripts/deploy-prod.sh
 # -----------------------------------------------------------------------------
 version: "3.9"
 
 services:
   lilg-api:
+    container_name: idp-api
     environment:
       PUBLIC_BASE_URL: https://idp.lenskart.com
       SAML_IDP_BASE_URL: https://idp.lenskart.com
@@ -16,8 +20,31 @@ services:
       TRUST_PROXY: "true"
       SAML_KEY_DIR: /app/data/saml
     ports:
-      - "8080:8080"
+      # Cloudflare origin (required for proxied DNS)
+      - "0.0.0.0:80:8080"
+      # Local health checks / SSH tunnel
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      start_period: 120s
+      retries: 12
+
+  mysql:
+    container_name: idp-mysql
+
+  redis:
+    container_name: idp-redis
 
   lilg-worker:
+    container_name: idp-worker
     environment:
       TRUST_PROXY: "true"
+
+  # LocalStack not needed in production — drop from API startup deps (see lilg-api above)
+  localstack:
+    profiles:
+      - dev-only
