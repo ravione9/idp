@@ -30,13 +30,29 @@ export function registerHttpsServer(server: https.Server, port: number): void {
   state.httpsPort    = port;
 }
 
+/**
+ * Node HTTPS server sends intermediates via the `cert` PEM (not the `ca` option).
+ * Append portal_ssl_ca so Cloudflare Full (strict) can validate the chain (fixes 526).
+ */
+export function buildTlsCertChain(cert: string, ca?: string | null): string {
+  const leaf = cert.trim();
+  const chain = ca?.trim();
+  if (!chain) return leaf;
+  const blocks = (leaf.match(/-----BEGIN CERTIFICATE-----/g) ?? []).length;
+  if (blocks > 1) return leaf;
+  return `${leaf}\n${chain}`;
+}
+
 /** Called from the portal-ssl API after a new cert is saved. */
 export function reloadTlsContext(cert: string, key: string, ca?: string | null): void {
   if (!state.httpsServer) {
     logger.warn('reloadTlsContext called but no HTTPS server is running — restart required to activate HTTPS');
     return;
   }
-  state.httpsServer.setSecureContext({ cert, key, ca: ca ?? undefined });
+  state.httpsServer.setSecureContext({
+    cert: buildTlsCertChain(cert, ca),
+    key,
+  });
   logger.info('Portal HTTPS TLS context hot-reloaded — no restart required');
 }
 

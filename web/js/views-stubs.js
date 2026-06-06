@@ -3520,7 +3520,7 @@ export async function viewGeneralSettings(content) {
               <textarea class="form-textarea" id="gs-ssl-key" rows="6" placeholder="-----BEGIN PRIVATE KEY-----&#10;MIIEvQIBADANBgkq...&#10;-----END PRIVATE KEY-----"></textarea>
             </div>
             <div class="form-group">
-              <label class="form-label">CA / Intermediate Chain PEM <span style="color:var(--muted);font-weight:400">(optional — include if using an intermediate CA)</span></label>
+              <label class="form-label">CA / Intermediate Chain PEM <span style="color:var(--muted);font-weight:400">(required for Cloudflare — Thawte/DigiCert intermediate)</span></label>
               <textarea class="form-textarea" id="gs-ssl-ca" rows="4" placeholder="-----BEGIN CERTIFICATE-----&#10;(intermediate / root CA)&#10;-----END CERTIFICATE-----"></textarea>
             </div>
             <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap">

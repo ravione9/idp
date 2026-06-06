@@ -15,7 +15,7 @@ import { closePool, queryOne } from './db/connection.js';
 import { redis as sessionRedis } from './auth/session-store.js';
 import { runMigrations } from './db/migrate.js';
 import { rateLimit } from './auth/rate-limit.js';
-import { registerHttpsServer, getPortalTlsState } from './services/portal-tls.js';
+import { registerHttpsServer, getPortalTlsState, buildTlsCertChain } from './services/portal-tls.js';
 
 // Routes
 import healthRouter   from './api/health.js';
@@ -280,9 +280,8 @@ async function main(): Promise<void> {
       const httpsPort = parseInt(process.env['HTTPS_PORT'] ?? '8443', 10);
       const httpsServer = https.createServer(
         {
-          cert: sslRow.portal_ssl_cert,
+          cert: buildTlsCertChain(sslRow.portal_ssl_cert, sslRow.portal_ssl_ca),
           key:  sslRow.portal_ssl_key,
-          ca:   sslRow.portal_ssl_ca ?? undefined,
         },
         app,
       );
