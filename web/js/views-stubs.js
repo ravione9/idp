@@ -1,4 +1,4 @@
-import { api } from './api.js?v=2026-06-07-app-access-api';
+import { api } from './api.js?v=2026-06-07-app-access-apps';
 import { el, esc, fmtDate } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 
@@ -3346,7 +3346,10 @@ export async function viewAppAccessPolicy(content) {
   let tagGroupsCache = [];
 
   async function loadAppsAndGroups() {
-    const [apps, groups] = await Promise.all([api.igaApps(), api.listTagGroups()]);
+    const [apps, groups] = await Promise.all([
+      api.listAppAccessApps(),
+      api.listTagGroups(),
+    ]);
     appsCache = norm(apps);
     tagGroupsCache = norm(groups);
   }
@@ -3446,10 +3449,18 @@ export async function viewAppAccessPolicy(content) {
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
 
-  function openAssignModal() {
-    const appOpts = appsCache.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');
-    const tgOpts = tagGroupsCache.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
+  async function openAssignModal() {
+    try { await loadAppsAndGroups(); } catch (e) { alert(e.message); return; }
+
+    const appOpts = appsCache.length
+      ? appsCache.map(a => `<option value="${esc(a.id)}">${esc(a.name)}${a.has_saml ? ' (SAML)' : ''}</option>`).join('')
+      : '<option value="" disabled>No applications — register SAML/IGA apps first</option>';
+    const tgOpts = tagGroupsCache.length
+      ? tagGroupsCache.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('')
+      : '<option value="" disabled>No tag groups — use + Tag Group to create one</option>';
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Assign Application Access</h2></div><div class="modal-body">
+      ${!appsCache.length ? '<div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">No applications in the catalog yet. Register a SAML app under <strong>Applications</strong> or add one in the IGA catalog — it will appear here automatically.</div>' : ''}
+      ${!tagGroupsCache.length ? '<div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">Tag groups are empty. Click <strong>+ Tag Group</strong> on this page before assigning group-based access.</div>' : ''}
       <div class="form-group"><label class="form-label">Application</label>
         <select class="form-select" id="aa-app"><option value="">— Select —</option>${appOpts}</select></div>
       <div class="form-group"><label class="form-label">Assignment Type</label>

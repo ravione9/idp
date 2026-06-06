@@ -190,7 +190,9 @@ Object.assign(api, {
 
   // Application Access Policy
   appAccessSummary:     () => f('/api/admin/app-access-policy/summary'),
-  listTagGroups:        () => f('/api/admin/app-access-policy/tag-groups'),
+  listAppAccessApps:    () => f('/api/admin/app-access-policy/applications'),
+  listTagGroups:        (activeOnly = true) =>
+    f(`/api/admin/app-access-policy/tag-groups${activeOnly ? '' : '?activeOnly=0'}`),
   getTagGroup:          (id) => f(`/api/admin/app-access-policy/tag-groups/${id}`),
   createTagGroup:       (data) => f('/api/admin/app-access-policy/tag-groups', { method: 'POST', body: JSON.stringify(data) }),
   updateTagGroup:       (id, data) => f(`/api/admin/app-access-policy/tag-groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),

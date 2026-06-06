@@ -28,6 +28,59 @@ export interface WorkflowRow {
 }
 
 // ---------------------------------------------------------------------------
+// Assignable application catalog (mirrors SAML SPs into applications)
+// ---------------------------------------------------------------------------
+export async function syncSamlAppsToCatalog(): Promise<number> {
+  const sps = await query<{
+    slug: string;
+    name: string;
+    icon_url: string | null;
+    sort_order: number;
+    active: number;
+  }>(
+    `SELECT slug, name, icon_url, sort_order, active
+       FROM saml_service_providers`,
+    [],
+  );
+
+  let inserted = 0;
+  for (const sp of sps) {
+    const existing = await queryOne<{ id: string }>(
+      `SELECT id FROM applications WHERE slug = ?`,
+      [sp.slug],
+    );
+    if (existing) continue;
+
+    await execute(
+      `INSERT INTO applications
+         (id, slug, name, icon_url, category, visibility, sso_enabled, provisioning, sort_order, active)
+       VALUES (?, ?, ?, ?, 'SSO', 'PUBLIC', 1, 0, ?, ?)`,
+      [uuidv4(), sp.slug, sp.name, sp.icon_url, sp.sort_order ?? 0, sp.active ? 1 : 0],
+    );
+    inserted += 1;
+  }
+
+  if (inserted > 0) {
+    logger.info({ inserted }, 'Mirrored SAML service providers into applications catalog');
+  }
+  return inserted;
+}
+
+export async function listAssignableApplications(): Promise<Record<string, unknown>[]> {
+  await syncSamlAppsToCatalog();
+  return query(
+    `SELECT a.id, a.slug, a.name, a.icon_url, a.category, a.active,
+            EXISTS (
+              SELECT 1 FROM saml_service_providers sp WHERE sp.slug = a.slug AND sp.active = 1
+            ) AS has_saml
+       FROM applications a
+      WHERE a.active = 1
+      ORDER BY a.sort_order ASC, a.name ASC`,
+    [],
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Audit
 // ---------------------------------------------------------------------------
 export async function logAppAccessAudit(params: {

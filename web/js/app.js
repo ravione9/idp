@@ -3,7 +3,7 @@
    Top nav (workspace) + admin sidebar (when in Admin).
    Layout: SailPoint top nav + miniOrange-style admin sidebar.
    ============================================================ */
-import { api } from './api.js?v=2026-06-07-app-access-api';
+import { api } from './api.js?v=2026-06-07-app-access-apps';
 import { el, esc, initials } from './ui.js';
 import { icon } from './icons.js';
 import {
@@ -12,7 +12,7 @@ import {
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
   viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
-} from './views-admin.js?v=2026-06-07-app-access-api';
+} from './views-admin.js?v=2026-06-07-app-access-apps';
 import {
   viewGroups, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,
@@ -23,7 +23,7 @@ import {
   viewWorkflowLibrary, viewEventTriggers, viewNotifications,
   viewSsoReports,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
-} from './views-stubs.js?v=2026-06-07-app-access-api';
+} from './views-stubs.js?v=2026-06-07-app-access-apps';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 

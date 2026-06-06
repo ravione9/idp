@@ -13,6 +13,7 @@ import {
   grantAppAccess,
   revokeAppAccess,
   parseApprovalLevels,
+  listAssignableApplications,
   type ApprovalLevel,
 } from '../services/app-access-policy.js';
 
@@ -55,14 +56,22 @@ router.get('/summary', asyncHandler(async (_req: Request, res: Response) => {
   });
 }));
 
+// GET /applications — assignable apps (IGA catalog + mirrored SAML SPs)
+router.get('/applications', asyncHandler(async (_req: Request, res: Response) => {
+  const rows = await listAssignableApplications();
+  res.json({ data: rows });
+}));
+
 // ===========================================================================
 // Tag groups
 // ===========================================================================
-router.get('/tag-groups', asyncHandler(async (_req: Request, res: Response) => {
+router.get('/tag-groups', asyncHandler(async (req: Request, res: Response) => {
+  const activeOnly = (req.query['activeOnly'] as string) !== '0';
   const rows = await query(
     `SELECT tg.id, tg.name, tg.description, tg.tags, tg.active, tg.created_at,
        (SELECT COUNT(*) FROM tag_group_members m WHERE m.tag_group_id = tg.id) AS member_count
      FROM tag_groups tg
+     ${activeOnly ? 'WHERE tg.active = 1' : ''}
      ORDER BY tg.name`,
     [],
   );

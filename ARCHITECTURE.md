@@ -382,6 +382,7 @@ To add a new migration:
 | `GET` | `/api/admin/audit/saml` | SAML assertions log |
 | `GET` | `/api/admin/audit/system` | `audit_log` rows |
 | `GET` | `/api/admin/app-access-policy/summary` | Assignment / workflow / audit counts |
+| `GET` | `/api/admin/app-access-policy/applications` | Assignable apps (IGA catalog + auto-mirrored SAML SPs) |
 | `GET`/`POST` | `/api/admin/app-access-policy/tag-groups[/:id]` | Tag group CRUD |
 | `POST`/`DELETE` | `/api/admin/app-access-policy/tag-groups/:id/members[/:empId]` | Tag group membership |
 | `GET`/`POST`/`DELETE` | `/api/admin/app-access-policy/assignments[/:id]` | User or tag-group application grants |
