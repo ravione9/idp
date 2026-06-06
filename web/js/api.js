@@ -205,6 +205,11 @@ Object.assign(api, {
     f(`/api/admin/users?q=${encodeURIComponent(q)}&state=${encodeURIComponent(state)}&source=${encodeURIComponent(source)}&limit=${limit}&offset=${offset}`),
   getUserProfile:      (empId) => f(`/api/admin/users/${empId}`),
   createLocalUser:     (data) => f('/api/admin/users/local', { method: 'POST', body: JSON.stringify(data) }),
+  adminMfaStatus:      (empId) => f(`/api/admin/users/${empId}/mfa`),
+  adminMfaEnroll:      (empId) => f(`/api/admin/users/${empId}/mfa/enroll`, { method: 'POST' }),
+  adminMfaConfirm:     (empId, code) => f(`/api/admin/users/${empId}/mfa/confirm`, { method: 'POST', body: JSON.stringify({ code }) }),
+  adminMfaDisable:     (empId) => f(`/api/admin/users/${empId}/mfa/disable`, { method: 'POST' }),
+  adminMfaRegenCodes:  (empId) => f(`/api/admin/users/${empId}/mfa/regenerate-codes`, { method: 'POST' }),
   adminResetPassword:  (empId, newPassword, notifyUser = false) =>
     f(`/api/admin/users/${empId}/reset-password`, { method: 'POST', body: JSON.stringify({ newPassword, notifyUser }) }),
   linkIdentity:        (empId, data) => f(`/api/admin/users/${empId}/link-identity`, { method: 'POST', body: JSON.stringify(data) }),

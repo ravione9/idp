@@ -362,6 +362,11 @@ To add a new migration:
 | `GET` | `/api/admin/users` | Paginated employee list (search, state, identity source filter) |
 | `GET` | `/api/admin/users/:empId` | Full profile: employee, identity links, sessions, password writeback log |
 | `POST` | `/api/admin/users/local` | Create local employee + password account |
+| `GET` | `/api/admin/users/:empId/mfa` | Admin MFA status for a specific user |
+| `POST` | `/api/admin/users/:empId/mfa/enroll` | Start user MFA enrollment (returns QR + secret) |
+| `POST` | `/api/admin/users/:empId/mfa/confirm` | Confirm user MFA with 6-digit code |
+| `POST` | `/api/admin/users/:empId/mfa/disable` | Disable MFA for a user |
+| `POST` | `/api/admin/users/:empId/mfa/regenerate-codes` | Regenerate user MFA backup codes |
 | `POST` | `/api/admin/users/:empId/reset-password` | Admin password reset with AD/Google writeback |
 | `POST` | `/api/admin/users/:empId/link-identity` | Attach an external identity link |
 | `DELETE` | `/api/admin/users/:empId/identity-links/:linkId` | Remove an identity link |
@@ -685,6 +690,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### *(pending)* — 2026-06-06 — User Directory: admin MFA management for local users
+
+**Why** — Admins needed GUI controls to create local users and manage MFA setup directly from the Unified Directory profile drawer.
+
+**What changed:**
+
+- **`src/api/admin-users.ts`** — adds admin MFA endpoints per user (`/mfa`, `/mfa/enroll`, `/mfa/confirm`, `/mfa/disable`, `/mfa/regenerate-codes`) and includes `mfaStatus` in `GET /api/admin/users/:empId`.
+- **`web/js/api.js`** — adds `adminMfa*` client methods.
+- **`web/js/views-stubs.js`** — profile drawer adds new **MFA** tab with enrollment QR, confirm code, disable, and regenerate backup codes.
 
 ### `9599c4b` — 2026-06-06 — SAML SP registration: metadata XML upload
 

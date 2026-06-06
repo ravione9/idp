@@ -20,6 +20,14 @@ import { writebackPassword } from '../services/password-writeback.js';
 import { backfillAdIdentityLinkIfMissing } from '../services/ad-sync.js';
 import logger from '../utils/logger.js';
 import { z } from 'zod';
+import qrcode from 'qrcode';
+import {
+  getMfaStatus,
+  startEnrollment,
+  confirmEnrollment,
+  disableMfa,
+  regenerateBackupCodes,
+} from '../auth/mfa.js';
 
 const router = Router();
 router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
@@ -179,13 +187,113 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
     logger.warn({ empId: profileEmpId, err }, 'password_writeback_log query failed');
   }
 
+  let mfaStatus: Record<string, unknown> = {
+    enrolled: false,
+    enabled: false,
+    remainingBackupCodes: 0,
+    lastUsedAt: null,
+  };
+  try {
+    mfaStatus = await getMfaStatus(profileEmpId) as unknown as Record<string, unknown>;
+  } catch (err) {
+    logger.warn({ empId: profileEmpId, err }, 'mfa status query failed');
+  }
+
   res.json({
     employee,
     identityLinks,
     recentLogins,
     writebackLog,
+    mfaStatus,
     ...(profileEmpId !== empId ? { migratedFrom: empId } : {}),
   });
+});
+
+// ---------------------------------------------------------------------------
+// MFA admin endpoints — manage MFA for a specific employee
+// ---------------------------------------------------------------------------
+const mfaConfirmSchema = z.object({ code: z.string().regex(/^\d{6}$/) });
+
+router.get('/:empId/mfa', async (req: Request, res: Response): Promise<void> => {
+  const { empId } = req.params;
+  const emp = await queryOne<{ emp_id: string; email_corp: string }>(
+    `SELECT emp_id, email_corp FROM employees WHERE emp_id = ?`,
+    [empId],
+  );
+  if (!emp) { res.status(404).json({ error: 'Employee not found' }); return; }
+  const status = await getMfaStatus(emp.emp_id);
+  res.json(status);
+});
+
+router.post('/:empId/mfa/enroll', async (req: Request, res: Response): Promise<void> => {
+  const { empId } = req.params;
+  const emp = await queryOne<{ emp_id: string; email_corp: string }>(
+    `SELECT emp_id, email_corp FROM employees WHERE emp_id = ?`,
+    [empId],
+  );
+  if (!emp) { res.status(404).json({ error: 'Employee not found' }); return; }
+
+  const result = await startEnrollment(emp.emp_id, emp.email_corp || emp.emp_id);
+  const qrDataUrl = await qrcode.toDataURL(result.otpauthUrl, { margin: 1, width: 220 });
+  logger.info({ empId: emp.emp_id }, 'Admin started MFA enrollment for user');
+  res.json({
+    secret: result.secret,
+    otpauthUrl: result.otpauthUrl,
+    qrDataUrl,
+  });
+});
+
+router.post('/:empId/mfa/confirm', async (req: Request, res: Response): Promise<void> => {
+  const { empId } = req.params;
+  const parsed = mfaConfirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Code must be 6 digits' });
+    return;
+  }
+
+  const emp = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees WHERE emp_id = ?`,
+    [empId],
+  );
+  if (!emp) { res.status(404).json({ error: 'Employee not found' }); return; }
+
+  try {
+    const { backupCodes } = await confirmEnrollment(emp.emp_id, parsed.data.code);
+    logger.info({ empId: emp.emp_id }, 'Admin confirmed MFA enrollment for user');
+    res.json({ success: true, backupCodes });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Verification failed' });
+  }
+});
+
+router.post('/:empId/mfa/disable', async (req: Request, res: Response): Promise<void> => {
+  const { empId } = req.params;
+  const emp = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees WHERE emp_id = ?`,
+    [empId],
+  );
+  if (!emp) { res.status(404).json({ error: 'Employee not found' }); return; }
+
+  await disableMfa(emp.emp_id);
+  logger.info({ empId: emp.emp_id }, 'Admin disabled MFA for user');
+  res.json({ success: true });
+});
+
+router.post('/:empId/mfa/regenerate-codes', async (req: Request, res: Response): Promise<void> => {
+  const { empId } = req.params;
+  const emp = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees WHERE emp_id = ?`,
+    [empId],
+  );
+  if (!emp) { res.status(404).json({ error: 'Employee not found' }); return; }
+
+  try {
+    const codes = await regenerateBackupCodes(emp.emp_id);
+    logger.info({ empId: emp.emp_id }, 'Admin regenerated MFA backup codes for user');
+    res.json({ backupCodes: codes });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Failed' });
+  }
 });
 
 // ---------------------------------------------------------------------------

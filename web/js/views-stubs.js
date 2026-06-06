@@ -2536,6 +2536,7 @@ function initUsersTab(panel) {
           <button class="pp-tab active" data-tab="overview">Overview</button>
           <button class="pp-tab" data-tab="identity">Identity Links <span class="pp-tab-badge" id="pp-tab-id-count" style="display:none"></span></button>
           <button class="pp-tab" data-tab="sessions">Sessions <span class="pp-tab-badge" id="pp-tab-sess-count" style="display:none"></span></button>
+          <button class="pp-tab" data-tab="mfa">MFA</button>
           <button class="pp-tab" data-tab="password">Password Reset</button>
         </div>
 
@@ -2584,6 +2585,7 @@ function initUsersTab(panel) {
       const emp   = profileData.employee      || {};
       const links = activeLinks();
       const sessions = profileData.recentLogins || [];
+      const mfa = profileData.mfaStatus || { enabled: false, enrolled: false };
 
       const initial = (emp.full_name || empId).charAt(0).toUpperCase();
       overlay.querySelector('#pp-avatar').textContent = initial;
@@ -2594,7 +2596,8 @@ function initUsersTab(panel) {
       const activeSources = profileSourceBadges(emp, links);
       overlay.querySelector('#pp-badges').innerHTML =
         stateBadge(emp.ilg_state) +
-        (activeSources.length ? activeSources.map(srcBadge).join('') : srcBadge('LOCAL'));
+        (activeSources.length ? activeSources.map(srcBadge).join('') : srcBadge('LOCAL')) +
+        (mfa.enabled ? `<span class="badge badge-success">MFA</span>` : '');
 
       // Tab counters
       const idCount = links.length;
@@ -2654,6 +2657,7 @@ function initUsersTab(panel) {
       const links        = activeLinks();
       const recentLogins = profileData.recentLogins  || [];
       const writebackLog = profileData.writebackLog  || [];
+      const mfaStatus    = profileData.mfaStatus     || { enrolled: false, enabled: false, remainingBackupCodes: 0, lastUsedAt: null };
       const body         = overlay.querySelector('#pp-body');
 
       // ── Overview tab ─────────────────────────────────────────────────────────
@@ -2757,6 +2761,117 @@ function initUsersTab(panel) {
               </table>
             </div>`
           : `<div class="pp-empty"><div class="pp-empty-icon">🖥️</div>No recent sessions found.</div>`;
+      }
+
+      // ── MFA tab ─────────────────────────────────────────────────────────────
+      else if (tab === 'mfa') {
+        const statusBadge = mfaStatus.enabled
+          ? `<span class="badge badge-success">Enabled</span>`
+          : mfaStatus.enrolled
+            ? `<span class="badge badge-warning">Enrollment pending</span>`
+            : `<span class="badge badge-neutral">Disabled</span>`;
+
+        body.innerHTML = `
+          <p class="pp-section-title">Multi-factor Authentication</p>
+          <div class="pp-attr-grid">
+            <div class="pp-attr"><span class="pp-attr-label">Status</span><span class="pp-attr-value">${statusBadge}</span></div>
+            <div class="pp-attr"><span class="pp-attr-label">Backup Codes Left</span><span class="pp-attr-value">${Number(mfaStatus.remainingBackupCodes || 0)}</span></div>
+            <div class="pp-attr"><span class="pp-attr-label">Last Used</span><span class="pp-attr-value">${mfaStatus.lastUsedAt ? fmtDate(mfaStatus.lastUsedAt) : '—'}</span></div>
+          </div>
+          <div id="pp-mfa-actions" style="margin-top:1rem"></div>
+          <div id="pp-mfa-msg" style="margin-top:1rem"></div>`;
+
+        const actionsEl = body.querySelector('#pp-mfa-actions');
+        const msgEl = body.querySelector('#pp-mfa-msg');
+
+        if (mfaStatus.enabled) {
+          actionsEl.innerHTML = `
+            <button class="btn btn-secondary" id="pp-mfa-regen">Regenerate Backup Codes</button>
+            <button class="btn btn-danger" id="pp-mfa-disable" style="margin-left:0.5rem">Disable MFA</button>`;
+
+          body.querySelector('#pp-mfa-regen').addEventListener('click', async () => {
+            if (!confirm('Regenerate backup codes? Existing codes will stop working immediately.')) return;
+            try {
+              const r = await api.adminMfaRegenCodes(empId);
+              msgEl.innerHTML = `<div class="pp-alert warning">
+                <div style="font-weight:600;margin-bottom:0.5rem">Save these backup codes (shown once)</div>
+                <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.5rem;font-family:var(--mono,'JetBrains Mono',monospace)">
+                  ${(r.backupCodes || []).map((c) => `<code style="padding:0.35rem 0.5rem;background:rgba(0,0,0,0.05);border-radius:6px">${esc(c)}</code>`).join('')}
+                </div>
+              </div>`;
+              reloadProfile(true);
+            } catch (e) {
+              msgEl.innerHTML = `<div class="pp-alert error">Failed to regenerate codes: ${esc(e.message)}</div>`;
+            }
+          });
+
+          body.querySelector('#pp-mfa-disable').addEventListener('click', async () => {
+            if (!confirm('Disable MFA for this user? They will login without second factor until re-enabled.')) return;
+            try {
+              await api.adminMfaDisable(empId);
+              msgEl.innerHTML = `<div class="pp-alert success">MFA disabled for user.</div>`;
+              reloadProfile(true);
+            } catch (e) {
+              msgEl.innerHTML = `<div class="pp-alert error">Failed to disable MFA: ${esc(e.message)}</div>`;
+            }
+          });
+        } else {
+          actionsEl.innerHTML = `
+            <p class="muted" style="font-size:0.85rem;margin-bottom:0.75rem">
+              Start enrollment to generate a QR code. Ask the user to scan and share the 6-digit code so you can confirm setup.
+            </p>
+            <button class="btn btn-primary" id="pp-mfa-start">Start MFA Enrollment</button>
+            <div id="pp-mfa-enroll" style="margin-top:1rem"></div>`;
+
+          body.querySelector('#pp-mfa-start').addEventListener('click', async () => {
+            const enrollEl = body.querySelector('#pp-mfa-enroll');
+            const btn = body.querySelector('#pp-mfa-start');
+            btn.disabled = true;
+            btn.textContent = 'Generating…';
+            try {
+              const r = await api.adminMfaEnroll(empId);
+              enrollEl.innerHTML = `
+                <div style="display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap">
+                  <img src="${r.qrDataUrl}" alt="MFA QR" style="width:180px;height:180px;border:1px solid var(--border);border-radius:8px;background:#fff">
+                  <div style="flex:1;min-width:240px">
+                    <div class="muted" style="font-size:0.8rem;margin-bottom:0.35rem">Manual secret</div>
+                    <code style="display:block;padding:0.5rem;border-radius:6px;background:rgba(0,0,0,0.05);word-break:break-all">${esc(r.secret)}</code>
+                    <div style="margin-top:0.85rem">
+                      <label class="form-label">Verification code</label>
+                      <input class="form-input" id="pp-mfa-code" maxlength="6" placeholder="6-digit code">
+                      <button class="btn btn-success" id="pp-mfa-confirm" style="margin-top:0.5rem">Confirm MFA</button>
+                    </div>
+                    <div id="pp-mfa-confirm-msg" style="margin-top:0.75rem"></div>
+                  </div>
+                </div>`;
+
+              enrollEl.querySelector('#pp-mfa-confirm').addEventListener('click', async () => {
+                const code = enrollEl.querySelector('#pp-mfa-code').value.trim();
+                const out = enrollEl.querySelector('#pp-mfa-confirm-msg');
+                if (!/^\d{6}$/.test(code)) {
+                  out.innerHTML = `<div class="pp-alert error">Code must be 6 digits.</div>`;
+                  return;
+                }
+                try {
+                  const r2 = await api.adminMfaConfirm(empId, code);
+                  out.innerHTML = `<div class="pp-alert warning">
+                    <div style="font-weight:600;margin-bottom:0.5rem">MFA enabled. Save backup codes (shown once)</div>
+                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.5rem;font-family:var(--mono,'JetBrains Mono',monospace)">
+                      ${(r2.backupCodes || []).map((c) => `<code style="padding:0.35rem 0.5rem;background:rgba(0,0,0,0.05);border-radius:6px">${esc(c)}</code>`).join('')}
+                    </div>
+                  </div>`;
+                  reloadProfile(true);
+                } catch (e) {
+                  out.innerHTML = `<div class="pp-alert error">Failed to confirm MFA: ${esc(e.message)}</div>`;
+                }
+              });
+            } catch (e) {
+              enrollEl.innerHTML = `<div class="pp-alert error">Failed to start enrollment: ${esc(e.message)}</div>`;
+            }
+            btn.disabled = false;
+            btn.textContent = 'Start MFA Enrollment';
+          });
+        }
       }
 
       // ── Password Reset tab ───────────────────────────────────────────────────
