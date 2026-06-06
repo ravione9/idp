@@ -9,6 +9,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne, execute } from '../db/connection.js';
+import { safeQuery } from '../db/safe-query.js';
 import {
   grantAppAccess,
   revokeAppAccess,
@@ -173,7 +174,7 @@ router.get('/assignments', asyncHandler(async (req: Request, res: Response) => {
     where += ' AND aaa.app_id = ?';
     params.push(appId);
   }
-  const rows = await query(
+  const rows = await safeQuery(
     `SELECT aaa.id, aaa.app_id, aaa.assignment_type, aaa.target_id,
             aaa.granted_by, aaa.granted_at, a.name AS app_name, a.slug AS app_slug,
             CASE aaa.assignment_type

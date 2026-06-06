@@ -3497,9 +3497,9 @@ export async function viewAppAccessPolicy(content) {
 
   async function loadAppsAndGroups() {
     const [apps, tagGroups, identityGroups] = await Promise.all([
-      api.listAppAccessApps(),
-      api.listTagGroups(),
-      api.listGroups(),
+      api.listAppAccessApps().catch(() => ({ data: [] })),
+      api.listTagGroups().catch(() => ({ data: [] })),
+      api.listGroups().catch(() => ({ data: [] })),
     ]);
     appsCache = norm(apps);
     tagGroupsCache = norm(tagGroups);
