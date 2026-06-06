@@ -12,7 +12,7 @@ import {
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
   viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
-} from './views-admin.js?v=2026-06-07-prebuilt-tab';
+} from './views-admin.js?v=2026-06-07-b';
 import {
   viewGroups, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,
@@ -23,7 +23,7 @@ import {
   viewWorkflowLibrary, viewEventTriggers, viewNotifications,
   viewSsoReports,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
-} from './views-stubs.js?v=2026-06-07-prebuilt-tab';
+} from './views-stubs.js?v=2026-06-07-b';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 

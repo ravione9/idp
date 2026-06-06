@@ -3,7 +3,7 @@
 import { api } from './api.js?v=2026-06-07-groups-sync';
 import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut } from './ui.js';
 import { icon as svgIcon } from './icons.js';
-import { viewOidcApps, viewPrebuiltApps } from './views-stubs.js?v=2026-06-07-prebuilt-tab';
+import { viewOidcApps, viewPrebuiltApps } from './views-stubs.js?v=2026-06-07-b';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
