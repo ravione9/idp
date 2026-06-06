@@ -21,16 +21,24 @@ const LEGACY_GROUP_LIST_SQL = `
   SELECT g.id, g.name, g.description, g.type, g.active, g.created_at,
          'LOCAL' AS source_system, NULL AS external_id, NULL AS connector_id,
          NULL AS last_synced_at, NULL AS connector_name,
-    (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS member_count
+    (SELECT COUNT(*) FROM group_members m
+      WHERE m.group_id = (g.id COLLATE utf8mb4_unicode_ci)) AS member_count
    FROM \`groups\` g
   WHERE g.active = 1
   ORDER BY g.name`;
+
+const GROUP_MEMBERS_SQL = `
+  SELECT m.emp_id, e.full_name, e.email_corp
+   FROM group_members m
+   JOIN employees e ON e.emp_id = (m.emp_id COLLATE utf8mb4_unicode_ci)
+  WHERE m.group_id = ?`;
 
 const GROUP_LIST_SQL = `
   SELECT g.id, g.name, g.description, g.type, g.source_system, g.external_id,
          g.connector_id, g.last_synced_at, g.active, g.created_at,
          c.name AS connector_name,
-    (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS member_count
+    (SELECT COUNT(*) FROM group_members m
+      WHERE m.group_id = (g.id COLLATE utf8mb4_unicode_ci)) AS member_count
    FROM \`groups\` g
    LEFT JOIN connectors c ON c.id = (g.connector_id COLLATE utf8mb4_unicode_ci)
   WHERE g.active = 1
@@ -42,7 +50,7 @@ function normalizeGroupRows(rows: Record<string, unknown>[]): Record<string, unk
     if (typeof out['member_count'] === 'bigint') {
       out['member_count'] = Number(out['member_count']);
     }
-    for (const key of ['created_at', 'last_synced_at'] as const) {
+    for (const key of ['created_at', 'updated_at', 'last_synced_at'] as const) {
       const v = out[key];
       if (v instanceof Date) out[key] = v.toISOString();
     }
@@ -125,14 +133,23 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
     `SELECT * FROM \`groups\` WHERE id = ?`, [req.params['id']],
   );
   if (!group) { res.status(404).json({ error: 'Not found' }); return; }
-  const members = await query(
-    `SELECT m.emp_id, e.full_name, e.email_corp
-     FROM group_members m
-     JOIN employees e ON e.emp_id = m.emp_id
-     WHERE m.group_id = ?`,
-    [req.params['id']],
-  );
-  res.json({ ...group, members });
+  let members: Record<string, unknown>[] = [];
+  try {
+    members = await query<Record<string, unknown>>(GROUP_MEMBERS_SQL, [req.params['id']]);
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (
+      code === 'ER_CANT_AGGREGATE_2COLLATIONS'
+      || code === 'ER_BAD_FIELD_ERROR'
+      || code === 'ER_NO_SUCH_TABLE'
+    ) {
+      logger.warn({ err, groupId: req.params['id'] }, 'Group members query failed — returning empty list');
+    } else {
+      throw err;
+    }
+  }
+  const normalized = normalizeGroupRows([group])[0]!;
+  res.json({ ...normalized, members });
 }));
 
 // PUT /:id — update group

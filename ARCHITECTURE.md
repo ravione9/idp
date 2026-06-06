@@ -705,6 +705,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### `e8f9a87` — 2026-06-07 — Group members modal: fix emp_id collation mismatch
+
+**Why** — `GET /api/admin/groups/:id` (Manage Members modal) failed with `ER_CANT_AGGREGATE_2COLLATIONS` because `group_members.emp_id` used `utf8mb4_0900_ai_ci` while `employees.emp_id` uses `utf8mb4_unicode_ci`.
+
+**What changed:**
+
+- **`migrations/016_group_members_collation_fix.sql`** — align `group_members.group_id` and `emp_id` to `utf8mb4_unicode_ci`.
+- **`src/api/config-groups.ts`** — COLLATE on employees JOIN; defensive empty-member fallback; COLLATE on member-count subquery.
+
+---
+
 ### `534b531` — 2026-06-07 — Groups list: fix connector_id collation mismatch
 
 **Why** — `GET /api/admin/groups` failed with `ER_CANT_AGGREGATE_2COLLATIONS` because migration 014 added `groups.connector_id` with MySQL 8 default `utf8mb4_0900_ai_ci` while `connectors.id` uses `utf8mb4_unicode_ci`.
