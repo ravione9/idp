@@ -21,6 +21,7 @@ import { asyncHandler } from '../utils/async-handler.js';
 import { triggerConnectorSync } from '../services/connector-dispatcher.js';
 import {
   buildGoogleJwtAuth,
+  formatGoogleAuthError,
   listScopedGoogleUsers,
   resolveGoogleSyncScope,
 } from '../services/google-directory-config.js';
@@ -567,22 +568,33 @@ router.post(
           return;
         }
 
-        const auth = buildGoogleJwtAuth(cfg);
-        const directory = google.admin({ version: 'directory_v1', auth });
-        await directory.users.list({ customer: 'my_customer', maxResults: 1 });
+        try {
+          const auth = buildGoogleJwtAuth(cfg);
+          const directory = google.admin({ version: 'directory_v1', auth });
+          await directory.users.list({ customer: 'my_customer', maxResults: 1 });
 
-        const scope = resolveGoogleSyncScope(cfg);
-        const scopedUsers = await listScopedGoogleUsers(directory, scope);
-        const scopeParts: string[] = [];
-        if (scope.orgUnits.length) scopeParts.push(`${scope.orgUnits.length} OU(s)`);
-        if (scope.groups.length) scopeParts.push(`${scope.groups.length} group(s)`);
-        if (scope.users.length) scopeParts.push(`${scope.users.length} explicit user(s)`);
-        const scopeLabel = scopeParts.length ? scopeParts.join(', ') : 'entire directory';
+          const scope = resolveGoogleSyncScope(cfg);
+          const scopedUsers = await listScopedGoogleUsers(directory, scope);
+          const scopeParts: string[] = [];
+          if (scope.orgUnits.length) scopeParts.push(`${scope.orgUnits.length} OU(s)`);
+          if (scope.groups.length) scopeParts.push(`${scope.groups.length} group(s)`);
+          if (scope.users.length) scopeParts.push(`${scope.users.length} explicit user(s)`);
+          const scopeLabel = scopeParts.length ? scopeParts.join(', ') : 'entire directory';
 
-        res.json({
-          success: true,
-          message: `Connected to Google Workspace (${scope.customerDomain}). Sync scope: ${scopeLabel} — ${scopedUsers.length} user(s) matched.`,
-        });
+          res.json({
+            success: true,
+            message: `Connected to Google Workspace (${scope.customerDomain}). Sync scope: ${scopeLabel} — ${scopedUsers.length} user(s) matched.`,
+          });
+        } catch (googleErr) {
+          const friendly = formatGoogleAuthError(googleErr, cfg);
+          logger.warn({ connectorId: req.params['id'], err: googleErr }, 'Google Workspace connection test failed');
+          res.status(422).json({
+            success: false,
+            code:    'GOOGLE_AUTH_FAILED',
+            message: friendly,
+            detail:  googleErr instanceof Error ? googleErr.message : String(googleErr),
+          });
+        }
       } else {
         // Generic: just confirm config is non-empty and connector exists
         res.json({ success: true, message: `Connector "${type}" configuration saved. Full test on next sync.` });

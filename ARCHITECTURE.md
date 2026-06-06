@@ -685,6 +685,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### *(pending)* — 2026-06-06 — Google connector: fix domain-wide delegation auth + clearer errors
+
+**Why** — Test Connection returned `unauthorized_client` when Admin Console delegation only authorized `admin.directory.user` (code requested extra scopes) or when Admin Email was missing / set to the service account.
+
+**What changed:**
+
+- **`src/services/google-directory-config.ts`** — request only delegated scopes (`user` always; `group.readonly` only when Sync Groups set); require Workspace super-admin impersonation email; `formatGoogleAuthError()` with Client ID + scope checklist.
+- **`src/api/iga.ts`** — Google test returns `GOOGLE_AUTH_FAILED` with actionable message.
+- **`web/js/views-stubs.js`** — domain-wide delegation setup hint + Admin Email field guidance.
+
 ### `f50768b` — 2026-06-06 — Google Workspace connector: OU / group / user sync scope
 
 **Why** — Directory Sync imported every Google user with no way to limit inbound sync to specific organisational units, groups, or named accounts (AD already had `targetOu`).

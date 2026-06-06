@@ -7,6 +7,11 @@ import type { admin_directory_v1 } from 'googleapis';
 import type { JWT } from 'google-auth-library';
 import { config } from '../config.js';
 
+export const GOOGLE_DIRECTORY_USER_SCOPE =
+  'https://www.googleapis.com/auth/admin.directory.user';
+export const GOOGLE_DIRECTORY_GROUP_SCOPE =
+  'https://www.googleapis.com/auth/admin.directory.group.readonly';
+
 export interface GoogleSyncScope {
   customerDomain: string;
   adminEmail: string;
@@ -16,6 +21,76 @@ export interface GoogleSyncScope {
   users: string[];
   includeSubOrgUnits: boolean;
   syncGroupMemberships: boolean;
+}
+
+export function parseGoogleServiceAccountKey(saKeyRaw: string): Record<string, string> {
+  const raw = saKeyRaw.trim();
+  if (!raw) {
+    throw new Error('Google connector: serviceAccountKey is required in connector config (or GOOGLE_SA_KEY_JSON in .env)');
+  }
+  try {
+    return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    return JSON.parse(Buffer.from(raw, 'base64').toString('utf8')) as Record<string, string>;
+  }
+}
+
+/** Scopes to request at token time — must match Admin Console domain-wide delegation exactly. */
+export function googleJwtScopes(cfg: Record<string, unknown>): string[] {
+  const scopes = [GOOGLE_DIRECTORY_USER_SCOPE];
+  if (parseCsvList(cfg['syncGroups']).length > 0) {
+    scopes.push(GOOGLE_DIRECTORY_GROUP_SCOPE);
+  }
+  return scopes;
+}
+
+export function resolveGoogleImpersonationEmail(
+  cfg: Record<string, unknown>,
+  key: Record<string, string>,
+): string {
+  const admin = String(cfg['adminEmail'] ?? '').trim();
+  if (!admin) {
+    throw new Error(
+      'Admin Email is required — enter a Google Workspace super admin (e.g. admin@company.com), not the service account address.',
+    );
+  }
+  if (admin.endsWith('.gserviceaccount.com') || admin === key['client_email']) {
+    throw new Error(
+      'Admin Email must be a Workspace admin user to impersonate (domain-wide delegation). Do not use the service account email here.',
+    );
+  }
+  return admin;
+}
+
+export function formatGoogleAuthError(err: unknown, cfg: Record<string, unknown>): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (!raw.includes('unauthorized_client')) {
+    return raw;
+  }
+
+  let clientId = '';
+  try {
+    const keyRaw = String(cfg['serviceAccountKey'] ?? config.google.saKeyJson ?? '').trim();
+    if (keyRaw) {
+      clientId = parseGoogleServiceAccountKey(keyRaw)['client_id'] ?? '';
+    }
+  } catch {
+    // ignore parse errors in error formatter
+  }
+
+  const scopeCsv = googleJwtScopes(cfg).join(',');
+  const admin = String(cfg['adminEmail'] ?? '').trim() || '(not set)';
+
+  return [
+    'Google rejected the service-account token (unauthorized_client).',
+    'Check domain-wide delegation:',
+    `1) Google Cloud Console → IAM → Service Accounts → enable "Domain-wide delegation" for this SA.`,
+    `2) Google Admin Console → Security → API controls → Domain-wide delegation → Add new:`,
+    `   Client ID: ${clientId || '(copy client_id from the JSON key)'}`,
+    `   OAuth scopes: ${scopeCsv}`,
+    `3) Admin Email must be a Workspace super admin (you set: ${admin}) — not the service account email.`,
+    `4) If you added Sync Groups, the group.readonly scope above must be in the delegation list.`,
+  ].join(' ');
 }
 
 export function parseCsvList(raw: unknown): string[] {
@@ -51,27 +126,13 @@ export function resolveGoogleSyncScope(cfg: Record<string, unknown>): GoogleSync
 
 export function buildGoogleJwtAuth(cfg: Record<string, unknown>): JWT {
   const saKeyRaw = String(cfg['serviceAccountKey'] ?? config.google.saKeyJson ?? '').trim();
-  if (!saKeyRaw) {
-    throw new Error('Google connector: serviceAccountKey is required in connector config (or GOOGLE_SA_KEY_JSON in .env)');
-  }
-
-  let key: Record<string, string>;
-  try {
-    key = JSON.parse(saKeyRaw) as Record<string, string>;
-  } catch {
-    key = JSON.parse(Buffer.from(saKeyRaw, 'base64').toString('utf8')) as Record<string, string>;
-  }
-
-  const impersonate = String(cfg['adminEmail'] ?? '').trim() || key['client_email'];
+  const key = parseGoogleServiceAccountKey(saKeyRaw);
+  const impersonate = resolveGoogleImpersonationEmail(cfg, key);
 
   return new google.auth.JWT({
     email:   key['client_email'],
     key:     key['private_key'],
-    scopes:  [
-      'https://www.googleapis.com/auth/admin.directory.user',
-      'https://www.googleapis.com/auth/admin.directory.group.readonly',
-      'https://www.googleapis.com/auth/admin.directory.orgunit.readonly',
-    ],
+    scopes:  googleJwtScopes(cfg),
     subject: impersonate,
   });
 }

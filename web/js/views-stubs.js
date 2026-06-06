@@ -1757,7 +1757,7 @@ const FIELD_LABELS = {
   customerDomain:     'Customer Domain',
   serviceAccountEmail:'Service Account Email',
   serviceAccountKey:  'Service Account JSON Key',
-  adminEmail:         'Admin Email (for impersonation)',
+  adminEmail:         'Admin Email (Workspace super admin — required for domain-wide delegation)',
   syncOrgUnits:       'Sync OUs (one per line, e.g. /Sales — blank = all OUs)',
   syncGroups:         'Sync Groups (one per line, group email — optional filter)',
   syncUsers:          'Sync Users (one per line, user email — optional filter)',
@@ -2021,6 +2021,13 @@ function initSourcesTab(panel) {
           <textarea class="form-textarea" id="cfg-${f}" rows="4" placeholder='{"type":"service_account","project_id":"..."}'>${val}</textarea>
         </div>`;
       }
+      if (f === 'adminEmail' && connectorType === 'GOOGLE_WORKSPACE') {
+        return `<div class="form-group" style="grid-column:1/-1">
+          <label class="form-label">${esc(label)} <span style="color:var(--danger)">*</span></label>
+          <input type="email" class="form-input" id="cfg-${f}" value="${val}" placeholder="admin@company.com">
+          <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">Must be a Google Workspace <strong>super admin</strong> in your domain — not the service account email. Used for domain-wide delegation impersonation.</p>
+        </div>`;
+      }
       if (f === 'syncOrgUnits' && connectorType === 'GOOGLE_WORKSPACE') {
         return `<hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 1rem;grid-column:1/-1">
         <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:0.75rem;color:var(--text-dim);grid-column:1/-1">SYNC SCOPE <span class="muted" style="font-weight:400;font-size:0.78rem">— leave blank to sync entire directory</span></h3>
@@ -2100,6 +2107,13 @@ function initSourcesTab(panel) {
         </div>
         <hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 1rem">
         <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:0.75rem;color:var(--text-dim)">CONNECTION SETTINGS</h3>
+        ${connectorType === 'GOOGLE_WORKSPACE' ? `<div class="alert alert-info" style="font-size:0.8rem;margin-bottom:1rem;line-height:1.45">
+          <strong>Domain-wide delegation setup</strong> (one-time in Google):<br>
+          1) Cloud Console → Service account → enable <em>Domain-wide delegation</em><br>
+          2) Admin Console → Security → API controls → Domain-wide delegation → add the SA <strong>Client ID</strong> with scope:
+          <code style="font-size:0.72rem">https://www.googleapis.com/auth/admin.directory.user</code>
+          (add <code style="font-size:0.72rem">...group.readonly</code> only if you filter by Sync Groups)
+        </div>` : ''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">
           ${configFields}
         </div>
