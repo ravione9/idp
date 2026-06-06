@@ -60,10 +60,9 @@ function generateSamAccountName(fullName: string): string {
 
 function formatAdGroupSyncSummary(cfg: Record<string, unknown>, gs: GroupSyncSummary): string {
   const keys = parseCsvList(cfg['syncGroups']);
-  if (!keys.length) {
-    return ' | Groups: skipped (set Sync Groups on the AD connector — CN, sAMAccountName, DN, or *)';
-  }
+  const mode = keys.length ? '' : ' (auto-all)';
   let line = ` | Groups: ${gs.groupsSynced} synced, ${gs.membersSynced} members`;
+  line += mode;
   if (gs.errors.length) {
     const preview = gs.errors.slice(0, 2).join('; ');
     line += ` (${gs.errors.length} errors: ${preview}${gs.errors.length > 2 ? '…' : ''})`;

@@ -712,6 +712,19 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### (pending) — 2026-06-07 — AD group sync auto-discovery + stronger member mapping
+
+**Why** — AD group sync runs were importing users but returning 0 group imports in many setups because `syncGroups` was blank (treated as skip) and member resolution depended mostly on AD link/email fields.
+
+**What changed:**
+
+- **`src/services/group-sync.ts`** — AD group sync now defaults blank `syncGroups` to auto-discover up to 200 security groups (same behavior as `*`), improves same-name synced-group upsert, and resolves members by `employeeID` / UPN fallback.
+- **`src/adapters/ad-adapter.ts`** — `listGroupMemberUsers()` now reads `userPrincipalName` and `employeeID` in addition to `sAMAccountName` / `mail`.
+- **`src/services/ad-sync.ts`** — inbound run summary now reports AD group sync as auto-all mode when `syncGroups` is blank.
+- **`web/js/views-stubs.js`** — AD connector scope hint updated: blank Sync Groups means auto-sync (up to 200 security groups).
+
+---
+
 ### (pending) — 2026-06-07 — Migration 020: normalize Zoho slug/name variants for policy gating
 
 **Why** — Some environments had Zoho Mail created as slug `zoho_mail` / name `Zoho_mail` instead of `zoho-mail`. Migrations `017/019` targeted `zoho-mail` only, so those variant rows remained `all_active=true` / `visibility='PUBLIC'`, causing users to see Zoho without explicit policy grants.

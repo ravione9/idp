@@ -550,7 +550,7 @@ export class ADAdapter extends BaseAdapter {
   /** List enabled user members of a group (by group DN). */
   async listGroupMemberUsers(
     groupDn: string,
-  ): Promise<AdapterResult<Array<{ sam: string; mail?: string }>>> {
+  ): Promise<AdapterResult<Array<{ sam: string; mail?: string; upn?: string; employeeId?: string }>>> {
     return this.safe(async () => {
       const groupEntries = await this.searchAt(groupDn, '(objectClass=group)', ['member']);
       if (!groupEntries.length) return [];
@@ -560,13 +560,13 @@ export class ADAdapter extends BaseAdapter {
         ? (raw as string[])
         : (raw ? [String(raw)] : []);
 
-      const users: Array<{ sam: string; mail?: string }> = [];
+      const users: Array<{ sam: string; mail?: string; upn?: string; employeeId?: string }> = [];
       for (const memberDn of memberDns.slice(0, 1000)) {
         try {
           const uEntries = await this.searchAt(
             memberDn,
             '(&(objectClass=user)(!(sAMAccountName=*$)))',
-            ['sAMAccountName', 'mail', 'userAccountControl'],
+            ['sAMAccountName', 'mail', 'userPrincipalName', 'employeeID', 'userAccountControl'],
           );
           if (!uEntries.length) continue;
           const u = uEntries[0];
@@ -575,8 +575,12 @@ export class ADAdapter extends BaseAdapter {
           const sam = getLdapAttr(u, 'sAMAccountName');
           if (!sam) continue;
           const mail = getLdapAttr(u, 'mail');
-          const row: { sam: string; mail?: string } = { sam };
+          const upn = getLdapAttr(u, 'userPrincipalName');
+          const employeeId = getLdapAttr(u, 'employeeID');
+          const row: { sam: string; mail?: string; upn?: string; employeeId?: string } = { sam };
           if (mail) row.mail = mail;
+          if (upn) row.upn = upn;
+          if (employeeId) row.employeeId = employeeId;
           users.push(row);
         } catch {
           // skip unresolved member DNs (nested groups, contacts, etc.)

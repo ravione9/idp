@@ -2325,7 +2325,7 @@ function initSourcesTab(panel) {
         <div id="cfg-pane-scope" class="cfg-pane" style="display:none">
           ${isGoogle
             ? '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">Choose which OUs, groups, and users to import. Leave all blank to sync the <strong>entire</strong> Google directory.</p>'
-            : '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">List AD groups to mirror into <strong>Identity → Groups</strong>. User sync must run first so members can be linked. Leave blank to skip group sync.</p>'}
+            : '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">List AD groups to mirror into <strong>Identity → Groups</strong>. User sync must run first so members can be linked. Leave blank to auto-sync up to <strong>200 security groups</strong>.</p>'}
           <div style="display:grid;grid-template-columns:1fr;gap:0">${isGoogle ? googleScopeFields : adScopeFields}</div>
         </div>` : `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">${configFields}</div>`;

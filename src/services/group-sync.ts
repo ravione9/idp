@@ -78,6 +78,15 @@ async function upsertSyncedGroup(params: {
     );
     return byName.id;
   }
+  if (byName && byName.source_system === params.sourceSystem) {
+    await execute(
+      `UPDATE \`groups\` SET
+          external_id = ?, connector_id = ?, active = 1, last_synced_at = UTC_TIMESTAMP(), updated_at = UTC_TIMESTAMP()
+       WHERE id = ?`,
+      [params.externalId, params.connectorId, byName.id],
+    );
+    return byName.id;
+  }
 
   const id = uuidv4();
   await execute(
@@ -133,6 +142,23 @@ async function resolveEmpIdByAdSam(sam: string, email?: string): Promise<string 
   if (link) return link.emp_id;
   if (email) return resolveEmpIdByEmail(email);
   return null;
+}
+
+async function resolveEmpIdByAdMember(member: {
+  sam: string;
+  mail?: string;
+  upn?: string;
+  employeeId?: string;
+}): Promise<string | null> {
+  if (member.employeeId) {
+    const byEmp = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM employees WHERE emp_id = ?`,
+      [member.employeeId.trim()],
+    );
+    if (byEmp) return byEmp.emp_id;
+  }
+  const email = member.mail || member.upn;
+  return resolveEmpIdByAdSam(member.sam, email);
 }
 
 export async function syncGoogleDirectoryGroups(
@@ -215,7 +241,19 @@ async function resolveAdGroupKeys(
   cfg: Record<string, unknown>,
 ): Promise<{ keys: string[]; errors: string[] }> {
   const raw = parseCsvList(cfg['syncGroups']);
-  if (!raw.length) return { keys: [], errors: [] };
+  // Default behavior: if Sync Groups is empty, sync all security groups.
+  // This avoids a common "AD group sync did nothing" misconfiguration.
+  if (!raw.length) {
+    const listed = await adapter.listDirectoryGroups();
+    if (!listed.success) {
+      return { keys: [], errors: [listed.error ?? 'failed to list AD security groups'] };
+    }
+    const dns = (listed.data ?? []).map((g) => g.dn);
+    if (!dns.length) {
+      return { keys: [], errors: ['No AD security groups found under domain root'] };
+    }
+    return { keys: dns, errors: [] };
+  }
 
   const wildcard = raw.length === 1 && (raw[0] === '*' || raw[0].toUpperCase() === 'ALL');
   if (!wildcard) return { keys: raw, errors: [] };
@@ -236,7 +274,6 @@ export async function syncAdDirectoryGroups(
   cfg: Record<string, unknown>,
 ): Promise<GroupSyncSummary> {
   const summary: GroupSyncSummary = { groupsSynced: 0, membersSynced: 0, errors: [] };
-  if (!parseCsvList(cfg['syncGroups']).length) return summary;
 
   const adapter = createAdAdapterFromConfig(cfg);
   try {
@@ -272,7 +309,7 @@ export async function syncAdDirectoryGroups(
 
         const empIds: string[] = [];
         for (const m of membersRes.data ?? []) {
-          const empId = await resolveEmpIdByAdSam(m.sam, m.mail);
+          const empId = await resolveEmpIdByAdMember(m);
           if (empId) empIds.push(empId);
         }
         summary.membersSynced += await replaceGroupMembers(groupId, [...new Set(empIds)]);
@@ -327,7 +364,6 @@ export async function syncAllDirectoryGroups(): Promise<GroupSyncSummary> {
         total.errors.push(`Google connector ${conn.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     } else if (conn.connector_type === 'AD' || conn.connector_type === 'LDAP') {
-      if (!parseCsvList(cfg['syncGroups']).length) continue;
       const part = await syncAdDirectoryGroups(conn.id, cfg);
       total.groupsSynced += part.groupsSynced;
       total.membersSynced += part.membersSynced;
