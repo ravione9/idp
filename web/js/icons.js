@@ -83,6 +83,7 @@ export const ICONS = {
   download:    S('<path d="M12 4v12"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/>'),
   filter:      S('<path d="M3 5h18"/><path d="M6 12h12"/><path d="M10 19h4"/>'),
   star:        S('<path d="M12 3l2.6 5.6 6.4.6-4.8 4.4 1.4 6.4L12 17l-5.6 3 1.4-6.4L3 9.2l6.4-.6z"/>'),
+  palette:     S('<circle cx="13.5" cy="6.5" r="1.5" fill="currentColor" stroke="none"/><circle cx="17.5" cy="10.5" r="1.5" fill="currentColor" stroke="none"/><circle cx="8.5" cy="7.5" r="1.5" fill="currentColor" stroke="none"/><circle cx="6.5" cy="12.5" r="1.5" fill="currentColor" stroke="none"/><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-2.8-5.2L12 12 7.8 9.8C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/>'),
 };
 
 export function icon(name) {

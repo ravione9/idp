@@ -6,6 +6,7 @@
 import { api } from './api.js?v=2026-06-07-ad-groups-sync';
 import { el, esc, initials } from './ui.js';
 import { icon } from './icons.js';
+import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import {
   renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
 } from './views-end-user.js';
@@ -173,6 +174,15 @@ function buildShell() {
           ${adminButton}
         </nav>
         <div class="topnav-actions">
+          <div class="theme-picker" id="theme-picker">
+            <button type="button" class="theme-picker-btn" id="theme-picker-btn" title="Appearance" aria-label="Choose theme" aria-haspopup="true">
+              <span class="i-wrap">${icon('palette')}</span>
+            </button>
+            <div class="theme-picker-menu" id="theme-picker-menu" role="menu" aria-label="Theme options">
+              <div class="theme-picker-heading">Theme</div>
+              <div class="theme-picker-grid">${themeOptionsHtml()}</div>
+            </div>
+          </div>
           <div class="search-global">
             <input type="search" placeholder="Search users, apps…" id="global-search" />
           </div>
@@ -262,6 +272,8 @@ function buildShell() {
     try { await api.logout(); } catch {}
     location.href = '/login';
   });
+
+  mountThemeMenu(root);
 
   return root;
 }
@@ -353,6 +365,7 @@ async function navigate(key, opts = {}) {
    ENTRY
    ---------------------------------------------------------------- */
 async function main() {
+  initTheme();
   const root = document.getElementById('app');
   const path = location.pathname.replace(/\/$/, '') || '/';
 

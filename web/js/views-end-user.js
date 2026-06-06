@@ -1,6 +1,8 @@
 /* End-user views: Home (app launcher), My Access, Request Access, My Tasks, Settings. */
 import { api } from './api.js?v=2026-06-07-groups-sync';
 import { el, esc, fmtDate, ilgBadge, initials } from './ui.js';
+import { icon } from './icons.js';
+import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
@@ -26,6 +28,17 @@ export function renderLogin() {
         <div class="auth-footer">© Lenskart Identity · idp.lenskart.com</div>
       </aside>
       <main class="auth-panel">
+        <div class="auth-theme-bar">
+          <div class="theme-picker" id="theme-picker">
+            <button type="button" class="theme-picker-btn theme-picker-btn--light" id="theme-picker-btn" title="Appearance" aria-label="Choose theme">
+              <span class="i-wrap">${icon('palette')}</span>
+            </button>
+            <div class="theme-picker-menu theme-picker-menu--auth" id="theme-picker-menu" role="menu">
+              <div class="theme-picker-heading">Theme</div>
+              <div class="theme-picker-grid">${themeOptionsHtml()}</div>
+            </div>
+          </div>
+        </div>
         <div class="auth-card" id="step-email">
           <h2>Sign in to Lenskart IdP</h2>
           <p class="muted">Enter your corporate email to continue.</p>
@@ -44,6 +57,8 @@ export function renderLogin() {
       </main>
     </div>
   `);
+
+  mountThemeMenu(root);
 
   const panel = root.querySelector('.auth-panel');
 
@@ -649,6 +664,7 @@ export async function viewSettings(me, content) {
         ${isLocal ? '<button class="tab" data-tab="security">Security</button>' : ''}
         <button class="tab" data-tab="sessions">Sessions</button>
         <button class="tab" data-tab="mfa">Two-factor</button>
+        <button class="tab" data-tab="appearance">Appearance</button>
       </div>
       <div id="settings-content"><div class="loading-row"><span class="spinner"></span></div></div>
     </div>`);
@@ -818,12 +834,21 @@ export async function viewSettings(me, content) {
       }
     });
   }
+  function appearance() {
+    target.innerHTML = `<div class="card" style="max-width:560px">
+      <h2>Appearance</h2>
+      <p class="subtitle" style="margin-bottom:1.25rem">Choose a colour theme for the portal. Your preference is saved on this device.</p>
+      <div class="theme-picker-grid theme-picker-grid--settings">${themeOptionsHtml()}</div>
+    </div>`;
+    wireThemePicker(target);
+  }
   function showTab(name) {
     wrap.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     if (name === 'profile') profile();
     else if (name === 'security') security();
     else if (name === 'sessions') sessions();
     else if (name === 'mfa') mfa();
+    else if (name === 'appearance') appearance();
   }
   wrap.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => showTab(tab.dataset.tab)));
   profile();
