@@ -9,14 +9,58 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne, execute } from '../db/connection.js';
-import { syncAllDirectoryGroups } from '../services/group-sync.js';
+import { safeQuery } from '../db/safe-query.js';
+import { syncAllDirectoryGroups, isGroupSyncSchemaReady } from '../services/group-sync.js';
 
 const router = Router();
 router.use(requireAuth);
 router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
 
+const LEGACY_GROUP_LIST_SQL = `
+  SELECT g.id, g.name, g.description, g.type, g.active, g.created_at,
+         'LOCAL' AS source_system, NULL AS external_id, NULL AS connector_id,
+         NULL AS last_synced_at, NULL AS connector_name,
+    (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS member_count
+   FROM \`groups\` g
+  WHERE g.active = 1
+  ORDER BY g.name`;
+
+const GROUP_LIST_SQL = `
+  SELECT g.id, g.name, g.description, g.type, g.source_system, g.external_id,
+         g.connector_id, g.last_synced_at, g.active, g.created_at,
+         c.name AS connector_name,
+    (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS member_count
+   FROM \`groups\` g
+   LEFT JOIN connectors c ON c.id = g.connector_id
+  WHERE g.active = 1
+  ORDER BY g.source_system, g.name`;
+
+async function listGroups(): Promise<Record<string, unknown>[]> {
+  const schemaReady = await isGroupSyncSchemaReady();
+  if (!schemaReady) {
+    return safeQuery<Record<string, unknown>>(LEGACY_GROUP_LIST_SQL, []);
+  }
+  return safeQuery<Record<string, unknown>>(GROUP_LIST_SQL, []);
+}
+
+async function groupSourceSystem(groupId: string): Promise<string> {
+  const schemaReady = await isGroupSyncSchemaReady();
+  if (!schemaReady) return 'LOCAL';
+  const row = await queryOne<{ source_system: string }>(
+    `SELECT source_system FROM \`groups\` WHERE id = ?`,
+    [groupId],
+  );
+  return row?.source_system ?? 'LOCAL';
+}
+
 // POST /sync — pull groups + members from Google / AD connectors (syncGroups config)
 router.post('/sync', asyncHandler(async (_req: Request, res: Response) => {
+  if (!(await isGroupSyncSchemaReady())) {
+    res.status(503).json({
+      error: 'Group directory sync requires migration 014 — restart the API after deploy so migrations apply',
+    });
+    return;
+  }
   const result = await syncAllDirectoryGroups();
   res.json({
     success: true,
@@ -28,18 +72,8 @@ router.post('/sync', asyncHandler(async (_req: Request, res: Response) => {
 
 // GET / — list groups with member count
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {
-  const rows = await query(
-    `SELECT g.id, g.name, g.description, g.type, g.source_system, g.external_id,
-            g.connector_id, g.last_synced_at, g.active, g.created_at,
-            c.name AS connector_name,
-      (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS member_count
-     FROM \`groups\` g
-     LEFT JOIN connectors c ON c.id = g.connector_id
-     WHERE g.active = 1
-     ORDER BY g.source_system, g.name`,
-    [],
-  );
-  res.json({ data: rows });
+  const rows = await listGroups();
+  res.json({ data: rows, schemaReady: await isGroupSyncSchemaReady() });
 }));
 
 // POST / — create group
@@ -102,11 +136,11 @@ router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
 
 // POST /:id/members — add member (local groups only)
 router.post('/:id/members', asyncHandler(async (req: Request, res: Response) => {
-  const group = await queryOne<{ source_system: string }>(
-    `SELECT source_system FROM \`groups\` WHERE id = ?`, [req.params['id']],
+  const exists = await queryOne<{ id: string }>(
+    `SELECT id FROM \`groups\` WHERE id = ?`, [req.params['id']],
   );
-  if (!group) { res.status(404).json({ error: 'Group not found' }); return; }
-  if (group.source_system !== 'LOCAL') {
+  if (!exists) { res.status(404).json({ error: 'Group not found' }); return; }
+  if ((await groupSourceSystem(req.params['id']!)) !== 'LOCAL') {
     res.status(409).json({ error: 'Members of synced groups are managed by directory sync (Google / AD)' });
     return;
   }
@@ -122,11 +156,11 @@ router.post('/:id/members', asyncHandler(async (req: Request, res: Response) => 
 
 // DELETE /:id/members/:empId — remove member (local groups only)
 router.delete('/:id/members/:empId', asyncHandler(async (req: Request, res: Response) => {
-  const group = await queryOne<{ source_system: string }>(
-    `SELECT source_system FROM \`groups\` WHERE id = ?`, [req.params['id']],
+  const exists = await queryOne<{ id: string }>(
+    `SELECT id FROM \`groups\` WHERE id = ?`, [req.params['id']],
   );
-  if (!group) { res.status(404).json({ error: 'Group not found' }); return; }
-  if (group.source_system !== 'LOCAL') {
+  if (!exists) { res.status(404).json({ error: 'Group not found' }); return; }
+  if ((await groupSourceSystem(req.params['id']!)) !== 'LOCAL') {
     res.status(409).json({ error: 'Members of synced groups are managed by directory sync (Google / AD)' });
     return;
   }

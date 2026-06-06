@@ -17,6 +17,21 @@ import {
 } from './google-directory-config.js';
 import logger from '../utils/logger.js';
 
+let groupSyncSchemaReady: boolean | null = null;
+
+export async function isGroupSyncSchemaReady(): Promise<boolean> {
+  if (groupSyncSchemaReady !== null) return groupSyncSchemaReady;
+  const row = await queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'groups'
+        AND column_name = 'source_system'`,
+    [],
+  );
+  groupSyncSchemaReady = (row?.n ?? 0) > 0;
+  return groupSyncSchemaReady;
+}
+
 export interface GroupSyncSummary {
   groupsSynced: number;
   membersSynced: number;
@@ -242,6 +257,14 @@ export async function syncAdDirectoryGroups(
 }
 
 export async function syncAllDirectoryGroups(): Promise<GroupSyncSummary> {
+  if (!(await isGroupSyncSchemaReady())) {
+    return {
+      groupsSynced: 0,
+      membersSynced: 0,
+      errors: ['Migration 014 not applied — restart API after deploy'],
+    };
+  }
+
   const connectors = await query<{
     id: string;
     connector_type: string;
