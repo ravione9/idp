@@ -705,7 +705,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### `b8b2190` — 2026-06-07 — Groups API: hardened list fallback
+### `f15db28` — 2026-06-07 — Groups API: hardened list fallback
 
 **Why** — `/api/admin/groups` could still return 500 when migration 014 columns were missing or the extended JOIN query failed on a long-lived DB volume.
 
