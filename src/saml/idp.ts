@@ -156,7 +156,7 @@ export async function createSpInitiatedLoginResponse(input: SamlLoginInput): Pro
   const result = await idp.createLoginResponse(
     spInstance,
     flowResult,
-    saml.Constants.namespace.binding.post,
+    'post',
     userInfo,
     undefined,
     false,
@@ -180,8 +180,8 @@ export async function createIdpInitiatedLoginResponse(
 
   const result = await idp.createLoginResponse(
     spInstance,
-    {},
-    saml.Constants.namespace.binding.post,
+    null as unknown as Record<string, unknown>,
+    'post',
     userInfo,
     undefined,
     false,
