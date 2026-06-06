@@ -705,7 +705,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### `0e0083e` — 2026-06-07 — AD group directory sync: discovery + reporting
+### `ec07102` — 2026-06-07 — AD group directory sync: discovery + reporting
 
 **Why** — AD connector sync imported users but groups never appeared; sync history had no group line because `syncGroups` was often unset and group LDAP lookup was limited to the user search base.
 
