@@ -45,6 +45,7 @@ function spMetadataUploadHtml(pfx) {
         </p>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
           <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-idp-meta-dl">⬇ Download our IdP metadata.xml</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-idp-cert-dl">⬇ Download our IdP certificate (.pem)</button>
           <a class="btn btn-secondary btn-sm" id="${pfx}-idp-meta-open" target="_blank" rel="noopener">Open metadata URL</a>
         </div>
         <p class="muted" style="font-size:0.74rem;margin:0 0 0.75rem">Use this file in the third-party app to establish trust with this portal IdP.</p>
@@ -70,6 +71,7 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
   const pasteEl = bd.querySelector(`#${pfx}-meta-paste`);
   const parseBtn = bd.querySelector(`#${pfx}-meta-parse`);
   const idpMetaDownloadBtn = bd.querySelector(`#${pfx}-idp-meta-dl`);
+  const idpCertDownloadBtn = bd.querySelector(`#${pfx}-idp-cert-dl`);
   const idpMetaOpenLink = bd.querySelector(`#${pfx}-idp-meta-open`);
   const idpMetaUrl = `${window.location.origin}/saml/metadata`;
 
@@ -185,6 +187,47 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
       } finally {
         idpMetaDownloadBtn.disabled = false;
         idpMetaDownloadBtn.textContent = oldLabel || '⬇ Download our IdP metadata.xml';
+      }
+    });
+  }
+
+  if (idpCertDownloadBtn) {
+    idpCertDownloadBtn.addEventListener('click', async () => {
+      const oldLabel = idpCertDownloadBtn.textContent;
+      idpCertDownloadBtn.disabled = true;
+      idpCertDownloadBtn.textContent = 'Downloading…';
+      try {
+        const res = await fetch('/saml/metadata', { credentials: 'include' });
+        const xml = await res.text();
+        if (!res.ok || !xml.includes('<EntityDescriptor')) {
+          throw new Error('Could not fetch valid IdP metadata XML from /saml/metadata');
+        }
+
+        const match = xml.match(/<[^>]*:?X509Certificate[^>]*>([\s\S]*?)<\/[^>]*:?X509Certificate>/i);
+        if (!match) {
+          throw new Error('No X.509 certificate found in IdP metadata');
+        }
+        const raw = (match[1] || '').replace(/\s+/g, '');
+        const lines = raw.match(/.{1,64}/g);
+        if (!lines || lines.length === 0) {
+          throw new Error('Invalid X.509 certificate in IdP metadata');
+        }
+        const pem = `-----BEGIN CERTIFICATE-----\n${lines.join('\n')}\n-----END CERTIFICATE-----\n`;
+
+        const blob = new Blob([pem], { type: 'application/x-pem-file;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'idp-certificate.pem';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        if (errEl) errEl.innerHTML = errHtml(e.message || 'Failed to download IdP certificate.');
+      } finally {
+        idpCertDownloadBtn.disabled = false;
+        idpCertDownloadBtn.textContent = oldLabel || '⬇ Download our IdP certificate (.pem)';
       }
     });
   }
