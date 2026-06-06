@@ -685,7 +685,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### *(pending)* — 2026-06-06 — Google Workspace connector: OU / group / user sync scope
+### `f50768b` — 2026-06-06 — Google Workspace connector: OU / group / user sync scope
 
 **Why** — Directory Sync imported every Google user with no way to limit inbound sync to specific organisational units, groups, or named accounts (AD already had `targetOu`).
 
