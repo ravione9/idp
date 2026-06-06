@@ -3484,13 +3484,13 @@ export async function viewBirthright(content) {
 
 // ─── Application Access Policy ────────────────────────────────────────────────
 export async function viewAppAccessPolicy(content) {
-  content.replaceChildren(el(`<div>
+  content.replaceChildren(el(`<div class="aap-page">
     ${header('Application Access Policy', 'Assign application access by user or tag group; configure approval workflows and audit trail')}
-    <div id="aap-stats" class="stats-row" style="margin-bottom:1rem">${loading()}</div>
-    <div class="cfg-tab-bar" style="display:flex;gap:0.5rem;margin-bottom:1rem;border-bottom:1px solid var(--border)">
-      <button type="button" class="cfg-tab btn btn-sm btn-primary active" data-tab="assign">Application Assignment</button>
-      <button type="button" class="cfg-tab btn btn-sm btn-secondary" data-tab="workflow">Group Access Workflow</button>
-      <button type="button" class="cfg-tab btn btn-sm btn-secondary" data-tab="audit">Audit Log</button>
+    <div id="aap-stats" class="stat-grid aap-stats">${loading()}</div>
+    <div class="cfg-tab-bar inline-tabs aap-tabs">
+      <button type="button" class="cfg-tab inline-tab active" data-tab="assign">Application Assignment</button>
+      <button type="button" class="cfg-tab inline-tab" data-tab="workflow">Group Access Workflow</button>
+      <button type="button" class="cfg-tab inline-tab" data-tab="audit">Audit Log</button>
     </div>
     <div id="tab-assign"></div>
     <div id="tab-workflow" style="display:none"></div>
@@ -3517,8 +3517,6 @@ export async function viewAppAccessPolicy(content) {
     wrap.querySelectorAll('.cfg-tab').forEach(t => {
       const on = t.dataset.tab === name;
       t.classList.toggle('active', on);
-      t.classList.toggle('btn-primary', on);
-      t.classList.toggle('btn-secondary', !on);
     });
     wrap.querySelector('#tab-assign').style.display   = name === 'assign' ? '' : 'none';
     wrap.querySelector('#tab-workflow').style.display = name === 'workflow' ? '' : 'none';
@@ -3573,16 +3571,22 @@ export async function viewAppAccessPolicy(content) {
       }).join('') : `<tr><td colspan="4"><div class="empty-state"><p>No tag groups yet.</p></div></td></tr>`;
 
       area.innerHTML = `
-        <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
-          <button class="btn btn-primary" id="aap-assign-btn">+ Assign Access</button>
-          <button class="btn btn-secondary" id="aap-tg-btn">+ Tag Group</button>
+        <div class="aap-actions">
+          <div>
+            <h3 class="section-title">Application Assignment</h3>
+            <p class="subtitle">Grant direct or group-based app access and manage tag groups.</p>
+          </div>
+          <div class="aap-actions-btns">
+            <button class="btn btn-primary" id="aap-assign-btn">+ Assign Access</button>
+            <button class="btn btn-secondary" id="aap-tg-btn">+ Tag Group</button>
+          </div>
         </div>
-        <h3 style="font-size:0.95rem;margin:0 0 0.5rem">Active Assignments</h3>
-        <div class="table-wrap" style="margin-bottom:1.5rem"><table>
+        <h3 class="section-title">Active Assignments</h3>
+        <div class="table-wrap aap-table"><table>
           <thead><tr><th>Application</th><th>Type</th><th>Target</th><th>Granted</th><th></th></tr></thead>
           <tbody>${assignRows}</tbody>
         </table></div>
-        <h3 style="font-size:0.95rem;margin:0 0 0.5rem">Tag Groups</h3>
+        <h3 class="section-title">Tag Groups</h3>
         <div class="table-wrap"><table>
           <thead><tr><th>Name</th><th>Tags</th><th>Members</th><th></th></tr></thead>
           <tbody>${tgRows}</tbody>
@@ -3752,7 +3756,7 @@ export async function viewAppAccessPolicy(content) {
       }).join('') : `<tr><td colspan="6"><div class="empty-state"><p>No workflows configured.</p></div></td></tr>`;
 
       area.innerHTML = `
-        <p class="muted" style="font-size:0.85rem;margin:0 0 1rem">
+        <p class="muted aap-note">
           Users requesting access to application tag groups are routed through these approval chains before access is provisioned.
         </p>
         <button class="btn btn-primary" id="wf-new" style="margin-bottom:1rem">+ New Workflow</button>
@@ -3864,7 +3868,7 @@ export async function viewAppAccessPolicy(content) {
         </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><p>No audit events yet.</p></div></td></tr>`;
 
       area.innerHTML = `
-        <p class="muted" style="font-size:0.85rem;margin:0 0 1rem">Immutable log of assignments, access requests, approvals, provisioning, and revocations.</p>
+        <p class="muted aap-note">Immutable log of assignments, access requests, approvals, provisioning, and revocations.</p>
         <div class="table-wrap"><table>
           <thead><tr><th>When</th><th>Action</th><th>Application</th><th>Actor</th><th>Target</th><th>Request</th></tr></thead>
           <tbody>${rows}</tbody>

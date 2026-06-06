@@ -1285,6 +1285,24 @@ td code, .td-code { font-size: 0.78rem; }
 .inline-tab:hover { color: var(--text); }
 .inline-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
 
+/* Application Access Policy layout polish */
+.aap-page .page-header { margin-bottom: 1rem; }
+.aap-stats { margin-bottom: 1rem; }
+.aap-tabs { margin-bottom: 1rem; }
+.aap-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+.aap-actions .section-title { margin: 0; }
+.aap-actions .subtitle { color: var(--text-muted); font-size: 0.84rem; margin-top: 0.2rem; }
+.aap-actions-btns { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.aap-table { margin-bottom: 1.25rem; }
+.aap-note { font-size: 0.85rem; margin: 0 0 0.9rem; }
+
 /* Tag / chip row */
 .tag-list { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.35rem; }
 .tag {
