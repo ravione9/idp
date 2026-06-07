@@ -780,7 +780,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
-### `10a8a5e` — 2026-06-07 — Fix MySQL reserved word `system` breaking password writeback
+### `2815b1f` — 2026-06-07 — Fix MySQL reserved word `system` breaking password writeback
 
 **Why** — Password reset showed `WRITEBACK` SQL syntax error because `system` is reserved in MySQL 8+ and was not backtick-quoted in `getIdentityLinksForEmp` and related queries.
 
