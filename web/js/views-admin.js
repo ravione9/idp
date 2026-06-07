@@ -1082,8 +1082,8 @@ export async function viewAdmins(content) {
       </form>
     </details>
     <div class="table-wrap"><div class="table-toolbar"><strong>Local administrators</strong></div>
-      <table><thead><tr><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th></th></tr></thead>
-      <tbody id="admins-tbody"><tr><td colspan="5" class="loading-row"><span class="spinner"></span></td></tr></tbody></table></div></div>`);
+      <table><thead><tr><th>Name / Email</th><th>Role</th><th>Type</th><th>Status</th><th>Last login</th><th></th></tr></thead>
+      <tbody id="admins-tbody"><tr><td colspan="6" class="loading-row"><span class="spinner"></span></td></tr></tbody></table></div></div>`);
   content.replaceChildren(wrap);
 
   async function loadTable() {
@@ -1092,13 +1092,14 @@ export async function viewAdmins(content) {
       const rows = r.data || [];
       wrap.querySelector('#admins-tbody').innerHTML = rows.length
         ? rows.map((a) => `<tr>
-          <td class="cell-strong">${esc(a.email)}</td>
+          <td><div class="cell-strong">${esc(a.full_name || a.email)}</div><div class="muted" style="font-size:0.75rem">${esc(a.email)}</div></td>
           <td><span class="badge badge-info">${esc(a.role)}</span></td>
+          <td>${a.has_local_account ? '<span class="badge badge-neutral">Local</span>' : '<span class="badge badge-primary">SSO</span>'}</td>
           <td>${a.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
           <td class="muted">${fmtDate(a.last_login_at)}</td>
-          <td class="actions">${a.active ? `<button class="btn btn-sm btn-danger" data-id="${a.id}">Deactivate</button>` : ''}</td>
+          <td class="actions">${a.has_local_account && a.active ? `<button class="btn btn-sm btn-danger" data-id="${a.id}">Deactivate</button>` : ''}</td>
         </tr>`).join('')
-        : `<tr><td colspan="5" class="empty-state">No local administrators</td></tr>`;
+        : `<tr><td colspan="6" class="empty-state">No administrators</td></tr>`;
       wrap.querySelectorAll('[data-id]').forEach((btn) => {
         btn.addEventListener('click', async () => {
           if (!confirm('Deactivate this administrator?')) return;
@@ -1107,7 +1108,7 @@ export async function viewAdmins(content) {
         });
       });
     } catch (err) {
-      wrap.querySelector('#admins-tbody').innerHTML = `<tr><td colspan="5"><div class="alert alert-error">${esc(err.message)}</div></td></tr>`;
+      wrap.querySelector('#admins-tbody').innerHTML = `<tr><td colspan="6"><div class="alert alert-error">${esc(err.message)}</div></td></tr>`;
     }
   }
   wrap.querySelector('#ca-form').addEventListener('submit', async (e) => {

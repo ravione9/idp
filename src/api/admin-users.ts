@@ -69,7 +69,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   const rows = await query<Record<string, unknown>>(
     `SELECT e.emp_id, e.full_name, e.email_corp, e.dept_id, e.employment_type,
             e.ilg_state, e.ilg_state_since, e.hire_date, e.manager_emp_id,
-            la.role AS admin_role, la.last_login_at, la.active AS local_active,
+            COALESCE(la.role, e.role) AS admin_role, la.last_login_at, la.active AS local_active,
             COALESCE(
               GROUP_CONCAT(DISTINCT il.\`system\` ORDER BY il.\`system\` SEPARATOR ','), ''
             ) AS identity_sources,
@@ -107,7 +107,7 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
     `SELECT e.*,
             m.full_name  AS manager_name,
             m.email_corp AS manager_email,
-            la.role      AS admin_role,
+            COALESCE(la.role, e.role) AS admin_role,
             la.last_login_at,
             la.active    AS local_active
        FROM employees e
@@ -145,7 +145,7 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
           `SELECT e.*,
                   m.full_name  AS manager_name,
                   m.email_corp AS manager_email,
-                  la.role      AS admin_role,
+                  COALESCE(la.role, e.role) AS admin_role,
                   la.last_login_at,
                   la.active    AS local_active
              FROM employees e

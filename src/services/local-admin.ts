@@ -16,10 +16,12 @@ export interface LocalAccountRow {
   id:           number;
   emp_id:       string;
   email:        string;
+  full_name:    string;
   role:         string;
   active:       number;
   created_at:   string;
   last_login_at: string | null;
+  has_local_account: number;
 }
 
 export async function countLocalAdmins(): Promise<number> {
@@ -67,9 +69,21 @@ export async function touchLocalLogin(accountId: number): Promise<void> {
 
 export async function listLocalAdmins(): Promise<LocalAccountRow[]> {
   return query<LocalAccountRow>(
-    `SELECT la.id, la.emp_id, la.email, la.role, la.active, la.created_at, la.last_login_at
-       FROM local_accounts la
-      ORDER BY la.created_at DESC`,
+    `SELECT
+       COALESCE(la.id, 0)                        AS id,
+       e.emp_id,
+       e.full_name,
+       COALESCE(la.email, e.email_corp)           AS email,
+       COALESCE(la.role, e.role)                  AS role,
+       COALESCE(la.active, 1)                     AS active,
+       COALESCE(la.created_at, e.hire_date)       AS created_at,
+       la.last_login_at,
+       IF(la.id IS NOT NULL, 1, 0)                AS has_local_account
+     FROM employees e
+     LEFT JOIN local_accounts la ON la.emp_id = e.emp_id AND la.active = 1
+     WHERE COALESCE(la.role, e.role) IN ('ADMIN', 'SUPER_ADMIN')
+       AND e.ilg_state = 'ACTIVE'
+     ORDER BY COALESCE(la.created_at, e.hire_date) DESC`,
     [],
   );
 }

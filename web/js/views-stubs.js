@@ -2983,14 +2983,12 @@ function initUsersTab(panel, me = null) {
             msgEl.style.color = '';
             try {
               await api.updateUserRole(empId, newRole);
-              msgEl.textContent = 'Saved!';
-              msgEl.style.color = 'var(--color-success, #16a34a)';
               profileData.employee.admin_role = newRole;
-              setTimeout(() => { msgEl.textContent = ''; }, 2500);
+              // Re-render so the dropdown and badge reflect the saved value
+              renderTab('overview');
             } catch (e) {
               msgEl.textContent = 'Error: ' + e.message;
               msgEl.style.color = 'var(--color-danger, #dc2626)';
-            } finally {
               roleSaveBtn.disabled = false;
             }
           });
