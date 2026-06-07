@@ -3,6 +3,7 @@
  * Issues signed assertions to registered Service Providers for authenticated employees.
  */
 
+import zlib from 'node:zlib';
 import * as saml from 'samlify';
 import { config, isSamlEnabled } from '../config.js';
 import logger from '../utils/logger.js';
@@ -191,11 +192,35 @@ export async function createIdpInitiatedLoginResponse(
   return buildSamlPostForm(result);
 }
 
-/** Extract Issuer (SP entity ID) from a base64 SAML AuthnRequest (redirect binding). */
-export function extractIssuerFromAuthnRequest(samlRequestB64: string): string | null {
+/** Decode SAML AuthnRequest parameter to XML (redirect = deflate+base64, post = base64). */
+export function decodeAuthnRequestXml(samlRequestEncoded: string): string | null {
   try {
-    const inflated = Buffer.from(samlRequestB64, 'base64');
-    const xml = inflated.toString('utf8');
+    const decoded = Buffer.from(samlRequestEncoded, 'base64');
+
+    // HTTP-Redirect binding: DEFLATE (raw) then base64 (SAML 2.0 §3.4.4)
+    try {
+      const xml = zlib.inflateRawSync(decoded).toString('utf8');
+      if (xml.includes('AuthnRequest') || xml.includes('Issuer')) return xml;
+    } catch {
+      // not deflate-compressed
+    }
+
+    // HTTP-POST binding: base64-encoded XML
+    const plain = decoded.toString('utf8');
+    if (plain.includes('AuthnRequest') || plain.includes('Issuer')) return plain;
+
+    return null;
+  } catch (err) {
+    logger.warn({ err }, 'Failed to decode SAML AuthnRequest');
+    return null;
+  }
+}
+
+/** Extract Issuer (SP entity ID) from a SAML AuthnRequest parameter. */
+export function extractIssuerFromAuthnRequest(samlRequestEncoded: string): string | null {
+  try {
+    const xml = decodeAuthnRequestXml(samlRequestEncoded);
+    if (!xml) return null;
     const match = xml.match(/<(?:saml2?:)?Issuer[^>]*>([^<]+)<\/(?:saml2?:)?Issuer>/i);
     return match?.[1]?.trim() ?? null;
   } catch (err) {

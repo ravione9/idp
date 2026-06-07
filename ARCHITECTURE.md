@@ -771,6 +771,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
+### (pending) — 2026-06-07 — Fix SAML AuthnRequest Issuer parse on SSO resume (redirect binding)
+
+**Why** — After portal login, `/saml/resume/:id` returned `Could not determine Service Provider from SAMLRequest` for Zoho and other SPs using HTTP-Redirect binding, because Issuer extraction only base64-decoded the request instead of DEFLATE-inflating it first.
+
+**What changed:**
+
+- **`src/saml/idp.ts`** — `decodeAuthnRequestXml()` handles redirect (deflate+base64) and post (base64 XML) bindings; `extractIssuerFromAuthnRequest()` uses it.
+- **`src/api/saml.ts`** — normalizes stored query/body params; caches `spEntityId` in the pending Redis payload as a resume hint.
+
+---
+
 ### (pending) — 2026-06-07 — `check-user-sso.sh` diagnostic for SP-initiated login
 
 **Why** — Admins need a quick read-only check (employee, local account, Zoho policy grant, SAML keys) before testing Zoho SP-initiated SSO for a user.

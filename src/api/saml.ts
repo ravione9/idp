@@ -44,12 +44,36 @@ function sendLoginForm(res: Response, html: string): void {
   res.send(html);
 }
 
-async function resolveSpFromRequest(req: Request): Promise<{
+/** Express query/body values → flat string map for Redis replay. */
+function normalizeSamlParams(input: Record<string, unknown> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!input) return out;
+  for (const [key, val] of Object.entries(input)) {
+    if (typeof val === 'string') out[key] = val;
+    else if (Array.isArray(val) && typeof val[0] === 'string') out[key] = val[0];
+  }
+  return out;
+}
+
+function samlRequestFrom(req: Request): string | undefined {
+  return (
+    (req.query['SAMLRequest'] as string | undefined) ??
+    (req.body?.['SAMLRequest'] as string | undefined)
+  );
+}
+
+async function resolveSpFromRequest(
+  req: Request,
+  spEntityIdHint?: string | null,
+): Promise<{
   sp: import('../saml/types.js').SamlServiceProviderRow;
 } | { error: string; status: number }> {
-  const samlRequest =
-    (req.query['SAMLRequest'] as string | undefined) ??
-    (req.body?.['SAMLRequest'] as string | undefined);
+  if (spEntityIdHint) {
+    const sp = await getServiceProviderByEntityId(spEntityIdHint);
+    if (sp) return { sp };
+  }
+
+  const samlRequest = samlRequestFrom(req);
 
   if (!samlRequest) {
     return { error: 'Missing SAMLRequest', status: 400 };
@@ -72,6 +96,7 @@ async function issueAssertion(
   req: Request,
   res: Response,
   binding: SamlBinding,
+  spEntityIdHint?: string | null,
 ): Promise<void> {
   if (!isSamlEnabled()) {
     samlUnavailable(res);
@@ -81,11 +106,16 @@ async function issueAssertion(
   const user = req.user;
   if (!user) {
     const pendingId = uuidv4();
+    const query = normalizeSamlParams(req.query as Record<string, unknown>);
+    const body  = normalizeSamlParams(req.body as Record<string, unknown>);
+    const samlRequest = query['SAMLRequest'] ?? body['SAMLRequest'];
+    const spEntityId = samlRequest ? extractIssuerFromAuthnRequest(samlRequest) : null;
     const payload = JSON.stringify({
       binding,
-      query:  req.query,
-      body:   req.body,
-      relayState: (req.query['RelayState'] ?? req.body?.['RelayState']) as string | undefined,
+      query,
+      body,
+      relayState: query['RelayState'] ?? body['RelayState'],
+      spEntityId,
     });
     await redis.set(`${PENDING_SSO_PREFIX}${pendingId}`, payload, 'EX', PENDING_SSO_TTL_S);
     const returnTo = encodeURIComponent(`/saml/resume/${pendingId}`);
@@ -93,7 +123,7 @@ async function issueAssertion(
     return;
   }
 
-  const resolved = await resolveSpFromRequest(req);
+  const resolved = await resolveSpFromRequest(req, spEntityIdHint);
   if ('error' in resolved) {
     res.status(resolved.status).json({ error: resolved.error });
     return;
@@ -186,6 +216,7 @@ router.get('/resume/:pendingId', requireAuth, async (req: Request, res: Response
     query?:  Record<string, string>;
     body?:   Record<string, string>;
     relayState?: string;
+    spEntityId?: string | null;
   };
 
   const fakeReq = {
@@ -195,7 +226,7 @@ router.get('/resume/:pendingId', requireAuth, async (req: Request, res: Response
     user:  req.user,
   } as Request;
 
-  await issueAssertion(fakeReq, res, pending.binding);
+  await issueAssertion(fakeReq, res, pending.binding, pending.spEntityId);
 });
 
 // ---------------------------------------------------------------------------
