@@ -378,7 +378,7 @@ async function navigate(key, opts = {}) {
   } else if (key === 'audit') {
     await route.view(content, viewTab);
   } else if (key === 'directorySync') {
-    await route.view(content, viewTab);
+    await route.view(content, viewTab, me);
   } else {
     await route.view(content);
   }

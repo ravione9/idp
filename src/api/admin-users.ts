@@ -502,6 +502,42 @@ router.post('/:empId/link-identity', async (req: Request, res: Response): Promis
 });
 
 // ---------------------------------------------------------------------------
+// PATCH /:empId/role  — change admin role for an existing user
+// ---------------------------------------------------------------------------
+const patchRoleSchema = z.object({
+  role: z.enum(['USER', 'MANAGER', 'HRBP', 'ADMIN', 'SUPER_ADMIN']),
+});
+
+router.patch('/:empId/role', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const { empId } = req.params;
+  const parsed = patchRoleSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid role', details: parsed.error.flatten() });
+    return;
+  }
+  const { role } = parsed.data;
+  const adminId = req.user!.empId;
+
+  const emp = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees WHERE emp_id = ?`, [empId],
+  );
+  if (!emp) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+
+  // Update both tables so local login and employee record stay in sync
+  await execute(`UPDATE employees SET role = ? WHERE emp_id = ?`, [role, empId]);
+  await execute(
+    `UPDATE local_accounts SET role = ? WHERE emp_id = ? AND active = 1`,
+    [role, empId],
+  );
+
+  logger.info({ empId, role, adminId }, 'Admin role updated by super admin');
+  res.json({ success: true, empId, role });
+}));
+
+// ---------------------------------------------------------------------------
 // DELETE /:empId/identity-links/:linkId  — remove an identity link
 // ---------------------------------------------------------------------------
 router.delete('/:empId/identity-links/:linkId', async (req: Request, res: Response): Promise<void> => {

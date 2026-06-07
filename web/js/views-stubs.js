@@ -1992,7 +1992,7 @@ function connectorStatusBadge(status) {
   return `<span class="badge ${map[status]||'badge-neutral'}">${esc(status||'—')}</span>`;
 }
 
-export async function viewDirectorySync(content, initialTab = 'sources') {
+export async function viewDirectorySync(content, initialTab = 'sources', me = null) {
   const validTab = initialTab === 'users' ? 'users' : 'sources';
   content.replaceChildren(el(`<div class="admin-page">
     ${header('Universal Directory', 'Identity sources and hybrid users across AD, Google, and local directories', `<button class="btn btn-primary btn-sm" id="ds-add-header-btn">+ Add Source</button>`)}
@@ -2017,7 +2017,7 @@ export async function viewDirectorySync(content, initialTab = 'sources') {
 
   // ── initialise both tabs ─────────────────────────────────────────────────────
   initSourcesTab(wrap.querySelector('#tab-sources'));
-  initUsersTab(wrap.querySelector('#tab-users'));
+  initUsersTab(wrap.querySelector('#tab-users'), me);
   showTab(validTab);
 }
 
@@ -2597,7 +2597,7 @@ function initSourcesTab(panel) {
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  TAB 2: Universal Directory — Hybrid Identity Users         ║
 // ╚══════════════════════════════════════════════════════════════╝
-function initUsersTab(panel) {
+function initUsersTab(panel, me = null) {
   // ── Source badge colours ─────────────────────────────────────────────────────
   const SRC_BADGE = {
     AD:            { label: 'AD',              color: '#0078D4', bg: '#e8f3fc' },
@@ -2916,7 +2916,27 @@ function initUsersTab(panel) {
           ['Department',       esc(emp.dept_id    || '—')],
           ['Employment Type',  esc(emp.employment_type || '—')],
           ['State',            stateBadge(emp.ilg_state)],
-          ['Admin Role',       emp.admin_role ? `<span class="badge badge-primary">${esc(emp.admin_role)}</span>` : '<span class="muted">None</span>'],
+          ['Admin Role',       (() => {
+            const currentRole = emp.admin_role || 'None';
+            const isSuperAdmin = me?.employee?.role === 'SUPER_ADMIN';
+            if (!isSuperAdmin) {
+              return emp.admin_role
+                ? `<span class="badge badge-primary">${esc(emp.admin_role)}</span>`
+                : '<span class="muted">None</span>';
+            }
+            return `
+              <span class="role-change-wrap" style="display:inline-flex;align-items:center;gap:0.4rem">
+                <select class="form-select form-select-sm" id="pp-role-select" style="padding:0.15rem 0.5rem;height:auto;font-size:0.8rem">
+                  <option value="USER"${currentRole==='USER'?' selected':''}>User</option>
+                  <option value="MANAGER"${currentRole==='MANAGER'?' selected':''}>Manager</option>
+                  <option value="HRBP"${currentRole==='HRBP'?' selected':''}>HRBP</option>
+                  <option value="ADMIN"${currentRole==='ADMIN'?' selected':''}>Admin</option>
+                  <option value="SUPER_ADMIN"${currentRole==='SUPER_ADMIN'?' selected':''}>Super Admin</option>
+                </select>
+                <button class="btn btn-sm btn-primary" id="pp-role-save" style="padding:0.15rem 0.6rem;font-size:0.8rem">Save</button>
+                <span id="pp-role-msg" style="font-size:0.75rem"></span>
+              </span>`;
+          })()],
           ['Hire Date',        emp.hire_date ? fmtDate(emp.hire_date) : '—'],
           ['Last Login',       emp.last_login_at ? fmtDate(emp.last_login_at) : '—'],
           ['Manager',          emp.manager_name
@@ -2950,6 +2970,31 @@ function initUsersTab(panel) {
               </tbody>
             </table>
           </div>` : ''}`;
+
+        // Wire up role-save button for SUPER_ADMIN
+        const roleSaveBtn = body.querySelector('#pp-role-save');
+        if (roleSaveBtn) {
+          roleSaveBtn.addEventListener('click', async () => {
+            const select = body.querySelector('#pp-role-select');
+            const msgEl  = body.querySelector('#pp-role-msg');
+            const newRole = select.value;
+            roleSaveBtn.disabled = true;
+            msgEl.textContent = 'Saving…';
+            msgEl.style.color = '';
+            try {
+              await api.updateUserRole(empId, newRole);
+              msgEl.textContent = 'Saved!';
+              msgEl.style.color = 'var(--color-success, #16a34a)';
+              profileData.employee.admin_role = newRole;
+              setTimeout(() => { msgEl.textContent = ''; }, 2500);
+            } catch (e) {
+              msgEl.textContent = 'Error: ' + e.message;
+              msgEl.style.color = 'var(--color-danger, #dc2626)';
+            } finally {
+              roleSaveBtn.disabled = false;
+            }
+          });
+        }
       }
 
       // ── Identity Links tab ───────────────────────────────────────────────────

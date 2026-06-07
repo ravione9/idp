@@ -236,6 +236,7 @@ Object.assign(api, {
   adminMfaRegenCodes:  (empId) => f(`/api/admin/users/${empId}/mfa/regenerate-codes`, { method: 'POST' }),
   adminResetPassword:  (empId, newPassword, notifyUser = false) =>
     f(`/api/admin/users/${empId}/reset-password`, { method: 'POST', body: JSON.stringify({ newPassword, notifyUser }) }),
+  updateUserRole:      (empId, role) => f(`/api/admin/users/${empId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   linkIdentity:        (empId, data) => f(`/api/admin/users/${empId}/link-identity`, { method: 'POST', body: JSON.stringify(data) }),
   unlinkIdentity:      (empId, linkId) => f(`/api/admin/users/${empId}/identity-links/${linkId}`, { method: 'DELETE' }),
 

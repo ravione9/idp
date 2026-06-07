@@ -390,6 +390,7 @@ To add a new migration:
 | `GET` | `/api/admin/users` | Paginated employee list (search, state, identity source filter) |
 | `GET` | `/api/admin/users/:empId` | Full profile: employee, identity links, sessions, password writeback log |
 | `POST` | `/api/admin/users/local` | Create local employee + password account |
+| `PATCH` | `/api/admin/users/:empId/role` | Change admin role for existing user (SUPER_ADMIN only) |
 | `GET` | `/api/admin/users/:empId/mfa` | Admin MFA status for a specific user |
 | `POST` | `/api/admin/users/:empId/mfa/enroll` | Start user MFA enrollment (returns QR + secret) |
 | `POST` | `/api/admin/users/:empId/mfa/confirm` | Confirm user MFA with 6-digit code |
@@ -732,6 +733,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### TBD — 2026-06-07 — Role assignment for existing users
+
+**Why** — Admin roles could only be set at account-creation time. There was no way for a Super Admin to promote or demote an existing user (e.g. set someone to ADMIN or SUPER_ADMIN).
+
+**What changed:**
+
+- **`src/api/admin-users.ts`** — new `PATCH /:empId/role` route; validates with zod, updates both `employees.role` and `local_accounts.role`; gated behind `requireRole('SUPER_ADMIN')`.
+- **`web/js/api.js`** — `updateUserRole(empId, role)` client method.
+- **`web/js/views-stubs.js`** — `viewDirectorySync` and `initUsersTab` accept `me`; overview tab "Admin Role" row shows an inline dropdown + Save button for Super Admins, read-only badge for all others.
+- **`web/js/app.js`** — passes `me` when calling `viewDirectorySync`.
+- **`ARCHITECTURE.md`** — §6 API table updated.
 
 ### f632254 — 2026-06-07 — Persist SPA route and search across page refresh
 
