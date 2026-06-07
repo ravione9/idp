@@ -231,8 +231,8 @@ Object.assign(api, {
   userLifecycle: (empId) => f(`/api/admin/users/${empId}/lifecycle`),
 
   // Unified directory — hybrid identity
-  listUsersUnified: (q = '', state = '', source = '', limit = 100, offset = 0) =>
-    f(`/api/admin/users?q=${encodeURIComponent(q)}&state=${encodeURIComponent(state)}&source=${encodeURIComponent(source)}&limit=${limit}&offset=${offset}`),
+  listUsersUnified: (q = '', state = '', source = '', limit = 100, offset = 0, includeInactive = false) =>
+    f(`/api/admin/users?q=${encodeURIComponent(q)}&state=${encodeURIComponent(state)}&source=${encodeURIComponent(source)}&limit=${limit}&offset=${offset}&includeInactive=${includeInactive ? '1' : '0'}`),
   getUserProfile:      (empId) => f(`/api/admin/users/${empId}`),
   createLocalUser:     (data) => f('/api/admin/users/local', { method: 'POST', body: JSON.stringify(data) }),
   adminMfaStatus:      (empId) => f(`/api/admin/users/${empId}/mfa`),

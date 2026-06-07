@@ -466,7 +466,7 @@ To add a new migration:
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/admin/dashboard` | Aggregate stats |
-| `GET` | `/api/admin/users` | Paginated employee list (search, state, identity source filter) |
+| `GET` | `/api/admin/users` | Paginated employee list (search, state, identity source filter). By default returns only portal-accessible users (`ACTIVE`, `REACTIVATED`); pass `includeInactive=1` or `state=SUSPENDED` to include suspended accounts |
 | `GET` | `/api/admin/users/:empId` | Full profile: employee, identity links, sessions, password writeback log |
 | `POST` | `/api/admin/users/local` | Create local employee + password account |
 | `PATCH` | `/api/admin/users/:empId/role` | Assign/revoke portal administrator access (`local_accounts` only; does not change job designation) |
@@ -761,10 +761,10 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Access request decisions** — `POST /api/iga/access-requests/:id/decision` (approve/reject, auto-fulfil entitlements on final approval) in `src/services/access-request-workflow.ts`
 - ✅ **Birthright entitlement engine** — `src/services/birthright.ts` assigns/revokes birthright entitlements on lifecycle events (JOINER/LEAVER)
 - ✅ **Connector dispatcher** — `src/services/connector-dispatcher.ts` routes `POST /api/iga/connectors/:id/sync` to the right sync service (AD or Google)
-- ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); tracks runs in `connector_runs`
-- ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import and outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank scope syncs the full directory; non-empty filters combine with AND logic
+- ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); inbound import **skips disabled AD accounts** (does not create new portal users); existing linked users disabled in AD are marked `SUSPENDED_AUTO` and hidden from the Universal Directory; tracks runs in `connector_runs`
+- ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import **skips suspended Google accounts** (same rules as AD); outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank scope syncs the full directory; non-empty filters combine with AND logic
 - ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; AD writeback auto-retries StartTLS/LDAPS when the connector uses plain LDAP; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
-- ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate` — revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`
+- ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate` — admin suspend sets `SUSPENDED_HR` (hidden from directory, login blocked); revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`
 - ✅ **Access review campaign generator** — `POST /api/iga/access-reviews` + `POST /api/iga/access-reviews/:id/items/:itemId/decision` in `src/services/access-review.ts` (scopes: ALL_USERS, APP_SPECIFIC, HIGH_RISK; auto-closes campaign when all items reviewed; REVOKE triggers user_entitlement revocation)
 - ✅ **SoD evaluator** — `src/services/sod-evaluator.ts` runs on every entitlement grant; populates `sod_violations`; full-scan available
 - ✅ **Notification dispatcher** — `src/services/notification.ts` dispatches EMAIL (nodemailer), SLACK (webhook), TEAMS, IN_APP; called by access-request, lifecycle, and review workflows
@@ -898,6 +898,19 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **Updated:** `src/api/config-adaptive-auth.ts` — `POST /evaluate` replaced with an engine-backed evaluation; accepts `empId` + context and returns `decision`, `riskScore`, `signals`, and `matchedPolicies`.
 - **New migration 027** — adds `STEP_UP` to `adaptive_auth_policies.action` enum; seeds 11 default policies covering the full authentication logic matrix (see §5.6).
 - **ARCHITECTURE.md §5.1** — risk-based step-up marked Live; §5.6 added with full matrix, condition types, risk signals, and login flow description.
+
+### TBD — 2026-06-07 — Exclude suspended users from directory sync and portal access
+
+**Why** — Disabled AD accounts and admin-suspended users were still appearing in Universal Directory and could regain portal access on AD login.
+
+**What changed:**
+
+- **`src/fsm/states.ts`** — `PORTAL_ACCESSIBLE_STATES` / `isPortalAccessible()` shared helper (`ACTIVE`, `REACTIVATED` only).
+- **`src/services/ad-sync.ts`**, **`src/services/google-sync.ts`** — inbound sync skips creating new users when the source account is disabled/suspended; existing linked users are marked `SUSPENDED_AUTO` with `DISABLED` identity links.
+- **`src/api/admin-users.ts`** — `GET /api/admin/users` defaults to portal-accessible states; `state=SUSPENDED` or `includeInactive=1` reveals suspended rows.
+- **`src/services/user-lifecycle.ts`** — admin suspend/unsuspend/terminate use valid FSM states (`SUSPENDED_HR`, `DEPARTED`).
+- **`src/services/ad-auth.ts`**, **`src/auth/local-auth.ts`**, **`src/auth/middleware.ts`** — login blocked for non-accessible `ilg_state`; removed AD-login auto-reactivation of suspended users.
+- **`web/js/views-stubs.js`**, **`web/js/api.js`** — Universal Directory Users tab defaults to **Available** filter; **All states** opt-in via `includeInactive`.
 
 ### TBD — 2026-06-08 — MFA enforcement policy and per-user MFA management
 

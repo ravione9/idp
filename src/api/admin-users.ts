@@ -30,6 +30,7 @@ import {
   disableMfa,
   regenerateBackupCodes,
 } from '../auth/mfa.js';
+import { PORTAL_ACCESSIBLE_STATES } from '../fsm/states.js';
 
 const router = Router();
 router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
@@ -91,6 +92,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   const search = (req.query['q']      as string)?.trim() ?? '';
   const state  = (req.query['state']  as string)?.trim() ?? '';
   const source = (req.query['source'] as string)?.trim() ?? '';   // e.g. 'AD', 'GOOGLE', 'LOCAL'
+  const includeInactive = req.query['includeInactive'] === '1';
 
   const where: string[] = [];
   const params: unknown[] = [];
@@ -100,9 +102,15 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     const like = `%${search}%`;
     params.push(like, like, like);
   }
-  if (state) {
+  if (state === 'SUSPENDED') {
+    where.push(`e.ilg_state IN ('SUSPENDED_AUTO', 'SUSPENDED_HR')`);
+  } else if (state) {
     where.push('e.ilg_state = ?');
     params.push(state);
+  } else if (!includeInactive) {
+    const placeholders = PORTAL_ACCESSIBLE_STATES.map(() => '?').join(', ');
+    where.push(`e.ilg_state IN (${placeholders})`);
+    params.push(...PORTAL_ACCESSIBLE_STATES);
   }
   if (source === 'LOCAL') {
     where.push('la.id IS NOT NULL');

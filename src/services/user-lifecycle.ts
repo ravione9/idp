@@ -12,6 +12,7 @@ import { query, queryOne } from '../db/connection.js';
 import { enqueueOutboxOps, getIdentityLinksForEmp } from '../utils/outbox.js';
 import { redis } from '../auth/session-store.js';
 import { appendAuditLog } from '../utils/audit-log.js';
+import { ILGState } from '../fsm/states.js';
 import logger from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -54,8 +55,8 @@ export async function suspendUser(empId: string, reason: string, initiatedBy: st
   }
 
   // Idempotent: already suspended
-  if (emp.ilg_state === 'SUSPENDED') {
-    logger.info({ empId }, 'suspendUser: employee already SUSPENDED, skipping');
+  if (emp.ilg_state === ILGState.SUSPENDED_HR) {
+    logger.info({ empId }, 'suspendUser: employee already SUSPENDED_HR, skipping');
     return;
   }
 
@@ -64,7 +65,7 @@ export async function suspendUser(empId: string, reason: string, initiatedBy: st
   // Update employee state
   await query(
     'UPDATE employees SET ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?',
-    ['SUSPENDED', empId],
+    [ILGState.SUSPENDED_HR, empId],
   );
 
   // Revoke sessions
@@ -89,8 +90,8 @@ export async function suspendUser(empId: string, reason: string, initiatedBy: st
   // Record lifecycle event
   await query(
     `INSERT INTO lifecycle_events (emp_id, event_type, old_state, new_state, reason, initiated_by)
-     VALUES (?, 'SUSPEND', ?, 'SUSPENDED', ?, ?)`,
-    [empId, oldState, reason, initiatedBy],
+     VALUES (?, 'SUSPEND', ?, ?, ?, ?)`,
+    [empId, oldState, ILGState.SUSPENDED_HR, reason, initiatedBy],
   );
 
   // Write audit log
@@ -98,7 +99,7 @@ export async function suspendUser(empId: string, reason: string, initiatedBy: st
     initiatedBy,
     'USER_SUSPEND',
     `employee:${empId}`,
-    { empId, reason, oldState, newState: 'SUSPENDED' },
+    { empId, reason, oldState, newState: ILGState.SUSPENDED_HR },
   ).catch((err) => logger.warn({ err }, 'Failed to write audit log for USER_SUSPEND'));
 
   logger.info({ empId, oldState, initiatedBy }, 'Employee suspended');
@@ -117,9 +118,9 @@ export async function unsuspendUser(empId: string, reason: string, initiatedBy: 
     throw new Error('Employee not found');
   }
 
-  // Idempotent: only unsuspend if currently SUSPENDED
-  if (emp.ilg_state !== 'SUSPENDED') {
-    logger.info({ empId, ilg_state: emp.ilg_state }, 'unsuspendUser: employee is not SUSPENDED, skipping');
+  // Idempotent: only unsuspend if currently admin-suspended
+  if (emp.ilg_state !== ILGState.SUSPENDED_HR) {
+    logger.info({ empId, ilg_state: emp.ilg_state }, 'unsuspendUser: employee is not SUSPENDED_HR, skipping');
     return;
   }
 
@@ -128,7 +129,7 @@ export async function unsuspendUser(empId: string, reason: string, initiatedBy: 
   // Update employee state
   await query(
     'UPDATE employees SET ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?',
-    ['ACTIVE', empId],
+    [ILGState.ACTIVE, empId],
   );
 
   // Enqueue ENABLE outbox ops for all identity links
@@ -149,8 +150,8 @@ export async function unsuspendUser(empId: string, reason: string, initiatedBy: 
   // Record lifecycle event
   await query(
     `INSERT INTO lifecycle_events (emp_id, event_type, old_state, new_state, reason, initiated_by)
-     VALUES (?, 'UNSUSPEND', ?, 'ACTIVE', ?, ?)`,
-    [empId, oldState, reason, initiatedBy],
+     VALUES (?, 'UNSUSPEND', ?, ?, ?, ?)`,
+    [empId, oldState, ILGState.ACTIVE, reason, initiatedBy],
   );
 
   // Write audit log
@@ -158,7 +159,7 @@ export async function unsuspendUser(empId: string, reason: string, initiatedBy: 
     initiatedBy,
     'USER_UNSUSPEND',
     `employee:${empId}`,
-    { empId, reason, oldState, newState: 'ACTIVE' },
+    { empId, reason, oldState, newState: ILGState.ACTIVE },
   ).catch((err) => logger.warn({ err }, 'Failed to write audit log for USER_UNSUSPEND'));
 
   logger.info({ empId, initiatedBy }, 'Employee unsuspended');
@@ -177,9 +178,9 @@ export async function terminateUser(empId: string, reason: string, initiatedBy: 
     throw new Error('Employee not found');
   }
 
-  // Idempotent: already terminated
-  if (emp.ilg_state === 'TERMINATED') {
-    logger.info({ empId }, 'terminateUser: employee already TERMINATED, skipping');
+  // Idempotent: already departed
+  if (emp.ilg_state === ILGState.DEPARTED || emp.ilg_state === ILGState.DEPROVISIONED) {
+    logger.info({ empId, ilg_state: emp.ilg_state }, 'terminateUser: employee already departed, skipping');
     return;
   }
 
@@ -188,7 +189,7 @@ export async function terminateUser(empId: string, reason: string, initiatedBy: 
   // Update employee state
   await query(
     'UPDATE employees SET ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?',
-    ['TERMINATED', empId],
+    [ILGState.DEPARTED, empId],
   );
 
   // Revoke all sessions
@@ -210,8 +211,8 @@ export async function terminateUser(empId: string, reason: string, initiatedBy: 
   // Record lifecycle event
   await query(
     `INSERT INTO lifecycle_events (emp_id, event_type, old_state, new_state, reason, initiated_by)
-     VALUES (?, 'TERMINATE', ?, 'TERMINATED', ?, ?)`,
-    [empId, oldState, reason, initiatedBy],
+     VALUES (?, 'TERMINATE', ?, ?, ?, ?)`,
+    [empId, oldState, ILGState.DEPARTED, reason, initiatedBy],
   );
 
   // Write audit log
@@ -219,7 +220,7 @@ export async function terminateUser(empId: string, reason: string, initiatedBy: 
     initiatedBy,
     'USER_TERMINATE',
     `employee:${empId}`,
-    { empId, reason, oldState, newState: 'TERMINATED' },
+    { empId, reason, oldState, newState: ILGState.DEPARTED },
   ).catch((err) => logger.warn({ err }, 'Failed to write audit log for USER_TERMINATE'));
 
   logger.info({ empId, oldState, initiatedBy }, 'Employee terminated');

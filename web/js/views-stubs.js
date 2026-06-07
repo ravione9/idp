@@ -3044,11 +3044,9 @@ function initUsersTab(panel, me = null) {
         <option value="AWS_IDC">AWS IDC</option>
       </select>
       <select class="form-select" id="ud-state-filter">
-        <option value="">All States</option>
-        <option value="ACTIVE">Active</option>
+        <option value="">Available</option>
         <option value="SUSPENDED">Suspended</option>
-        <option value="TERMINATED">Terminated</option>
-        <option value="INACTIVE">Inactive</option>
+        <option value="__all__">All states</option>
       </select>
       <div class="filter-toolbar-spacer"></div>
       <button class="btn btn-secondary btn-sm" id="ud-refresh-btn">Refresh</button>
@@ -3064,7 +3062,9 @@ function initUsersTab(panel, me = null) {
   async function loadUsers(q = '', state = '', source = '') {
     panel.querySelector('#ud-table-area').innerHTML = loading();
     try {
-      const r = await api.listUsersUnified(q, state, source, 200, 0);
+      const includeInactive = state === '__all__';
+      const apiState = includeInactive ? '' : state;
+      const r = await api.listUsersUnified(q, apiState, source, 200, 0, includeInactive);
       allUsers = Array.isArray(r) ? r : (r?.data ?? []);
       renderStats(allUsers);
       renderTable(allUsers);
@@ -3260,9 +3260,9 @@ function initUsersTab(panel, me = null) {
 
       // Lifecycle buttons
       const state        = (emp.ilg_state || '').toUpperCase();
-      const canSuspend   = state === 'ACTIVE';
-      const canUnsuspend = state === 'SUSPENDED';
-      const canTerminate = state !== 'TERMINATED';
+      const canSuspend   = state === 'ACTIVE' || state === 'REACTIVATED';
+      const canUnsuspend = state === 'SUSPENDED_HR';
+      const canTerminate = state !== 'DEPARTED' && state !== 'DEPROVISIONED';
 
       overlay.querySelector('#pp-lifecycle').innerHTML = [
         canSuspend   ? `<button class="btn btn-sm btn-warning"  id="pp-btn-suspend">⏸ Suspend</button>`    : '',

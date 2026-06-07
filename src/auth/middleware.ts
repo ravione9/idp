@@ -218,8 +218,9 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
 
     // Lookup employee by corporate email
     const emp = await queryOne<{ emp_id: string; role: string }>(
-      'SELECT emp_id, role FROM employees WHERE email_corp = ? AND ilg_state = ?',
-      [email, 'ACTIVE'],
+      `SELECT emp_id, role FROM employees
+        WHERE email_corp = ? AND ilg_state IN ('ACTIVE', 'REACTIVATED')`,
+      [email],
     );
 
     if (!emp) {

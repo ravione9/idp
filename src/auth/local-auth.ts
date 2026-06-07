@@ -36,6 +36,7 @@ import {
 import { authenticateAdCorporateUser } from '../services/ad-auth.js';
 import { getClientIp } from '../utils/request-context.js';
 import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
+import { isPortalAccessible } from '../fsm/states.js';
 
 const MFA_CHALLENGE_PREFIX        = 'lilg:mfa-challenge:';
 const MFA_ENROLL_CHALLENGE_PREFIX = 'lilg:mfa-enroll-challenge:';
@@ -294,6 +295,12 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
         }
         account = adAccount; // refreshed account with updated hash
       }
+    }
+
+    if (!isPortalAccessible(account.ilg_state)) {
+      await logAttempt(email, ip, false, `account-suspended:${account.ilg_state}`);
+      res.status(403).json({ error: 'Account is suspended', code: 'ACCOUNT_SUSPENDED' });
+      return;
     }
 
     // ── Adaptive auth evaluation (risk engine) ───────────────────────────────

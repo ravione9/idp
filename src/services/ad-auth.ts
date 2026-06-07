@@ -11,9 +11,9 @@ import logger from '../utils/logger.js';
 import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import { hashPassword } from './local-admin.js';
 import { backfillAdIdentityLinkIfMissing } from './ad-sync.js';
+import { isPortalAccessible } from '../fsm/states.js';
 
 const VALID_ROLES = new Set(['USER', 'MANAGER', 'HRBP', 'ADMIN', 'SUPER_ADMIN']);
-const BLOCKED_ILG_STATES = new Set(['DEPARTED', 'DEPROVISIONED']);
 
 type ConnectionAttempt = { useSsl?: boolean; startTls?: boolean; port?: number; label: string };
 
@@ -174,8 +174,8 @@ export async function authenticateAdCorporateUser(
     logger.info({ email: normalizedEmail }, 'AD login: no employee row for corporate email');
     return null;
   }
-  if (BLOCKED_ILG_STATES.has(employee.ilg_state)) {
-    logger.info({ email: normalizedEmail, ilg_state: employee.ilg_state }, 'AD login: employee lifecycle blocked');
+  if (!isPortalAccessible(employee.ilg_state)) {
+    logger.info({ email: normalizedEmail, ilg_state: employee.ilg_state }, 'AD login: employee not portal-accessible');
     return null;
   }
 
@@ -227,13 +227,6 @@ export async function authenticateAdCorporateUser(
     } finally {
       await adapter.disconnect().catch(() => undefined);
     }
-  }
-
-  if (!['ACTIVE', 'REACTIVATED'].includes(employee.ilg_state)) {
-    await execute(
-      `UPDATE employees SET ilg_state = 'ACTIVE', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
-      [effectiveEmpId],
-    );
   }
 
   const portalAccount = await queryOne<{ role: string }>(

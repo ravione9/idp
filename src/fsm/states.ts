@@ -102,6 +102,18 @@ export const VALID_TRANSITIONS: Record<ILGState, ILGState[]> = {
 };
 
 // ---------------------------------------------------------------------------
+// Portal access — login and Universal Directory visibility
+// ---------------------------------------------------------------------------
+export const PORTAL_ACCESSIBLE_STATES: readonly ILGState[] = [
+  ILGState.ACTIVE,
+  ILGState.REACTIVATED,
+];
+
+export function isPortalAccessible(state: string): boolean {
+  return (PORTAL_ACCESSIBLE_STATES as readonly string[]).includes(state);
+}
+
+// ---------------------------------------------------------------------------
 // Validate a transition
 // ---------------------------------------------------------------------------
 export function isValidTransition(from: ILGState, to: ILGState): boolean {

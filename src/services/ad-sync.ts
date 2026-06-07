@@ -437,8 +437,6 @@ async function importAdDirectoryUsers(
       const fullName = cleanAdDisplayName(adUser, sam);
       const uac = parseInt(getLdapAttr(adUser, 'userAccountControl') || '512', 10);
       const disabled = (uac & 0x0002) !== 0;
-      const linkStatus = disabled ? 'DISABLED' : 'ACTIVE';
-      const ilgState = disabled ? 'SUSPENDED_AUTO' : 'ACTIVE';
       const department = getLdapAttr(adUser, 'department').trim().slice(0, 50) || null;
       const title      = getLdapAttr(adUser, 'title').trim().slice(0, 100) || null;
 
@@ -452,6 +450,26 @@ async function importAdDirectoryUsers(
         `SELECT emp_id FROM employees WHERE emp_id = ?`,
         [empId],
       );
+
+      if (disabled) {
+        if (exists) {
+          await execute(
+            `UPDATE employees
+                SET full_name = ?, email_corp = ?, dept_id = ?, role = ?,
+                    ilg_state = 'SUSPENDED_AUTO', updated_at = UTC_TIMESTAMP()
+              WHERE emp_id = ?`,
+            [fullName, email, department, title, empId],
+          );
+          await upsertAdIdentityLink(empId, sam, 'DISABLED');
+          linked++;
+        }
+        skipped++;
+        succeeded++;
+        continue;
+      }
+
+      const linkStatus = 'ACTIVE';
+      const ilgState = 'ACTIVE';
 
       if (exists) {
         await execute(

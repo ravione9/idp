@@ -139,13 +139,41 @@ async function importGoogleDirectoryUsers(
 
       const fullName = gUser.name?.fullName?.trim() || email.split('@')[0] || email;
       const suspended = gUser.suspended === true;
-      const linkStatus = suspended ? 'DISABLED' : 'ACTIVE';
-      const ilgState = suspended ? 'SUSPENDED_AUTO' : 'ACTIVE';
 
       const existingLink = await queryOne<{ id: number; emp_id: string }>(
         `SELECT id, emp_id FROM identity_links WHERE \`system\` = 'GOOGLE' AND external_id = ?`,
         [googleId],
       );
+
+      if (suspended) {
+        if (existingLink) {
+          await upsertGoogleIdentityLink(existingLink.emp_id, googleId, 'DISABLED');
+          await execute(
+            `UPDATE employees SET full_name = ?, ilg_state = 'SUSPENDED_AUTO', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+            [fullName, existingLink.emp_id],
+          );
+          linked++;
+        } else {
+          const byEmail = await queryOne<{ emp_id: string }>(
+            `SELECT emp_id FROM employees WHERE email_corp = ?`,
+            [email],
+          );
+          if (byEmail) {
+            await execute(
+              `UPDATE employees SET full_name = ?, ilg_state = 'SUSPENDED_AUTO', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+              [fullName, byEmail.emp_id],
+            );
+            await upsertGoogleIdentityLink(byEmail.emp_id, googleId, 'DISABLED');
+            linked++;
+          }
+        }
+        skipped++;
+        succeeded++;
+        continue;
+      }
+
+      const linkStatus = 'ACTIVE';
+      const ilgState = 'ACTIVE';
 
       if (existingLink) {
         await upsertGoogleIdentityLink(existingLink.emp_id, googleId, linkStatus);
