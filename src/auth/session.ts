@@ -53,9 +53,8 @@ export async function createSession(params: {
   ttlHours:        number;
   ip:              string;
   userAgent:       string;
-  clientHostname?:  string | null;
-  clientLocalIp?:   string | null;
-  clientMac?:       string | null;
+  clientHostname?: string | null;
+  clientLocalIp?:  string | null;
 }): Promise<string> {
   const sessionId  = uuidv4();
   const expiresAt  = new Date(Date.now() + params.ttlHours * 3600 * 1000);
@@ -63,12 +62,12 @@ export async function createSession(params: {
   await query(
     `INSERT INTO idp_sessions
        (session_id, emp_id, iss, sub, email, role, created_at, last_active_at, expires_at,
-        ip, user_agent, client_hostname, client_local_ip, client_mac)
-     VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), ?, ?, ?, ?, ?, ?)`,
+        ip, user_agent, client_hostname, client_local_ip)
+     VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), ?, ?, ?, ?, ?)`,
     [sessionId, params.empId, params.iss, params.sub, params.email, params.role,
      expiresAt.toISOString().slice(0, 19).replace('T', ' '),
      params.ip, params.userAgent,
-     params.clientHostname ?? null, params.clientLocalIp ?? null, params.clientMac ?? null],
+     params.clientHostname ?? null, params.clientLocalIp ?? null],
   );
 
   const user: LilgUser = {

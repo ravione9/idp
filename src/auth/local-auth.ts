@@ -27,9 +27,8 @@ const MFA_CHALLENGE_PREFIX = 'lilg:mfa-challenge:';
 const MFA_CHALLENGE_TTL_S  = 300; // 5 min
 
 const deviceContextField = z.object({
-  hostname:   z.string().max(255).optional(),
-  localIp:    z.string().max(45).optional(),
-  macAddress: z.string().max(17).optional(),
+  hostname: z.string().max(255).optional(),
+  localIp:  z.string().max(45).optional(),
 }).partial().optional();
 
 const loginSchema = z.object({
@@ -51,7 +50,6 @@ interface MfaChallenge {
   createdAt:       number;
   clientHostname?: string | null;
   clientLocalIp?:  string | null;
-  clientMac?:      string | null;
 }
 
 async function logAttempt(email: string, ip: string, success: boolean, reason?: string): Promise<void> {
@@ -69,7 +67,7 @@ async function issueSessionAndRespond(
   res:       Response,
   req:       Request,
   account:   { id: number; emp_id: string; email: string; role: string },
-  device?:   { hostname: string | null; localIp: string | null; macAddress: string | null } | null,
+  device?:   { hostname: string | null; localIp: string | null } | null,
 ): Promise<void> {
   // Server-side: extract the client's internal LAN IP from the X-Forwarded-For chain.
   // When a corporate proxy/VPN adds the workstation IP to forwarding headers, this
@@ -87,7 +85,6 @@ async function issueSessionAndRespond(
     userAgent:      req.get('user-agent') ?? '',
     clientHostname: device?.hostname ?? null,
     clientLocalIp:  device?.localIp ?? headerLocalIp ?? null,
-    clientMac:      device?.macAddress ?? null,
   });
 
   // Background: reverse-DNS the internal IP to resolve hostname (like email Received: headers).
@@ -148,7 +145,6 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
         createdAt:      Date.now(),
         clientHostname: deviceContext?.hostname ?? null,
         clientLocalIp:  deviceContext?.localIp ?? null,
-        clientMac:      deviceContext?.macAddress ?? null,
       };
       await redis.set(
         `${MFA_CHALLENGE_PREFIX}${challengeId}`,
@@ -200,8 +196,7 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
     email:  challenge.email,
     role:   challenge.role,
   }, {
-    hostname:   challenge.clientHostname ?? null,
-    localIp:    challenge.clientLocalIp ?? null,
-    macAddress: challenge.clientMac ?? null,
+    hostname: challenge.clientHostname ?? null,
+    localIp:  challenge.clientLocalIp ?? null,
   });
 }

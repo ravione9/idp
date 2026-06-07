@@ -83,7 +83,7 @@ router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
   const rows = await query<Record<string, unknown>>(
     `SELECT session_id, iss, created_at, last_active_at, expires_at, ip, user_agent,
-            client_hostname, client_local_ip, client_mac, revoked_at
+            client_hostname, client_local_ip, revoked_at
        FROM idp_sessions
       WHERE emp_id = ? AND expires_at > UTC_TIMESTAMP() AND revoked_at IS NULL
       ORDER BY last_active_at DESC`,
@@ -106,20 +106,18 @@ router.post('/sessions/device-context', async (req: Request, res: Response): Pro
   const device = sanitizeDeviceContext(req.body);
   const headerLocalIp = findClientLocalIp(req);
 
-  const effectiveLocalIp   = device?.localIp   ?? headerLocalIp ?? null;
-  const effectiveHostname   = device?.hostname  ?? null;
-  const effectiveMac        = device?.macAddress ?? null;
+  const effectiveLocalIp  = device?.localIp  ?? headerLocalIp ?? null;
+  const effectiveHostname = device?.hostname ?? null;
 
   await query(
     `UPDATE idp_sessions
         SET client_hostname = COALESCE(client_hostname, ?),
-            client_local_ip  = COALESCE(client_local_ip, ?),
-            client_mac       = COALESCE(client_mac, ?)
+            client_local_ip  = COALESCE(client_local_ip, ?)
       WHERE session_id = ? AND emp_id = ? AND revoked_at IS NULL`,
-    [effectiveHostname, effectiveLocalIp, effectiveMac, user.sessionId, user.empId],
+    [effectiveHostname, effectiveLocalIp, user.sessionId, user.empId],
   );
 
-  // Background: reverse-DNS on internal IP for hostname (fires even if client sent nothing)
+  // Background: reverse-DNS on internal IP for hostname
   if (!effectiveHostname) {
     enrichSessionHostname(user.sessionId, effectiveLocalIp, (sid, hostname) =>
       query(

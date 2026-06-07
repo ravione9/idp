@@ -754,12 +754,11 @@ export async function viewSettings(me, content) {
         <td class="muted" style="font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.ip || '—')}</td>
         <td class="muted" style="font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.client_local_ip || '—')}</td>
         <td class="muted">${esc(s.client_hostname || '—')}</td>
-        <td class="muted" style="font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.client_mac || '—')}</td>
         <td class="actions"><button class="btn btn-sm btn-danger" data-revoke="${esc(s.session_id)}">${s.isCurrent ? 'Sign out' : 'Revoke'}</button></td>
-      </tr>`).join('') : `<tr><td colspan="9" class="empty-state"><span class="empty-icon">◌</span>No active sessions</td></tr>`;
+      </tr>`).join('') : `<tr><td colspan="8" class="empty-state"><span class="empty-icon">◌</span>No active sessions</td></tr>`;
       target.innerHTML = `<div class="table-wrap"><div class="table-toolbar">
         <strong>Active sessions</strong><span class="muted">${rows.length} session${rows.length === 1 ? '' : 's'}</span></div>
-        <table><thead><tr><th>Session</th><th>Issuer</th><th>Last active</th><th>Expires</th><th>Public IP</th><th>Local IP</th><th>Hostname</th><th>MAC</th><th></th></tr></thead>
+        <table><thead><tr><th>Session</th><th>Issuer</th><th>Last active</th><th>Expires</th><th>Public IP</th><th>Local IP</th><th>Hostname</th><th></th></tr></thead>
         <tbody>${body}</tbody></table></div>`;
       target.querySelectorAll('[data-revoke]').forEach((btn) => {
         btn.addEventListener('click', async () => {
