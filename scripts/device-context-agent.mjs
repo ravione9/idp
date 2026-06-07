@@ -2,28 +2,31 @@
 /**
  * Lenskart IdP — Local device-context agent
  *
- * Serves hostname, local LAN IP, and MAC on http://127.0.0.1:17891/device-context
- * so the IdP login page can attribute sessions to the correct workstation.
+ * Serves the workstation hostname and local LAN IP on:
+ *   http://127.0.0.1:17891/device-context
  *
- * INSTALLATION (Windows — run once per machine, no admin required):
- *   node scripts/device-context-agent.mjs
+ * The browser login page reads this so sessions show the actual machine name
+ * (e.g. L-PG049BBQ) — impossible to get from a web page any other way.
  *
- * AUTO-START (Windows, admin required):
- *   powershell -ExecutionPolicy Bypass -File scripts/install-device-agent.ps1
+ * ─── QUICK START (no admin, Windows) ────────────────────────────────────────
+ *   node scripts\device-context-agent.mjs
  *
- * QUICK TEST (PowerShell):
- *   Invoke-RestMethod http://127.0.0.1:17891/device-context
+ * ─── AUTO-START AT LOGON (no admin) ─────────────────────────────────────────
+ *   Copy  scripts\start-device-agent.bat  and  scripts\device-context-agent.mjs
+ *   to:   %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\
+ *   (or open shell: explorer shell:startup)
+ *
+ * ─── AUTO-START AS SCHEDULED TASK (admin) ────────────────────────────────────
+ *   powershell -ExecutionPolicy Bypass -File scripts\install-device-agent.ps1
+ *
+ * ─── VERIFY ──────────────────────────────────────────────────────────────────
+ *   PowerShell:  Invoke-RestMethod http://127.0.0.1:17891/device-context
+ *   CMD:         curl http://127.0.0.1:17891/device-context
  */
 import http from 'node:http';
 import os from 'node:os';
 
 const PORT = parseInt(process.env['DEVICE_CONTEXT_PORT'] || '17891', 10);
-
-function formatMac(raw) {
-  const hex = String(raw || '').replace(/[^0-9a-f]/gi, '').toUpperCase();
-  if (hex.length !== 12) return null;
-  return hex.match(/.{2}/g).join(':');
-}
 
 function pickBestInterface() {
   const ifaces = os.networkInterfaces();
@@ -38,17 +41,11 @@ function pickBestInterface() {
     for (const addr of addrs) {
       if (addr.family !== 'IPv4' || addr.internal) continue;
 
-      // Score: prefer Ethernet > Wi-Fi > other
       let score = 2;
-      if (/^(ethernet|eth|en\d|局域网)/.test(lower)) score = 0;
-      else if (/^(wi-?fi|wlan|wl\d|airport)/.test(lower)) score = 1;
+      if (/^(ethernet|eth|en\d|局域网|이더넷)/.test(lower)) score = 0;
+      else if (/^(wi-?fi|wlan|wl\d|airport|무선)/.test(lower)) score = 1;
 
-      candidates.push({
-        name,
-        address: addr.address,
-        mac: formatMac(addr.mac),
-        score,
-      });
+      candidates.push({ name, address: addr.address, score });
     }
   }
 
@@ -58,43 +55,30 @@ function pickBestInterface() {
 
 function buildPayload() {
   const hostname = os.hostname().trim() || null;
-  const iface = pickBestInterface();
-
-  let mac = iface?.mac || null;
-  // Fall back: parse MAC from LOC-{12hexchars} style AD hostnames
-  if (!mac && hostname) {
-    const m = hostname.match(/^LOC-([0-9A-F]{12})$/i);
-    if (m) mac = formatMac(m[1]);
-  }
-
+  const iface    = pickBestInterface();
   return {
     hostname,
-    localIp:    iface?.address || null,
-    macAddress: mac,
+    localIp: iface?.address || null,
   };
 }
 
 const ALLOWED_ORIGINS = [
-  'http://localhost',
-  'http://127.0.0.1',
   'https://idp.lenskart.com',
   'http://192.168.24.254:8080',
+  'http://localhost:8080',
+  'http://127.0.0.1:8080',
 ];
 
 const server = http.createServer((req, res) => {
-  const origin = req.headers['origin'] || '';
-  const corsOrigin = ALLOWED_ORIGINS.find((o) => origin.startsWith(o)) ? origin : ALLOWED_ORIGINS[2];
+  const origin     = req.headers['origin'] || '';
+  const corsOrigin = ALLOWED_ORIGINS.find((o) => origin.startsWith(o)) ? origin : ALLOWED_ORIGINS[0];
 
   res.setHeader('Access-Control-Allow-Origin', corsOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Vary', 'Origin');
 
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
   if (req.url !== '/device-context') {
     res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -117,13 +101,12 @@ server.on('error', (err) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  const payload = buildPayload();
+  const p = buildPayload();
   process.stdout.write([
-    `Lenskart IdP device-context agent`,
+    'Lenskart IdP — device-context agent',
     `  Listening : http://127.0.0.1:${PORT}/device-context`,
-    `  Hostname  : ${payload.hostname || '—'}`,
-    `  Local IP  : ${payload.localIp  || '—'}`,
-    `  MAC       : ${payload.macAddress || '—'}`,
+    `  Hostname  : ${p.hostname  || '—'}`,
+    `  Local IP  : ${p.localIp   || '—'}`,
     '',
   ].join('\n'));
 });
