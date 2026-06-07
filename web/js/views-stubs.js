@@ -642,29 +642,154 @@ export async function viewMfaMethods(content) {
 }
 
 // ─── 5. Adaptive Auth ─────────────────────────────────────────────────────────
+
+const AA_CONDITION_TYPES = [
+  { type: 'IP_RANGE', label: 'IP Range / CIDR', hint: 'Comma-separated prefixes, e.g. 10.0.0.0/8, 192.168.' },
+  { type: 'NETWORK_TYPE', label: 'Network Type', options: ['CORPORATE', 'EXTERNAL', 'TOR', 'PROXY'] },
+  { type: 'DEVICE_MANAGED', label: 'Device Managed' },
+  { type: 'NEW_DEVICE', label: 'New Device (not seen before)' },
+  { type: 'IMPOSSIBLE_TRAVEL', label: 'Impossible Travel' },
+  { type: 'COUNTRY', label: 'Country (ISO code)' },
+  { type: 'USER_ROLE', label: 'User Role', options: ['ADMIN', 'SUPER_ADMIN', 'IT_OPS', 'SECURITY', 'EMPLOYEE'] },
+  { type: 'RISK_SCORE', label: 'Risk Score (0–100)' },
+  { type: 'SENSITIVE_APP', label: 'Sensitive Application' },
+  { type: 'TOR_PROXY', label: 'TOR / Proxy IP' },
+];
+
+const AA_ACTIONS = ['ALLOW', 'MFA', 'STEP_UP', 'DENY', 'BLOCK'];
+
+function parseAaConditions(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function summarizeAaConditions(raw) {
+  const labels = parseAaConditions(raw).map(c => {
+    const meta = AA_CONDITION_TYPES.find(t => t.type === c.type);
+    return meta?.label || c.type;
+  });
+  return labels.length ? labels.join(', ') : '—';
+}
+
+function aaTypeOptions(selected = 'NEW_DEVICE') {
+  return AA_CONDITION_TYPES.map(t =>
+    `<option value="${esc(t.type)}"${t.type === selected ? ' selected' : ''}>${esc(t.label)}</option>`,
+  ).join('');
+}
+
+function aaMultiOptions(options, selected = []) {
+  const sel = new Set((selected || []).map(v => String(v).toUpperCase()));
+  return options.map(o => `<option value="${esc(o)}"${sel.has(o) ? ' selected' : ''}>${esc(o)}</option>`).join('');
+}
+
+function aaFieldsHtml(type, cond = {}) {
+  switch (type) {
+    case 'IP_RANGE':
+      return `<input class="form-input aa-field" data-f="values" placeholder="10.0.0.0/8, 192.168." value="${esc((cond.values || []).join(', '))}" style="flex:2">`;
+    case 'NETWORK_TYPE':
+    case 'USER_ROLE':
+      return `<select class="form-select aa-field" data-f="values" multiple style="flex:2;min-height:2.4rem">${aaMultiOptions(AA_CONDITION_TYPES.find(t => t.type === type).options, cond.values)}</select>`;
+    case 'DEVICE_MANAGED':
+      return `<select class="form-select aa-field" data-f="value" style="flex:1">
+        <option value="true"${String(cond.value).toLowerCase() === 'true' ? ' selected' : ''}>Managed device</option>
+        <option value="false"${String(cond.value).toLowerCase() !== 'true' ? ' selected' : ''}>Unmanaged device</option>
+      </select>`;
+    case 'COUNTRY':
+      return `<select class="form-select aa-field" data-f="op" style="flex:0.8">
+        <option value="in"${cond.op !== 'not_in' ? ' selected' : ''}>Is in</option>
+        <option value="not_in"${cond.op === 'not_in' ? ' selected' : ''}>Is not in</option>
+      </select>
+      <input class="form-input aa-field" data-f="values" placeholder="US, IN, GB" value="${esc((cond.values || []).join(', '))}" style="flex:1.5">`;
+    case 'RISK_SCORE':
+      return `<select class="form-select aa-field" data-f="op" style="flex:0.8">
+        <option value="gt"${cond.op === 'gt' ? ' selected' : ''}>&gt;</option>
+        <option value="gte"${!cond.op || cond.op === 'gte' ? ' selected' : ''}>&gt;=</option>
+        <option value="lt"${cond.op === 'lt' ? ' selected' : ''}>&lt;</option>
+        <option value="lte"${cond.op === 'lte' ? ' selected' : ''}>&lt;=</option>
+      </select>
+      <input class="form-input aa-field" data-f="value" type="number" min="0" max="100" value="${esc(String(cond.value ?? 60))}" style="flex:0.8">`;
+    default:
+      return `<span class="muted" style="flex:2;font-size:0.82rem">No extra settings — matches when this signal is detected.</span>`;
+  }
+}
+
+function mountAaConditionRow(container, cond = {}) {
+  const type = cond.type || 'NEW_DEVICE';
+  const row = el(`<div class="form-check-row aa-cond-row" style="gap:0.5rem;margin-bottom:0.5rem;align-items:flex-start">
+    <select class="form-select aa-type" style="flex:1.2">${aaTypeOptions(type)}</select>
+    <div class="aa-fields" style="display:flex;gap:0.5rem;flex:2;align-items:center">${aaFieldsHtml(type, cond)}</div>
+    <button type="button" class="btn btn-sm btn-danger aa-remove" title="Remove condition">×</button>
+  </div>`);
+  const syncFields = () => {
+    const nextType = row.querySelector('.aa-type').value;
+    row.querySelector('.aa-fields').innerHTML = aaFieldsHtml(nextType, { type: nextType });
+  };
+  row.querySelector('.aa-type').addEventListener('change', syncFields);
+  row.querySelector('.aa-remove').addEventListener('click', () => {
+    const rows = container.querySelectorAll('.aa-cond-row');
+    if (rows.length <= 1) return;
+    row.remove();
+  });
+  container.appendChild(row);
+  return row;
+}
+
+function collectAaConditions(container) {
+  const conditions = [];
+  for (const row of container.querySelectorAll('.aa-cond-row')) {
+    const type = row.querySelector('.aa-type').value;
+    const cond = { type };
+    if (type === 'IP_RANGE' || type === 'COUNTRY') {
+      const raw = row.querySelector('[data-f="values"]')?.value || '';
+      const values = raw.split(',').map(v => v.trim()).filter(Boolean);
+      if (!values.length) return { error: `${AA_CONDITION_TYPES.find(t => t.type === type)?.label || type} requires at least one value` };
+      cond.values = type === 'COUNTRY' ? values.map(v => v.toUpperCase()) : values;
+      if (type === 'COUNTRY') cond.op = row.querySelector('[data-f="op"]')?.value || 'in';
+    } else if (type === 'NETWORK_TYPE' || type === 'USER_ROLE') {
+      const values = [...row.querySelector('[data-f="values"]').selectedOptions].map(o => o.value);
+      if (!values.length) return { error: `${AA_CONDITION_TYPES.find(t => t.type === type)?.label || type} requires at least one selection` };
+      cond.values = values;
+    } else if (type === 'DEVICE_MANAGED') {
+      cond.value = row.querySelector('[data-f="value"]')?.value || 'false';
+    } else if (type === 'RISK_SCORE') {
+      cond.op = row.querySelector('[data-f="op"]')?.value || 'gte';
+      const value = Number(row.querySelector('[data-f="value"]')?.value);
+      if (Number.isNaN(value)) return { error: 'Risk score must be a number between 0 and 100' };
+      cond.value = value;
+    }
+    conditions.push(cond);
+  }
+  if (!conditions.length) return { error: 'Add at least one condition' };
+  return { conditions };
+}
+
 export async function viewAdaptiveAuth(content) {
   content.replaceChildren(el(`<div>${header('Adaptive Authentication', 'Risk-based authentication policies', `<button class="btn btn-primary" id="new-aa-btn">+ New Policy</button>`)}<div id="list-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
+  const policyCache = new Map();
 
   async function load() {
     try {
       const policies = norm(await api.listAdaptivePolicies());
-      const actionBadge = a => ({ ALLOW: 'badge-success', MFA_REQUIRED: 'badge-warning', DENY: 'badge-danger', BLOCK: 'badge-danger' }[a] || 'badge-neutral');
-      const rows = policies.length ? policies.map(p => {
-        let condSummary = '';
-        try { const c = JSON.parse(p.conditions_json || '{}'); condSummary = Object.keys(c).join(', ') || '—'; } catch { condSummary = '—'; }
-        return `<tr>
+      policyCache.clear();
+      policies.forEach(p => policyCache.set(String(p.id), p));
+      const actionBadge = a => ({ ALLOW: 'badge-success', MFA: 'badge-warning', MFA_REQUIRED: 'badge-warning', STEP_UP: 'badge-warning', DENY: 'badge-danger', BLOCK: 'badge-danger' }[a] || 'badge-neutral');
+      const rows = policies.length ? policies.map(p => `<tr>
           <td class="cell-strong">${esc(p.name)}</td>
-          <td class="muted" style="font-size:0.8rem">${esc(condSummary)}</td>
+          <td class="muted" style="font-size:0.8rem">${esc(summarizeAaConditions(p.conditions_json))}</td>
           <td><span class="badge ${actionBadge(p.action)}">${esc(p.action)}</span></td>
           <td>${p.priority ?? '—'}</td>
           <td>${p.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary edit-aa" data-id="${esc(String(p.id))}" data-name="${esc(p.name)}" data-desc="${esc(p.description||'')}" data-cond="${esc(p.conditions_json||'{}')}" data-action="${esc(p.action||'ALLOW')}" data-pri="${esc(String(p.priority||0))}">Edit</button>
+            <button class="btn btn-sm btn-secondary edit-aa" data-id="${esc(String(p.id))}">Edit</button>
             <button class="btn btn-sm btn-danger del-aa" data-id="${esc(String(p.id))}">Delete</button>
           </td>
-        </tr>`;
-      }).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No adaptive policies.</p></div></td></tr>`;
+        </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No adaptive policies.</p></div></td></tr>`;
       wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Conditions</th><th>Action</th><th>Priority</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
       wrap.querySelectorAll('.del-aa').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -673,30 +798,53 @@ export async function viewAdaptiveAuth(content) {
         });
       });
       wrap.querySelectorAll('.edit-aa').forEach(btn => {
-        btn.addEventListener('click', () => openAaModal(btn.dataset.id, { name: btn.dataset.name, description: btn.dataset.desc, conditions_json: btn.dataset.cond, action: btn.dataset.action, priority: btn.dataset.pri }));
+        btn.addEventListener('click', () => {
+          const p = policyCache.get(btn.dataset.id);
+          if (!p) return;
+          openAaModal(p.id, p);
+        });
       });
     } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
   }
 
   function openAaModal(id, defaults = {}) {
     const isEdit = !!id;
-    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${isEdit ? 'Edit' : 'New'} Adaptive Policy</h2></div><div class="modal-body">
+    const action = defaults.action === 'MFA_REQUIRED' ? 'MFA' : (defaults.action || 'MFA');
+    const actionOpts = AA_ACTIONS.map(a => `<option value="${a}"${a === action ? ' selected' : ''}>${a}</option>`).join('');
+    const initialConditions = parseAaConditions(defaults.conditions_json);
+    const bd = openModal(`<div class="modal modal-wide"><div class="modal-header"><h2>${isEdit ? 'Edit' : 'New'} Adaptive Policy</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="aa-name" value="${esc(defaults.name||'')}"></div>
       <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="aa-desc" value="${esc(defaults.description||'')}"></div>
-      <div class="form-group"><label class="form-label">Conditions JSON</label><textarea class="form-textarea" id="aa-cond" rows="4">${esc(defaults.conditions_json||'{}')}</textarea></div>
-      <div class="form-group"><label class="form-label">Action</label><select class="form-select" id="aa-action">
-        <option ${defaults.action==='ALLOW'?'selected':''}>ALLOW</option>
-        <option ${defaults.action==='MFA_REQUIRED'?'selected':''}>MFA_REQUIRED</option>
-        <option ${defaults.action==='DENY'?'selected':''}>DENY</option>
-        <option ${defaults.action==='BLOCK'?'selected':''}>BLOCK</option>
-      </select></div>
-      <div class="form-group"><label class="form-label">Priority</label><input class="form-input" id="aa-pri" type="number" value="${esc(String(defaults.priority||10))}"></div>
+      <div class="form-group">
+        <label class="form-label">Conditions</label>
+        <p class="muted" style="font-size:0.78rem;margin:0 0 0.5rem">All conditions must match (AND). Lower priority numbers are evaluated first.</p>
+        <div id="aa-conditions"></div>
+        <button type="button" class="btn btn-sm btn-secondary" id="aa-add-cond" style="margin-top:0.35rem">+ Add Condition</button>
+      </div>
+      <div class="form-group"><label class="form-label">Action</label><select class="form-select" id="aa-action">${actionOpts}</select></div>
+      <div class="form-group"><label class="form-label">Priority</label><input class="form-input" id="aa-pri" type="number" value="${esc(String(defaults.priority ?? 10))}"></div>
       <div id="aa-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="aa-save">${isEdit ? 'Update' : 'Create'}</button><button class="btn btn-secondary" id="aa-cancel">Cancel</button></div></div>`);
+    const condContainer = bd.querySelector('#aa-conditions');
+    if (initialConditions.length) {
+      initialConditions.forEach(c => mountAaConditionRow(condContainer, c));
+    } else {
+      mountAaConditionRow(condContainer, { type: 'NEW_DEVICE' });
+    }
+    bd.querySelector('#aa-add-cond').addEventListener('click', () => mountAaConditionRow(condContainer));
     bd.querySelector('#aa-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#aa-save').addEventListener('click', async () => {
-      const data = { name: bd.querySelector('#aa-name').value, description: bd.querySelector('#aa-desc').value, conditions_json: bd.querySelector('#aa-cond').value, action: bd.querySelector('#aa-action').value, priority: parseInt(bd.querySelector('#aa-pri').value)||10 };
-      if (!data.name) { bd.querySelector('#aa-err').innerHTML = errHtml('Name required'); return; }
+      const name = bd.querySelector('#aa-name').value.trim();
+      if (!name) { bd.querySelector('#aa-err').innerHTML = errHtml('Name required'); return; }
+      const collected = collectAaConditions(condContainer);
+      if (collected.error) { bd.querySelector('#aa-err').innerHTML = errHtml(collected.error); return; }
+      const data = {
+        name,
+        description: bd.querySelector('#aa-desc').value.trim() || null,
+        conditions_json: collected.conditions,
+        action: bd.querySelector('#aa-action').value,
+        priority: parseInt(bd.querySelector('#aa-pri').value, 10) || 10,
+      };
       try {
         if (isEdit) await api.updateAdaptivePolicy(id, data); else await api.createAdaptivePolicy(data);
         bd.remove(); await load();
@@ -1242,6 +1390,15 @@ function wizColour(name = '') { return WIZ_ICON_COLOURS[name.charCodeAt(0) % WIZ
 
 // Vendor-specific setup tips. Anything not in the table falls back to generic instructions.
 const VENDOR_TIPS = {
+  'custom-oidc': {
+    docsUrl: null,
+    setupSteps: [
+      'Open your application\'s <strong>OAuth 2.0 / OpenID Connect</strong> provider settings.',
+      'Paste the <strong>IdP endpoints</strong> from step 2 (discovery URL is usually enough).',
+      'Copy the <strong>redirect / callback URIs</strong> your app shows and paste them in step 3 of this wizard.',
+      'After you click <strong>Register</strong>, copy the auto-generated <strong>Client ID</strong> and <strong>Client Secret</strong> back into your app.',
+    ],
+  },
   slack: {
     docsUrl: 'https://slack.com/help/articles/360039304351-Use-OpenID-Connect-with-Slack',
     setupSteps: [
@@ -1722,7 +1879,13 @@ function openSamlWizard(app) {
 }
 
 // OIDC integration wizard — 4 steps: Overview, Redirect URIs, Advanced, Review
-function openOidcWizard(app) {
+function openOidcWizard(app, opts = {}) {
+  const origin = window.location.origin;
+  const idpIssuer     = origin;
+  const idpDiscovery  = `${origin}/.well-known/openid-configuration`;
+  const idpAuthorize  = `${origin}/oauth/authorize`;
+  const idpToken      = `${origin}/oauth/token`;
+  const idpUserinfo   = `${origin}/oauth/userinfo`;
   const tips = vendorTips(app.id, app);
 
   const initial = {
@@ -1746,11 +1909,11 @@ function openOidcWizard(app) {
         id: 'overview', label: 'Overview',
         render: () => `
           <div class="info-box">
-            <strong>What you'll do</strong>
+            <strong>How this works</strong>
             <ol class="wiz-tip-list">
-              <li>Tell ${esc(app.name)} where to send users after login (redirect URIs).</li>
-              <li>Pick the OAuth grant types and OpenID scopes you need.</li>
-              <li>Save and copy the <strong>Client ID</strong> and <strong>Client Secret</strong> into ${esc(app.name)}.</li>
+              <li>Copy the <strong>IdP OIDC endpoints</strong> from step 2 into ${esc(app.name)}'s OAuth / OIDC settings.</li>
+              <li>Paste the <strong>redirect URIs</strong> that ${esc(app.name)} gives you into step 3.</li>
+              <li>Click <strong>Register</strong> — this IdP <em>auto-generates</em> a <strong>Client ID</strong> and <strong>Client Secret</strong>. Copy both into ${esc(app.name)}; the secret is shown <strong>once</strong>.</li>
             </ol>
           </div>
           <h3 style="font-size:0.95rem;margin:1.25rem 0 0.5rem">Vendor setup steps</h3>
@@ -1758,6 +1921,39 @@ function openOidcWizard(app) {
             ${tips.setupSteps.map((s) => `<li>${s}</li>`).join('')}
           </ol>
           ${tips.docsUrl ? `<p style="font-size:0.85rem;margin-top:1rem"><a href="${esc(tips.docsUrl)}" target="_blank" rel="noopener">Open ${esc(app.name)} OIDC documentation →</a></p>` : ''}
+        `,
+      },
+      {
+        id: 'idp', label: 'IdP Details',
+        render: () => `
+          <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
+            Open <strong>${esc(app.name)}</strong>'s OAuth / OpenID Connect settings and paste these IdP values.
+            Most apps accept the <strong>Discovery URL</strong> alone and fetch the rest automatically.
+          </p>
+          <div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">
+            OIDC issuer routes (<code>/oauth/authorize</code>, <code>/oauth/token</code>, …) are on the Phase 3 roadmap.
+            Client registration stores credentials now; full token exchange ships in a follow-up release.
+          </div>
+          <div class="form-group">
+            <label class="form-label">Issuer</label>
+            ${readonlyInput(idpIssuer, 'oidc-iss')}
+          </div>
+          <div class="form-group">
+            <label class="form-label">OpenID Discovery URL <span class="muted" style="font-weight:400;font-size:0.78rem">(recommended — paste once)</span></label>
+            ${readonlyInput(idpDiscovery, 'oidc-disc')}
+          </div>
+          <div class="form-group">
+            <label class="form-label">Authorization Endpoint</label>
+            ${readonlyInput(idpAuthorize, 'oidc-authz')}
+          </div>
+          <div class="form-group">
+            <label class="form-label">Token Endpoint</label>
+            ${readonlyInput(idpToken, 'oidc-token')}
+          </div>
+          <div class="form-group">
+            <label class="form-label">UserInfo Endpoint</label>
+            ${readonlyInput(idpUserinfo, 'oidc-userinfo')}
+          </div>
         `,
       },
       {
@@ -1849,7 +2045,10 @@ function openOidcWizard(app) {
         render: (d) => {
           const uris = (d.redirectsRaw || '').split('\n').map((s) => s.trim()).filter(Boolean);
           return `
-            <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">Review the values — registering will generate a <strong>Client ID</strong> and <strong>Client Secret</strong>.</p>
+            <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
+              Review the values below. Clicking <strong>Register</strong> creates the client in this IdP and
+              <strong>auto-generates</strong> a Client ID and Client Secret (shown on the next screen only).
+            </p>
             <div class="card">
               <div class="kv"><div class="k">Name</div><div class="v">${esc(d.name)}</div></div>
               <div class="kv"><div class="k">Redirect URIs</div><div class="v" style="word-break:break-all">${uris.map((u) => `<code style="font-size:0.78rem;display:block">${esc(u)}</code>`).join('')}</div></div>
@@ -1895,7 +2094,8 @@ function openOidcWizard(app) {
       cancel.textContent = 'Done';
       cancel.classList.replace('btn-secondary', 'btn-primary');
       cancel.addEventListener('click', () => {
-        if (window.LILG_NAV) window.LILG_NAV('applications', { tab: 'oidc' });
+        if (opts.onDone) opts.onDone();
+        else if (window.LILG_NAV) window.LILG_NAV('applications', { tab: 'oidc' });
       }, { once: true });
     },
   });
@@ -1918,7 +2118,17 @@ export async function viewOidcApps(content, opts = {}) {
   </div>`));
   const wrap = content.firstChild;
 
-  wrap.querySelector('#new-oidc-btn')?.addEventListener('click', () => openRegisterModal());
+  wrap.querySelector('#new-oidc-btn')?.addEventListener('click', () => {
+    const app = SSO_CATALOG.find((a) => a.id === 'custom-oidc');
+    if (app) {
+      openOidcWizard(app, {
+        onDone: async () => {
+          await load();
+          wrap.querySelector('#list-area')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        },
+      });
+    }
+  });
 
   // ── My Applications tab ────────────────────────────────────────────────────
   async function load() {
@@ -1988,84 +2198,7 @@ export async function viewOidcApps(content, opts = {}) {
     try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; }
   }
 
-  // ── register modal (custom or from catalog) ─────────────────────────────────
-  function openRegisterModal(prefill = {}) {
-    const bd = openModal(`<div class="modal" style="width:580px;max-width:96vw">
-      <div class="modal-header"><h2>${prefill.name ? 'Add — ' + esc(prefill.name) : 'Register OIDC Application'}</h2></div>
-      <div class="modal-body">
-        ${prefill.hint ? `<div class="info-box" style="margin-bottom:1rem">ℹ️ ${esc(prefill.hint)}</div>` : ''}
-        <div class="form-2col">
-          <div class="form-group span2">
-            <label class="form-label">Application Name <span style="color:var(--danger)">*</span></label>
-            <input class="form-input" id="oidc-name" value="${esc(prefill.name||'')}" placeholder="e.g. Slack">
-          </div>
-          <div class="form-group span2">
-            <label class="form-label">Redirect URIs <span class="muted" style="font-weight:400">(one per line)</span></label>
-            <textarea class="form-textarea" id="oidc-uris" rows="3" placeholder="https://app.example.com/callback&#10;https://app.example.com/auth/callback">${esc((prefill.redirect_uris||[]).join('\n'))}</textarea>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Grant Types</label>
-            <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-code" ${(prefill.grants||['authorization_code']).includes('authorization_code')?'checked':''}><label for="gt-code">authorization_code</label></div>
-            <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-refresh" ${(prefill.grants||[]).includes('refresh_token')?'checked':''}><label for="gt-refresh">refresh_token</label></div>
-            <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-creds" ${(prefill.grants||[]).includes('client_credentials')?'checked':''}><label for="gt-creds">client_credentials</label></div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Scopes</label>
-            ${['openid','email','profile','groups','roles'].map(s => `
-            <div class="form-check-row"><input type="checkbox" class="form-check" id="sc-${s}" ${(prefill.scopes||['openid','email','profile']).includes(s)?'checked':''}><label for="sc-${s}">${esc(s)}</label></div>`).join('')}
-          </div>
-        </div>
-        <div id="oidc-err"></div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-primary" id="oidc-save">Register Application</button>
-        <button class="btn btn-secondary" id="oidc-cancel">Cancel</button>
-      </div>
-    </div>`);
-
-    bd.querySelector('#oidc-cancel').addEventListener('click', () => bd.remove());
-    bd.querySelector('#oidc-save').addEventListener('click', async () => {
-      const saveBtn = bd.querySelector('#oidc-save');
-      saveBtn.disabled = true; saveBtn.textContent = 'Registering…';
-      const grants = [];
-      if (bd.querySelector('#gt-code').checked)    grants.push('authorization_code');
-      if (bd.querySelector('#gt-refresh').checked) grants.push('refresh_token');
-      if (bd.querySelector('#gt-creds').checked)   grants.push('client_credentials');
-      const scopes = ['openid','email','profile','groups','roles'].filter(s => bd.querySelector(`#sc-${s}`)?.checked);
-      const urisRaw = bd.querySelector('#oidc-uris').value;
-      const data = {
-        name: bd.querySelector('#oidc-name').value.trim(),
-        redirect_uris: urisRaw.split('\n').map(s => s.trim()).filter(Boolean),
-        grant_types: grants.length ? grants : ['authorization_code'],
-        scopes: scopes.length ? scopes : ['openid', 'email', 'profile'],
-        response_types: ['code'],
-        token_endpoint_auth_method: 'client_secret_basic',
-      };
-      if (prefill.catalog_slug) {
-        data.catalog_slug = prefill.catalog_slug;
-        if (prefill.category) data.category = prefill.category;
-      }
-      if (!data.name) { bd.querySelector('#oidc-err').innerHTML = errHtml('Application name is required'); saveBtn.disabled=false; saveBtn.textContent='Register Application'; return; }
-      if (data.grant_types.includes('authorization_code') && !data.redirect_uris.length) {
-        bd.querySelector('#oidc-err').innerHTML = errHtml('At least one redirect URI is required for authorization_code grant.');
-        saveBtn.disabled=false; saveBtn.textContent='Register Application';
-        return;
-      }
-      try {
-        const result = await api.createOidcClient(data);
-        bd.remove();
-        showSecretModal(result.client_id, result.client_secret, async () => {
-          await load();
-          wrap.querySelector('#list-area')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
-      } catch(e) {
-        bd.querySelector('#oidc-err').innerHTML = errHtml(e.message);
-        saveBtn.disabled=false; saveBtn.textContent='Register Application';
-      }
-    });
-  }
-
-  // ── show secret in modal ────────────────────────────────────────────────────
+  // ── show secret in modal (secret rotation) ──────────────────────────────────
   function showSecretModal(clientId, secret, onDone) {
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>🔑 Save Your Client Secret</h2></div>
       <div class="modal-body">
