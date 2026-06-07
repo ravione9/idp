@@ -203,7 +203,7 @@ app.use('/api/internal/saml', internalSamlRouter);
 // immediately (small SPA, no fingerprinted bundles). ETag still allows 304s.
 app.use(
   express.static(WEB_ROOT, {
-    etag: true,
+    etag: false,
     lastModified: true,
     cacheControl: true,
     maxAge: 0,
@@ -220,7 +220,9 @@ app.use(
 const spaRoutes = ['/', '/login', '/admin-central'];
 for (const r of spaRoutes) {
   app.get(r, (_req: Request, res: Response) => {
-    res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('CDN-Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
     res.sendFile(path.join(WEB_ROOT, 'index.html'));
   });
 }

@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/styles.css?v=2026-06-08-responsive3" />
+  <link rel="stylesheet" href="/css/styles.css?v=2026-06-08-responsive4" />
 </head>
 <body>
   <div id="app">
@@ -43,6 +43,22 @@
       if (msg && /\/js\//.test(msg)) showBootError(msg);
     });
   </script>
-  <script type="module" src="/js/app.js?v=2026-06-08-responsive3"></script>
+  <!-- Bump IDP_ASSET_V on every frontend deploy so all ES modules reload together -->
+  <script type="importmap" id="idp-importmap"></script>
+  <script>
+    (function () {
+      var v = '2026-06-08-responsive4';
+      var mods = ['api', 'ui', 'icons', 'theme', 'views-end-user', 'views-admin', 'views-stubs'];
+      var scope = {};
+      for (var i = 0; i < mods.length; i++) {
+        scope['./' + mods[i] + '.js'] = '/js/' + mods[i] + '.js?v=' + v;
+      }
+      document.getElementById('idp-importmap').textContent = JSON.stringify({ scopes: { '/js/': scope } });
+      var boot = document.createElement('script');
+      boot.type = 'module';
+      boot.src = '/js/app.js?v=' + v;
+      document.body.appendChild(boot);
+    })();
+  </script>
 </body>
 </html>
