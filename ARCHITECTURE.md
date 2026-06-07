@@ -904,7 +904,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
-### (pending) — 2026-06-07 — AD corporate login: UPN bind + circuit-breaker isolation
+### `633f23b` — 2026-06-07 — AD corporate login: UPN bind + circuit-breaker isolation
 
 **Why** — AD password login still failed for synced users because verification only tried sAMAccountName/DN lookup, wrong-password attempts could trip the AD circuit breaker, and login required a pre-existing identity link.
 
