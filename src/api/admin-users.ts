@@ -508,7 +508,7 @@ const patchRoleSchema = z.object({
   role: z.enum(['USER', 'MANAGER', 'HRBP', 'ADMIN', 'SUPER_ADMIN']),
 });
 
-router.patch('/:empId/role', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response): Promise<void> => {
+router.patch('/:empId/role', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const { empId } = req.params;
   const parsed = patchRoleSchema.safeParse(req.body);
   if (!parsed.success) {

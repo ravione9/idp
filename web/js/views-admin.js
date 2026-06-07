@@ -1067,50 +1067,182 @@ export async function viewUsers(content) {
 
 /* ---------- Administrators ---------- */
 export async function viewAdmins(content) {
-  const wrap = el(`<div>${header('Administrators', 'Local accounts that can access this IdP console')}
-    <details class="card" style="margin-bottom:1rem"><summary style="cursor:pointer;font-weight:600">Create local administrator</summary>
-      <p class="subtitle" style="margin:0.5rem 0 1rem">Use sparingly. Prefer Google SSO for employees.</p>
+  const wrap = el(`<div>${header('Administrators', 'Accounts with admin access to this IdP console')}
+
+    <!-- ── Add from Directory ──────────────────────────────────────────── -->
+    <details class="card" open style="margin-bottom:1rem">
+      <summary style="cursor:pointer;font-weight:600">Add user from directory as administrator</summary>
+      <p class="subtitle" style="margin:0.5rem 0 1rem">Search for an existing employee and assign them an admin role.</p>
+      <div id="afd-area">
+        <div style="display:flex;gap:0.6rem;align-items:flex-end;flex-wrap:wrap">
+          <div class="field" style="flex:1;min-width:200px;margin:0">
+            <label>Search employee (name or email)</label>
+            <input id="afd-search" class="form-control" placeholder="Type to search…" autocomplete="off" />
+          </div>
+          <div class="field" style="margin:0">
+            <label>Role</label>
+            <select id="afd-role" class="form-select">
+              <option value="ADMIN">Admin</option>
+              <option value="SUPER_ADMIN">Super Admin</option>
+            </select>
+          </div>
+          <button id="afd-btn" class="btn btn-primary" disabled>Assign role</button>
+        </div>
+        <div id="afd-results" style="margin-top:0.5rem"></div>
+        <div id="afd-msg" style="margin-top:0.4rem;font-size:0.85rem"></div>
+      </div>
+    </details>
+
+    <!-- ── Create brand-new local account ─────────────────────────────── -->
+    <details class="card" style="margin-bottom:1rem">
+      <summary style="cursor:pointer;font-weight:600">Create new local administrator account</summary>
+      <p class="subtitle" style="margin:0.5rem 0 1rem">Creates a new employee record + password login. Use sparingly — prefer adding from directory.</p>
       <div id="ca-error"></div>
       <form id="ca-form">
         <div class="grid-2">
           <div class="field"><label>Full name</label><input name="fullName" required /></div>
           <div class="field"><label>Email</label><input name="email" type="email" required /></div>
           <div class="field"><label>Password (min 10)</label><input name="password" type="password" minlength="10" required /></div>
-          <div class="field"><label>Role</label><select name="role"><option value="ADMIN">ADMIN</option><option value="SUPER_ADMIN">SUPER_ADMIN</option></select></div>
+          <div class="field"><label>Role</label><select name="role"><option value="ADMIN">Admin</option><option value="SUPER_ADMIN">Super Admin</option></select></div>
         </div>
         <button type="submit" class="btn btn-primary">Create administrator</button>
       </form>
     </details>
-    <div class="table-wrap"><div class="table-toolbar"><strong>Local administrators</strong></div>
+
+    <!-- ── Administrators table ───────────────────────────────────────── -->
+    <div class="table-wrap">
+      <div class="table-toolbar"><strong id="admins-count">Administrators</strong></div>
       <table><thead><tr><th>Name / Email</th><th>Role</th><th>Type</th><th>Status</th><th>Last login</th><th></th></tr></thead>
-      <tbody id="admins-tbody"><tr><td colspan="6" class="loading-row"><span class="spinner"></span></td></tr></tbody></table></div></div>`);
+      <tbody id="admins-tbody"><tr><td colspan="6" class="loading-row"><span class="spinner"></span></td></tr></tbody></table>
+    </div>
+  </div>`);
   content.replaceChildren(wrap);
 
+  // ── Administrators table ─────────────────────────────────────────────────
   async function loadTable() {
     try {
       const r = await api.listLocalAdmins();
       const rows = r.data || [];
+      wrap.querySelector('#admins-count').textContent = `Administrators (${rows.length})`;
       wrap.querySelector('#admins-tbody').innerHTML = rows.length
         ? rows.map((a) => `<tr>
-          <td><div class="cell-strong">${esc(a.full_name || a.email)}</div><div class="muted" style="font-size:0.75rem">${esc(a.email)}</div></td>
-          <td><span class="badge badge-info">${esc(a.role)}</span></td>
-          <td>${a.has_local_account ? '<span class="badge badge-neutral">Local</span>' : '<span class="badge badge-primary">SSO</span>'}</td>
-          <td>${a.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
-          <td class="muted">${fmtDate(a.last_login_at)}</td>
-          <td class="actions">${a.has_local_account && a.active ? `<button class="btn btn-sm btn-danger" data-id="${a.id}">Deactivate</button>` : ''}</td>
-        </tr>`).join('')
-        : `<tr><td colspan="6" class="empty-state">No administrators</td></tr>`;
-      wrap.querySelectorAll('[data-id]').forEach((btn) => {
+            <td>
+              <div class="cell-strong">${esc(a.full_name || a.email)}</div>
+              <div class="muted" style="font-size:0.75rem">${esc(a.email)}</div>
+            </td>
+            <td><span class="badge badge-info">${esc(a.role)}</span></td>
+            <td>${a.has_local_account
+              ? '<span class="badge badge-neutral">Local</span>'
+              : '<span class="badge badge-primary">SSO</span>'}</td>
+            <td>${a.active
+              ? '<span class="badge badge-success">Active</span>'
+              : '<span class="badge badge-neutral">Inactive</span>'}</td>
+            <td class="muted">${fmtDate(a.last_login_at)}</td>
+            <td class="actions">
+              ${a.has_local_account && a.active
+                ? `<button class="btn btn-sm btn-danger" data-action="deactivate" data-id="${a.id}">Deactivate</button>`
+                : `<button class="btn btn-sm btn-warning" data-action="remove" data-emp="${esc(a.emp_id)}">Remove role</button>`}
+            </td>
+          </tr>`).join('')
+        : `<tr><td colspan="6" class="empty-state">No administrators yet</td></tr>`;
+
+      wrap.querySelectorAll('[data-action="deactivate"]').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          if (!confirm('Deactivate this administrator?')) return;
+          if (!confirm('Deactivate this local administrator account?')) return;
           try { await api.deactivateAdmin(btn.dataset.id); loadTable(); }
           catch (err) { alert(err.message); }
         });
       });
+      wrap.querySelectorAll('[data-action="remove"]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Remove admin role from this SSO user? They will become a regular user.')) return;
+          try { await api.updateUserRole(btn.dataset.emp, 'USER'); loadTable(); }
+          catch (err) { alert(err.message); }
+        });
+      });
     } catch (err) {
-      wrap.querySelector('#admins-tbody').innerHTML = `<tr><td colspan="6"><div class="alert alert-error">${esc(err.message)}</div></td></tr>`;
+      wrap.querySelector('#admins-tbody').innerHTML =
+        `<tr><td colspan="6"><div class="alert alert-error">${esc(err.message)}</div></td></tr>`;
     }
   }
+
+  // ── Add from Directory ───────────────────────────────────────────────────
+  const afdSearch  = wrap.querySelector('#afd-search');
+  const afdResults = wrap.querySelector('#afd-results');
+  const afdBtn     = wrap.querySelector('#afd-btn');
+  const afdRole    = wrap.querySelector('#afd-role');
+  const afdMsg     = wrap.querySelector('#afd-msg');
+  let selectedEmp  = null;
+  let searchTimer  = null;
+
+  function setMsg(text, isError = false) {
+    afdMsg.textContent = text;
+    afdMsg.style.color = isError ? 'var(--color-danger,#dc2626)' : 'var(--color-success,#16a34a)';
+  }
+
+  function selectEmployee(emp) {
+    selectedEmp = emp;
+    afdSearch.value = `${emp.full_name} — ${emp.email_corp}`;
+    afdResults.innerHTML = '';
+    afdBtn.disabled = false;
+    afdMsg.textContent = '';
+  }
+
+  afdSearch.addEventListener('input', () => {
+    selectedEmp = null;
+    afdBtn.disabled = true;
+    afdMsg.textContent = '';
+    clearTimeout(searchTimer);
+    const q = afdSearch.value.trim();
+    if (q.length < 2) { afdResults.innerHTML = ''; return; }
+    searchTimer = setTimeout(async () => {
+      try {
+        const r = await api.listUsersUnified(q, '', '', 10, 0);
+        const items = (r.data || []).filter(u => !['ADMIN','SUPER_ADMIN'].includes(u.admin_role));
+        if (!items.length) {
+          afdResults.innerHTML = `<div class="muted" style="padding:0.4rem 0;font-size:0.85rem">No matching users found (already admins are hidden)</div>`;
+          return;
+        }
+        afdResults.innerHTML = `<div class="search-dropdown" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;max-height:220px;overflow-y:auto">
+          ${items.map(u => `
+            <div class="search-dropdown-item" data-emp='${JSON.stringify({emp_id:u.emp_id,full_name:u.full_name,email_corp:u.email_corp})}'
+              style="padding:0.55rem 0.8rem;cursor:pointer;display:flex;align-items:center;gap:0.6rem;border-bottom:1px solid var(--border,#e5e7eb)">
+              <span class="avatar" style="width:28px;height:28px;font-size:0.7rem;flex-shrink:0">${esc((u.full_name||'?').charAt(0).toUpperCase())}</span>
+              <div>
+                <div style="font-weight:600;font-size:0.875rem">${esc(u.full_name||u.emp_id)}</div>
+                <div class="muted" style="font-size:0.75rem">${esc(u.email_corp||'')} · ${esc(u.emp_id)}</div>
+              </div>
+            </div>`).join('')}
+        </div>`;
+        afdResults.querySelectorAll('.search-dropdown-item').forEach(item => {
+          item.addEventListener('mouseenter', () => item.style.background = 'var(--hover-bg,#f3f4f6)');
+          item.addEventListener('mouseleave', () => item.style.background = '');
+          item.addEventListener('click', () => selectEmployee(JSON.parse(item.dataset.emp)));
+        });
+      } catch (e) {
+        afdResults.innerHTML = `<div class="muted" style="font-size:0.85rem;padding:0.3rem 0">Search failed: ${esc(e.message)}</div>`;
+      }
+    }, 300);
+  });
+
+  afdBtn.addEventListener('click', async () => {
+    if (!selectedEmp) return;
+    afdBtn.disabled = true;
+    setMsg('Assigning…');
+    try {
+      await api.updateUserRole(selectedEmp.emp_id, afdRole.value);
+      setMsg(`✓ ${selectedEmp.full_name} is now ${afdRole.value.replace('_', ' ')}`);
+      afdSearch.value = '';
+      afdResults.innerHTML = '';
+      selectedEmp = null;
+      loadTable();
+    } catch (e) {
+      setMsg('Failed: ' + e.message, true);
+      afdBtn.disabled = false;
+    }
+  });
+
+  // ── Create local admin form ──────────────────────────────────────────────
   wrap.querySelector('#ca-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const errEl = wrap.querySelector('#ca-error');
@@ -1124,6 +1256,7 @@ export async function viewAdmins(content) {
       errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
     }
   });
+
   loadTable();
 }
 
