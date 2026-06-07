@@ -20,6 +20,7 @@ import {
   touchLocalLogin,
   verifyLocalPassword,
 } from '../services/local-admin.js';
+import { getClientIp } from '../utils/request-context.js';
 
 const MFA_CHALLENGE_PREFIX = 'lilg:mfa-challenge:';
 const MFA_CHALLENGE_TTL_S  = 300; // 5 min
@@ -65,7 +66,7 @@ async function issueSessionAndRespond(
     iss:       'local',
     sub:       `local:${account.id}`,
     ttlHours:  config.session.ttlCorporateHours,
-    ip:        req.ip ?? '',
+    ip:        getClientIp(req),
     userAgent: req.get('user-agent') ?? '',
   });
 
@@ -83,7 +84,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
   }
 
   const { email, password } = parsed.data;
-  const ip = req.ip ?? '';
+  const ip = getClientIp(req);
 
   try {
     let account = await findLocalAccountByEmail(email);
@@ -152,13 +153,13 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
   const challenge = JSON.parse(raw) as MfaChallenge;
   const ok = await verifyTotp(challenge.empId, parsed.data.code);
   if (!ok) {
-    await logAttempt(challenge.email, req.ip ?? '', false, 'mfa-bad-code');
+    await logAttempt(challenge.email, getClientIp(req), false, 'mfa-bad-code');
     res.status(401).json({ error: 'Invalid verification code' });
     return;
   }
 
   await redis.del(key);
-  await logAttempt(challenge.email, req.ip ?? '', true, 'mfa-ok');
+  await logAttempt(challenge.email, getClientIp(req), true, 'mfa-ok');
 
   await issueSessionAndRespond(res, req, {
     id:     challenge.accountId,

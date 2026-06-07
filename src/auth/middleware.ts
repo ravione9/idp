@@ -9,7 +9,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { getPublicOrigin } from '../utils/request-context.js';
+import { getClientIp, getPublicOrigin } from '../utils/request-context.js';
 import { config } from '../config.js';
 import { query, queryOne } from '../db/connection.js';
 import { redis } from './session-store.js';
@@ -213,7 +213,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       iss:       'google',
       sub,
       ttlHours:  config.session.ttlCorporateHours,
-      ip:        req.ip ?? '',
+      ip:        getClientIp(req),
       userAgent: req.get('user-agent') ?? '',
     });
 

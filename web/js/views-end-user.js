@@ -1,6 +1,6 @@
 /* End-user views: Home (app launcher), My Access, Request Access, My Tasks, Settings. */
 import { api } from './api.js?v=2026-06-07-groups-sync';
-import { el, esc, fmtDate, ilgBadge, initials } from './ui.js';
+import { el, esc, fmtDate, ilgBadge, initials, persistSearch } from './ui.js';
 import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 
@@ -310,6 +310,9 @@ export async function viewHome(me, content) {
     redraw();
   });
 
+  /* Restore any search text from a previous session (survives refresh) */
+  searchQ = persistSearch(wrap.querySelector('#home-search'), 'home-apps');
+
   wrap.querySelectorAll('.home-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       activeTab = tab.dataset.tab;
@@ -521,6 +524,8 @@ export async function viewRequestAccess(content) {
       ...ents.map(e => ({ ...e, _type: 'ENTITLEMENT' })),
       ...roles.map(r => ({ ...r, _type: 'ROLE' })),
     ];
+    /* Restore any search text from a previous session (survives refresh) */
+    persistSearch(wrap.querySelector('#ra-search'), 'request-access');
     if (!allItems.length) {
       wrap.querySelector('#ra-catalog').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div><p>No items in the catalog yet. Ask an admin to onboard applications.</p></div>`;
     } else {
@@ -738,7 +743,6 @@ export async function viewSettings(me, content) {
         <td><span class="badge badge-info">${esc(s.iss)}</span></td>
         <td class="muted">${fmtDate(s.last_active_at)}</td>
         <td class="muted">${fmtDate(s.expires_at)}</td>
-        <td class="muted" style="font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.ip || '—')}</td>
         <td class="muted">${esc(s.device_info || '—')}</td>
         <td class="muted">${esc(s.geo_location || '—')}</td>
         <td class="muted" style="font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.ip || '—')}</td>

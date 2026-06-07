@@ -32,6 +32,22 @@ export function initials(name = '') {
   return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '?';
 }
 
+/* Persist a search input's value across page refreshes.
+   Restores any previously typed value into the input and keeps
+   sessionStorage in sync as the user types. Returns the restored
+   value so callers can seed their own filter state. */
+export function persistSearch(input, key) {
+  if (!input || !key) return '';
+  const storageKey = `idp_search_${key}`;
+  const saved = sessionStorage.getItem(storageKey) || '';
+  if (saved) input.value = saved;
+  input.addEventListener('input', () => {
+    if (input.value) sessionStorage.setItem(storageKey, input.value);
+    else sessionStorage.removeItem(storageKey);
+  });
+  return saved;
+}
+
 export function ilgBadge(state) {
   const s = (state || '').toUpperCase();
   if (s === 'ACTIVE' || s === 'REACTIVATED') return `<span class="badge badge-success">${esc(s)}</span>`;

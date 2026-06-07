@@ -1,7 +1,7 @@
 /* Admin views: Dashboard, SAML apps, App catalog, Connectors, Users, Admins,
    Reviews, SoD, Risk, Authentication, Audit, Reports. */
 import { api } from './api.js?v=2026-06-07-groups-sync';
-import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut } from './ui.js';
+import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut, persistSearch } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 import { viewOidcApps, viewPrebuiltApps } from './views-stubs.js?v=2026-06-07-c';
 
@@ -788,6 +788,9 @@ export async function viewIgaApps(content, opts = {}) {
   wrap.querySelector('#ac-vis').addEventListener('change', (e) => { visFilter = e.target.value; renderTable(); });
   wrap.querySelector('#ac-show-inactive').addEventListener('change', (e) => { showInactive = e.target.checked; renderTable(); });
 
+  /* Restore any search text from a previous session (survives refresh) */
+  searchQ = persistSearch(wrap.querySelector('#ac-search'), 'ac-catalog');
+
   await loadApps();
 }
 
@@ -1063,7 +1066,9 @@ export async function viewUsers(content) {
   const reload = () => load(search.value, filter.value);
   search.addEventListener('input', debounce(reload));
   filter.addEventListener('change', reload);
-  load();
+  /* Restore any search text from a previous session (survives refresh) */
+  persistSearch(search, 'admin-users');
+  reload();
 }
 
 /* ---------- Administrators ---------- */

@@ -4,7 +4,7 @@
    Layout: SailPoint top nav + miniOrange-style admin sidebar.
    ============================================================ */
 import { api } from './api.js?v=2026-06-07-device-v2';
-import { el, esc, initials } from './ui.js';
+import { el, esc, initials, persistSearch } from './ui.js';
 import { icon } from './icons.js';
 import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import {
@@ -274,6 +274,9 @@ function buildShell() {
   });
 
   mountThemeMenu(root);
+
+  /* Keep the global search text across page refreshes */
+  persistSearch(root.querySelector('#global-search'), 'global');
 
   return root;
 }

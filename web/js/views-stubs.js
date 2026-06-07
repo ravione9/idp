@@ -1,5 +1,5 @@
 import { api } from './api.js?v=2026-06-07-ad-groups-sync';
-import { el, esc, fmtDate } from './ui.js';
+import { el, esc, fmtDate, persistSearch } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 
 function header(title, subtitle, action = '') {
@@ -1892,6 +1892,9 @@ export async function viewPrebuiltApps(content, opts = {}) {
     });
   });
 
+  /* Restore any search text from a previous session (survives refresh) */
+  searchQ = persistSearch(wrap.querySelector('#pbi-search'), 'integrations');
+
   renderGrid();
 }
 
@@ -3376,7 +3379,10 @@ function initUsersTab(panel) {
   panel.querySelector('#ud-create-btn').addEventListener('click', openCreateUserModal);
 
   // ── Initial load ─────────────────────────────────────────────────────────────
-  loadUsers();
+  // Restore any search text from a previous session (survives refresh)
+  persistSearch(panel.querySelector('#ud-search'), 'user-directory');
+  const f0 = getFilters();
+  loadUsers(f0.q, f0.state, f0.source);
 }
 
 // ─── 11. Business Roles ───────────────────────────────────────────────────────

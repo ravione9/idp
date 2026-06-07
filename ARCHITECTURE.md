@@ -176,10 +176,11 @@ Google OIDC credentials are resolved in this order:
 - Session ID = `uuid v4`. Cookie value is `<id>.<HMAC-SHA256(SESSION_SECRET, id)>` (base64url).
 - TTL: 8 hours (corporate) / 12 hours (store) — configurable via env.
 - Cookie flags: `HttpOnly`, `SameSite=Lax`. `Secure` is on in production but **off** when `COOKIE_SECURE=false` (dev plain HTTP).
-- Each session records **public IP** (`ip`), **client hostname** (`client_hostname`), **local LAN IP** (`client_local_ip`), and **MAC** (`client_mac`). Attribution uses a two-tier approach (same technique as SMTP `Received:` / `X-Originating-IP` email headers):
-  1. **Server-side (automatic)** — walks the full `X-Forwarded-For` / `X-Real-IP` / `X-Originating-IP` chain at login time; first private RFC-1918 IP found becomes `client_local_ip`. An async reverse-DNS PTR lookup on that IP fills `client_hostname` (works when corporate DNS has PTR records for workstation IPs).
-  2. **Optional agent** (`scripts/device-context-agent.mjs` on the workstation → `http://127.0.0.1:17891/device-context`) — provides MAC and reliable hostname when DNS PTR records are absent. Install via `scripts/install-device-agent.ps1` (Windows scheduled task at logon).
-  - MAC address is Layer 2 and cannot be obtained server-side; it is populated only via the optional agent or derived from `LOC-{12hexchars}` AD hostnames.
+- Each session records **public IP** (`ip`), **device** (`device_info`), and **location** (`geo_location`). Gmail-style attribution — no workstation agent required:
+  1. **`device_info`** — parsed from the `User-Agent` at login time (e.g. `Chrome · Windows 10/11`). Always populated synchronously.
+  2. **`ip`** — client public IP via `getClientIp()` (`CF-Connecting-IP` → first `X-Forwarded-For` hop → socket).
+  3. **`geo_location`** — async IP geolocation after login (e.g. `Mumbai · India` via ip-api.com). Fire-and-forget; never blocks login.
+- Migrations **`024_drop_client_mac.sql`** and **`025_session_geo_device.sql`** removed agent-dependent columns (`client_hostname`, `client_local_ip`, `client_mac`).
 
 ### 5.3 Master administrator
 
@@ -366,8 +367,7 @@ To add a new migration:
 |---|---|---|
 | `GET` | `/api/me` | Current user + capabilities |
 | `PUT` | `/api/me/password` | Change own password |
-| `GET` | `/api/me/sessions` | List own active sessions (public IP, local IP, hostname, MAC) |
-| `POST` | `/api/me/sessions/device-context` | Attach client hostname / local IP / MAC to current session |
+| `GET` | `/api/me/sessions` | List own active sessions (IP, device, location) |
 | `DELETE` | `/api/me/sessions/:id` | Revoke a session |
 | `GET` | `/api/me/mfa` | MFA status |
 | `POST` | `/api/me/mfa/enroll` | Start TOTP enrollment (returns QR) |
@@ -558,8 +558,6 @@ bash scripts/restart-api.sh
 # Full stack reset (MySQL volume kept)
 sudo bash scripts/fix-and-start.sh
 
-# Workstation-only: expose hostname / LAN IP / MAC to the IdP login page
-node scripts/device-context-agent.mjs
 ```
 
 **Do not** run bare `git pull` on pam-2 — use `bash scripts/sync-repo.sh` or `bash scripts/deploy.sh`.
@@ -727,18 +725,31 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### (pending) — 2026-06-07 — Session device context (hostname, local IP, MAC)
+### 5417fd0 — 2026-06-07 — Session UI fixes, search persistence, agent cleanup
 
-**Why** — Admin user profile Sessions tab showed only public IP and user agent; operators need client machine hostname (e.g. `LOC-9D358FEE60EC`), local LAN IP, and MAC captured from the endpoint at login.
+**Why** — Post-refactor verification found a sessions table column bug, stale docs/dead agent code, and missing Cloudflare-aware IP capture; search boxes lost typed text on refresh.
 
 **What changed:**
 
-- **`migrations/022_session_device_context.sql`**, **`migrations/023_session_client_mac.sql`** — adds `idp_sessions.client_hostname`, `client_local_ip`, `client_mac`.
-- **`scripts/device-context-agent.mjs`** — optional workstation agent (hostname + LAN IP + MAC via `os.networkInterfaces()`).
-- **`web/js/device-context.js`** — browser collector (WebRTC + local agent probe; derives MAC from `LOC-{12hex}` hostnames).
-- **`src/auth/session.ts`**, **`src/auth/local-auth.ts`** — persist device context on session create (incl. MFA challenge carry-over).
-- **`src/api/me-actions.ts`** — `POST /api/me/sessions/device-context` for Google OIDC post-login attach; session list returns new fields.
-- **`src/api/admin-users.ts`**, **`web/js/views-stubs.js`**, **`web/js/views-end-user.js`** — Sessions tables show Public IP, Local IP, Hostname, MAC.
+- **`web/js/views-end-user.js`** — fix Settings → Sessions column order (Device, Location, IP).
+- **`src/auth/local-auth.ts`**, **`src/auth/middleware.ts`** — use `getClientIp()` for session IP and auth logging.
+- **`web/js/ui.js`**, **`web/js/app.js`**, **`web/js/views-admin.js`**, **`web/js/views-stubs.js`** — `persistSearch()` keeps filter text across page refresh via `sessionStorage`.
+- **Removed** — `web/js/device-context.js`, `src/utils/device-context.ts`, `scripts/device-context-agent.mjs`, `scripts/install-device-agent*`, `scripts/start-device-agent.bat`; trimmed unused DNS helpers from **`src/utils/request-context.ts`**.
+
+---
+
+### 37be907 — 2026-06-07 — Gmail-style session attribution (device + location, no agent)
+
+**Why** — Workstation agents and X-Forwarded-For reverse-DNS rarely populated session hostname/MAC reliably; operators still need readable device and location context like Gmail security alerts.
+
+**What changed:**
+
+- **`migrations/024_drop_client_mac.sql`**, **`migrations/025_session_geo_device.sql`** — drop `client_hostname`, `client_local_ip`, `client_mac`; add `device_info`, `geo_location`.
+- **`src/utils/ua-parser.ts`** — lightweight User-Agent → `Browser · OS` string.
+- **`src/utils/ip-geo.ts`** — async ip-api.com geolocation after session create.
+- **`src/auth/session.ts`**, **`src/auth/local-auth.ts`**, **`src/auth/middleware.ts`** — store `device_info` at login; enrich `geo_location` in background; use `getClientIp()` for public IP.
+- **`src/api/me-actions.ts`**, **`src/api/admin-users.ts`** — session APIs return `device_info` + `geo_location` (removed `POST /api/me/sessions/device-context`).
+- **`web/js/views-stubs.js`**, **`web/js/views-end-user.js`** — Sessions tables show Device, Location, IP.
 
 ---
 
