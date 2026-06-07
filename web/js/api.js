@@ -45,20 +45,8 @@ Object.assign(api, {
   samlAudit:        () => f('/api/admin/audit/saml'),
   systemAudit:      () => f('/api/admin/audit/system'),
 
-  localLogin:       (email, password, deviceContext = null) =>
-    f('/auth/local/login', {
-      method: 'POST',
-      body: JSON.stringify({
-        email,
-        password,
-        ...(deviceContext ? { deviceContext } : {}),
-      }),
-    }),
-  reportDeviceContext: (deviceContext) =>
-    f('/api/me/sessions/device-context', {
-      method: 'POST',
-      body: JSON.stringify(deviceContext || {}),
-    }),
+  localLogin: (email, password) =>
+    f('/auth/local/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   localLoginMfa:    (challengeId, code) =>
     f('/auth/local/login/mfa-verify', { method: 'POST', body: JSON.stringify({ challengeId, code }) }),
   logout:           () => f('/auth/logout', { method: 'POST' }),

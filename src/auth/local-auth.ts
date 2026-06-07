@@ -12,7 +12,7 @@ import logger from '../utils/logger.js';
 import { createSession, setSessionCookie } from './session.js';
 import { redis } from './session-store.js';
 import { getMfaStatus, verifyTotp } from './mfa.js';
-import { query, execute } from '../db/connection.js';
+import { query } from '../db/connection.js';
 import {
   ensureMasterAdminFromEnv,
   findLocalAccountByEmail,
@@ -20,21 +20,13 @@ import {
   touchLocalLogin,
   verifyLocalPassword,
 } from '../services/local-admin.js';
-import { sanitizeDeviceContext } from '../utils/device-context.js';
-import { findClientLocalIp, enrichSessionHostname, hostnameFromEmpId, forwardDnsLookup } from '../utils/request-context.js';
 
 const MFA_CHALLENGE_PREFIX = 'lilg:mfa-challenge:';
 const MFA_CHALLENGE_TTL_S  = 300; // 5 min
 
-const deviceContextField = z.object({
-  hostname: z.string().max(255).optional(),
-  localIp:  z.string().max(45).optional(),
-}).partial().optional();
-
 const loginSchema = z.object({
-  email:         z.string().email(),
-  password:      z.string().min(8),
-  deviceContext: deviceContextField,
+  email:    z.string().email(),
+  password: z.string().min(8),
 });
 
 const verifySchema = z.object({
@@ -43,13 +35,11 @@ const verifySchema = z.object({
 });
 
 interface MfaChallenge {
-  empId:           string;
-  email:           string;
-  role:            string;
-  accountId:       number;
-  createdAt:       number;
-  clientHostname?: string | null;
-  clientLocalIp?:  string | null;
+  empId:     string;
+  email:     string;
+  role:      string;
+  accountId: number;
+  createdAt: number;
 }
 
 async function logAttempt(email: string, ip: string, success: boolean, reason?: string): Promise<void> {
@@ -64,50 +54,20 @@ async function logAttempt(email: string, ip: string, success: boolean, reason?: 
 }
 
 async function issueSessionAndRespond(
-  res:       Response,
-  req:       Request,
-  account:   { id: number; emp_id: string; email: string; role: string },
-  device?:   { hostname: string | null; localIp: string | null } | null,
+  res:     Response,
+  req:     Request,
+  account: { id: number; emp_id: string; email: string; role: string },
 ): Promise<void> {
-  // Server-side: extract the client's internal LAN IP from the X-Forwarded-For chain.
-  // When a corporate proxy/VPN adds the workstation IP to forwarding headers, this
-  // resolves the private IP without requiring any client-side agent.
-  // Derive hostname from LOC-{hex} emp_id (AD machine accounts embed machine name in emp_id).
-  const empHostname   = hostnameFromEmpId(account.emp_id);
-  const headerLocalIp = findClientLocalIp(req);
-  const resolvedHostname = device?.hostname ?? empHostname ?? null;
-
   const sessionId = await createSession({
-    empId:          account.emp_id,
-    email:          account.email,
-    role:           account.role,
-    iss:            'local',
-    sub:            `local:${account.id}`,
-    ttlHours:       config.session.ttlCorporateHours,
-    ip:             req.ip ?? '',
-    userAgent:      req.get('user-agent') ?? '',
-    clientHostname: resolvedHostname,
-    clientLocalIp:  device?.localIp ?? headerLocalIp ?? null,
+    empId:     account.emp_id,
+    email:     account.email,
+    role:      account.role,
+    iss:       'local',
+    sub:       `local:${account.id}`,
+    ttlHours:  config.session.ttlCorporateHours,
+    ip:        req.ip ?? '',
+    userAgent: req.get('user-agent') ?? '',
   });
-
-  // Background: if we have a hostname but no local IP, try forward DNS to get the LAN IP.
-  // Also try reverse DNS if we have a header-sourced local IP.
-  const knownLocalIp = device?.localIp ?? headerLocalIp ?? null;
-  if (!knownLocalIp && resolvedHostname) {
-    forwardDnsLookup(resolvedHostname).then((ip) => {
-      if (!ip) return;
-      return execute(
-        'UPDATE idp_sessions SET client_local_ip = ? WHERE session_id = ? AND client_local_ip IS NULL',
-        [ip, sessionId],
-      );
-    }).catch(() => {});
-  }
-  enrichSessionHostname(sessionId, knownLocalIp, (sid, hostname) =>
-    execute(
-      'UPDATE idp_sessions SET client_hostname = ? WHERE session_id = ? AND client_hostname IS NULL',
-      [hostname, sid],
-    ).then(() => {}),
-  );
 
   await touchLocalLogin(account.id);
   setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
@@ -122,9 +82,8 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     return;
   }
 
-  const { email, password, deviceContext: rawDeviceContext } = parsed.data;
+  const { email, password } = parsed.data;
   const ip = req.ip ?? '';
-  const deviceContext = sanitizeDeviceContext(rawDeviceContext);
 
   try {
     let account = await findLocalAccountByEmail(email);
@@ -151,13 +110,11 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     if (mfa.enabled) {
       const challengeId = crypto.randomUUID();
       const challenge: MfaChallenge = {
-        empId:          account.emp_id,
-        email:          account.email,
-        role:           account.role,
-        accountId:      account.id,
-        createdAt:      Date.now(),
-        clientHostname: deviceContext?.hostname ?? null,
-        clientLocalIp:  deviceContext?.localIp ?? null,
+        empId:     account.emp_id,
+        email:     account.email,
+        role:      account.role,
+        accountId: account.id,
+        createdAt: Date.now(),
       };
       await redis.set(
         `${MFA_CHALLENGE_PREFIX}${challengeId}`,
@@ -171,7 +128,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     }
 
     await logAttempt(email, ip, true);
-    await issueSessionAndRespond(res, req, account, deviceContext);
+    await issueSessionAndRespond(res, req, account);
   } catch (err) {
     logger.error({ err }, 'Local login failed');
     res.status(500).json({ error: 'Login failed' });
@@ -208,8 +165,5 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
     emp_id: challenge.empId,
     email:  challenge.email,
     role:   challenge.role,
-  }, {
-    hostname: challenge.clientHostname ?? null,
-    localIp:  challenge.clientLocalIp ?? null,
   });
 }

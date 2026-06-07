@@ -9,6 +9,8 @@ import { config } from '../config.js';
 import { query } from '../db/connection.js';
 import { redis } from './session-store.js';
 import type { LilgUser } from './types.js';
+import { parseUserAgent } from '../utils/ua-parser.js';
+import { enrichSessionGeo } from '../utils/ip-geo.js';
 
 export const COOKIE_NAME = 'idp_sid';
 const SESSION_REDIS_PREFIX = 'idp:session:';
@@ -45,30 +47,31 @@ async function cacheSession(user: LilgUser): Promise<void> {
 }
 
 export async function createSession(params: {
-  empId:           string;
-  email:           string;
-  role:            string;
-  iss:             string;
-  sub:             string;
-  ttlHours:        number;
-  ip:              string;
-  userAgent:       string;
-  clientHostname?: string | null;
-  clientLocalIp?:  string | null;
+  empId:     string;
+  email:     string;
+  role:      string;
+  iss:       string;
+  sub:       string;
+  ttlHours:  number;
+  ip:        string;
+  userAgent: string;
 }): Promise<string> {
   const sessionId  = uuidv4();
   const expiresAt  = new Date(Date.now() + params.ttlHours * 3600 * 1000);
+  const deviceInfo = parseUserAgent(params.userAgent);
 
   await query(
     `INSERT INTO idp_sessions
        (session_id, emp_id, iss, sub, email, role, created_at, last_active_at, expires_at,
-        ip, user_agent, client_hostname, client_local_ip)
-     VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), ?, ?, ?, ?, ?)`,
+        ip, user_agent, device_info)
+     VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), ?, ?, ?, ?)`,
     [sessionId, params.empId, params.iss, params.sub, params.email, params.role,
      expiresAt.toISOString().slice(0, 19).replace('T', ' '),
-     params.ip, params.userAgent,
-     params.clientHostname ?? null, params.clientLocalIp ?? null],
+     params.ip, params.userAgent, deviceInfo],
   );
+
+  // Async: geo-lookup from IP (like Gmail security alerts) — never blocks login
+  enrichSessionGeo(sessionId, params.ip);
 
   const user: LilgUser = {
     sessionId,

@@ -9,9 +9,9 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { getPublicOrigin, findClientLocalIp, enrichSessionHostname, hostnameFromEmpId, forwardDnsLookup } from '../utils/request-context.js';
+import { getPublicOrigin } from '../utils/request-context.js';
 import { config } from '../config.js';
-import { query, queryOne, execute } from '../db/connection.js';
+import { query, queryOne } from '../db/connection.js';
 import { redis } from './session-store.js';
 import logger from '../utils/logger.js';
 import { parseOAuthState } from './login-routes.js';
@@ -206,40 +206,16 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       return;
     }
 
-    const headerLocalIp    = findClientLocalIp(req);
-    const empHostname      = hostnameFromEmpId(emp.emp_id);
-    const resolvedHostname = empHostname ?? null;
-    const knownLocalIp     = headerLocalIp ?? null;
-
     const sessionId = await createSession({
-      empId:         emp.emp_id,
+      empId:     emp.emp_id,
       email,
-      role:          emp.role ?? 'EMPLOYEE',
-      iss:           'google',
+      role:      emp.role ?? 'EMPLOYEE',
+      iss:       'google',
       sub,
-      ttlHours:      config.session.ttlCorporateHours,
-      ip:            req.ip ?? '',
-      userAgent:     req.get('user-agent') ?? '',
-      clientHostname: resolvedHostname,
-      clientLocalIp:  knownLocalIp,
+      ttlHours:  config.session.ttlCorporateHours,
+      ip:        req.ip ?? '',
+      userAgent: req.get('user-agent') ?? '',
     });
-
-    // Best-effort: forward DNS on hostname to get LAN IP when not from headers.
-    if (!knownLocalIp && resolvedHostname) {
-      forwardDnsLookup(resolvedHostname).then((ip) => {
-        if (!ip) return;
-        return execute(
-          'UPDATE idp_sessions SET client_local_ip = ? WHERE session_id = ? AND client_local_ip IS NULL',
-          [ip, sessionId],
-        );
-      }).catch(() => {});
-    }
-    enrichSessionHostname(sessionId, knownLocalIp, (sid, hostname) =>
-      execute(
-        'UPDATE idp_sessions SET client_hostname = ? WHERE session_id = ? AND client_hostname IS NULL',
-        [hostname, sid],
-      ).then(() => {}),
-    );
 
     setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
     const { returnTo } = parseOAuthState(req.query['state'] as string | undefined);

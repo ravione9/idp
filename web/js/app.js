@@ -7,7 +7,6 @@ import { api } from './api.js?v=2026-06-07-device-v2';
 import { el, esc, initials } from './ui.js';
 import { icon } from './icons.js';
 import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
-import { clearStoredDeviceContext, readStoredDeviceContext } from './device-context.js?v=2026-06-07-device-v2';
 import {
   renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
 } from './views-end-user.js';
@@ -377,12 +376,7 @@ async function main() {
 
   try {
     state.me = await api.me();
-    const deviceContext = readStoredDeviceContext();
-    if (deviceContext && (deviceContext.hostname || deviceContext.localIp || deviceContext.macAddress)) {
-      api.reportDeviceContext(deviceContext)
-        .then(() => clearStoredDeviceContext())
-        .catch(() => {});
-    }
+
   } catch {
     location.href = '/login';
     return;

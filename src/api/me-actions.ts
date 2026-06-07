@@ -21,8 +21,6 @@ import {
   startEnrollment,
 } from '../auth/mfa.js';
 import logger from '../utils/logger.js';
-import { sanitizeDeviceContext } from '../utils/device-context.js';
-import { findClientLocalIp, enrichSessionHostname, hostnameFromEmpId, forwardDnsLookup } from '../utils/request-context.js';
 
 const router = Router();
 
@@ -82,8 +80,8 @@ router.put('/password', async (req: Request, res: Response): Promise<void> => {
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
   const rows = await query<Record<string, unknown>>(
-    `SELECT session_id, iss, created_at, last_active_at, expires_at, ip, user_agent,
-            client_hostname, client_local_ip, revoked_at
+    `SELECT session_id, iss, created_at, last_active_at, expires_at, ip,
+            device_info, geo_location, revoked_at
        FROM idp_sessions
       WHERE emp_id = ? AND expires_at > UTC_TIMESTAMP() AND revoked_at IS NULL
       ORDER BY last_active_at DESC`,
@@ -96,46 +94,6 @@ router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   res.json({ data });
 });
 
-// ---------------------------------------------------------------------------
-// POST /sessions/device-context — attach client hostname / local IP to session
-// ---------------------------------------------------------------------------
-router.post('/sessions/device-context', async (req: Request, res: Response): Promise<void> => {
-  const user = req.user!;
-
-  // Client may send nothing or a partial object — fall back to server-side header detection.
-  const device = sanitizeDeviceContext(req.body);
-  const headerLocalIp = findClientLocalIp(req);
-
-  const effectiveLocalIp  = device?.localIp ?? headerLocalIp ?? null;
-  const effectiveHostname = device?.hostname ?? hostnameFromEmpId(user.empId) ?? null;
-
-  await query(
-    `UPDATE idp_sessions
-        SET client_hostname = COALESCE(client_hostname, ?),
-            client_local_ip  = COALESCE(client_local_ip, ?)
-      WHERE session_id = ? AND emp_id = ? AND revoked_at IS NULL`,
-    [effectiveHostname, effectiveLocalIp, user.sessionId, user.empId],
-  );
-
-  // Best-effort: forward DNS for local IP if hostname known but local IP is not
-  if (!effectiveLocalIp && effectiveHostname) {
-    forwardDnsLookup(effectiveHostname).then((ip) => {
-      if (!ip) return;
-      return query(
-        'UPDATE idp_sessions SET client_local_ip = ? WHERE session_id = ? AND client_local_ip IS NULL',
-        [ip, user.sessionId],
-      );
-    }).catch(() => {});
-  }
-  enrichSessionHostname(user.sessionId, effectiveLocalIp, (sid, hostname) =>
-    query(
-      'UPDATE idp_sessions SET client_hostname = ? WHERE session_id = ? AND client_hostname IS NULL',
-      [hostname, sid],
-    ).then(() => {}),
-  );
-
-  res.json({ success: true });
-});
 
 // ---------------------------------------------------------------------------
 // DELETE /sessions/:id — revoke a session
