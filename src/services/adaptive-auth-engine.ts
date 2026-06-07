@@ -15,7 +15,7 @@
  *   USER_ROLE       { values: string[] }                        Role match
  *   RISK_SCORE      { op: 'gt'|'gte'|'lt'|'lte', value: number } Computed 0–100 score
  *   SENSITIVE_APP   {}                                          App category is Finance/HR/ERP/CRM/PAM/Administration
- *   TOR_PROXY       {}                                          IP flagged as hosting/proxy by ip-api.com
+ *   TOR_PROXY       {}                                          IP flagged as proxy by ip-api.com
  */
 
 import { query, queryOne } from '../db/connection.js';
@@ -91,8 +91,12 @@ interface GeoResult {
  * Synchronous geo lookup during policy evaluation (unlike ip-geo.ts which is
  * fire-and-forget). Times out at 4 s; returns null on any failure.
  *
- * Free ip-api.com: `hosting` = VPS/datacenter/Tor exit. `proxy` = HTTP proxy.
- * Both are free-tier fields despite the docs confusion.
+ * Free ip-api.com:
+ *   - `proxy`   = anonymizing/proxy network signal
+ *   - `hosting` = datacenter/hosting ASN signal (often shared NAT or enterprise egress)
+ *
+ * For login risk, `proxy` drives TOR/Proxy blocking conditions. `hosting` is treated
+ * as a weaker signal to avoid false blocks for legitimate enterprise networks.
  */
 async function fetchGeo(ip: string): Promise<GeoResult | null> {
   if (!ip || isPrivateIp(ip)) return null;
@@ -202,8 +206,9 @@ export async function evaluateAdaptiveAuth(ctx: LoginContext): Promise<Evaluatio
   const isHighRiskCountry = countryCode !== '' && HIGH_RISK_COUNTRIES.has(countryCode);
   if (isHighRiskCountry)   { riskScore += 30; signals.push(`high_risk_country:${countryCode}`); }
 
-  const isTorProxy = (geo?.isProxy ?? false) || (geo?.isHosting ?? false);
-  if (isTorProxy)          { riskScore += 30; signals.push('tor_proxy'); }
+  const isAnonymizingProxy = geo?.isProxy ?? false;
+  if (isAnonymizingProxy)  { riskScore += 30; signals.push('tor_proxy'); }
+  if (geo?.isHosting)      { riskScore += 10; signals.push('hosting_network'); }
 
   // Impossible travel: country changed within 4 hours since last active session
   let isImpossibleTravel = false;
@@ -274,7 +279,7 @@ export async function evaluateAdaptiveAuth(ctx: LoginContext): Promise<Evaluatio
           const types = (cond.values ?? []).map((v) => v.toUpperCase());
           if (types.includes('CORPORATE') && privateIp)          pass = true;
           if (types.includes('EXTERNAL')  && !privateIp)         pass = true;
-          if (types.includes('TOR')       && (geo?.isHosting ?? false)) pass = true;
+          if (types.includes('TOR')       && (geo?.isProxy   ?? false)) pass = true;
           if (types.includes('PROXY')     && (geo?.isProxy   ?? false)) pass = true;
           break;
         }
@@ -290,7 +295,7 @@ export async function evaluateAdaptiveAuth(ctx: LoginContext): Promise<Evaluatio
         case 'NEW_DEVICE':       { pass = isNewDevice;       break; }
         case 'IMPOSSIBLE_TRAVEL':{ pass = isImpossibleTravel; break; }
         case 'SENSITIVE_APP':    { pass = isSensitiveApp;    break; }
-        case 'TOR_PROXY':        { pass = isTorProxy;        break; }
+        case 'TOR_PROXY':        { pass = isAnonymizingProxy; break; }
 
         case 'COUNTRY': {
           const codes  = (cond.values ?? []).map((v) => v.toUpperCase());

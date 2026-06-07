@@ -225,7 +225,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 | External Network + Managed Device | MFA |
 | External Network + Unmanaged Device | STEP_UP (MFA + device-verification flag) |
 | High-Risk Country (`CN`, `RU`, `KP`, `IR`, `BY`, `CU`, `SD`, `SY`, `VE`, `LY`, `MM`, `AF`) | BLOCK |
-| TOR exit node / anonymous proxy / hosting IP | BLOCK |
+| TOR exit node / anonymous proxy IP | BLOCK |
 | Impossible travel (country changed in < 4 h since last session) | MFA |
 | New / unrecognised device | MFA |
 | Risk score ≥ 60 | STEP_UP |
@@ -246,7 +246,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 | `USER_ROLE` | `values: string[]` |
 | `RISK_SCORE` | `op: 'gt'\|'gte'\|'lt'\|'lte'`, `value: number` (0–100) |
 | `SENSITIVE_APP` | *(no extra fields)* — matches apps in sensitive categories |
-| `TOR_PROXY` | *(no extra fields)* — ip-api.com `proxy`/`hosting` flag |
+| `TOR_PROXY` | *(no extra fields)* — ip-api.com `proxy` flag |
 
 **Risk score signals** (computed per login, additive):
 
@@ -255,6 +255,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 | New device | +20 |
 | High-risk country | +30 |
 | TOR / proxy IP | +30 |
+| Hosting/datacenter egress IP | +10 |
 | Impossible travel | +25 |
 
 **Login flow with adaptive auth (`POST /auth/local/login`):**
@@ -806,6 +807,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-06-07 — Avoid false adaptive blocks before MFA enrollment
+
+**Why** — First-time users were sometimes blocked with `ADAPTIVE_BLOCKED` before they could enroll MFA because ip-api `hosting` networks were treated as TOR/proxy signals.
+
+**What changed:**
+
+- **Updated:** `src/services/adaptive-auth-engine.ts` now treats only ip-api `proxy` as TOR/proxy blocking signal (`TOR_PROXY` / `NETWORK_TYPE=TOR`).
+- **Updated:** `src/services/adaptive-auth-engine.ts` now treats ip-api `hosting` as a lower-weight risk signal (`hosting_network`, +10) instead of immediate proxy-block behavior.
+- **Outcome:** first-time enforced users can reach MFA enrollment-required flow in normal enterprise egress/NAT environments while retaining block behavior for anonymizing proxy traffic.
 
 ### TBD — 2026-06-07 — Exclude groups from MFA policy
 
