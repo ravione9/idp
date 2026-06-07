@@ -168,7 +168,7 @@ async function drainBatch(): Promise<void> {
   let rows: OutboxRow[];
   try {
     rows = await query<OutboxRow>(
-      `SELECT id, emp_id, system, op, payload, priority, attempts, max_attempts
+      `SELECT id, emp_id, \`system\`, op, payload, priority, attempts, max_attempts
          FROM adapter_outbox
         WHERE status = 'PENDING'
           AND next_run_at <= UTC_TIMESTAMP()

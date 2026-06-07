@@ -35,11 +35,11 @@ export async function getIdentityLinksForEmp(
   conn?: PoolConnection,
 ): Promise<IdentityLink[]> {
   return query<IdentityLink>(
-    `SELECT id, emp_id, system, external_id, status, auth_kind
+    `SELECT id, emp_id, \`system\`, external_id, status, auth_kind
        FROM identity_links
       WHERE emp_id = ?
         AND status IN ('ACTIVE', 'DISABLED')
-      ORDER BY system ASC`,
+      ORDER BY \`system\` ASC`,
     [empId],
     conn,
   );
@@ -72,7 +72,7 @@ export async function enqueueOutboxOps(
   }
 
   await query(
-    `INSERT INTO adapter_outbox (emp_id, system, op, payload, priority, next_run_at)
+    `INSERT INTO adapter_outbox (emp_id, \`system\`, op, payload, priority, next_run_at)
      VALUES ${placeholders.join(', ')}`,
     values,
     conn,

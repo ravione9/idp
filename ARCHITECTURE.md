@@ -780,6 +780,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
+### `10a8a5e` — 2026-06-07 — Fix MySQL reserved word `system` breaking password writeback
+
+**Why** — Password reset showed `WRITEBACK` SQL syntax error because `system` is reserved in MySQL 8+ and was not backtick-quoted in `getIdentityLinksForEmp` and related queries.
+
+**What changed:**
+
+- **`src/utils/outbox.ts`**, **`src/api/admin-users.ts`**, **`src/api/employees.ts`**, **`src/api/internal.ts`**, **`src/services/outbox-worker.ts`** — quote `` `system` `` column in all `identity_links` / `adapter_outbox` SQL.
+
+---
+
 ### `c1ac5ec` — 2026-06-07 — Admin password reset: AD/Google writeback + persistent UI results
 
 **Why** — Reset only updated Local when AD/Google identity links were missing; success/failure feedback flashed away because the profile drawer re-rendered the Password Reset tab immediately after reset.

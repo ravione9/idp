@@ -135,10 +135,10 @@ router.get(
     const { empId } = req.params;
 
     const links = await query<Record<string, unknown>>(
-      `SELECT id, system, external_id, status, last_synced_at, drift_flag, auth_kind
+      `SELECT id, \`system\`, external_id, status, last_synced_at, drift_flag, auth_kind
          FROM identity_links
         WHERE emp_id = ?
-        ORDER BY system ASC`,
+        ORDER BY \`system\` ASC`,
       [empId],
     );
 
@@ -157,7 +157,7 @@ router.get(
     const { empId } = req.params;
 
     const bindings = await query<Record<string, unknown>>(
-      `SELECT id, system, scope, role_name, granted_at, revoked_at, snapshot_ts
+      `SELECT id, \`system\`, scope, role_name, granted_at, revoked_at, snapshot_ts
          FROM role_bindings
         WHERE emp_id = ?
         ORDER BY granted_at DESC`,

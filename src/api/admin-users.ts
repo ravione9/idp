@@ -60,7 +60,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     where.push('la.id IS NOT NULL');
   } else if (source) {
     // Must have an ACTIVE link for that system
-    where.push(`EXISTS (SELECT 1 FROM identity_links il WHERE il.emp_id = e.emp_id AND il.system = ? AND il.status = 'ACTIVE')`);
+    where.push(`EXISTS (SELECT 1 FROM identity_links il WHERE il.emp_id = e.emp_id AND il.\`system\` = ? AND il.status = 'ACTIVE')`);
     params.push(source);
   }
 
@@ -71,7 +71,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
             e.ilg_state, e.ilg_state_since, e.hire_date, e.manager_emp_id,
             la.role AS admin_role, la.last_login_at, la.active AS local_active,
             COALESCE(
-              GROUP_CONCAT(DISTINCT il.system ORDER BY il.system SEPARATOR ','), ''
+              GROUP_CONCAT(DISTINCT il.\`system\` ORDER BY il.\`system\` SEPARATOR ','), ''
             ) AS identity_sources,
             COUNT(DISTINCT il.id) AS identity_link_count
        FROM employees e
@@ -124,8 +124,8 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
   let identityLinks: Record<string, unknown>[] = [];
   try {
     identityLinks = await query<Record<string, unknown>>(
-      `SELECT id, system, external_id, status, last_synced_at, drift_flag, auth_kind
-         FROM identity_links WHERE emp_id = ? AND status != 'DELETED' ORDER BY system ASC`,
+      `SELECT id, \`system\`, external_id, status, last_synced_at, drift_flag, auth_kind
+         FROM identity_links WHERE emp_id = ? AND status != 'DELETED' ORDER BY \`system\` ASC`,
       [empId],
     );
   } catch (err) {
@@ -157,8 +157,8 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
         if (migrated) employee = migrated;
       }
       identityLinks = await query<Record<string, unknown>>(
-        `SELECT id, system, external_id, status, last_synced_at, drift_flag, auth_kind
-           FROM identity_links WHERE emp_id = ? AND status != 'DELETED' ORDER BY system ASC`,
+        `SELECT id, \`system\`, external_id, status, last_synced_at, drift_flag, auth_kind
+           FROM identity_links WHERE emp_id = ? AND status != 'DELETED' ORDER BY \`system\` ASC`,
         [backfill.empId],
       );
     }
@@ -488,7 +488,7 @@ router.post('/:empId/link-identity', async (req: Request, res: Response): Promis
   if (!emp) { res.status(404).json({ error: 'Employee not found' }); return; }
 
   await execute(
-    `INSERT INTO identity_links (emp_id, system, external_id, status, auth_kind)
+    `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind)
      VALUES (?, ?, ?, 'ACTIVE', ?)
      ON DUPLICATE KEY UPDATE status='ACTIVE', auth_kind=VALUES(auth_kind), last_synced_at=UTC_TIMESTAMP()`,
     [empId, system, externalId, authKind],

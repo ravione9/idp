@@ -351,7 +351,7 @@ router.post('/drift-detection', async (_req: Request, res: Response): Promise<vo
       il_status:  string;
       emp_state:  string;
     }>(
-      `SELECT il.id AS il_id, il.emp_id, il.system, il.external_id, il.status AS il_status, e.ilg_state AS emp_state
+      `SELECT il.id AS il_id, il.emp_id, il.\`system\`, il.external_id, il.status AS il_status, e.ilg_state AS emp_state
          FROM identity_links il
          JOIN employees e ON e.emp_id = il.emp_id
         WHERE il.status = 'ACTIVE'
