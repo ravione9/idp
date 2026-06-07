@@ -228,10 +228,17 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       return;
     }
 
+    const portalAccount = await queryOne<{ role: string }>(
+      `SELECT role FROM local_accounts
+        WHERE emp_id = ? AND active = 1 AND role IN ('ADMIN', 'SUPER_ADMIN')`,
+      [emp.emp_id],
+    );
+    const sessionRole = portalAccount?.role ?? 'EMPLOYEE';
+
     const sessionId = await createSession({
       empId:     emp.emp_id,
       email,
-      role:      emp.role ?? 'EMPLOYEE',
+      role:      sessionRole,
       iss:       'google',
       sub,
       ttlHours:  config.session.ttlCorporateHours,

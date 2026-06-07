@@ -2916,27 +2916,10 @@ function initUsersTab(panel, me = null) {
           ['Department',       esc(emp.dept_id    || '—')],
           ['Employment Type',  esc(emp.employment_type || '—')],
           ['State',            stateBadge(emp.ilg_state)],
-          ['Admin Role',       (() => {
-            const currentRole = emp.admin_role || 'None';
-            const isSuperAdmin = me?.employee?.role === 'SUPER_ADMIN';
-            if (!isSuperAdmin) {
-              return emp.admin_role
-                ? `<span class="badge badge-primary">${esc(emp.admin_role)}</span>`
-                : '<span class="muted">None</span>';
-            }
-            return `
-              <span class="role-change-wrap" style="display:inline-flex;align-items:center;gap:0.4rem">
-                <select class="form-select form-select-sm" id="pp-role-select" style="padding:0.15rem 0.5rem;height:auto;font-size:0.8rem">
-                  <option value="USER"${currentRole==='USER'?' selected':''}>User</option>
-                  <option value="MANAGER"${currentRole==='MANAGER'?' selected':''}>Manager</option>
-                  <option value="HRBP"${currentRole==='HRBP'?' selected':''}>HRBP</option>
-                  <option value="ADMIN"${currentRole==='ADMIN'?' selected':''}>Admin</option>
-                  <option value="SUPER_ADMIN"${currentRole==='SUPER_ADMIN'?' selected':''}>Super Admin</option>
-                </select>
-                <button class="btn btn-sm btn-primary" id="pp-role-save" style="padding:0.15rem 0.6rem;font-size:0.8rem">Save</button>
-                <span id="pp-role-msg" style="font-size:0.75rem"></span>
-              </span>`;
-          })()],
+          ['Designation',      emp.role ? esc(emp.role) : '<span class="muted">—</span>'],
+          ['Portal Administrator', emp.portal_role
+            ? `<span class="badge badge-primary">${esc(emp.portal_role)}</span>`
+            : '<span class="muted">None — assign from Identity → Administrators</span>'],
           ['Hire Date',        emp.hire_date ? fmtDate(emp.hire_date) : '—'],
           ['Last Login',       emp.last_login_at ? fmtDate(emp.last_login_at) : '—'],
           ['Manager',          emp.manager_name
@@ -2971,28 +2954,6 @@ function initUsersTab(panel, me = null) {
             </table>
           </div>` : ''}`;
 
-        // Wire up role-save button for SUPER_ADMIN
-        const roleSaveBtn = body.querySelector('#pp-role-save');
-        if (roleSaveBtn) {
-          roleSaveBtn.addEventListener('click', async () => {
-            const select = body.querySelector('#pp-role-select');
-            const msgEl  = body.querySelector('#pp-role-msg');
-            const newRole = select.value;
-            roleSaveBtn.disabled = true;
-            msgEl.textContent = 'Saving…';
-            msgEl.style.color = '';
-            try {
-              await api.updateUserRole(empId, newRole);
-              profileData.employee.admin_role = newRole;
-              // Re-render so the dropdown and badge reflect the saved value
-              renderTab('overview');
-            } catch (e) {
-              msgEl.textContent = 'Error: ' + e.message;
-              msgEl.style.color = 'var(--color-danger, #dc2626)';
-              roleSaveBtn.disabled = false;
-            }
-          });
-        }
       }
 
       // ── Identity Links tab ───────────────────────────────────────────────────

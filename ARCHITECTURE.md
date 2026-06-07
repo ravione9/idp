@@ -390,7 +390,7 @@ To add a new migration:
 | `GET` | `/api/admin/users` | Paginated employee list (search, state, identity source filter) |
 | `GET` | `/api/admin/users/:empId` | Full profile: employee, identity links, sessions, password writeback log |
 | `POST` | `/api/admin/users/local` | Create local employee + password account |
-| `PATCH` | `/api/admin/users/:empId/role` | Change admin role for existing user (SUPER_ADMIN only) |
+| `PATCH` | `/api/admin/users/:empId/role` | Assign/revoke portal administrator access (`local_accounts` only; does not change job designation) |
 | `GET` | `/api/admin/users/:empId/mfa` | Admin MFA status for a specific user |
 | `POST` | `/api/admin/users/:empId/mfa/enroll` | Start user MFA enrollment (returns QR + secret) |
 | `POST` | `/api/admin/users/:empId/mfa/confirm` | Confirm user MFA with 6-digit code |
@@ -734,17 +734,19 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### TBD — 2026-06-07 — Role assignment for existing users
+### TBD — 2026-06-07 — Separate portal administrator from job designation
 
-**Why** — Admin roles could only be set at account-creation time. There was no way for a Super Admin to promote or demote an existing user (e.g. set someone to ADMIN or SUPER_ADMIN).
+**Why** — `employees.role` holds HR/job designation (e.g. "Senior Executive - Human Capital") from directory sync. Portal console access (ADMIN / SUPER_ADMIN) is a separate duty and must not overwrite or display as designation.
 
 **What changed:**
 
-- **`src/api/admin-users.ts`** — new `PATCH /:empId/role` route; validates with zod, updates both `employees.role` and `local_accounts.role`; gated behind `requireRole('SUPER_ADMIN')`.
-- **`web/js/api.js`** — `updateUserRole(empId, role)` client method.
-- **`web/js/views-stubs.js`** — `viewDirectorySync` and `initUsersTab` accept `me`; overview tab "Admin Role" row shows an inline dropdown + Save button for Super Admins, read-only badge for all others.
-- **`web/js/app.js`** — passes `me` when calling `viewDirectorySync`.
-- **`ARCHITECTURE.md`** — §6 API table updated.
+- **`employees.role`** — job designation only (from AD/HRMS/Google sync); shown as **Designation** in user profiles.
+- **`local_accounts.role`** — portal access when `ADMIN` or `SUPER_ADMIN`; assigned only from **Identity → Administrators** (add from directory or create local account).
+- **`src/services/local-admin.ts`** — `getPortalRole`, `assignPortalRole`, `revokePortalRole`; administrators list reads `local_accounts` only.
+- **`src/api/admin-users.ts`** — `PATCH /:empId/role` updates portal access in `local_accounts` only; API returns `portal_role` (not designation).
+- **`src/auth/middleware.ts`**, **`src/services/ad-auth.ts`** — Google/AD login session role resolved from portal assignment in `local_accounts`.
+- **`src/api/me.ts`** — exposes `session.portalRole` for frontend admin gating.
+- **`web/js/ui.js`**, **`web/js/app.js`**, **`web/js/views-admin.js`**, **`web/js/views-stubs.js`**, **`web/js/views-end-user.js`** — admin UI uses `portalRole`; profiles show Designation + read-only Portal Administrator.
 
 ### f632254 — 2026-06-07 — Persist SPA route and search across page refresh
 

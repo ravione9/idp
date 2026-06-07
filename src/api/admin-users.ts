@@ -18,7 +18,7 @@ import { requireRole } from '../auth/rbac.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { writebackPassword, ensureWritebackIdentityLinks } from '../services/password-writeback.js';
 import { backfillAdIdentityLinkIfMissing } from '../services/ad-sync.js';
-import { hashPassword } from '../services/local-admin.js';
+import { assignPortalRole, hashPassword, revokePortalRole } from '../services/local-admin.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import logger from '../utils/logger.js';
 import { z } from 'zod';
@@ -69,7 +69,8 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   const rows = await query<Record<string, unknown>>(
     `SELECT e.emp_id, e.full_name, e.email_corp, e.dept_id, e.employment_type,
             e.ilg_state, e.ilg_state_since, e.hire_date, e.manager_emp_id,
-            COALESCE(la.role, e.role) AS admin_role, la.last_login_at, la.active AS local_active,
+            CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN') THEN la.role ELSE NULL END AS portal_role,
+            la.last_login_at, la.active AS local_active,
             COALESCE(
               GROUP_CONCAT(DISTINCT il.\`system\` ORDER BY il.\`system\` SEPARATOR ','), ''
             ) AS identity_sources,
@@ -107,7 +108,7 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
     `SELECT e.*,
             m.full_name  AS manager_name,
             m.email_corp AS manager_email,
-            COALESCE(la.role, e.role) AS admin_role,
+            CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN') THEN la.role ELSE NULL END AS portal_role,
             la.last_login_at,
             la.active    AS local_active
        FROM employees e
@@ -145,7 +146,7 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
           `SELECT e.*,
                   m.full_name  AS manager_name,
                   m.email_corp AS manager_email,
-                  COALESCE(la.role, e.role) AS admin_role,
+                  CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN') THEN la.role ELSE NULL END AS portal_role,
                   la.last_login_at,
                   la.active    AS local_active
              FROM employees e
@@ -411,9 +412,11 @@ router.post('/:empId/reset-password', asyncHandler(async (req: Request, res: Res
         error: `Corporate email already tied to local account ${emailTaken.emp_id}`,
       });
     } else {
-      const localRole = ['ADMIN', 'SUPER_ADMIN', 'HRBP', 'MANAGER'].includes(employee.role ?? '')
-        ? employee.role!
-        : 'USER';
+      const existingPortal = await queryOne<{ role: string }>(
+        `SELECT role FROM local_accounts WHERE emp_id = ? AND active = 1`,
+        [empId],
+      );
+      const localRole = existingPortal?.role ?? 'USER';
       await execute(
         `INSERT INTO local_accounts (emp_id, email, password_hash, role, created_by, active)
          VALUES (?, ?, ?, ?, ?, 1)
@@ -502,10 +505,10 @@ router.post('/:empId/link-identity', async (req: Request, res: Response): Promis
 });
 
 // ---------------------------------------------------------------------------
-// PATCH /:empId/role  — change admin role for an existing user
+// PATCH /:empId/role  — assign or revoke portal administrator access
 // ---------------------------------------------------------------------------
 const patchRoleSchema = z.object({
-  role: z.enum(['USER', 'MANAGER', 'HRBP', 'ADMIN', 'SUPER_ADMIN']),
+  role: z.enum(['USER', 'ADMIN', 'SUPER_ADMIN']),
 });
 
 router.patch('/:empId/role', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response): Promise<void> => {
@@ -526,15 +529,14 @@ router.patch('/:empId/role', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(a
     return;
   }
 
-  // Update both tables so local login and employee record stay in sync
-  await execute(`UPDATE employees SET role = ? WHERE emp_id = ?`, [role, empId]);
-  await execute(
-    `UPDATE local_accounts SET role = ? WHERE emp_id = ? AND active = 1`,
-    [role, empId],
-  );
+  if (role === 'USER') {
+    await revokePortalRole(empId);
+  } else {
+    await assignPortalRole(empId, role, adminId);
+  }
 
-  logger.info({ empId, role, adminId }, 'Admin role updated by super admin');
-  res.json({ success: true, empId, role });
+  logger.info({ empId, role, adminId }, 'Portal administrator role updated');
+  res.json({ success: true, empId, portalRole: role === 'USER' ? null : role });
 }));
 
 // ---------------------------------------------------------------------------

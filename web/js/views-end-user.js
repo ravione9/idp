@@ -1,10 +1,9 @@
 /* End-user views: Home (app launcher), My Access, Request Access, My Tasks, Settings. */
 import { api } from './api.js?v=2026-06-07-groups-sync';
-import { el, esc, fmtDate, ilgBadge, initials, persistSearch, syncAppUrl } from './ui.js?v=2026-06-08';
+import { el, esc, fmtDate, ilgBadge, initials, persistSearch, syncAppUrl, isPortalAdmin } from './ui.js?v=2026-06-08';
 import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 
-const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
 function loginReturnTo() {
   const raw = new URLSearchParams(location.search).get('returnTo');
@@ -258,7 +257,7 @@ export function renderLogin() {
 
 /* ---------- Home: app launcher (JumpCloud-style with favorites + search) ---------- */
 export async function viewHome(me, content, initialTab = 'all') {
-  const isAdmin = ROLES_ADMIN.includes(me.employee?.role);
+  const isAdmin = isPortalAdmin(me);
 
   let allApps = [];
   let samlEnabled = false;
@@ -731,7 +730,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
         <div class="kv"><div class="k">Full name</div><div class="v">${esc(me.employee?.full_name || '—')}</div></div>
         <div class="kv"><div class="k">Email</div><div class="v">${esc(me.session?.email || '—')}</div></div>
         <div class="kv"><div class="k">Employee ID</div><div class="v"><code>${esc(me.employee?.emp_id || '—')}</code></div></div>
-        <div class="kv"><div class="k">Role</div><div class="v"><span class="badge badge-info">${esc(me.employee?.role || 'USER')}</span></div></div>
+        <div class="kv"><div class="k">Designation</div><div class="v"><span class="badge badge-info">${esc(me.employee?.role || '—')}</span></div></div>
         <div class="kv"><div class="k">Department</div><div class="v">${esc(me.employee?.dept_id || '—')}</div></div>
         <div class="kv"><div class="k">ILG state</div><div class="v">${ilgBadge(me.employee?.ilg_state)}</div></div>
       </div></div>

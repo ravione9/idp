@@ -1,5 +1,20 @@
 /* Shared UI helpers: DOM, escape, formatters, badges, charts. */
 
+const PORTAL_ADMIN_ROLES = new Set(['ADMIN', 'SUPER_ADMIN']);
+
+/** Portal console access role (separate from employees.role job designation). */
+export function portalRoleOf(me) {
+  return me?.session?.portalRole ?? 'EMPLOYEE';
+}
+
+export function isPortalAdmin(me) {
+  return PORTAL_ADMIN_ROLES.has(portalRoleOf(me));
+}
+
+export function isPortalSuperAdmin(me) {
+  return portalRoleOf(me) === 'SUPER_ADMIN';
+}
+
 export function el(html) {
   const t = document.createElement('template');
   t.innerHTML = html.trim();

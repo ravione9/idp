@@ -236,7 +236,13 @@ export async function authenticateAdCorporateUser(
     );
   }
 
-  const role = employee.role && VALID_ROLES.has(employee.role) ? employee.role : 'USER';
+  const portalAccount = await queryOne<{ role: string }>(
+    `SELECT role FROM local_accounts
+      WHERE emp_id = ? AND active = 1 AND role IN ('ADMIN', 'SUPER_ADMIN')`,
+    [effectiveEmpId],
+  );
+  const role = portalAccount?.role
+    ?? (employee.role && VALID_ROLES.has(employee.role) ? employee.role : 'USER');
   const passwordHash = await hashPassword(password);
 
   await execute(

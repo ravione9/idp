@@ -4,7 +4,7 @@
    Layout: SailPoint top nav + miniOrange-style admin sidebar.
    ============================================================ */
 import { api } from './api.js?v=2026-06-07-device-v2';
-import { el, esc, initials, persistSearch, syncAppUrl } from './ui.js?v=2026-06-08';
+import { el, esc, initials, persistSearch, syncAppUrl, portalRoleOf, isPortalAdmin, isPortalSuperAdmin } from './ui.js?v=2026-06-08';
 import { icon } from './icons.js';
 import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import {
@@ -25,8 +25,6 @@ import {
   viewSsoReports,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
 } from './views-stubs.js?v=2026-06-08';
-
-const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
 /* ----------------------------------------------------------------
    ROUTES — every navigable destination, indexed by key.
@@ -131,8 +129,8 @@ window.LILG_NAV = navigate;
    ---------------------------------------------------------------- */
 function buildShell() {
   const me = state.me;
-  const isAdmin = ROLES_ADMIN.includes(me.employee?.role);
-  const isSuper = me.employee?.role === 'SUPER_ADMIN';
+  const isAdmin = isPortalAdmin(me);
+  const isSuper = isPortalSuperAdmin(me);
 
   const primaryButtons = PRIMARY_NAV_ORDER.map((key) => {
     const r = ROUTES[key];
@@ -189,7 +187,7 @@ function buildShell() {
             <span class="avatar">${esc(initials(me.employee?.full_name || me.session?.email))}</span>
             <div>
               <div class="profile-name">${esc(me.employee?.full_name || me.session?.email || 'User')}</div>
-              <div class="profile-role">${esc(me.employee?.role || 'USER')}</div>
+              <div class="profile-role">${esc(me.employee?.role || 'Employee')}${isPortalAdmin(me) ? ` · ${esc(portalRoleOf(me))}` : ''}</div>
             </div>
             <div class="profile-dropdown" id="profile-dropdown">
               <a href="#" data-key="settings">Account settings</a>
@@ -347,8 +345,8 @@ async function navigate(key, opts = {}) {
 
   const route = ROUTES[key];
   if (!route) return;
-  if (route.admin && !ROLES_ADMIN.includes(me.employee?.role)) return;
-  if (route.super && me.employee?.role !== 'SUPER_ADMIN') return;
+  if (route.admin && !isPortalAdmin(me)) return;
+  if (route.super && !isPortalSuperAdmin(me)) return;
 
   state.current = key;
 

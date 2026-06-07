@@ -11,6 +11,60 @@ import type { Role } from '../auth/rbac.js';
 
 const BCRYPT_ROUNDS = 12;
 const ADMIN_ROLES: Role[] = ['ADMIN', 'SUPER_ADMIN'];
+const PORTAL_ADMIN_ROLES = new Set(['ADMIN', 'SUPER_ADMIN']);
+
+/** Portal console role stored in local_accounts — separate from employees.role (job designation). */
+export async function getPortalRole(empId: string): Promise<Role | null> {
+  const row = await queryOne<{ role: string }>(
+    `SELECT role FROM local_accounts
+      WHERE emp_id = ? AND active = 1 AND role IN ('ADMIN', 'SUPER_ADMIN')`,
+    [empId],
+  );
+  return row && PORTAL_ADMIN_ROLES.has(row.role) ? (row.role as Role) : null;
+}
+
+export async function assignPortalRole(
+  empId: string,
+  role: 'ADMIN' | 'SUPER_ADMIN',
+  createdBy: string,
+): Promise<void> {
+  const emp = await queryOne<{ email_corp: string | null }>(
+    'SELECT email_corp FROM employees WHERE emp_id = ?',
+    [empId],
+  );
+  if (!emp?.email_corp) {
+    throw new Error('Employee not found or has no corporate email');
+  }
+
+  const email = emp.email_corp.toLowerCase().trim();
+  const existing = await queryOne<{ id: number }>(
+    'SELECT id FROM local_accounts WHERE emp_id = ?',
+    [empId],
+  );
+
+  if (existing) {
+    await query(
+      'UPDATE local_accounts SET role = ?, active = 1 WHERE emp_id = ?',
+      [role, empId],
+    );
+    return;
+  }
+
+  const passwordHash = await hashPassword(`${uuidv4()}${uuidv4()}`);
+  await query(
+    `INSERT INTO local_accounts (emp_id, email, password_hash, role, created_by, active)
+     VALUES (?, ?, ?, ?, ?, 1)`,
+    [empId, email, passwordHash, role, createdBy],
+  );
+}
+
+export async function revokePortalRole(empId: string): Promise<void> {
+  await query(
+    `UPDATE local_accounts SET role = 'USER'
+      WHERE emp_id = ? AND active = 1 AND role IN ('ADMIN', 'SUPER_ADMIN')`,
+    [empId],
+  );
+}
 
 export interface LocalAccountRow {
   id:           number;
@@ -69,21 +123,13 @@ export async function touchLocalLogin(accountId: number): Promise<void> {
 
 export async function listLocalAdmins(): Promise<LocalAccountRow[]> {
   return query<LocalAccountRow>(
-    `SELECT
-       COALESCE(la.id, 0)                        AS id,
-       e.emp_id,
-       e.full_name,
-       COALESCE(la.email, e.email_corp)           AS email,
-       COALESCE(la.role, e.role)                  AS role,
-       COALESCE(la.active, 1)                     AS active,
-       COALESCE(la.created_at, e.hire_date)       AS created_at,
-       la.last_login_at,
-       IF(la.id IS NOT NULL, 1, 0)                AS has_local_account
-     FROM employees e
-     LEFT JOIN local_accounts la ON la.emp_id = e.emp_id AND la.active = 1
-     WHERE COALESCE(la.role, e.role) IN ('ADMIN', 'SUPER_ADMIN')
-       AND e.ilg_state = 'ACTIVE'
-     ORDER BY COALESCE(la.created_at, e.hire_date) DESC`,
+    `SELECT la.id, la.emp_id, e.full_name, la.email, la.role, la.active,
+            la.created_at, la.last_login_at,
+            IF(e.emp_id LIKE 'LOC%', 1, 0) AS has_local_account
+       FROM local_accounts la
+       JOIN employees e ON e.emp_id = la.emp_id
+      WHERE la.role IN ('ADMIN', 'SUPER_ADMIN') AND la.active = 1
+      ORDER BY la.created_at DESC`,
     [],
   );
 }
@@ -118,9 +164,9 @@ export async function createLocalAdministrator(params: {
   await transaction(async (conn) => {
     await conn.execute(
       `INSERT INTO employees
-         (emp_id, full_name, email_corp, hire_date, employment_type, hrms_status, ilg_state, role)
-       VALUES (?, ?, ?, CURDATE(), 'CORPORATE', 'ACTIVE', 'ACTIVE', ?)`,
-      [empId, params.fullName, email, params.role],
+         (emp_id, full_name, email_corp, hire_date, employment_type, hrms_status, ilg_state)
+       VALUES (?, ?, ?, CURDATE(), 'CORPORATE', 'ACTIVE', 'ACTIVE')`,
+      [empId, params.fullName, email],
     );
 
     await conn.execute(
@@ -175,7 +221,7 @@ export async function ensureMasterAdminFromEnv(): Promise<void> {
 
   await query(
     `UPDATE employees
-        SET full_name = ?, role = 'SUPER_ADMIN', hrms_status = 'ACTIVE', ilg_state = 'ACTIVE'
+        SET full_name = ?, hrms_status = 'ACTIVE', ilg_state = 'ACTIVE'
       WHERE emp_id = ?`,
     [master.fullName, existing.emp_id],
   );

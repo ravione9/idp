@@ -1,11 +1,9 @@
 /* Admin views: Dashboard, SAML apps, App catalog, Connectors, Users, Admins,
    Reviews, SoD, Risk, Authentication, Audit, Reports. */
 import { api } from './api.js?v=2026-06-07-groups-sync';
-import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut, persistSearch, syncAppUrl } from './ui.js?v=2026-06-08';
+import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut, persistSearch, syncAppUrl, isPortalSuperAdmin } from './ui.js?v=2026-06-08';
 import { icon as svgIcon } from './icons.js';
 import { viewOidcApps, viewPrebuiltApps } from './views-stubs.js?v=2026-06-07-c';
-
-const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
 // Shared helpers (mirrors views-stubs.js — not yet in a shared module)
 function openModal(html) {
@@ -792,7 +790,7 @@ export async function viewIgaApps(content, opts = {}) {
 /* ---------- SAML Applications (legacy CRUD) ---------- */
 export async function viewSamlApps(me, content, opts = {}) {
   const embed = !!opts.embed;
-  const isSuper = me.employee?.role === 'SUPER_ADMIN';
+  const isSuper = isPortalSuperAdmin(me);
 
   const actionBtn = isSuper
     ? `<button class="btn btn-primary" id="sa-new-btn">+ Register SAML App</button>`
@@ -1028,7 +1026,7 @@ export async function viewUsers(content) {
           <span id="users-count" class="muted"></span>
         </div>
       </div>
-      <table><thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Type</th><th>State</th><th>Admin role</th><th>Last login</th></tr></thead>
+      <table><thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Type</th><th>State</th><th>Portal access</th><th>Last login</th></tr></thead>
         <tbody><tr><td colspan="7" class="loading-row"><span class="spinner"></span></td></tr></tbody></table>
     </div></div>`);
   content.replaceChildren(wrap);
@@ -1045,7 +1043,7 @@ export async function viewUsers(content) {
           </div></td>
           <td>${esc(u.email_corp)}</td><td>${esc(u.dept_id || '—')}</td><td>${esc(u.employment_type || '—')}</td>
           <td>${ilgBadge(u.ilg_state)}</td>
-          <td>${u.admin_role ? `<span class="badge badge-info">${esc(u.admin_role)}</span>` : '<span class="muted">—</span>'}</td>
+          <td>${u.portal_role ? `<span class="badge badge-info">${esc(u.portal_role)}</span>` : '<span class="muted">—</span>'}</td>
           <td class="muted">${fmtDate(u.last_login_at)}</td>
         </tr>`).join('')
         : `<tr><td colspan="7" class="empty-state"><span class="empty-icon">◍</span>No users found</td></tr>`;
@@ -1067,7 +1065,7 @@ export async function viewUsers(content) {
 
 /* ---------- Administrators ---------- */
 export async function viewAdmins(content) {
-  const wrap = el(`<div>${header('Administrators', 'Accounts with admin access to this IdP console')}
+  const wrap = el(`<div>${header('Administrators', 'Portal console access — separate from job designation in the employee directory')}
 
     <!-- ── Add from Directory ──────────────────────────────────────────── -->
     <details class="card" open style="margin-bottom:1rem">
@@ -1198,7 +1196,7 @@ export async function viewAdmins(content) {
     searchTimer = setTimeout(async () => {
       try {
         const r = await api.listUsersUnified(q, '', '', 10, 0);
-        const items = (r.data || []).filter(u => !['ADMIN','SUPER_ADMIN'].includes(u.admin_role));
+        const items = (r.data || []).filter(u => !['ADMIN','SUPER_ADMIN'].includes(u.portal_role));
         if (!items.length) {
           afdResults.innerHTML = `<div class="muted" style="padding:0.4rem 0;font-size:0.85rem">No matching users found (already admins are hidden)</div>`;
           return;

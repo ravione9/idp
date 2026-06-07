@@ -35,6 +35,7 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
       email:     user.email,
       iss:       user.iss,
       expiresAt: user.expiresAt,
+      portalRole: role,
     },
     employee: emp,
     capabilities: {
