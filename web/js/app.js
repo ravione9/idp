@@ -3,11 +3,11 @@
    Top nav (workspace) + admin sidebar (when in Admin).
    Layout: SailPoint top nav + miniOrange-style admin sidebar.
    ============================================================ */
-import { api } from './api.js?v=2026-06-07-session-device';
+import { api } from './api.js?v=2026-06-07-device-v2';
 import { el, esc, initials } from './ui.js';
 import { icon } from './icons.js';
 import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
-import { clearStoredDeviceContext, readStoredDeviceContext } from './device-context.js?v=2026-06-07-session-device';
+import { clearStoredDeviceContext, readStoredDeviceContext } from './device-context.js?v=2026-06-07-device-v2';
 import {
   renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
 } from './views-end-user.js';
@@ -25,7 +25,7 @@ import {
   viewWorkflowLibrary, viewEventTriggers, viewNotifications,
   viewSsoReports,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
-} from './views-stubs.js?v=2026-06-07-session-device';
+} from './views-stubs.js?v=2026-06-07-device-v2';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 

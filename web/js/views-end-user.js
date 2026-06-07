@@ -3,7 +3,7 @@ import { api } from './api.js?v=2026-06-07-groups-sync';
 import { el, esc, fmtDate, ilgBadge, initials } from './ui.js';
 import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
-import { ensureDeviceContext, readStoredDeviceContext } from './device-context.js?v=2026-06-07-session-device';
+import { ensureDeviceContext, readStoredDeviceContext } from './device-context.js?v=2026-06-07-device-v2';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
@@ -124,7 +124,8 @@ export function renderLogin() {
       e.preventDefault();
       pwErr.innerHTML = '';
       const password = new FormData(e.target).get('password');
-      const deviceContext = readStoredDeviceContext();
+      // Always await fresh collection at submit time so a just-started local agent is detected.
+      const deviceContext = await ensureDeviceContext().catch(() => null);
       try {
         const r = await api.localLogin(email, password, deviceContext);
         if (r && r.mfaRequired && r.challengeId) {
