@@ -16,6 +16,7 @@ import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
+import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // ---------------------------------------------------------------------------
@@ -573,9 +574,9 @@ function loadConnectorConfig(connectorId: string): Promise<Record<string, unknow
 
 function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
   const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
-  const port       = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
-  const useSsl     = cfg['useSsl'] !== undefined ? Boolean(cfg['useSsl']) : config.ad.url.startsWith('ldaps');
-  const startTls   = cfg['startTls'] !== undefined ? Boolean(cfg['startTls']) : false;
+  const useSsl     = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
+  const startTls   = parseConnectorBoolean(cfg['startTls'], false);
+  const port       = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
   const bindDn     = (cfg['bindDn']       as string | undefined) || config.ad.bindDn;
   const bindPass   = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
   const baseDn     = (cfg['baseDn']       as string | undefined) || config.ad.baseDn;
@@ -603,8 +604,15 @@ export async function backfillAdIdentityLinkIfMissing(
 
   const conn = await queryOne<{ id: string }>(
     `SELECT id FROM connectors
-      WHERE connector_type IN ('AD', 'LDAP') AND status = 'ACTIVE'
-      ORDER BY last_sync_at DESC
+      WHERE connector_type IN ('AD', 'LDAP') AND status IN ('ACTIVE', 'CONNECTED', 'CONFIGURED')
+      ORDER BY
+        CASE status
+          WHEN 'ACTIVE' THEN 0
+          WHEN 'CONNECTED' THEN 1
+          ELSE 2
+        END,
+        last_sync_at DESC,
+        updated_at DESC
       LIMIT 1`,
     [],
   );
@@ -715,9 +723,9 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   }
 
   const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
-  const port       = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
-  const useSsl     = cfg['useSsl'] !== undefined ? Boolean(cfg['useSsl']) : config.ad.url.startsWith('ldaps');
-  const startTls   = cfg['startTls'] !== undefined ? Boolean(cfg['startTls']) : false;
+  const useSsl     = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
+  const startTls   = parseConnectorBoolean(cfg['startTls'], false);
+  const port       = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
   const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
   logger.info(

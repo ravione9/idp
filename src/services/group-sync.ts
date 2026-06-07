@@ -9,6 +9,7 @@ import { query, queryOne, execute } from '../db/connection.js';
 import { ADAdapter } from '../adapters/ad-adapter.js';
 import { redis } from '../auth/session-store.js';
 import { config } from '../config.js';
+import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import {
   buildGoogleJwtAuth,
   resolveGoogleSyncScope,
@@ -225,9 +226,9 @@ export async function syncGoogleDirectoryGroups(
 
 function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
   const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
-  const port = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
-  const useSsl = cfg['useSsl'] !== undefined ? Boolean(cfg['useSsl']) : config.ad.url.startsWith('ldaps');
-  const startTls = cfg['startTls'] !== undefined ? Boolean(cfg['startTls']) : false;
+  const useSsl = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
+  const startTls = parseConnectorBoolean(cfg['startTls'], false);
+  const port = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
   const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
   const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
   const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;

@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import { queryOne, execute } from '../db/connection.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
+import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import { hashPassword } from './local-admin.js';
 import { backfillAdIdentityLinkIfMissing } from './ad-sync.js';
 
@@ -22,8 +23,15 @@ function parseConnectorConfig(raw: string | Record<string, unknown>): Record<str
 async function loadActiveAdConnectorConfig(): Promise<Record<string, unknown> | null> {
   const row = await queryOne<{ config_json: string | Record<string, unknown> }>(
     `SELECT config_json FROM connectors
-      WHERE connector_type IN ('AD', 'LDAP') AND status = 'ACTIVE'
-      ORDER BY updated_at DESC LIMIT 1`,
+      WHERE connector_type IN ('AD', 'LDAP') AND status IN ('ACTIVE', 'CONNECTED', 'CONFIGURED')
+      ORDER BY
+        CASE status
+          WHEN 'ACTIVE' THEN 0
+          WHEN 'CONNECTED' THEN 1
+          ELSE 2
+        END,
+        updated_at DESC
+      LIMIT 1`,
     [],
   );
   if (!row) return null;
@@ -32,9 +40,9 @@ async function loadActiveAdConnectorConfig(): Promise<Record<string, unknown> | 
 
 function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
   const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
-  const port = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
-  const useSsl = cfg['useSsl'] !== undefined ? Boolean(cfg['useSsl']) : config.ad.url.startsWith('ldaps');
-  const startTls = cfg['startTls'] !== undefined ? Boolean(cfg['startTls']) : false;
+  const useSsl = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
+  const startTls = parseConnectorBoolean(cfg['startTls'], false);
+  const port = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
   const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
   const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
   const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;

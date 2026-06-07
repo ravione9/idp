@@ -17,6 +17,7 @@ import { requireRole } from '../auth/rbac.js';
 import { execute, queryOne } from '../db/connection.js';
 import { safeQuery } from '../db/safe-query.js';
 import logger from '../utils/logger.js';
+import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { triggerConnectorSync } from '../services/connector-dispatcher.js';
 import {
@@ -416,9 +417,9 @@ router.post(
 
       if (type === 'AD' || type === 'LDAP') {
         const host     = (cfg['host'] as string | undefined)?.trim();
-        const port     = Number(cfg['port'] ?? 389);
-        const useSsl   = Boolean(cfg['useSsl']);
-        const startTls = Boolean(cfg['startTls']);
+        const useSsl   = parseConnectorBoolean(cfg['useSsl'], false);
+        const startTls = parseConnectorBoolean(cfg['startTls'], false);
+        const port     = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
         const bindDn   = (cfg['bindDn'] as string | undefined)?.trim();
         const bindPass = cfg['bindPassword'] as string | undefined;
 
