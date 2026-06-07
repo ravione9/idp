@@ -780,7 +780,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
-### `663c1b9` — 2026-06-07 — Admin password reset: AD/Google writeback + persistent UI results
+### `c1ac5ec` — 2026-06-07 — Admin password reset: AD/Google writeback + persistent UI results
 
 **Why** — Reset only updated Local when AD/Google identity links were missing; success/failure feedback flashed away because the profile drawer re-rendered the Password Reset tab immediately after reset.
 
