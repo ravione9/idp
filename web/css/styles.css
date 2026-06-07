@@ -194,7 +194,7 @@ body {
 
 /* app-root wrapper — must carry height:100% down to .shell */
 .app-root {
-  height: 100%;
+  height: 100vh;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -210,6 +210,14 @@ body {
 .app-root > .shell {
   flex: 1 1 0;
   min-height: 0;
+}
+
+@supports (height: 100dvh) {
+  #app,
+  .app-root { min-height: 100dvh; }
+  #app:has(.shell),
+  #app:has(.app-root),
+  .app-root:has(.shell) { height: 100dvh; }
 }
 
 a { color: var(--primary); text-decoration: none; }
@@ -379,6 +387,9 @@ button { font-family: inherit; cursor: pointer; }
    ============================================================ */
 .modal.modal-wizard {
   width: 760px;
+}
+.modal.modal-wide {
+  width: 860px;
 }
 .modal-wizard .modal-header {
   display: flex;
@@ -1828,6 +1839,7 @@ td code, .td-code { font-size: 0.78rem; }
 .app-tile { position: relative; }
 .app-fav-btn {
   position: absolute; top: 5px; right: 5px;
+  background: var(--surface);
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   border: none; cursor: pointer;
   font-size: 0.9rem;
@@ -1885,6 +1897,33 @@ td code, .td-code { font-size: 0.78rem; }
   height: 2px;
   background: var(--primary);
   border-radius: 2px 2px 0 0;
+}
+
+/* ============================================================
+   END-USER PAGE POLISH
+   ============================================================ */
+.enduser-home .app-tile {
+  min-height: 116px;
+}
+.enduser-home .app-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.enduser-request .ra-item-card:hover {
+  box-shadow: var(--shadow);
+}
+.ra-backdrop {
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.ra-drawer {
+  overscroll-behavior: contain;
+}
+
+.enduser-tasks td .btn-sm {
+  min-width: 86px;
 }
 
 /* ============================================================
@@ -2218,6 +2257,7 @@ td code, .td-code { font-size: 0.78rem; }
 .theme-option.active {
   border-color: var(--primary);
   background: var(--primary-soft);
+  box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent);
 }
 
@@ -2226,6 +2266,7 @@ td code, .td-code { font-size: 0.78rem; }
   height: 18px;
   border-radius: 50%;
   flex-shrink: 0;
+  border: 2px solid var(--border);
   border: 2px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
@@ -2433,6 +2474,30 @@ td code, .td-code { font-size: 0.78rem; }
   .card { padding: 1rem 1.1rem; }
   .card.compact { padding: 0.75rem 0.9rem; }
   .grid-2, .grid-3 { gap: 0.65rem; }
+}
+
+/* iPad + compact laptop layout tightening */
+@media (min-width: 901px) and (max-width: 1180px) {
+  .shell.admin-mode .admin-body { grid-template-columns: 188px minmax(0, 1fr); }
+  .shell.user-mode .admin-body { grid-template-columns: 176px minmax(0, 1fr); }
+  .admin-sidebar { width: 188px; }
+  .topnav .brand span:not(.brand-logo) { display: none; }
+  .search-global { display: none; }
+  .topnav-actions { padding-left: 0.6rem; }
+  .primary-nav button { padding: 0 0.58rem; font-size: 0.78rem; }
+  .profile-menu .profile-role { display: none; }
+}
+
+/* iPad portrait: keep top bar controls uncluttered */
+@media (min-width: 901px) and (max-width: 1024px) {
+  .topnav-actions { gap: 0.35rem; padding-left: 0.45rem; }
+  .profile-menu .profile-name { display: none; }
+}
+
+/* Laptop widths: restore a bit more breathing room */
+@media (min-width: 1181px) and (max-width: 1366px) {
+  .search-global input { width: 196px; }
+  .primary-nav button { padding: 0 0.78rem; font-size: 0.82rem; }
 }
 
 @media (max-width: 1100px) {
@@ -2678,11 +2743,36 @@ body.nav-locked { overflow: hidden; }
   table { min-width: 460px; font-size: 0.8125rem; }
   th, td { padding: 0.6rem 0.7rem; }
 
+  .enduser-page .page-header .btn { width: 100%; }
+  .enduser-request .ra-filter-card #ra-search,
+  .enduser-request .ra-filter-card #ra-type {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+  .enduser-request .ra-drawer {
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border-left: none !important;
+    box-shadow: none !important;
+  }
+  .enduser-request .ra-drawer-inner { padding: 1rem !important; }
+  .enduser-request .ra-date-row,
+  .enduser-request .ra-action-row { flex-direction: column; }
+  .enduser-request .ra-action-row .btn { width: 100%; }
+
+  .enduser-tasks td[style*="white-space:nowrap"] { white-space: normal !important; min-width: 172px; }
+  .enduser-tasks td .btn-sm {
+    width: 100%;
+    margin: 0.2rem 0 0 !important;
+  }
+
   .aap-actions { flex-direction: column; }
   .aap-actions-btns { width: 100%; }
 
   .modal-backdrop { padding: 0.75rem; align-items: flex-end; }
-  .modal, .modal.modal-wizard, .modal.modal-saml-reg {
+  .modal, .modal.modal-wizard, .modal.modal-saml-reg, .modal.modal-wide {
     width: 100%;
     max-width: 100%;
     max-height: 92vh;
@@ -2720,6 +2810,7 @@ body.nav-locked { overflow: hidden; }
 
   .apps-section { padding: 1rem; }
   .app-grid { grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); }
+  .enduser-home .app-tile { min-height: 102px; padding: 0.9rem 0.45rem; }
 
   .wizard-stepper { padding: 0.65rem 0.75rem; }
   .wizard-stepper .wiz-label { display: none; }
@@ -2738,6 +2829,33 @@ body.nav-locked { overflow: hidden; }
   table { min-width: 380px; }
 }
 
+/* Narrow phone widths (390 and below) */
+@media (max-width: 390px) {
+  .topnav { padding: 0 0.4rem; gap: 0.28rem; }
+  .topnav-actions { padding-left: 0.2rem; gap: 0.22rem; }
+  .mobile-menu-btn,
+  .theme-picker-btn {
+    width: 34px;
+    height: 34px;
+  }
+  .profile-menu {
+    padding: 0.2rem 0.42rem 0.2rem 0.24rem;
+    border-radius: 999px;
+  }
+  .content { padding: 0.55rem; }
+  .btn-inline { min-width: 0; width: 100%; }
+}
+
+/* Very small phones (360 and below) */
+@media (max-width: 360px) {
+  .topnav { padding: 0 0.3rem; gap: 0.2rem; }
+  .topnav-actions { border-left: none; padding-left: 0; gap: 0.18rem; }
+  .profile-menu { padding: 0.15rem 0.3rem 0.15rem 0.2rem; }
+  .avatar { width: 26px; height: 26px; font-size: 0.68rem; }
+  .content { padding: 0.45rem; }
+  table { min-width: 340px; }
+}
+
 /* ── Notch / safe-area padding ── */
 @supports (padding: env(safe-area-inset-top)) {
   .topnav {
@@ -2749,6 +2867,15 @@ body.nav-locked { overflow: hidden; }
   .profile-panel { padding-bottom: env(safe-area-inset-bottom); }
 }
 
+/* Legacy iOS safe-area syntax */
+@supports (padding: constant(safe-area-inset-top)) {
+  .topnav {
+    padding-left: max(0.75rem, constant(safe-area-inset-left));
+    padding-right: max(0.75rem, constant(safe-area-inset-right));
+  }
+  .content { padding-bottom: max(0.85rem, constant(safe-area-inset-bottom)); }
+}
+
 /* Touch devices — remove hover-only micro-interactions */
 @media (hover: none) and (pointer: coarse) {
   .app-fav-btn { opacity: 1; }
@@ -2757,20 +2884,6 @@ body.nav-locked { overflow: hidden; }
 }
 
 /* Landscape phone */
-@media (max-height: 500px) and (orientation: landscape) {
-  .auth-panel { min-height: auto; padding: 1rem; }
-  .auth-hero { padding: 1.5rem; }
-  .modal { max-height: 98vh; }
-}
-
-/* Touch-friendly: reduce hover-only interactions on coarse pointers */
-@media (hover: none) and (pointer: coarse) {
-  .app-fav-btn { opacity: 1; }
-  .app-tile:hover { transform: none; }
-  .stat-card:hover { box-shadow: var(--shadow-sm); }
-}
-
-/* Landscape phone — keep content usable */
 @media (max-height: 500px) and (orientation: landscape) {
   .auth-panel { min-height: auto; padding: 1rem; }
   .auth-hero { padding: 1.5rem; }

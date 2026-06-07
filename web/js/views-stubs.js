@@ -64,7 +64,7 @@ const norm = r => Array.isArray(r) ? r : (r?.data ?? []);
 
 // ─── 1. Groups ────────────────────────────────────────────────────────────────
 export async function viewGroups(content) {
-  content.replaceChildren(el(`<div>${header('Groups', 'Local groups, plus Google Workspace and AD groups synced from connectors', `<div style="display:flex;gap:0.5rem"><button class="btn btn-secondary" id="sync-groups-btn">⟳ Sync from Directory</button><button class="btn btn-primary" id="new-group-btn">+ New Group</button></div>`)}<div id="grp-msg" style="margin-bottom:0.75rem"></div><div id="list-area">${loading()}</div></div>`));
+  content.replaceChildren(el(`<div>${header('Groups', 'Local groups, plus Google Workspace and AD groups synced through configured connectors', `<div style="display:flex;gap:0.5rem"><button class="btn btn-secondary" id="sync-groups-btn">⟳ Sync from Directory</button><button class="btn btn-primary" id="new-group-btn">+ New Group</button></div>`)}<div id="grp-msg" style="margin-bottom:0.75rem"></div><div id="list-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
 
   const sourceBadge = (src) => ({

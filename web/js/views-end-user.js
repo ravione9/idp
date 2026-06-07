@@ -388,7 +388,7 @@ export async function viewHome(me, content, initialTab = 'all') {
     }
     if (!items.length) {
       if (activeTab === 'favs') {
-        return `<div class="empty-state"><span class="empty-icon">⭐</span><p>No favorites yet — hover over an app tile and click ☆ to add it here.</p></div>`;
+        return `<div class="empty-state"><span class="empty-icon">⭐</span><p>No favorites yet — tap or click ☆ on an app tile to add it here.</p></div>`;
       }
       if (!samlEnabled) {
         return `<p class="subtitle" style="text-align:center;padding:2rem 0">${isAdmin ? 'SAML IdP signing keys not configured — see Authentication.' : 'Contact your administrator to enable SSO.'}</p>`;
@@ -399,7 +399,7 @@ export async function viewHome(me, content, initialTab = 'all') {
   }
 
   const wrap = el(`
-    <div>
+    <div class="enduser-page enduser-home">
       <div class="welcome-banner">
         <div>
           <h1>Welcome, ${esc(me.employee?.full_name || me.session?.email || 'there')}</h1>
@@ -468,7 +468,7 @@ export async function viewHome(me, content, initialTab = 'all') {
 /* ---------- My Access ---------- */
 export async function viewMyAccess(content) {
   const wrap = el(`
-    <div>
+    <div class="enduser-page enduser-myaccess">
       <div class="page-header">
         <div><h1>My Access</h1><p class="subtitle">Entitlements and roles currently assigned to you</p></div>
         <a href="#" data-go="request" class="btn btn-primary">Request access</a>
@@ -502,13 +502,13 @@ export async function viewMyAccess(content) {
 /* ---------- Request Access — full catalog browser with SoD pre-check ---------- */
 export async function viewRequestAccess(content) {
   const wrap = el(`
-    <div>
+    <div class="enduser-page enduser-request">
       <div class="page-header">
         <div><h1>Request Access</h1><p class="subtitle">Browse the application catalog and request access with business justification</p></div>
       </div>
 
       <!-- search + filter bar -->
-      <div class="card" style="margin-bottom:1.25rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
+      <div class="card ra-filter-card" style="margin-bottom:1.25rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
         <input class="form-input" id="ra-search" placeholder="Search applications…" style="flex:1;min-width:200px">
         <select class="form-select" id="ra-type" style="width:auto">
           <option value="">All types</option>
@@ -521,9 +521,10 @@ export async function viewRequestAccess(content) {
       <div id="ra-catalog"><div class="loading-row"><span class="spinner"></span></div></div>
 
       <!-- request drawer (hidden by default) -->
-      <div id="ra-drawer" style="display:none;position:fixed;right:0;top:0;height:100%;width:420px;max-width:100vw;background:var(--surface);border-left:1px solid var(--border);box-shadow:-4px 0 16px rgba(0,0,0,.15);z-index:200;overflow-y:auto">
-        <div style="padding:1.5rem">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
+      <div id="ra-backdrop" class="ra-backdrop" style="display:none;position:fixed;inset:0;background:var(--overlay);z-index:190"></div>
+      <div id="ra-drawer" class="ra-drawer" style="display:none;position:fixed;right:0;top:0;height:100%;width:420px;max-width:100vw;background:var(--surface);border-left:1px solid var(--border);box-shadow:-4px 0 16px rgba(0,0,0,.15);z-index:200;overflow-y:auto">
+        <div class="ra-drawer-inner" style="padding:1.5rem">
+          <div class="ra-drawer-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
             <h2 style="margin:0" id="ra-d-title">Request access</h2>
             <button id="ra-d-close" class="btn btn-sm btn-secondary">✕</button>
           </div>
@@ -532,11 +533,17 @@ export async function viewRequestAccess(content) {
       </div>
     </div>`);
   content.replaceChildren(wrap);
+  const drawer = wrap.querySelector('#ra-drawer');
+  const backdrop = wrap.querySelector('#ra-backdrop');
+
+  function closeRequestDrawer() {
+    drawer.style.display = 'none';
+    backdrop.style.display = 'none';
+  }
 
   // Close drawer
-  wrap.querySelector('#ra-d-close').addEventListener('click', () => {
-    wrap.querySelector('#ra-drawer').style.display = 'none';
-  });
+  wrap.querySelector('#ra-d-close').addEventListener('click', closeRequestDrawer);
+  backdrop.addEventListener('click', closeRequestDrawer);
 
   // Filter / search
   let allItems = [];
@@ -562,7 +569,7 @@ export async function viewRequestAccess(content) {
       html += `<h3 class="section-title">${typeLabel[t] || t}</h3>
         <div class="grid-3" style="margin-bottom:1.5rem">
           ${items.map(item => `
-            <div class="card" style="cursor:pointer;transition:box-shadow .15s" data-req-id="${esc(String(item.id))}" data-req-type="${esc(item._type)}">
+            <div class="card ra-item-card" style="cursor:pointer;transition:box-shadow .15s" data-req-id="${esc(String(item.id))}" data-req-type="${esc(item._type)}">
               <div style="display:flex;gap:0.75rem;align-items:flex-start">
                 ${item.icon_url ? `<img src="${esc(item.icon_url)}" alt="" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.style.display='none'">` : `<div style="width:36px;height:36px;border-radius:6px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">${esc((item.name||'?').charAt(0).toUpperCase())}</div>`}
                 <div style="flex:1;min-width:0">
@@ -587,7 +594,6 @@ export async function viewRequestAccess(content) {
   }
 
   function openRequestDrawer(id, type, name) {
-    const drawer = wrap.querySelector('#ra-drawer');
     wrap.querySelector('#ra-d-title').textContent = `Request: ${name}`;
     const now = new Date();
     const defEnd = new Date(now);
@@ -604,19 +610,20 @@ export async function viewRequestAccess(content) {
       </div>
       <div class="form-group">
         <label class="form-label">Validity period</label>
-        <div style="display:flex;gap:0.5rem">
+        <div class="ra-date-row" style="display:flex;gap:0.5rem">
           <div style="flex:1"><label class="form-label" style="font-size:0.8rem">From</label><input class="form-input" id="ra-from" type="date" value="${fmt(now)}"></div>
           <div style="flex:1"><label class="form-label" style="font-size:0.8rem">Until</label><input class="form-input" id="ra-until" type="date" value="${fmt(defEnd)}"></div>
         </div>
       </div>
       <div id="ra-sod-check" style="margin-bottom:1rem"></div>
       <div id="ra-req-msg" style="margin-bottom:1rem"></div>
-      <div style="display:flex;gap:0.5rem">
+      <div class="ra-action-row" style="display:flex;gap:0.5rem">
         <button class="btn btn-primary" id="ra-submit" style="flex:1">Submit Request</button>
         <button class="btn btn-secondary" id="ra-d-cancel">Cancel</button>
       </div>`;
     drawer.style.display = 'block';
-    wrap.querySelector('#ra-d-cancel').addEventListener('click', () => { drawer.style.display = 'none'; });
+    backdrop.style.display = 'block';
+    wrap.querySelector('#ra-d-cancel').addEventListener('click', closeRequestDrawer);
     wrap.querySelector('#ra-submit').addEventListener('click', async () => {
       const just = wrap.querySelector('#ra-just').value.trim();
       const targetInput = wrap.querySelector('#ra-target').value.trim();
@@ -685,7 +692,7 @@ export async function viewRequestAccess(content) {
 /* ---------- My Tasks — approvals + access review certifications ---------- */
 export async function viewMyTasks(content) {
   const wrap = el(`
-    <div>
+    <div class="enduser-page enduser-tasks">
       <div class="page-header"><div>
         <h1>My Tasks</h1><p class="subtitle">Pending approvals and access review certifications assigned to you</p>
       </div></div>
@@ -808,7 +815,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
   const tabs = ['profile', ...(isLocal ? ['security'] : []), 'sessions', 'mfa', 'appearance'];
   const validTab = tabs.includes(initialTab) ? initialTab : 'profile';
   const wrap = el(`
-    <div>
+    <div class="enduser-page enduser-settings">
       <div class="page-header"><div><h1>Account</h1><p class="subtitle">Profile, security, sessions and capabilities</p></div></div>
       <div class="tabs">
         <button class="tab${validTab === 'profile' ? ' active' : ''}" data-tab="profile">Profile</button>

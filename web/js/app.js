@@ -35,12 +35,12 @@ import {
 const ROUTES = {
   /* ── Workspace (top primary nav) ── */
   home:     { primary: 'home',     label: 'Home',           icon: 'grid',         view: viewHome },
-  request:  { primary: 'request',  label: 'Request Center', icon: 'catalog',      view: viewRequestAccess },
+  request:  { primary: 'request',  label: 'Request Access', icon: 'catalog',      view: viewRequestAccess },
   tasks:    { primary: 'tasks',    label: 'Approvals',      icon: 'check',        view: viewMyTasks },
   myaccess: { primary: 'myaccess', label: 'My Access',      icon: 'key',          view: viewMyAccess },
 
   /* ── Account ── */
-  settings: { primary: 'settings', label: 'Account',        icon: 'shield',       view: viewSettings },
+  settings: { primary: 'settings', label: 'Security',       icon: 'shield',       view: viewSettings },
 
   /* ── Admin > Dashboard ── */
   dashboard: { primary: 'admin', group: 'Overview', label: 'Dashboard', icon: 'dashboard', admin: true, view: viewDashboard },
@@ -194,7 +194,7 @@ function buildShell() {
               <div class="profile-role">${esc(me.employee?.role || 'Employee')}${isPortalAdmin(me) ? ` · ${esc(portalRoleOf(me))}` : ''}</div>
             </div>
             <div class="profile-dropdown" id="profile-dropdown">
-              <a href="#" data-key="settings">Account settings</a>
+              <a href="#" data-key="settings">Security settings</a>
               ${isAdmin ? '<a href="#" data-key="audit">Audit logs</a>' : ''}
               ${me.capabilities?.metadataUrl ? `<a href="${esc(me.capabilities.metadataUrl)}" target="_blank">SAML metadata</a>` : ''}
               <div class="sep"></div>

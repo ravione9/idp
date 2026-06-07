@@ -27,6 +27,11 @@ import {
   getServiceProviderBySlug,
 } from '../saml/sp-registry.js';
 import { canUserLaunchApp } from '../services/app-access-policy.js';
+import {
+  extractRequestIdFromAuthnRequest,
+  logSamlAssertion,
+  samlBindingFromFlow,
+} from '../saml/assertion-log.js';
 
 const router = Router();
 const PENDING_SSO_PREFIX = 'lilg:saml:pending:';
@@ -168,6 +173,18 @@ async function issueAssertion(
     }
     const html = await createSpInitiatedLoginResponse(loginInput);
 
+    const samlRequest =
+      (req.query['SAMLRequest'] as string | undefined) ??
+      (req.body?.['SAMLRequest'] as string | undefined);
+    const logParams = {
+      spId:      resolved.sp.id,
+      empId:     emp.emp_id,
+      binding:   samlBindingFromFlow(binding),
+      requestId: extractRequestIdFromAuthnRequest(samlRequest),
+    };
+    if (relayState) Object.assign(logParams, { relayState });
+    await logSamlAssertion(logParams);
+
     logger.info({ empId: emp.emp_id, sp: resolved.sp.slug }, 'SAML SP-initiated assertion issued');
     sendLoginForm(res, html);
   } catch (err) {
@@ -264,6 +281,15 @@ router.get('/launch/:slug', requireAuth, async (req: Request, res: Response): Pr
   try {
     const relayState = (req.query['RelayState'] as string | undefined) ?? '';
     const html = await createIdpInitiatedLoginResponse(sp, emp, relayState);
+
+    const logParams = {
+      spId:    sp.id,
+      empId:   emp.emp_id,
+      binding: 'IDP_INITIATED' as const,
+    };
+    if (relayState) Object.assign(logParams, { relayState });
+    await logSamlAssertion(logParams);
+
     logger.info({ empId: emp.emp_id, sp: sp.slug }, 'SAML IdP-initiated assertion issued');
     sendLoginForm(res, html);
   } catch (err) {
