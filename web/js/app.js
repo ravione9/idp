@@ -160,9 +160,10 @@ function buildShell() {
     }).join('');
 
   const root = el(`
+    <div class="app-root">
     <div class="shell">
       <header class="topnav">
-        <button type="button" class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="mobile-nav-panel">
+        <button type="button" class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Open menu" aria-expanded="false">
           <span class="i-wrap">${icon('menu')}</span>
         </button>
         <div class="brand">
@@ -216,7 +217,8 @@ function buildShell() {
         <aside class="admin-sidebar hidden" id="admin-sidebar">${sidebarHtml}</aside>
         <main class="content" id="content"><div class="loading-row"><span class="spinner"></span></div></main>
       </div>
-      <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
+    </div>
+    <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
     </div>
   `);
 
@@ -243,13 +245,13 @@ function buildShell() {
   const adminSidebar = root.querySelector('#admin-sidebar');
   const shellEl = root.querySelector('.shell');
 
-  if (collapseState) {
+  if (collapseState && toggleBtn && adminSidebar && shellEl) {
     adminSidebar.classList.add('collapsed');
     shellEl.classList.add('sidebar-collapsed');
     toggleBtn.innerHTML = icon('chevronRight');
   }
 
-  toggleBtn.addEventListener('click', () => {
+  toggleBtn?.addEventListener('click', () => {
     const isCollapsed = adminSidebar.classList.toggle('collapsed');
     shellEl.classList.toggle('sidebar-collapsed', isCollapsed);
     toggleBtn.innerHTML = isCollapsed ? icon('chevronRight') : icon('chevronLeft');
@@ -288,11 +290,13 @@ function wireMobileNav(root) {
   const shellEl = root.querySelector('.shell');
   const menuBtn = root.querySelector('#mobile-menu-btn');
   const backdrop = root.querySelector('#mobile-backdrop');
+  if (!shellEl || !menuBtn) return;
+
   const mq = window.matchMedia('(max-width: 900px)');
 
   function closeMobileNav() {
     shellEl.classList.remove('mobile-nav-open');
-    menuBtn?.setAttribute('aria-expanded', 'false');
+    menuBtn.setAttribute('aria-expanded', 'false');
     backdrop?.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('nav-locked');
   }
@@ -300,12 +304,12 @@ function wireMobileNav(root) {
   function openMobileNav() {
     if (!mq.matches) return;
     shellEl.classList.add('mobile-nav-open');
-    menuBtn?.setAttribute('aria-expanded', 'true');
+    menuBtn.setAttribute('aria-expanded', 'true');
     backdrop?.setAttribute('aria-hidden', 'false');
     document.body.classList.add('nav-locked');
   }
 
-  menuBtn?.addEventListener('click', () => {
+  menuBtn.addEventListener('click', () => {
     if (shellEl.classList.contains('mobile-nav-open')) closeMobileNav();
     else openMobileNav();
   });
@@ -316,9 +320,9 @@ function wireMobileNav(root) {
     if (e.key === 'Escape' && shellEl.classList.contains('mobile-nav-open')) closeMobileNav();
   });
 
-  mq.addEventListener('change', (e) => {
-    if (!e.matches) closeMobileNav();
-  });
+  const onMqChange = (e) => { if (!e.matches) closeMobileNav(); };
+  if (typeof mq.addEventListener === 'function') mq.addEventListener('change', onMqChange);
+  else if (typeof mq.addListener === 'function') mq.addListener(onMqChange);
 
   for (const sel of ['#admin-sidebar', '#user-sidebar', '#primary-nav']) {
     root.querySelector(sel)?.addEventListener('click', (e) => {
@@ -436,44 +440,57 @@ async function navigate(key, opts = {}) {
 async function main() {
   initTheme();
   const root = document.getElementById('app');
+  if (!root) return;
+
   const path = location.pathname.replace(/\/$/, '') || '/';
 
-  if (path === '/login') {
-    root.replaceChildren(renderLogin());
-    return;
-  }
-
   try {
-    state.me = await api.me();
-
-  } catch {
-    location.href = '/login';
-    return;
-  }
-
-  const params = new URLSearchParams(location.search);
-  const initialParam = params.get('v') || 'home';
-  if (APP_ROUTE_ALIASES[initialParam]) {
-    state.current = 'applications';
-    state.appsTab = params.get('tab') || APP_ROUTE_ALIASES[initialParam];
-  } else {
-    state.current = ROUTES[initialParam] ? initialParam : 'home';
-    if (state.current === 'applications') {
-      state.appsTab = params.get('tab') || 'catalog';
+    if (path === '/login') {
+      root.replaceChildren(renderLogin());
+      return;
     }
+
+    try {
+      state.me = await api.me();
+    } catch {
+      location.href = '/login';
+      return;
+    }
+
+    const params = new URLSearchParams(location.search);
+    const initialParam = params.get('v') || 'home';
+    if (APP_ROUTE_ALIASES[initialParam]) {
+      state.current = 'applications';
+      state.appsTab = params.get('tab') || APP_ROUTE_ALIASES[initialParam];
+    } else {
+      state.current = ROUTES[initialParam] ? initialParam : 'home';
+      if (state.current === 'applications') {
+        state.appsTab = params.get('tab') || 'catalog';
+      }
+    }
+
+    root.replaceChildren(buildShell());
+    await navigate(state.current, { tab: params.get('tab') });
+
+    /* Background: populate task badge counts */
+    api.igaMyTasks().then(r => {
+      const cnt = (r?.data || r || []).length;
+      const badge = document.getElementById('us-task-badge');
+      const topBadge = document.querySelector('#primary-nav [data-key="tasks"] .badge-count');
+      if (badge && cnt > 0) { badge.textContent = cnt; badge.classList.remove('hidden'); }
+      if (topBadge && cnt > 0) { topBadge.textContent = cnt; }
+    }).catch(() => {});
+  } catch (err) {
+    console.error('Portal startup failed:', err);
+    root.innerHTML = `<div class="auth-panel" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem">
+      <div class="auth-card" style="max-width:480px">
+        <h2>Something went wrong</h2>
+        <p class="muted">The portal could not start. Try a hard refresh (Ctrl+Shift+R) or sign in again.</p>
+        <div class="alert alert-error" style="margin-top:1rem;word-break:break-word">${esc(String(err?.message || err))}</div>
+        <a href="/login" class="btn btn-primary btn-block" style="margin-top:1rem">Go to sign in</a>
+      </div>
+    </div>`;
   }
-
-  root.replaceChildren(buildShell());
-  navigate(state.current, { tab: params.get('tab') });
-
-  /* Background: populate task badge counts */
-  api.igaMyTasks().then(r => {
-    const cnt = (r?.data || r || []).length;
-    const badge = document.getElementById('us-task-badge');
-    const topBadge = document.querySelector('#primary-nav [data-key="tasks"] .badge-count');
-    if (badge && cnt > 0) { badge.textContent = cnt; badge.classList.remove('hidden'); }
-    if (topBadge && cnt > 0) { topBadge.textContent = cnt; }
-  }).catch(() => {});
 }
 
 main();

@@ -2425,6 +2425,8 @@ td code, .td-code { font-size: 0.78rem; }
    Breakpoints: 480px phone · 768px tablet · 900px nav drawer · 1100px tablet-wide
    ============================================================ */
 
+.app-root { min-height: 100vh; }
+
 .mobile-menu-btn {
   display: none;
   align-items: center;
@@ -2461,6 +2463,12 @@ body.nav-locked { overflow: hidden; }
 
   .mobile-backdrop { display: none; }
   .shell.mobile-nav-open .mobile-backdrop { display: block; }
+
+  .app-root .mobile-backdrop {
+    position: fixed;
+    inset: 0;
+    top: 56px;
+  }
 
   /* User sidebar — left drawer (replaces horizontal strip) */
   .shell.user-mode .user-sidebar {
