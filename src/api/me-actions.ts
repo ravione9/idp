@@ -21,6 +21,7 @@ import {
   startEnrollment,
 } from '../auth/mfa.js';
 import logger from '../utils/logger.js';
+import { sanitizeDeviceContext } from '../utils/device-context.js';
 
 const router = Router();
 
@@ -80,7 +81,8 @@ router.put('/password', async (req: Request, res: Response): Promise<void> => {
 router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
   const rows = await query<Record<string, unknown>>(
-    `SELECT session_id, iss, created_at, last_active_at, expires_at, ip, user_agent, revoked_at
+    `SELECT session_id, iss, created_at, last_active_at, expires_at, ip, user_agent,
+            client_hostname, client_local_ip, client_mac, revoked_at
        FROM idp_sessions
       WHERE emp_id = ? AND expires_at > UTC_TIMESTAMP() AND revoked_at IS NULL
       ORDER BY last_active_at DESC`,
@@ -91,6 +93,29 @@ router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
     isCurrent: r['session_id'] === user.sessionId,
   }));
   res.json({ data });
+});
+
+// ---------------------------------------------------------------------------
+// POST /sessions/device-context — attach client hostname / local IP to session
+// ---------------------------------------------------------------------------
+router.post('/sessions/device-context', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const device = sanitizeDeviceContext(req.body);
+  if (!device) {
+    res.status(400).json({ error: 'Invalid device context' });
+    return;
+  }
+
+  await query(
+    `UPDATE idp_sessions
+        SET client_hostname = COALESCE(client_hostname, ?),
+            client_local_ip  = COALESCE(client_local_ip, ?),
+            client_mac       = COALESCE(client_mac, ?)
+      WHERE session_id = ? AND emp_id = ? AND revoked_at IS NULL`,
+    [device.hostname, device.localIp, device.macAddress, user.sessionId, user.empId],
+  );
+
+  res.json({ success: true });
 });
 
 // ---------------------------------------------------------------------------

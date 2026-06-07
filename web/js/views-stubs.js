@@ -2926,7 +2926,10 @@ function initUsersTab(panel) {
               <td style="font-size:0.8rem;white-space:nowrap">${s.started_at ? fmtDate(s.started_at) : '—'}</td>
               <td style="font-size:0.8rem">${esc(s.iss||'—')}</td>
               <td style="font-size:0.78rem;font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.ip||'—')}</td>
-              <td style="font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.user_agent||'')}">
+              <td style="font-size:0.78rem;font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.client_local_ip||'—')}</td>
+              <td style="font-size:0.78rem">${esc(s.client_hostname||'—')}</td>
+              <td style="font-size:0.78rem;font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.client_mac||'—')}</td>
+              <td style="font-size:0.75rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.user_agent||'')}">
                 ${esc((s.user_agent||'').replace(/\(.*?\)/g,'').trim().slice(0,50))}
               </td>
               <td style="font-size:0.78rem;white-space:nowrap">${s.last_active_at ? fmtDate(s.last_active_at) : '—'}</td>
@@ -2938,7 +2941,7 @@ function initUsersTab(panel) {
             <p class="pp-section-title">Active & Recent Sessions (last 10)</p>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Started</th><th>Provider</th><th>IP Address</th><th>User Agent</th><th>Last Active</th></tr></thead>
+                <thead><tr><th>Started</th><th>Provider</th><th>Public IP</th><th>Local IP</th><th>Hostname</th><th>MAC</th><th>User Agent</th><th>Last Active</th></tr></thead>
                 <tbody>${sessRows}</tbody>
               </table>
             </div>`

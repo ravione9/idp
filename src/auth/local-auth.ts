@@ -20,13 +20,21 @@ import {
   touchLocalLogin,
   verifyLocalPassword,
 } from '../services/local-admin.js';
+import { sanitizeDeviceContext } from '../utils/device-context.js';
 
 const MFA_CHALLENGE_PREFIX = 'lilg:mfa-challenge:';
 const MFA_CHALLENGE_TTL_S  = 300; // 5 min
 
+const deviceContextField = z.object({
+  hostname:   z.string().max(255).optional(),
+  localIp:    z.string().max(45).optional(),
+  macAddress: z.string().max(17).optional(),
+}).partial().optional();
+
 const loginSchema = z.object({
-  email:    z.string().email(),
-  password: z.string().min(8),
+  email:         z.string().email(),
+  password:      z.string().min(8),
+  deviceContext: deviceContextField,
 });
 
 const verifySchema = z.object({
@@ -35,11 +43,14 @@ const verifySchema = z.object({
 });
 
 interface MfaChallenge {
-  empId:     string;
-  email:     string;
-  role:      string;
-  accountId: number;
-  createdAt: number;
+  empId:           string;
+  email:           string;
+  role:            string;
+  accountId:       number;
+  createdAt:       number;
+  clientHostname?: string | null;
+  clientLocalIp?:  string | null;
+  clientMac?:      string | null;
 }
 
 async function logAttempt(email: string, ip: string, success: boolean, reason?: string): Promise<void> {
@@ -57,16 +68,20 @@ async function issueSessionAndRespond(
   res:       Response,
   req:       Request,
   account:   { id: number; emp_id: string; email: string; role: string },
+  device?:   { hostname: string | null; localIp: string | null; macAddress: string | null } | null,
 ): Promise<void> {
   const sessionId = await createSession({
-    empId:     account.emp_id,
-    email:     account.email,
-    role:      account.role,
-    iss:       'local',
-    sub:       `local:${account.id}`,
-    ttlHours:  config.session.ttlCorporateHours,
-    ip:        req.ip ?? '',
-    userAgent: req.get('user-agent') ?? '',
+    empId:          account.emp_id,
+    email:          account.email,
+    role:           account.role,
+    iss:            'local',
+    sub:            `local:${account.id}`,
+    ttlHours:       config.session.ttlCorporateHours,
+    ip:             req.ip ?? '',
+    userAgent:      req.get('user-agent') ?? '',
+    clientHostname: device?.hostname ?? null,
+    clientLocalIp:  device?.localIp ?? null,
+    clientMac:      device?.macAddress ?? null,
   });
   await touchLocalLogin(account.id);
   setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
@@ -81,8 +96,9 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     return;
   }
 
-  const { email, password } = parsed.data;
+  const { email, password, deviceContext: rawDeviceContext } = parsed.data;
   const ip = req.ip ?? '';
+  const deviceContext = sanitizeDeviceContext(rawDeviceContext);
 
   try {
     let account = await findLocalAccountByEmail(email);
@@ -109,11 +125,14 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     if (mfa.enabled) {
       const challengeId = crypto.randomUUID();
       const challenge: MfaChallenge = {
-        empId:     account.emp_id,
-        email:     account.email,
-        role:      account.role,
-        accountId: account.id,
-        createdAt: Date.now(),
+        empId:          account.emp_id,
+        email:          account.email,
+        role:           account.role,
+        accountId:      account.id,
+        createdAt:      Date.now(),
+        clientHostname: deviceContext?.hostname ?? null,
+        clientLocalIp:  deviceContext?.localIp ?? null,
+        clientMac:      deviceContext?.macAddress ?? null,
       };
       await redis.set(
         `${MFA_CHALLENGE_PREFIX}${challengeId}`,
@@ -127,7 +146,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     }
 
     await logAttempt(email, ip, true);
-    await issueSessionAndRespond(res, req, account);
+    await issueSessionAndRespond(res, req, account, deviceContext);
   } catch (err) {
     logger.error({ err }, 'Local login failed');
     res.status(500).json({ error: 'Login failed' });
@@ -164,5 +183,9 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
     emp_id: challenge.empId,
     email:  challenge.email,
     role:   challenge.role,
+  }, {
+    hostname:   challenge.clientHostname ?? null,
+    localIp:    challenge.clientLocalIp ?? null,
+    macAddress: challenge.clientMac ?? null,
   });
 }

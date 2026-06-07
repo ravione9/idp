@@ -172,10 +172,11 @@ Google OIDC credentials are resolved in this order:
 
 ### 5.2 Session model
 
-- Sessions are stored in **MySQL** (`lilg_sessions`) and cached in **Redis** (`lilg:session:<id>`).
+- Sessions are stored in **MySQL** (`idp_sessions`) and cached in **Redis** (`idp:session:<id>`).
 - Session ID = `uuid v4`. Cookie value is `<id>.<HMAC-SHA256(SESSION_SECRET, id)>` (base64url).
 - TTL: 8 hours (corporate) / 12 hours (store) — configurable via env.
 - Cookie flags: `HttpOnly`, `SameSite=Lax`. `Secure` is on in production but **off** when `COOKIE_SECURE=false` (dev plain HTTP).
+- Each session records **public IP** (`ip`, from the request), **client hostname** (`client_hostname`), **local LAN IP** (`client_local_ip`), and **MAC** (`client_mac`). The browser collects these via WebRTC ICE + optional workstation agent (`scripts/device-context-agent.mjs` → `http://127.0.0.1:17891/device-context`) on the login page; values are sent with `POST /auth/local/login` or attached after Google OIDC via `POST /api/me/sessions/device-context`. Hostnames like `LOC-9D358FEE60EC` also derive MAC `9D:35:8F:EE:60:EC`. Admin user profile **Sessions** tab and end-user **Account → Sessions** show all four endpoint fields.
 
 ### 5.3 Master administrator
 
@@ -362,7 +363,8 @@ To add a new migration:
 |---|---|---|
 | `GET` | `/api/me` | Current user + capabilities |
 | `PUT` | `/api/me/password` | Change own password |
-| `GET` | `/api/me/sessions` | List own active sessions |
+| `GET` | `/api/me/sessions` | List own active sessions (public IP, local IP, hostname, MAC) |
+| `POST` | `/api/me/sessions/device-context` | Attach client hostname / local IP / MAC to current session |
 | `DELETE` | `/api/me/sessions/:id` | Revoke a session |
 | `GET` | `/api/me/mfa` | MFA status |
 | `POST` | `/api/me/mfa/enroll` | Start TOTP enrollment (returns QR) |
@@ -552,6 +554,9 @@ bash scripts/restart-api.sh
 
 # Full stack reset (MySQL volume kept)
 sudo bash scripts/fix-and-start.sh
+
+# Workstation-only: expose hostname / LAN IP / MAC to the IdP login page
+node scripts/device-context-agent.mjs
 ```
 
 **Do not** run bare `git pull` on pam-2 — use `bash scripts/sync-repo.sh` or `bash scripts/deploy.sh`.
@@ -718,6 +723,21 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+
+### (pending) — 2026-06-07 — Session device context (hostname, local IP, MAC)
+
+**Why** — Admin user profile Sessions tab showed only public IP and user agent; operators need client machine hostname (e.g. `LOC-9D358FEE60EC`), local LAN IP, and MAC captured from the endpoint at login.
+
+**What changed:**
+
+- **`migrations/022_session_device_context.sql`**, **`migrations/023_session_client_mac.sql`** — adds `idp_sessions.client_hostname`, `client_local_ip`, `client_mac`.
+- **`scripts/device-context-agent.mjs`** — optional workstation agent (hostname + LAN IP + MAC via `os.networkInterfaces()`).
+- **`web/js/device-context.js`** — browser collector (WebRTC + local agent probe; derives MAC from `LOC-{12hex}` hostnames).
+- **`src/auth/session.ts`**, **`src/auth/local-auth.ts`** — persist device context on session create (incl. MFA challenge carry-over).
+- **`src/api/me-actions.ts`** — `POST /api/me/sessions/device-context` for Google OIDC post-login attach; session list returns new fields.
+- **`src/api/admin-users.ts`**, **`web/js/views-stubs.js`**, **`web/js/views-end-user.js`** — Sessions tables show Public IP, Local IP, Hostname, MAC.
+
+---
 
 ### (pending) — 2026-06-07 — Admin GUI Google OIDC configuration with DB-backed overrides
 

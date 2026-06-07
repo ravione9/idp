@@ -3,10 +3,11 @@
    Top nav (workspace) + admin sidebar (when in Admin).
    Layout: SailPoint top nav + miniOrange-style admin sidebar.
    ============================================================ */
-import { api } from './api.js?v=2026-06-07-ad-groups-sync';
+import { api } from './api.js?v=2026-06-07-session-device';
 import { el, esc, initials } from './ui.js';
 import { icon } from './icons.js';
 import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
+import { clearStoredDeviceContext, readStoredDeviceContext } from './device-context.js?v=2026-06-07-session-device';
 import {
   renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
 } from './views-end-user.js';
@@ -24,7 +25,7 @@ import {
   viewWorkflowLibrary, viewEventTriggers, viewNotifications,
   viewSsoReports,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
-} from './views-stubs.js?v=2026-06-07-dense';
+} from './views-stubs.js?v=2026-06-07-session-device';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
@@ -376,6 +377,12 @@ async function main() {
 
   try {
     state.me = await api.me();
+    const deviceContext = readStoredDeviceContext();
+    if (deviceContext && (deviceContext.hostname || deviceContext.localIp || deviceContext.macAddress)) {
+      api.reportDeviceContext(deviceContext)
+        .then(() => clearStoredDeviceContext())
+        .catch(() => {});
+    }
   } catch {
     location.href = '/login';
     return;

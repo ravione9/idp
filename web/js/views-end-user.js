@@ -3,6 +3,7 @@ import { api } from './api.js?v=2026-06-07-groups-sync';
 import { el, esc, fmtDate, ilgBadge, initials } from './ui.js';
 import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
+import { ensureDeviceContext, readStoredDeviceContext } from './device-context.js?v=2026-06-07-session-device';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
@@ -123,8 +124,9 @@ export function renderLogin() {
       e.preventDefault();
       pwErr.innerHTML = '';
       const password = new FormData(e.target).get('password');
+      const deviceContext = readStoredDeviceContext();
       try {
-        const r = await api.localLogin(email, password);
+        const r = await api.localLogin(email, password, deviceContext);
         if (r && r.mfaRequired && r.challengeId) {
           renderMfaStep(r.challengeId, email);
           return;
@@ -172,6 +174,16 @@ export function renderLogin() {
   }
 
   wireEmailForm(root.querySelector('#step-email'));
+
+  ensureDeviceContext().catch(() => {});
+
+  root.querySelectorAll('a[href="/auth/google"]').forEach((link) => {
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      try { await ensureDeviceContext(); } catch { /* non-fatal */ }
+      location.href = '/auth/google';
+    });
+  });
 
   api.adminStatus().then((s) => {
     if (!s.bootstrapEnabled) return;
@@ -738,12 +750,15 @@ export async function viewSettings(me, content) {
         <td><span class="badge badge-info">${esc(s.iss)}</span></td>
         <td class="muted">${fmtDate(s.last_active_at)}</td>
         <td class="muted">${fmtDate(s.expires_at)}</td>
-        <td class="muted truncate" title="${esc(s.user_agent || '')}">${esc(s.ip || '—')}</td>
+        <td class="muted" style="font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.ip || '—')}</td>
+        <td class="muted" style="font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.client_local_ip || '—')}</td>
+        <td class="muted">${esc(s.client_hostname || '—')}</td>
+        <td class="muted" style="font-family:var(--mono,'JetBrains Mono',monospace)">${esc(s.client_mac || '—')}</td>
         <td class="actions"><button class="btn btn-sm btn-danger" data-revoke="${esc(s.session_id)}">${s.isCurrent ? 'Sign out' : 'Revoke'}</button></td>
-      </tr>`).join('') : `<tr><td colspan="6" class="empty-state"><span class="empty-icon">◌</span>No active sessions</td></tr>`;
+      </tr>`).join('') : `<tr><td colspan="9" class="empty-state"><span class="empty-icon">◌</span>No active sessions</td></tr>`;
       target.innerHTML = `<div class="table-wrap"><div class="table-toolbar">
         <strong>Active sessions</strong><span class="muted">${rows.length} session${rows.length === 1 ? '' : 's'}</span></div>
-        <table><thead><tr><th>Session</th><th>Issuer</th><th>Last active</th><th>Expires</th><th>IP</th><th></th></tr></thead>
+        <table><thead><tr><th>Session</th><th>Issuer</th><th>Last active</th><th>Expires</th><th>Public IP</th><th>Local IP</th><th>Hostname</th><th>MAC</th><th></th></tr></thead>
         <tbody>${body}</tbody></table></div>`;
       target.querySelectorAll('[data-revoke]').forEach((btn) => {
         btn.addEventListener('click', async () => {

@@ -169,7 +169,8 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
   let recentLogins: Record<string, unknown>[] = [];
   try {
     recentLogins = await query<Record<string, unknown>>(
-      `SELECT session_id, iss, ip, user_agent, created_at AS started_at, last_active_at
+      `SELECT session_id, iss, ip, user_agent, client_hostname, client_local_ip, client_mac,
+              created_at AS started_at, last_active_at
          FROM idp_sessions WHERE emp_id = ? AND revoked_at IS NULL
          ORDER BY created_at DESC LIMIT 10`,
       [profileEmpId],
