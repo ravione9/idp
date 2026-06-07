@@ -816,6 +816,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### TBD — 2026-06-07 — OIDC client delete removes registration from list
+
+**Why** — Delete on the OIDC / OAuth Applications page only set `active = 0`, so clients stayed visible with status **Off** and appeared undeletable.
+
+**What changed:**
+
+- **Updated:** `src/api/config-oidc-clients.ts` — `DELETE /api/admin/oidc-clients/:id` now hard-deletes the client (and related `oauth_tokens` rows), matching SAML app delete behavior.
+
 ### TBD — 2026-06-07 — Defer MFA enrollment to next sign-in
 
 **Why** — Users forced into login-time MFA setup had no way to exit the flow; they needed a clear path to complete setup on a later sign-in (with optional grace-period access).

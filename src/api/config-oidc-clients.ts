@@ -168,9 +168,30 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
   res.json({ success: true });
 }));
 
-// DELETE /:id — soft delete
+// DELETE /:id — remove client registration
 router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
-  await execute(`UPDATE oidc_clients SET active = 0 WHERE id = ?`, [req.params['id']]);
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing client id' });
+    return;
+  }
+
+  const existing = await queryOne<{ id: string; client_id: string }>(
+    `SELECT id, client_id FROM oidc_clients WHERE id = ?`,
+    [id],
+  );
+  if (!existing) {
+    res.status(404).json({ error: 'OIDC client not found' });
+    return;
+  }
+
+  await execute(`DELETE FROM oauth_tokens WHERE client_id = ?`, [existing.client_id]);
+  const result = await execute(`DELETE FROM oidc_clients WHERE id = ?`, [id]);
+  if (result.affectedRows === 0) {
+    res.status(404).json({ error: 'OIDC client not found' });
+    return;
+  }
+
   res.json({ success: true });
 }));
 
