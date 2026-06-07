@@ -1,5 +1,5 @@
 import { api } from './api.js?v=2026-06-07-ad-groups-sync';
-import { el, esc, fmtDate, persistSearch, syncAppUrl } from './ui.js';
+import { el, esc, fmtDate, persistSearch, syncAppUrl } from './ui.js?v=2026-06-08';
 import { icon as svgIcon } from './icons.js';
 
 function header(title, subtitle, action = '') {

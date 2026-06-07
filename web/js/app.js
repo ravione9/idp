@@ -4,16 +4,16 @@
    Layout: SailPoint top nav + miniOrange-style admin sidebar.
    ============================================================ */
 import { api } from './api.js?v=2026-06-07-device-v2';
-import { el, esc, initials, persistSearch, syncAppUrl } from './ui.js?v=2026-06-07-refresh';
+import { el, esc, initials, persistSearch, syncAppUrl } from './ui.js?v=2026-06-08';
 import { icon } from './icons.js';
 import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import {
   renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
-} from './views-end-user.js?v=2026-06-07-refresh';
+} from './views-end-user.js?v=2026-06-08';
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
   viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
-} from './views-admin.js?v=2026-06-07-refresh';
+} from './views-admin.js?v=2026-06-08';
 import {
   viewGroups, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,
@@ -24,7 +24,7 @@ import {
   viewWorkflowLibrary, viewEventTriggers, viewNotifications,
   viewSsoReports,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
-} from './views-stubs.js?v=2026-06-07-refresh';
+} from './views-stubs.js?v=2026-06-08';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
