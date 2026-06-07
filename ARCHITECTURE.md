@@ -780,6 +780,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
+### `636f5ab` — 2026-06-07 — AD password reset: verify with user bind after unicodePwd modify
+
+**Why** — Admin reset showed AD SUCCESS while the domain password was unchanged; LDAP modify alone was not verified before reporting success.
+
+**What changed:**
+
+- **`src/adapters/ad-adapter.ts`** — after `unicodePwd` replace, bind as the target user on the same DC; fail writeback if verification bind fails.
+
+---
+
 ### `2815b1f` — 2026-06-07 — Fix MySQL reserved word `system` breaking password writeback
 
 **Why** — Password reset showed `WRITEBACK` SQL syntax error because `system` is reserved in MySQL 8+ and was not backtick-quoted in `getIdentityLinksForEmp` and related queries.

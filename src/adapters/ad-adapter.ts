@@ -524,17 +524,37 @@ export class ADAdapter extends BaseAdapter {
     });
   }
 
+  /** Bind as the target user to confirm unicodePwd was actually applied on this DC. */
+  private async verifyUserPassword(dn: string, password: string): Promise<void> {
+    const probe = this.createClient();
+    try {
+      if (this.startTls && !this.url.startsWith('ldaps://')) {
+        await probe.startTLS(this.tlsOpts);
+      }
+      await probe.bind(dn, password);
+      logger.info({ dn }, 'AD password verified via user bind');
+    } catch (err) {
+      throw new Error(
+        `AD password verification failed — the directory did not accept the new password (${formatLdapError(err)})`,
+      );
+    } finally {
+      await probe.unbind().catch(() => undefined);
+    }
+  }
+
   /** Set password for a user identified by sAMAccountName (requires LDAPS or StartTLS). */
   async setUserPassword(samAccountName: string, newPassword: string): Promise<AdapterResult<void>> {
     return this.safe(async () => {
       if (!this.connectionIsSecure()) {
         throw new Error('AD password reset requires LDAPS or LDAP+StartTLS');
       }
-      const entries = await this.findUser(samAccountName, ['dn']);
+      await this.ensureConnected();
+      const entries = await this.findUser(samAccountName, ['dn', 'sAMAccountName']);
       if (!entries.length) {
         throw new Error(`AD user not found for sAMAccountName=${samAccountName}`);
       }
-      await this.client.modify(entries[0].dn, [
+      const dn = entries[0].dn;
+      await this.client.modify(dn, [
         new Change({
           operation: 'replace',
           modification: new Attribute({
@@ -543,7 +563,8 @@ export class ADAdapter extends BaseAdapter {
           }),
         }),
       ]);
-      logger.info({ samAccountName, dn: entries[0].dn }, 'AD user password updated');
+      await this.verifyUserPassword(dn, newPassword);
+      logger.info({ samAccountName, dn }, 'AD user password updated and verified');
     });
   }
 
