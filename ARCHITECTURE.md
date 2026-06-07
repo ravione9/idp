@@ -163,7 +163,7 @@ The IdP signing keys used by SAML are stored on named volume `saml-keys` mounted
 | Local password + TOTP | `POST /auth/local/login` then `POST /auth/local/login/mfa-verify` | Live |
 | Google Workspace OIDC | `GET /auth/google` → `GET /auth/google/callback` | Live (env defaults + optional Admin GUI DB override) |
 | WebAuthn / passkeys | — | Schema staged in migration 003; routes pending |
-| Risk-based MFA step-up | — | Risk engine schema staged; engine pending |
+| Risk-based MFA step-up | `POST /auth/local/login` (engine in `src/services/adaptive-auth-engine.ts`) | Live |
 
 > **Removed:** Zoho OIDC was an inbound sign-in provider in the original design. It has been removed — Zoho Mail is now consumed as a SAML application (see §6.4). The legacy `/auth/zoho` endpoints respond with HTTP 410 Gone.
 
@@ -203,6 +203,68 @@ A bootstrap account is provisioned from `MASTER_ADMIN_EMAIL` + `MASTER_ADMIN_PAS
 
 `/auth/local/login` and `/auth/local/login/mfa-verify` are rate limited at **10 requests / minute / (IP+email)** via in-process sliding window (`src/auth/rate-limit.ts`).
 Every attempt (success or failure) is logged to `auth_attempts` for forensics.
+
+### 5.6 Adaptive / Risk-based Authentication
+
+**Engine:** `src/services/adaptive-auth-engine.ts` — evaluates active policies from `adaptive_auth_policies` against a `LoginContext` and returns the highest-severity matching action.
+
+**Decision priority:** `BLOCK > STEP_UP > MFA > ALLOW`
+
+**Authentication logic matrix:**
+
+| Condition | Action |
+|---|---|
+| Corporate Network + Managed Device + Risk Score < 30 | ALLOW (primary auth only) |
+| External Network + Managed Device | MFA |
+| External Network + Unmanaged Device | STEP_UP (MFA + device-verification flag) |
+| High-Risk Country (`CN`, `RU`, `KP`, `IR`, `BY`, `CU`, `SD`, `SY`, `VE`, `LY`, `MM`, `AF`) | BLOCK |
+| TOR exit node / anonymous proxy / hosting IP | BLOCK |
+| Impossible travel (country changed in < 4 h since last session) | MFA |
+| New / unrecognised device | MFA |
+| Risk score ≥ 60 | STEP_UP |
+| Sensitive app (`Finance`, `HR`, `ERP`, `CRM`, `PAM`, `Administration`) + external network | MFA |
+| Privileged role (`ADMIN`, `SUPER_ADMIN`, `IT_OPS`, `SECURITY`) | MFA (hard-coded override regardless of policies) |
+| Any unmatched external login (catch-all, priority 999) | MFA |
+
+**Supported condition types** (stored as JSON in `adaptive_auth_policies.conditions_json`):
+
+| Type | Parameters |
+|---|---|
+| `IP_RANGE` | `values: string[]` — CIDR or dot-prefix list |
+| `NETWORK_TYPE` | `values: ('CORPORATE'\|'EXTERNAL'\|'TOR'\|'PROXY')[]` |
+| `DEVICE_MANAGED` | `value: 'true'\|'false'` — corporate IP proxies managed status |
+| `NEW_DEVICE` | *(no extra fields)* |
+| `IMPOSSIBLE_TRAVEL` | *(no extra fields)* |
+| `COUNTRY` | `op: 'in'\|'not_in'`, `values: string[]` — ISO 3166-1 alpha-2 |
+| `USER_ROLE` | `values: string[]` |
+| `RISK_SCORE` | `op: 'gt'\|'gte'\|'lt'\|'lte'`, `value: number` (0–100) |
+| `SENSITIVE_APP` | *(no extra fields)* — matches apps in sensitive categories |
+| `TOR_PROXY` | *(no extra fields)* — ip-api.com `proxy`/`hosting` flag |
+
+**Risk score signals** (computed per login, additive):
+
+| Signal | Score contribution |
+|---|---|
+| New device | +20 |
+| High-risk country | +30 |
+| TOR / proxy IP | +30 |
+| Impossible travel | +25 |
+
+**Login flow with adaptive auth (`POST /auth/local/login`):**
+
+1. Password verified (local hash or AD fallback).
+2. Adaptive engine evaluates context → `ALLOW / MFA / STEP_UP / BLOCK`.
+3. `BLOCK` → HTTP 403 `ADAPTIVE_BLOCKED` — login rejected immediately.
+4. `MFA` or `STEP_UP` → MFA challenge issued (`{mfaRequired:true, challengeId, stepUp}`).
+   - If user has not enrolled TOTP → HTTP 403 `MFA_ENROLL_REQUIRED`.
+5. `ALLOW` and user has TOTP enrolled → MFA challenge issued (preserves existing voluntary MFA).
+6. `ALLOW` and no TOTP → session issued directly.
+
+**`STEP_UP`** means MFA **plus** a manager-approval workflow is recommended. The `stepUp: true` flag is returned to the frontend so it can display an additional notice; the auth flow itself still requires TOTP.
+
+**Geo detection:** ip-api.com free tier (synchronous, 4 s timeout). Private/RFC-1918 IPs are treated as corporate and skip the geo call. Country data written to `idp_sessions.geo_location` by the async `enrichSessionGeo` helper (fire-and-forget after session creation).
+
+**Default policies** are seeded by migration `027_adaptive_auth_enhancements.sql` and are editable via **Admin → Adaptive Auth Policies**.
 
 ---
 
@@ -732,7 +794,19 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ## 15. Change log
 
-> **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
+> **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-06-07 — Adaptive / risk-based authentication engine (live)
+
+**Why** — The adaptive auth schema and policy table have existed since migration 006, but the evaluation engine was never wired into the login flow. The `/evaluate` endpoint only checked `IP_RANGE` conditions. This implements the full authentication logic matrix.
+
+**What changed:**
+
+- **New:** `src/services/adaptive-auth-engine.ts` — policy evaluation engine supporting 10 condition types (`IP_RANGE`, `NETWORK_TYPE`, `DEVICE_MANAGED`, `NEW_DEVICE`, `IMPOSSIBLE_TRAVEL`, `COUNTRY`, `USER_ROLE`, `RISK_SCORE`, `SENSITIVE_APP`, `TOR_PROXY`). Returns `ALLOW / MFA / STEP_UP / BLOCK`. Decision priority: `BLOCK > STEP_UP > MFA > ALLOW`. Privileged roles (`ADMIN`, `SUPER_ADMIN`, `IT_OPS`, `SECURITY`) always receive at least `MFA` as a hard override.
+- **Updated:** `src/auth/local-auth.ts` — `POST /auth/local/login` now calls the adaptive engine after password verification. `BLOCK` → HTTP 403 `ADAPTIVE_BLOCKED`. `MFA`/`STEP_UP` → MFA challenge (including `stepUp: true` flag). `MFA_ENROLL_REQUIRED` returned when policy demands MFA but user hasn't enrolled TOTP.
+- **Updated:** `src/api/config-adaptive-auth.ts` — `POST /evaluate` replaced with an engine-backed evaluation; accepts `empId` + context and returns `decision`, `riskScore`, `signals`, and `matchedPolicies`.
+- **New migration 027** — adds `STEP_UP` to `adaptive_auth_policies.action` enum; seeds 11 default policies covering the full authentication logic matrix (see §5.6).
+- **ARCHITECTURE.md §5.1** — risk-based step-up marked Live; §5.6 added with full matrix, condition types, risk signals, and login flow description.
 
 ### TBD — 2026-06-08 — MFA enforcement policy and per-user MFA management
 

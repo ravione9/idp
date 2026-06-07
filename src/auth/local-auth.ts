@@ -1,8 +1,14 @@
 /**
  * Local email + password login for administrators.
- * Two-step flow when MFA is enabled:
- *   1. POST /auth/local/login            { email, password }       → { mfaRequired:true, challengeId }
- *   2. POST /auth/local/login/mfa-verify { challengeId, code }     → { success:true, redirect:'/' }
+ *
+ * Two-step flow:
+ *   1. POST /auth/local/login            { email, password }
+ *        → { success, redirect }               (low risk, no MFA)
+ *        → { mfaRequired:true, challengeId }   (MFA required by policy or enrollment)
+ *        → HTTP 403 ADAPTIVE_BLOCKED           (policy says BLOCK)
+ *        → HTTP 403 MFA_ENROLL_REQUIRED        (policy demands MFA but user not enrolled)
+ *   2. POST /auth/local/login/mfa-verify { challengeId, code }
+ *        → { success:true, redirect:'/' }
  */
 import { Request, Response } from 'express';
 import { z } from 'zod';
@@ -22,6 +28,7 @@ import {
 } from '../services/local-admin.js';
 import { authenticateAdCorporateUser } from '../services/ad-auth.js';
 import { getClientIp } from '../utils/request-context.js';
+import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
 
 const MFA_CHALLENGE_PREFIX = 'lilg:mfa-challenge:';
 const MFA_CHALLENGE_TTL_S  = 300; // 5 min
@@ -42,6 +49,8 @@ interface MfaChallenge {
   role:      string;
   accountId: number;
   createdAt: number;
+  /** True when the adaptive engine returned STEP_UP (MFA + manager-approval hint). */
+  stepUp?:   boolean;
 }
 
 async function logAttempt(email: string, ip: string, success: boolean, reason?: string): Promise<void> {
@@ -120,8 +129,40 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
       }
     }
 
-    const mfa = await getMfaStatus(account.emp_id);
-    if (mfa.enabled) {
+    // ── Adaptive auth evaluation (risk engine) ───────────────────────────────
+    const [mfa, adaptive] = await Promise.all([
+      getMfaStatus(account.emp_id),
+      evaluateAdaptiveAuth({
+        ip,
+        email:     account.email,
+        userAgent: req.get('user-agent') ?? '',
+        role:      account.role,
+        empId:     account.emp_id,
+      }),
+    ]);
+
+    if (adaptive.action === 'BLOCK') {
+      await logAttempt(email, ip, false, `adaptive-blocked:${adaptive.signals.slice(0, 3).join(',')}`);
+      logger.warn({ empId: account.emp_id, ip, signals: adaptive.signals }, 'Login blocked by adaptive auth');
+      res.status(403).json({ error: 'Access blocked by security policy', code: 'ADAPTIVE_BLOCKED' });
+      return;
+    }
+
+    // MFA is required when:
+    //   • adaptive engine returned MFA or STEP_UP (risk signal), or
+    //   • user already has TOTP enrolled (existing behaviour preserved)
+    const mfaRequired = adaptive.action === 'MFA'
+      || adaptive.action === 'STEP_UP'
+      || mfa.enabled;
+
+    if (mfaRequired) {
+      if (!mfa.enrolled) {
+        // Policy demands MFA but the user hasn't enrolled — block with hint.
+        await logAttempt(email, ip, false, 'mfa-enroll-required');
+        res.status(403).json({ error: 'MFA enrollment required — please set up an authenticator app', code: 'MFA_ENROLL_REQUIRED' });
+        return;
+      }
+
       const challengeId = crypto.randomUUID();
       const challenge: MfaChallenge = {
         empId:     account.emp_id,
@@ -129,6 +170,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
         role:      account.role,
         accountId: account.id,
         createdAt: Date.now(),
+        stepUp:    adaptive.action === 'STEP_UP',
       };
       await redis.set(
         `${MFA_CHALLENGE_PREFIX}${challengeId}`,
@@ -136,8 +178,8 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
         'EX',
         MFA_CHALLENGE_TTL_S,
       );
-      await logAttempt(email, ip, true, 'password-ok-mfa-pending');
-      res.json({ mfaRequired: true, challengeId });
+      await logAttempt(email, ip, true, `password-ok-mfa-pending${challenge.stepUp ? '-stepup' : ''}`);
+      res.json({ mfaRequired: true, challengeId, stepUp: challenge.stepUp ?? false });
       return;
     }
 

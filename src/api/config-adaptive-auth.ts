@@ -1,6 +1,21 @@
 /**
  * Config — Adaptive Auth Policies API
  * Mounted at /api/admin/adaptive-auth
+ *
+ * Supported condition types (stored in conditions_json):
+ *   IP_RANGE        { type, values: string[] }                        CIDR/prefix list
+ *   NETWORK_TYPE    { type, values: ('CORPORATE'|'EXTERNAL'|'TOR'|'PROXY')[] }
+ *   DEVICE_MANAGED  { type, value: 'true'|'false' }
+ *   NEW_DEVICE      { type }
+ *   IMPOSSIBLE_TRAVEL { type }
+ *   COUNTRY         { type, op: 'in'|'not_in', values: string[] }     ISO-3166 alpha-2
+ *   USER_ROLE       { type, values: string[] }
+ *   RISK_SCORE      { type, op: 'gt'|'gte'|'lt'|'lte', value: number }
+ *   SENSITIVE_APP   { type }
+ *   TOR_PROXY       { type }
+ *
+ * Actions: ALLOW | MFA | STEP_UP | DENY | BLOCK
+ * Priority: lower number = evaluated first; highest-severity match wins.
  */
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
@@ -8,6 +23,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, execute } from '../db/connection.js';
+import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -75,54 +91,31 @@ router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
   res.json({ success: true });
 }));
 
-// POST /evaluate — test policy against sample context
+// POST /evaluate — test policy against a simulated login context
 router.post('/evaluate', asyncHandler(async (req: Request, res: Response) => {
-  const { ip, email, userAgent, appId } = req.body as {
-    ip?: string; email?: string; userAgent?: string; appId?: string;
+  const { ip, email, userAgent, appId, empId, role } = req.body as {
+    ip?: string; email?: string; userAgent?: string;
+    appId?: string; empId?: string; role?: string;
   };
 
-  const policies = await query<{
-    id: string; name: string; priority: number;
-    conditions_json: string; action: string; scope: string;
-    app_ids_json: string | null; group_ids_json: string | null; active: number;
-  }>(
-    `SELECT * FROM adaptive_auth_policies WHERE active=1 ORDER BY priority ASC`, [],
-  );
+  if (!empId) { res.status(400).json({ error: 'empId required for evaluation' }); return; }
 
-  const matched: { id: string; name: string; action: string }[] = [];
-  let finalAction = 'ALLOW';
+  const result = await evaluateAdaptiveAuth({
+    ip:        ip        ?? '127.0.0.1',
+    email:     email     ?? '',
+    userAgent: userAgent ?? '',
+    role:      role      ?? 'EMPLOYEE',
+    empId,
+    ...(appId !== undefined && { appId }),
+  });
 
-  for (const policy of policies) {
-    const conditions: { type: string; values?: string[]; value?: string }[] =
-      typeof policy.conditions_json === 'string'
-        ? JSON.parse(policy.conditions_json)
-        : (policy.conditions_json as unknown as { type: string }[]);
-
-    let matches = true;
-    for (const cond of conditions) {
-      if (cond.type === 'IP_RANGE' && ip) {
-        // Simple prefix check for now
-        const allowed = (cond.values ?? []).some((cidr: string) => ip.startsWith(cidr.split('/')[0].split('.').slice(0, 2).join('.')));
-        if (!allowed) matches = false;
-      }
-    }
-
-    if (policy.scope === 'APP_SPECIFIC' && appId) {
-      const ids: string[] = policy.app_ids_json ? JSON.parse(policy.app_ids_json) : [];
-      if (!ids.includes(appId)) matches = false;
-    }
-
-    if (matches) {
-      matched.push({ id: policy.id, name: policy.name, action: policy.action });
-      // Higher priority action wins (BLOCK > DENY > MFA > ALLOW)
-      const rank: Record<string, number> = { ALLOW: 0, MFA: 1, DENY: 2, BLOCK: 3 };
-      if ((rank[policy.action] ?? 0) > (rank[finalAction] ?? 0)) {
-        finalAction = policy.action;
-      }
-    }
-  }
-
-  res.json({ input: { ip, email, userAgent, appId }, matchedPolicies: matched, decision: finalAction });
+  res.json({
+    input:           { ip, email, userAgent, appId, empId, role },
+    decision:        result.action,
+    riskScore:       result.riskScore,
+    signals:         result.signals,
+    matchedPolicies: result.matchedPolicies,
+  });
 }));
 
 export default router;
