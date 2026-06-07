@@ -1,5 +1,5 @@
 import { api } from './api.js?v=2026-06-07-ad-groups-sync';
-import { el, esc, fmtDate, persistSearch } from './ui.js';
+import { el, esc, fmtDate, persistSearch, syncAppUrl } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 
 function header(title, subtitle, action = '') {
@@ -1881,6 +1881,7 @@ export async function viewPrebuiltApps(content, opts = {}) {
   }
 
   wrap.querySelector('#pbi-search').addEventListener('input', e => { searchQ = e.target.value; renderGrid(); });
+  persistSearch(wrap.querySelector('#pbi-search'), 'integrations');
   wrap.querySelectorAll('.pbi-filter').forEach(btn => {
     btn.addEventListener('click', () => {
       activeCat = btn.dataset.cat;
@@ -1892,10 +1893,7 @@ export async function viewPrebuiltApps(content, opts = {}) {
     });
   });
 
-  /* Restore any search text from a previous session (survives refresh) */
-  searchQ = persistSearch(wrap.querySelector('#pbi-search'), 'integrations');
-
-  renderGrid();
+  if (!wrap.querySelector('#pbi-search').value) renderGrid();
 }
 
 // ─── 9. App Discovery ─────────────────────────────────────────────────────────
@@ -1995,31 +1993,33 @@ function connectorStatusBadge(status) {
   return `<span class="badge ${map[status]||'badge-neutral'}">${esc(status||'—')}</span>`;
 }
 
-export async function viewDirectorySync(content) {
+export async function viewDirectorySync(content, initialTab = 'sources') {
+  const validTab = initialTab === 'users' ? 'users' : 'sources';
   content.replaceChildren(el(`<div class="admin-page">
     ${header('Universal Directory', 'Identity sources and hybrid users across AD, Google, and local directories', `<button class="btn btn-primary btn-sm" id="ds-add-header-btn">+ Add Source</button>`)}
     <div class="tabs tabs--compact">
-      <button class="tab active" data-tab="sources">Directory Sources</button>
-      <button class="tab" data-tab="users">Users</button>
+      <button class="tab${validTab === 'sources' ? ' active' : ''}" data-tab="sources">Directory Sources</button>
+      <button class="tab${validTab === 'users' ? ' active' : ''}" data-tab="users">Users</button>
     </div>
     <div id="tab-sources"></div>
     <div id="tab-users" style="display:none"></div>
   </div>`));
   const wrap = content.firstChild;
 
-  // ── tab switching ────────────────────────────────────────────────────────────
+  function showTab(name) {
+    wrap.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
+    wrap.querySelector('#tab-sources').style.display = name === 'sources' ? '' : 'none';
+    wrap.querySelector('#tab-users').style.display = name === 'users' ? '' : 'none';
+    syncAppUrl('directorySync', name, 'sources');
+  }
   wrap.querySelectorAll('.tab').forEach(t => {
-    t.addEventListener('click', () => {
-      wrap.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-      t.classList.add('active');
-      wrap.querySelector('#tab-sources').style.display = t.dataset.tab === 'sources' ? '' : 'none';
-      wrap.querySelector('#tab-users').style.display = t.dataset.tab === 'users' ? '' : 'none';
-    });
+    t.addEventListener('click', () => showTab(t.dataset.tab));
   });
 
   // ── initialise both tabs ─────────────────────────────────────────────────────
   initSourcesTab(wrap.querySelector('#tab-sources'));
   initUsersTab(wrap.querySelector('#tab-users'));
+  showTab(validTab);
 }
 
 // ╔══════════════════════════════════════════════════════════════╗
@@ -3363,6 +3363,7 @@ function initUsersTab(panel) {
       loadUsers(f.q, f.state, f.source);
     }, 350);
   });
+  persistSearch(panel.querySelector('#ud-search'), 'user-directory');
 
   ['#ud-src-filter', '#ud-state-filter'].forEach(sel => {
     panel.querySelector(sel).addEventListener('change', () => {
@@ -3379,10 +3380,10 @@ function initUsersTab(panel) {
   panel.querySelector('#ud-create-btn').addEventListener('click', openCreateUserModal);
 
   // ── Initial load ─────────────────────────────────────────────────────────────
-  // Restore any search text from a previous session (survives refresh)
-  persistSearch(panel.querySelector('#ud-search'), 'user-directory');
-  const f0 = getFilters();
-  loadUsers(f0.q, f0.state, f0.source);
+  if (!panel.querySelector('#ud-search').value) {
+    const f0 = getFilters();
+    loadUsers(f0.q, f0.state, f0.source);
+  }
 }
 
 // ─── 11. Business Roles ───────────────────────────────────────────────────────

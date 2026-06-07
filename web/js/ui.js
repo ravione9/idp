@@ -33,19 +33,39 @@ export function initials(name = '') {
 }
 
 /* Persist a search input's value across page refreshes.
-   Restores any previously typed value into the input and keeps
-   sessionStorage in sync as the user types. Returns the restored
-   value so callers can seed their own filter state. */
+   Call after wiring the input listener so a restored value re-applies filters. */
 export function persistSearch(input, key) {
   if (!input || !key) return '';
   const storageKey = `idp_search_${key}`;
   const saved = sessionStorage.getItem(storageKey) || '';
-  if (saved) input.value = saved;
   input.addEventListener('input', () => {
     if (input.value) sessionStorage.setItem(storageKey, input.value);
     else sessionStorage.removeItem(storageKey);
   });
+  if (saved) {
+    input.value = saved;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
   return saved;
+}
+
+/** Read the current sub-tab from the URL (?tab=). */
+export function getAppTab(fallback = null) {
+  return new URLSearchParams(location.search).get('tab') || fallback;
+}
+
+/** Keep the browser URL in sync with the SPA route and optional sub-tab. */
+export function syncAppUrl(routeKey, tab = null, defaultTab = null) {
+  const qs = new URLSearchParams();
+  const showTab = tab && tab !== defaultTab;
+  if (routeKey && routeKey !== 'home') {
+    qs.set('v', routeKey);
+    if (showTab) qs.set('tab', tab);
+  } else if (routeKey === 'home' && showTab) {
+    qs.set('v', 'home');
+    qs.set('tab', tab);
+  }
+  history.replaceState(null, '', qs.toString() ? `/?${qs}` : '/');
 }
 
 export function ilgBadge(state) {

@@ -1,6 +1,6 @@
 /* End-user views: Home (app launcher), My Access, Request Access, My Tasks, Settings. */
 import { api } from './api.js?v=2026-06-07-groups-sync';
-import { el, esc, fmtDate, ilgBadge, initials, persistSearch } from './ui.js';
+import { el, esc, fmtDate, ilgBadge, initials, persistSearch, syncAppUrl } from './ui.js';
 import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 
@@ -208,7 +208,7 @@ export function renderLogin() {
 }
 
 /* ---------- Home: app launcher (JumpCloud-style with favorites + search) ---------- */
-export async function viewHome(me, content) {
+export async function viewHome(me, content, initialTab = 'all') {
   const isAdmin = ROLES_ADMIN.includes(me.employee?.role);
 
   let allApps = [];
@@ -220,7 +220,7 @@ export async function viewHome(me, content) {
   } catch { /* ignore */ }
 
   let favs = JSON.parse(localStorage.getItem('idp_fav_apps') || '[]');
-  let activeTab = 'all';
+  let activeTab = initialTab === 'favs' ? 'favs' : 'all';
   let searchQ = '';
 
   function renderAppTile(app) {
@@ -275,8 +275,8 @@ export async function viewHome(me, content) {
           <input class="form-input" id="home-search" placeholder="Search applications…">
         </div>
         <div class="home-tabs">
-          <button class="home-tab active" data-tab="all">All Apps</button>
-          <button class="home-tab" data-tab="favs">⭐ Favorites</button>
+          <button class="home-tab${activeTab === 'all' ? ' active' : ''}" data-tab="all">All Apps</button>
+          <button class="home-tab${activeTab === 'favs' ? ' active' : ''}" data-tab="favs">⭐ Favorites</button>
         </div>
         <div id="apps-render"></div>
       </div>
@@ -309,19 +309,18 @@ export async function viewHome(me, content) {
     searchQ = e.target.value;
     redraw();
   });
-
-  /* Restore any search text from a previous session (survives refresh) */
-  searchQ = persistSearch(wrap.querySelector('#home-search'), 'home-apps');
+  persistSearch(wrap.querySelector('#home-search'), 'home-apps');
 
   wrap.querySelectorAll('.home-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       activeTab = tab.dataset.tab;
       wrap.querySelectorAll('.home-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === activeTab));
+      syncAppUrl('home', activeTab, 'all');
       redraw();
     });
   });
 
-  redraw();
+  if (!wrap.querySelector('#home-search').value) redraw();
   content.replaceChildren(wrap);
 }
 
@@ -524,15 +523,14 @@ export async function viewRequestAccess(content) {
       ...ents.map(e => ({ ...e, _type: 'ENTITLEMENT' })),
       ...roles.map(r => ({ ...r, _type: 'ROLE' })),
     ];
-    /* Restore any search text from a previous session (survives refresh) */
+    wrap.querySelector('#ra-search').addEventListener('input', renderCatalog);
+    wrap.querySelector('#ra-type').addEventListener('change', renderCatalog);
     persistSearch(wrap.querySelector('#ra-search'), 'request-access');
     if (!allItems.length) {
       wrap.querySelector('#ra-catalog').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div><p>No items in the catalog yet. Ask an admin to onboard applications.</p></div>`;
-    } else {
+    } else if (!wrap.querySelector('#ra-search').value) {
       renderCatalog();
     }
-    wrap.querySelector('#ra-search').addEventListener('input', renderCatalog);
-    wrap.querySelector('#ra-type').addEventListener('change', renderCatalog);
   } catch(err) {
     wrap.querySelector('#ra-catalog').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
   }
@@ -659,17 +657,19 @@ export async function viewMyTasks(content) {
 }
 
 /* ---------- Settings (Profile / Security / Sessions / MFA) ---------- */
-export async function viewSettings(me, content) {
+export async function viewSettings(me, content, initialTab = 'profile') {
   const isLocal = me.session?.iss === 'local';
+  const tabs = ['profile', ...(isLocal ? ['security'] : []), 'sessions', 'mfa', 'appearance'];
+  const validTab = tabs.includes(initialTab) ? initialTab : 'profile';
   const wrap = el(`
     <div>
       <div class="page-header"><div><h1>Account</h1><p class="subtitle">Profile, security, sessions and capabilities</p></div></div>
       <div class="tabs">
-        <button class="tab active" data-tab="profile">Profile</button>
-        ${isLocal ? '<button class="tab" data-tab="security">Security</button>' : ''}
-        <button class="tab" data-tab="sessions">Sessions</button>
-        <button class="tab" data-tab="mfa">Two-factor</button>
-        <button class="tab" data-tab="appearance">Appearance</button>
+        <button class="tab${validTab === 'profile' ? ' active' : ''}" data-tab="profile">Profile</button>
+        ${isLocal ? `<button class="tab${validTab === 'security' ? ' active' : ''}" data-tab="security">Security</button>` : ''}
+        <button class="tab${validTab === 'sessions' ? ' active' : ''}" data-tab="sessions">Sessions</button>
+        <button class="tab${validTab === 'mfa' ? ' active' : ''}" data-tab="mfa">Two-factor</button>
+        <button class="tab${validTab === 'appearance' ? ' active' : ''}" data-tab="appearance">Appearance</button>
       </div>
       <div id="settings-content"><div class="loading-row"><span class="spinner"></span></div></div>
     </div>`);
@@ -850,7 +850,9 @@ export async function viewSettings(me, content) {
     wireThemePicker(target);
   }
   function showTab(name) {
+    if (!tabs.includes(name)) name = 'profile';
     wrap.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+    syncAppUrl('settings', name, 'profile');
     if (name === 'profile') profile();
     else if (name === 'security') security();
     else if (name === 'sessions') sessions();
@@ -858,5 +860,5 @@ export async function viewSettings(me, content) {
     else if (name === 'appearance') appearance();
   }
   wrap.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => showTab(tab.dataset.tab)));
-  profile();
+  showTab(validTab);
 }

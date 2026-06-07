@@ -1,7 +1,7 @@
 /* Admin views: Dashboard, SAML apps, App catalog, Connectors, Users, Admins,
    Reviews, SoD, Risk, Authentication, Audit, Reports. */
 import { api } from './api.js?v=2026-06-07-groups-sync';
-import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut, persistSearch } from './ui.js';
+import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut, persistSearch, syncAppUrl } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 import { viewOidcApps, viewPrebuiltApps } from './views-stubs.js?v=2026-06-07-c';
 
@@ -394,10 +394,7 @@ export async function viewApplications(me, content, initialTab = 'catalog') {
       panel.hidden = id !== tabId;
     }
 
-    const qs = new URLSearchParams();
-    qs.set('v', 'applications');
-    if (tabId !== 'catalog') qs.set('tab', tabId);
-    history.replaceState(null, '', `/?${qs}`);
+    syncAppUrl('applications', tabId, 'catalog');
 
     if (tabId === 'catalog' && !panels.catalog.dataset.loaded) {
       panels.catalog.dataset.loaded = '1';
@@ -787,9 +784,7 @@ export async function viewIgaApps(content, opts = {}) {
   wrap.querySelector('#ac-search').addEventListener('input', (e) => { searchQ = e.target.value; renderTable(); });
   wrap.querySelector('#ac-vis').addEventListener('change', (e) => { visFilter = e.target.value; renderTable(); });
   wrap.querySelector('#ac-show-inactive').addEventListener('change', (e) => { showInactive = e.target.checked; renderTable(); });
-
-  /* Restore any search text from a previous session (survives refresh) */
-  searchQ = persistSearch(wrap.querySelector('#ac-search'), 'ac-catalog');
+  persistSearch(wrap.querySelector('#ac-search'), 'ac-catalog');
 
   await loadApps();
 }
@@ -1066,9 +1061,8 @@ export async function viewUsers(content) {
   const reload = () => load(search.value, filter.value);
   search.addEventListener('input', debounce(reload));
   filter.addEventListener('change', reload);
-  /* Restore any search text from a previous session (survives refresh) */
   persistSearch(search, 'admin-users');
-  reload();
+  if (!search.value) reload();
 }
 
 /* ---------- Administrators ---------- */
@@ -1261,9 +1255,10 @@ export async function viewAuth(content) {
 }
 
 /* ---------- Audit ---------- */
-export async function viewAudit(content) {
+export async function viewAudit(content, initialTab = 'saml') {
+  const validTab = initialTab === 'system' ? 'system' : 'saml';
   const wrap = el(`<div>${header('Audit Logs', 'SSO assertions and tamper-evident system audit trail')}
-    <div class="tabs"><button class="tab active" data-tab="saml">SSO assertions</button><button class="tab" data-tab="system">System audit</button></div>
+    <div class="tabs"><button class="tab${validTab === 'saml' ? ' active' : ''}" data-tab="saml">SSO assertions</button><button class="tab${validTab === 'system' ? ' active' : ''}" data-tab="system">System audit</button></div>
     <div id="aud"><div class="loading-row"><span class="spinner"></span></div></div></div>`);
   content.replaceChildren(wrap);
   async function loadSaml() {
@@ -1298,11 +1293,13 @@ export async function viewAudit(content) {
         : `<div class="card empty-state">No audit entries yet</div>`;
     } catch (err) { t.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; }
   }
-  wrap.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => {
-    wrap.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
-    if (tab.dataset.tab === 'saml') loadSaml(); else loadSystem();
-  }));
-  loadSaml();
+  function showTab(name) {
+    wrap.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+    syncAppUrl('audit', name, 'saml');
+    if (name === 'saml') loadSaml(); else loadSystem();
+  }
+  wrap.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => showTab(tab.dataset.tab)));
+  showTab(validTab);
 }
 
 /* ---------- Reviews / SoD / Risk / Reports ---------- */

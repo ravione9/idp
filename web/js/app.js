@@ -4,16 +4,16 @@
    Layout: SailPoint top nav + miniOrange-style admin sidebar.
    ============================================================ */
 import { api } from './api.js?v=2026-06-07-device-v2';
-import { el, esc, initials, persistSearch } from './ui.js';
+import { el, esc, initials, persistSearch, syncAppUrl } from './ui.js?v=2026-06-07-refresh';
 import { icon } from './icons.js';
 import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import {
   renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
-} from './views-end-user.js';
+} from './views-end-user.js?v=2026-06-07-refresh';
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
   viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
-} from './views-admin.js?v=2026-06-07-c';
+} from './views-admin.js?v=2026-06-07-refresh';
 import {
   viewGroups, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,
@@ -24,7 +24,7 @@ import {
   viewWorkflowLibrary, viewEventTriggers, viewNotifications,
   viewSsoReports,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
-} from './views-stubs.js?v=2026-06-07-device-v2';
+} from './views-stubs.js?v=2026-06-07-refresh';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
@@ -124,7 +124,7 @@ const PRIMARY_NAV_ORDER = ['home', 'request', 'tasks', 'myaccess'];
 const APP_ROUTE_ALIASES = { 'iga-apps': 'catalog', 'saml-apps': 'saml', oidcApps: 'oidc' };
 const ADMIN_SIDEBAR_ALIASES = { 'iga-apps': 'applications', 'saml-apps': 'applications', oidcApps: 'applications' };
 
-const state = { me: null, current: 'home', appsTab: 'catalog' };
+const state = { me: null, current: 'home', appsTab: 'catalog', routeTab: null };
 window.LILG_NAV = navigate;
 
 /* ----------------------------------------------------------------
@@ -328,9 +328,18 @@ function applyActiveNav() {
 /* ----------------------------------------------------------------
    ROUTER
    ---------------------------------------------------------------- */
+const ROUTE_DEFAULT_TABS = {
+  applications:  'catalog',
+  settings:      'profile',
+  home:          'all',
+  audit:         'saml',
+  directorySync: 'sources',
+};
+
 async function navigate(key, opts = {}) {
   const me = state.me;
-  let tab = opts.tab || null;
+  const explicitTab = 'tab' in opts;
+  let tab = explicitTab ? (opts.tab || null) : null;
 
   if (APP_ROUTE_ALIASES[key]) {
     tab = tab || APP_ROUTE_ALIASES[key];
@@ -343,22 +352,33 @@ async function navigate(key, opts = {}) {
   if (route.super && me.employee?.role !== 'SUPER_ADMIN') return;
 
   state.current = key;
+
   if (key === 'applications') {
-    state.appsTab = tab || new URLSearchParams(location.search).get('tab') || state.appsTab || 'catalog';
+    state.appsTab = explicitTab ? (tab || 'catalog') : 'catalog';
+    tab = state.appsTab;
+  } else if (explicitTab) {
+    state.routeTab = tab || null;
+  } else {
+    state.routeTab = null;
+    tab = null;
   }
 
-  const qs = new URLSearchParams();
-  if (key !== 'home') qs.set('v', key);
-  if (key === 'applications' && state.appsTab && state.appsTab !== 'catalog') qs.set('tab', state.appsTab);
-  history.replaceState(null, '', qs.toString() ? `/?${qs}` : '/');
+  syncAppUrl(key, tab, ROUTE_DEFAULT_TABS[key]);
   applyActiveNav();
 
   const content = document.getElementById('content');
+  const viewTab = tab || ROUTE_DEFAULT_TABS[key] || null;
 
   const needsMe = new Set(['home', 'settings', 'applications']);
   if (needsMe.has(key)) {
     if (key === 'applications') await route.view(me, content, state.appsTab);
+    else if (key === 'settings') await route.view(me, content, viewTab);
+    else if (key === 'home') await route.view(me, content, viewTab);
     else await route.view(me, content);
+  } else if (key === 'audit') {
+    await route.view(content, viewTab);
+  } else if (key === 'directorySync') {
+    await route.view(content, viewTab);
   } else {
     await route.view(content);
   }
@@ -398,7 +418,7 @@ async function main() {
   }
 
   root.replaceChildren(buildShell());
-  navigate(state.current);
+  navigate(state.current, { tab: params.get('tab') });
 
   /* Background: populate task badge counts */
   api.igaMyTasks().then(r => {

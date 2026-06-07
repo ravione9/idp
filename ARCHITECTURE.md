@@ -458,6 +458,7 @@ web/
 
 - **Login screen** — split: brand hero (gradient) + sign-in card. **Identity-first flow**: email step → password step (avatar + "Not you?" link) → optional MFA challenge inline. Google SSO button on email step.
 - **Console** — fixed top primary nav + contextual left sidebar (user or admin mode).
+- **Routing** — SPA state is reflected in the URL: `/?v=<route>` (e.g. `users`, `settings`, `applications`) with optional `?tab=<subtab>` (e.g. `sessions`, `prebuilt`, `favs`). A full page refresh restores the same view and sub-tab. Per-page search/filter text is persisted in `sessionStorage` via `persistSearch()` and re-applied on load.
 - **Admin → Authentication** — shows Google OIDC status and supports SUPER_ADMIN save of Client ID / Secret / Hosted Domain (or pasted OAuth web-client JSON) into DB overrides.
 
 Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that switches by mode:
