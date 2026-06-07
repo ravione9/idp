@@ -74,6 +74,7 @@ export const ICONS = {
   arrowRight:  S('<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>'),
   chevronLeft: S('<path d="M15 6l-6 6 6 6"/>'),
   chevronRight:S('<path d="M9 6l6 6-6 6"/>'),
+  menu:        S('<path d="M4 6h16M4 12h16M4 18h16"/>'),
   plus:        S('<path d="M12 5v14M5 12h14"/>'),
   close:       S('<path d="M6 6l12 12M18 6L6 18"/>'),
   check:       S('<path d="M5 12.5l4 4 10-10"/>'),

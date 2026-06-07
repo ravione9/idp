@@ -162,6 +162,9 @@ function buildShell() {
   const root = el(`
     <div class="shell">
       <header class="topnav">
+        <button type="button" class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="mobile-nav-panel">
+          <span class="i-wrap">${icon('menu')}</span>
+        </button>
         <div class="brand">
           <span class="brand-logo">L</span>
           <span>Lenskart IdP</span>
@@ -213,6 +216,7 @@ function buildShell() {
         <aside class="admin-sidebar hidden" id="admin-sidebar">${sidebarHtml}</aside>
         <main class="content" id="content"><div class="loading-row"><span class="spinner"></span></div></main>
       </div>
+      <div class="mobile-backdrop" id="mobile-backdrop" aria-hidden="true"></div>
     </div>
   `);
 
@@ -275,7 +279,52 @@ function buildShell() {
   /* Keep the global search text across page refreshes */
   persistSearch(root.querySelector('#global-search'), 'global');
 
+  wireMobileNav(root);
+
   return root;
+}
+
+function wireMobileNav(root) {
+  const shellEl = root.querySelector('.shell');
+  const menuBtn = root.querySelector('#mobile-menu-btn');
+  const backdrop = root.querySelector('#mobile-backdrop');
+  const mq = window.matchMedia('(max-width: 900px)');
+
+  function closeMobileNav() {
+    shellEl.classList.remove('mobile-nav-open');
+    menuBtn?.setAttribute('aria-expanded', 'false');
+    backdrop?.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('nav-locked');
+  }
+
+  function openMobileNav() {
+    if (!mq.matches) return;
+    shellEl.classList.add('mobile-nav-open');
+    menuBtn?.setAttribute('aria-expanded', 'true');
+    backdrop?.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('nav-locked');
+  }
+
+  menuBtn?.addEventListener('click', () => {
+    if (shellEl.classList.contains('mobile-nav-open')) closeMobileNav();
+    else openMobileNav();
+  });
+
+  backdrop?.addEventListener('click', closeMobileNav);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && shellEl.classList.contains('mobile-nav-open')) closeMobileNav();
+  });
+
+  mq.addEventListener('change', (e) => {
+    if (!e.matches) closeMobileNav();
+  });
+
+  for (const sel of ['#admin-sidebar', '#user-sidebar', '#primary-nav']) {
+    root.querySelector(sel)?.addEventListener('click', (e) => {
+      if (e.target.closest('button[data-key]')) closeMobileNav();
+    });
+  }
 }
 
 /* ----------------------------------------------------------------
