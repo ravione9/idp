@@ -16,6 +16,7 @@ import { redis } from './session-store.js';
 import logger from '../utils/logger.js';
 import { parseOAuthState } from './login-routes.js';
 import { getGoogleOidcConfig, isGoogleOidcConfigured } from './google-oidc-config.js';
+import { emailAllowedForGoogleDomains } from './google-domains.js';
 import {
   COOKIE_NAME,
   SESSION_REDIS_PREFIX,
@@ -183,8 +184,15 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       audience: oidc.clientId,
     });
 
-    if (payload['hd'] !== oidc.hostedDomain) {
+    const hd = typeof payload['hd'] === 'string' ? payload['hd'].trim().toLowerCase() : '';
+    if (hd && !oidc.hostedDomains.includes(hd)) {
       res.status(403).json({ error: 'Wrong hosted domain' });
+      return;
+    }
+
+    const email = payload['email'] as string;
+    if (!emailAllowedForGoogleDomains(email, oidc.hostedDomains)) {
+      res.status(403).json({ error: 'Email domain not permitted for this IdP' });
       return;
     }
     if (!payload['email_verified']) {
@@ -192,7 +200,6 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       return;
     }
 
-    const email = payload['email'] as string;
     const sub   = payload['sub'] as string;
 
     // Lookup employee by corporate email

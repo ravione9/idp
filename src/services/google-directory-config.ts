@@ -6,6 +6,10 @@ import { google } from 'googleapis';
 import type { admin_directory_v1 } from 'googleapis';
 import type { JWT } from 'google-auth-library';
 import { config } from '../config.js';
+import {
+  parseGoogleHostedDomains,
+  primaryGoogleHostedDomain,
+} from '../auth/google-domains.js';
 
 export const GOOGLE_DIRECTORY_USER_SCOPE =
   'https://www.googleapis.com/auth/admin.directory.user';
@@ -13,7 +17,10 @@ export const GOOGLE_DIRECTORY_GROUP_SCOPE =
   'https://www.googleapis.com/auth/admin.directory.group.readonly';
 
 export interface GoogleSyncScope {
+  /** Primary domain label (first in list). */
   customerDomain: string;
+  /** All Workspace domains on this tenant (used for portal login allowlist). */
+  customerDomains: string[];
   adminEmail: string;
   provisionOrgUnit: string;
   orgUnits: string[];
@@ -112,8 +119,12 @@ export function normalizeOrgUnitPath(path: string): string {
 }
 
 export function resolveGoogleSyncScope(cfg: Record<string, unknown>): GoogleSyncScope {
+  const customerDomains = parseGoogleHostedDomains(
+    cfg['customerDomains'] ?? cfg['customerDomain'] ?? config.google.hostedDomain ?? '',
+  );
   return {
-    customerDomain: String(cfg['customerDomain'] ?? config.google.hostedDomain ?? '').trim(),
+    customerDomain: primaryGoogleHostedDomain(customerDomains),
+    customerDomains,
     adminEmail: String(cfg['adminEmail'] ?? cfg['serviceAccountEmail'] ?? '').trim(),
     provisionOrgUnit: normalizeOrgUnitPath(String(cfg['provisionOrgUnit'] ?? '/Employees')),
     orgUnits: parseCsvList(cfg['syncOrgUnits']).map(normalizeOrgUnitPath),

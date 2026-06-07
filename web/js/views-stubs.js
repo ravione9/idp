@@ -1966,7 +1966,7 @@ const FIELD_LABELS = {
   targetOu:           'New User OU (e.g. OU=IT — optional if Base DN is already an OU)',
   upnDomain:          'UPN Suffix (e.g. lenskart.com — optional)',
   useSsl:             'Protocol',
-  customerDomain:     'Customer Domain',
+  customerDomain:     'Workspace domains',
   serviceAccountEmail:'Service Account Email',
   serviceAccountKey:  'Service Account JSON Key',
   adminEmail:         'Admin Email (Workspace super admin — required for domain-wide delegation)',
@@ -2243,6 +2243,13 @@ function initSourcesTab(panel) {
         return `<div class="form-group">
           <label class="form-label">${esc(label)}</label>
           <textarea class="form-textarea" id="cfg-${f}" rows="4" placeholder='{"type":"service_account","project_id":"..."}'>${val}</textarea>
+        </div>`;
+      }
+      if (f === 'customerDomain' && isGoogle) {
+        return `<div class="form-group" style="grid-column:1/-1">
+          <label class="form-label">${esc(label)} <span style="color:var(--danger)">*</span></label>
+          <textarea class="form-textarea" id="cfg-${f}" rows="3" placeholder="lenskart.com&#10;lenskart.in&#10;dealskart.in">${val}</textarea>
+          <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">All Google Workspace domains on this tenant (one per line). Sync imports users from every domain; the same list is used for portal Google sign-in.</p>
         </div>`;
       }
       if (f === 'adminEmail' && isGoogle) {

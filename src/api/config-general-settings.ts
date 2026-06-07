@@ -8,6 +8,7 @@ import { requireRole } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { queryOne, execute } from '../db/connection.js';
 import { getGoogleOidcConfig, isGoogleOidcConfigured } from '../auth/google-oidc-config.js';
+import { parseGoogleHostedDomains } from '../auth/google-domains.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -58,6 +59,7 @@ router.get('/google-oidc', asyncHandler(async (_req: Request, res: Response) => 
   res.json({
     clientId: cfg.clientId,
     hostedDomain: cfg.hostedDomain,
+    hostedDomains: cfg.hostedDomains,
     hasClientSecret: Boolean(cfg.clientSecret),
     source: cfg.source,
     configured: isGoogleOidcConfigured(cfg),
@@ -75,11 +77,14 @@ router.put('/google-oidc', asyncHandler(async (req: Request, res: Response) => {
   const existing = await getGoogleOidcConfig();
   const clientId = readString(body, 'clientId') ?? jsonCreds?.clientId ?? existing.clientId;
   const clientSecret = readString(body, 'clientSecret') ?? jsonCreds?.clientSecret ?? existing.clientSecret;
-  const hostedDomain = readString(body, 'hostedDomain') ?? existing.hostedDomain;
+  const hostedDomainRaw = readString(body, 'hostedDomain')
+    ?? (existing.hostedDomains.length ? existing.hostedDomains.join('\n') : existing.hostedDomain);
+  const hostedDomains = parseGoogleHostedDomains(hostedDomainRaw);
+  const hostedDomainStored = hostedDomains.join('\n');
 
-  if (!clientId || !clientSecret || !hostedDomain) {
+  if (!clientId || !clientSecret || !hostedDomains.length) {
     res.status(400).json({
-      error: 'clientId, clientSecret, and hostedDomain are required (directly or from OAuth JSON).',
+      error: 'clientId, clientSecret, and at least one hosted domain are required (directly or from OAuth JSON).',
     });
     return;
   }
@@ -95,12 +100,12 @@ router.put('/google-oidc', asyncHandler(async (req: Request, res: Response) => {
        google_oidc_hosted_domain = VALUES(google_oidc_hosted_domain),
        updated_by = VALUES(updated_by),
        updated_at = UTC_TIMESTAMP()`,
-    [clientId, clientSecret, hostedDomain, empId],
+    [clientId, clientSecret, hostedDomainStored, empId],
   );
 
   res.json({
     success: true,
-    configured: isGoogleOidcConfigured({ clientId, clientSecret, hostedDomain }),
+    configured: isGoogleOidcConfigured({ clientId, clientSecret, hostedDomains }),
   });
 }));
 

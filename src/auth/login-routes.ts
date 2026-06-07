@@ -39,9 +39,13 @@ export async function googleLoginHandler(req: Request, res: Response): Promise<v
       response_type: 'code',
       scope:         'openid email profile',
       access_type:   'online',
-      hd:            oidc.hostedDomain,
       state,
     });
+
+    // Google hd= accepts only one domain; omit when multiple Workspace domains are allowed.
+    if (oidc.hostedDomains.length === 1) {
+      params.set('hd', oidc.hostedDomains[0]!);
+    }
 
     res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
   } catch (err) {

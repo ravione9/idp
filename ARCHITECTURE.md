@@ -170,6 +170,8 @@ Google OIDC credentials are resolved in this order:
 1. `general_settings.google_oidc_*` (set from **Admin → Authentication**)
 2. `.env` fallback (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_HOSTED_DOMAIN`)
 
+**Multi-domain Workspace tenants:** `google_oidc_hosted_domain` and the Google Directory connector **Workspace domains** field accept multiple domains (comma or newline separated, e.g. `lenskart.com`, `lenskart.in`, `dealskart.in`). Portal Google sign-in validates the user’s email domain against the merged allowlist (Authentication settings + active `google-workspace` connector). Directory sync uses `customer: my_customer` and imports users from all domains on the tenant when sync scope is blank.
+
 ### 5.2 Session model
 
 - Sessions are stored in **MySQL** (`idp_sessions`) and cached in **Redis** (`idp:session:<id>`).
@@ -768,6 +770,20 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/auth/session.ts`**, **`src/auth/local-auth.ts`**, **`src/auth/middleware.ts`** — store `device_info` at login; enrich `geo_location` in background; use `getClientIp()` for public IP.
 - **`src/api/me-actions.ts`**, **`src/api/admin-users.ts`** — session APIs return `device_info` + `geo_location` (removed `POST /api/me/sessions/device-context`).
 - **`web/js/views-stubs.js`**, **`web/js/views-end-user.js`** — Sessions tables show Device, Location, IP.
+
+---
+
+### (pending) — 2026-06-07 — Multi-domain Google Workspace sync + portal login
+
+**Why** — Lenskart operates multiple Google Workspace domains (`lenskart.com`, `lenskart.in`, `dealskart.in`, …) on one tenant; single-domain OIDC checks blocked users on secondary domains.
+
+**What changed:**
+
+- **`src/auth/google-domains.ts`** — shared parse/validate helpers for multi-domain allowlists.
+- **`src/auth/google-oidc-config.ts`**, **`login-routes.ts`**, **`middleware.ts`** — merge Authentication + Directory connector domains; validate email domain on callback; omit Google `hd=` when multiple domains configured.
+- **`src/services/google-directory-config.ts`**, **`src/api/iga.ts`**, **`web/js/views-stubs.js`** — connector **Workspace domains** field accepts one domain per line; same list drives portal login when OIDC domains are unset.
+- **`migrations/022_google_oidc_multi_domain.sql`** — widen `general_settings.google_oidc_hosted_domain` to 1000 chars.
+- **`web/js/views-admin.js`** — Authentication page uses multi-line domain editor.
 
 ---
 

@@ -1147,10 +1147,14 @@ export async function viewAuth(content) {
   const redirectUri = `${window.location.origin}/auth/google/callback`;
   const sourceLabel = (k) => {
     if (!google?.source || !google.source[k]) return '—';
+    if (google.source[k] === 'connector') {
+      return '<span class="badge badge-info">Directory connector</span>';
+    }
     return google.source[k] === 'db'
       ? '<span class="badge badge-info">DB override</span>'
       : '<span class="badge badge-neutral">.env</span>';
   };
+  const domainsDisplay = (google?.hostedDomains?.length ? google.hostedDomains : [google?.hostedDomain].filter(Boolean)).join(', ');
 
   wrap.querySelector('#auth-area').innerHTML = `<div class="grid-3">
     <div class="card"><h2>SAML 2.0 Identity Provider</h2>
@@ -1173,7 +1177,8 @@ export async function viewAuth(content) {
         <div class="kv"><div class="k">Configured</div><div class="v">${google?.configured ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-warning">No</span>'}</div></div>
         <div class="kv"><div class="k">Client ID source</div><div class="v">${sourceLabel('clientId')}</div></div>
         <div class="kv"><div class="k">Client secret source</div><div class="v">${sourceLabel('clientSecret')}</div></div>
-        <div class="kv"><div class="k">Hosted domain source</div><div class="v">${sourceLabel('hostedDomain')}</div></div>
+        <div class="kv"><div class="k">Hosted domains</div><div class="v">${esc(domainsDisplay || '—')}</div></div>
+        <div class="kv"><div class="k">Domain source</div><div class="v">${sourceLabel('hostedDomain')}</div></div>
       </div>
       ${googleLoadError ? `<div class="alert alert-warning" style="margin-top:1rem">${esc(googleLoadError)}</div>` : ''}
       ${google ? `
@@ -1187,8 +1192,9 @@ export async function viewAuth(content) {
           <input class="form-input" id="auth-google-client-secret" type="password" placeholder="${google.hasClientSecret ? 'Saved (leave blank to keep current)' : 'GOCSPX-...'}">
         </div>
         <div class="form-group">
-          <label class="form-label">Hosted Domain</label>
-          <input class="form-input" id="auth-google-hosted-domain" value="${esc(google.hostedDomain || '')}" placeholder="lenskart.com">
+          <label class="form-label">Workspace domains</label>
+          <textarea class="form-textarea" id="auth-google-hosted-domain" rows="3" placeholder="lenskart.com&#10;lenskart.in&#10;dealskart.in">${esc((google.hostedDomains?.length ? google.hostedDomains.join('\n') : google.hostedDomain) || '')}</textarea>
+          <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">One domain per line (or comma-separated). Same list as Directory Sync → Google Workspace. Used for portal sign-in allowlist.</p>
         </div>
         <div class="form-group">
           <label class="form-label">OAuth JSON (optional)</label>
@@ -1230,7 +1236,7 @@ export async function viewAuth(content) {
         return;
       }
       if (!hostedDomain) {
-        msg.innerHTML = `<div class="alert alert-error">Hosted Domain is required.</div>`;
+        msg.innerHTML = `<div class="alert alert-error">Enter at least one Workspace domain.</div>`;
         return;
       }
 

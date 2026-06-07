@@ -25,6 +25,7 @@ import {
   listScopedGoogleUsers,
   resolveGoogleSyncScope,
 } from '../services/google-directory-config.js';
+import { parseGoogleHostedDomains } from '../auth/google-domains.js';
 import { google } from 'googleapis';
 import { submitAccessRequest, processDecision } from '../services/access-request-workflow.js';
 import { createCampaign, submitReviewDecision } from '../services/access-review.js';
@@ -554,8 +555,10 @@ router.post(
           res.status(422).json({ success: false, code: `LDAP_${code ?? 'ERROR'}`, message: friendly, detail: raw });
         }
       } else if (type === 'GOOGLE' || type === 'GOOGLE_WORKSPACE') {
-        const required = ['customerDomain', 'adminEmail'];
-        const missing = required.filter((k) => !String(cfg[k] ?? '').trim());
+        const domains = parseGoogleHostedDomains(cfg['customerDomains'] ?? cfg['customerDomain']);
+        const missing: string[] = [];
+        if (!domains.length) missing.push('customerDomain');
+        if (!String(cfg['adminEmail'] ?? '').trim()) missing.push('adminEmail');
         if (!String(cfg['serviceAccountKey'] ?? '').trim()) {
           missing.push('serviceAccountKey');
         }
@@ -580,10 +583,11 @@ router.post(
           if (scope.groups.length) scopeParts.push(`${scope.groups.length} group(s)`);
           if (scope.users.length) scopeParts.push(`${scope.users.length} explicit user(s)`);
           const scopeLabel = scopeParts.length ? scopeParts.join(', ') : 'entire directory';
+          const domainLabel = scope.customerDomains.join(', ');
 
           res.json({
             success: true,
-            message: `Connected to Google Workspace (${scope.customerDomain}). Sync scope: ${scopeLabel} — ${scopedUsers.length} user(s) matched.`,
+            message: `Connected to Google Workspace (${domainLabel}). Sync scope: ${scopeLabel} — ${scopedUsers.length} user(s) matched. Portal login allows: ${domainLabel}.`,
           });
         } catch (googleErr) {
           const friendly = formatGoogleAuthError(googleErr, cfg);
