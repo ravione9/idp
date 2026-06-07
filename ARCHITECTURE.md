@@ -725,7 +725,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
-### 5417fd0 — 2026-06-07 — Session UI fixes, search persistence, agent cleanup
+### 43827f3 — 2026-06-07 — Session UI fixes, search persistence, agent cleanup
 
 **Why** — Post-refactor verification found a sessions table column bug, stale docs/dead agent code, and missing Cloudflare-aware IP capture; search boxes lost typed text on refresh.
 
