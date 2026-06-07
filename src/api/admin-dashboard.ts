@@ -13,6 +13,7 @@ import { queryOne } from '../db/connection.js';
 import { safeQuery } from '../db/safe-query.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { config, isSamlEnabled } from '../config.js';
+import { getGoogleOidcConfig, isGoogleOidcConfigured } from '../auth/google-oidc-config.js';
 
 const router = Router();
 
@@ -73,6 +74,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   );
 
   const base = config.app.publicBaseUrl ?? config.saml?.baseUrl;
+  const googleOidc = await getGoogleOidcConfig();
 
   res.json({
     counts: {
@@ -96,7 +98,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
       samlEnabled:        isSamlEnabled(),
       publicBaseUrl:      base ?? null,
       metadataUrl:        base ? `${base}/saml/metadata` : null,
-      googleConfigured:   !config.google.clientId.startsWith('REPLACE_ME'),
+      googleConfigured:   isGoogleOidcConfigured(googleOidc),
       zohoSamlConfigured: false,
     },
   });

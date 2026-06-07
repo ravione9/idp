@@ -7,8 +7,9 @@
  */
 
 import { Request, Response } from 'express';
-import { config } from '../config.js';
 import { getPublicOrigin } from '../utils/request-context.js';
+import logger from '../utils/logger.js';
+import { getGoogleOidcConfig, isGoogleOidcConfigured } from './google-oidc-config.js';
 
 function baseUrl(req: Request): string {
   return getPublicOrigin(req);
@@ -20,22 +21,33 @@ function safeReturnTo(raw: string | undefined): string {
   return raw;
 }
 
-export function googleLoginHandler(req: Request, res: Response): void {
-  const returnTo = safeReturnTo(req.query['returnTo'] as string | undefined);
-  const redirectUri = `${baseUrl(req)}/auth/google/callback`;
-  const state = Buffer.from(JSON.stringify({ returnTo }), 'utf8').toString('base64url');
+export async function googleLoginHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const oidc = await getGoogleOidcConfig();
+    if (!isGoogleOidcConfigured(oidc)) {
+      res.status(503).json({ error: 'Google login is not configured yet' });
+      return;
+    }
 
-  const params = new URLSearchParams({
-    client_id:     config.google.clientId,
-    redirect_uri:  redirectUri,
-    response_type: 'code',
-    scope:         'openid email profile',
-    access_type:   'online',
-    hd:            config.google.hostedDomain,
-    state,
-  });
+    const returnTo = safeReturnTo(req.query['returnTo'] as string | undefined);
+    const redirectUri = `${baseUrl(req)}/auth/google/callback`;
+    const state = Buffer.from(JSON.stringify({ returnTo }), 'utf8').toString('base64url');
 
-  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+    const params = new URLSearchParams({
+      client_id:     oidc.clientId,
+      redirect_uri:  redirectUri,
+      response_type: 'code',
+      scope:         'openid email profile',
+      access_type:   'online',
+      hd:            oidc.hostedDomain,
+      state,
+    });
+
+    res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+  } catch (err) {
+    logger.error({ err }, 'Failed to start Google OIDC login');
+    res.status(500).json({ error: 'Authentication setup failed' });
+  }
 }
 
 export function parseOAuthState(state: string | undefined): { returnTo: string } {

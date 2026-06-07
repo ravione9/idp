@@ -15,6 +15,7 @@ import { query, queryOne } from '../db/connection.js';
 import { redis } from './session-store.js';
 import logger from '../utils/logger.js';
 import { parseOAuthState } from './login-routes.js';
+import { getGoogleOidcConfig, isGoogleOidcConfigured } from './google-oidc-config.js';
 import {
   COOKIE_NAME,
   SESSION_REDIS_PREFIX,
@@ -151,6 +152,12 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
   }
 
   try {
+    const oidc = await getGoogleOidcConfig();
+    if (!isGoogleOidcConfigured(oidc)) {
+      res.status(503).json({ error: 'Google login is not configured yet' });
+      return;
+    }
+
     // Exchange code for tokens
     const tokenRes = await (await import('axios')).default.post<{
       id_token: string;
@@ -160,8 +167,8 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       'https://oauth2.googleapis.com/token',
       new URLSearchParams({
         code,
-        client_id:     config.google.clientId,
-        client_secret: config.google.clientSecret,
+        client_id:     oidc.clientId,
+        client_secret: oidc.clientSecret,
         redirect_uri:  `${getPublicOrigin(req)}/auth/google/callback`,
         grant_type:    'authorization_code',
       }).toString(),
@@ -173,10 +180,10 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     // Verify id_token
     const { payload } = await jwtVerify(id_token, googleJwks, {
       issuer:   ['accounts.google.com', 'https://accounts.google.com'],
-      audience: config.google.clientId,
+      audience: oidc.clientId,
     });
 
-    if (payload['hd'] !== config.google.hostedDomain) {
+    if (payload['hd'] !== oidc.hostedDomain) {
       res.status(403).json({ error: 'Wrong hosted domain' });
       return;
     }

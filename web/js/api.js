@@ -122,6 +122,8 @@ Object.assign(api, {
   // General Settings
   getGeneralSettings:  () => f('/api/admin/general-settings'),
   saveGeneralSettings: (data) => f('/api/admin/general-settings', { method: 'PUT', body: JSON.stringify(data) }),
+  getGoogleOidcSettings: () => f('/api/admin/general-settings/google-oidc'),
+  saveGoogleOidcSettings: (data) => f('/api/admin/general-settings/google-oidc', { method: 'PUT', body: JSON.stringify(data) }),
 
   // Portal SSL
   getPortalSsl:        () => f('/api/admin/portal-ssl'),

@@ -1132,8 +1132,26 @@ export async function viewAuth(content) {
   const wrap = el(`<div>${header('Authentication', 'SAML Identity Provider and OIDC connection status')}<div id="auth-area"><div class="loading-row"><span class="spinner"></span></div></div></div>`);
   content.replaceChildren(wrap);
   let s;
-  try { s = await api.idpStatus(); }
+  let google = null;
+  let googleLoadError = '';
+  try {
+    [s, google] = await Promise.all([
+      api.idpStatus(),
+      api.getGoogleOidcSettings().catch((err) => {
+        googleLoadError = err?.message || 'Could not load Google OIDC settings.';
+        return null;
+      }),
+    ]);
+  }
   catch (err) { wrap.querySelector('#auth-area').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; return; }
+
+  const redirectUri = `${window.location.origin}/auth/google/callback`;
+  const sourceLabel = (k) => {
+    if (!google?.source || !google.source[k]) return '—';
+    return google.source[k] === 'db'
+      ? '<span class="badge badge-info">DB override</span>'
+      : '<span class="badge badge-neutral">.env</span>';
+  };
 
   wrap.querySelector('#auth-area').innerHTML = `<div class="grid-3">
     <div class="card"><h2>SAML 2.0 Identity Provider</h2>
@@ -1149,9 +1167,37 @@ export async function viewAuth(content) {
         Run <code>bash scripts/gen-saml-dev-keys.sh</code>, paste <code>SAML_IDP_PRIVATE_KEY_PEM</code> and <code>SAML_IDP_CERT_PEM</code> into <code>.env</code>, then restart.</div></div>` : ''}
     </div>
     <div class="card"><h2>Inbound OIDC providers</h2>
-      <p class="subtitle" style="margin-bottom:1rem">Federated login for end users</p>
-      <div class="kv-list"><div class="kv"><div class="k">Google Workspace</div><div class="v"><a href="/auth/google">/auth/google</a></div></div></div>
-      <p class="subtitle" style="margin-top:1rem">Configure <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>, <code>GOOGLE_HOSTED_DOMAIN</code> in <code>.env</code>.</p>
+      <p class="subtitle" style="margin-bottom:1rem">Google Workspace federated login for end users</p>
+      <div class="kv-list">
+        <div class="kv"><div class="k">Login endpoint</div><div class="v"><a href="/auth/google">/auth/google</a></div></div>
+        <div class="kv"><div class="k">Redirect URI</div><div class="v"><code>${esc(redirectUri)}</code></div></div>
+        <div class="kv"><div class="k">Configured</div><div class="v">${google?.configured ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-warning">No</span>'}</div></div>
+        <div class="kv"><div class="k">Client ID source</div><div class="v">${sourceLabel('clientId')}</div></div>
+        <div class="kv"><div class="k">Client secret source</div><div class="v">${sourceLabel('clientSecret')}</div></div>
+        <div class="kv"><div class="k">Hosted domain source</div><div class="v">${sourceLabel('hostedDomain')}</div></div>
+      </div>
+      ${googleLoadError ? `<div class="alert alert-warning" style="margin-top:1rem">${esc(googleLoadError)}</div>` : ''}
+      ${google ? `
+      <form id="auth-google-form" style="margin-top:1rem">
+        <div class="form-group">
+          <label class="form-label">OAuth Client ID</label>
+          <input class="form-input" id="auth-google-client-id" value="${esc(google.clientId || '')}" placeholder="123456.apps.googleusercontent.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">OAuth Client Secret</label>
+          <input class="form-input" id="auth-google-client-secret" type="password" placeholder="${google.hasClientSecret ? 'Saved (leave blank to keep current)' : 'GOCSPX-...'}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Hosted Domain</label>
+          <input class="form-input" id="auth-google-hosted-domain" value="${esc(google.hostedDomain || '')}" placeholder="lenskart.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">OAuth JSON (optional)</label>
+          <textarea class="form-textarea" id="auth-google-json" rows="4" placeholder='Paste downloaded OAuth client JSON (contains web.client_id + web.client_secret)'></textarea>
+        </div>
+        <div id="auth-google-msg" style="margin-top:0.6rem"></div>
+        <button class="btn btn-primary" id="auth-google-save" type="submit">Save Google OIDC Settings</button>
+      </form>` : ''}
       <p class="subtitle">Zoho Mail is consumed as a SAML application — see <a href="#" data-go="applications" data-tab="saml">SAML Applications</a>.</p>
     </div>
     <div class="card"><h2>Local password login</h2>
@@ -1168,6 +1214,45 @@ export async function viewAuth(content) {
       window.LILG_NAV(a.dataset.go, tab ? { tab } : {});
     });
   });
+
+  const googleForm = wrap.querySelector('#auth-google-form');
+  if (googleForm) {
+    googleForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = wrap.querySelector('#auth-google-msg');
+      const saveBtn = wrap.querySelector('#auth-google-save');
+      const clientId = wrap.querySelector('#auth-google-client-id').value.trim();
+      const clientSecret = wrap.querySelector('#auth-google-client-secret').value.trim();
+      const hostedDomain = wrap.querySelector('#auth-google-hosted-domain').value.trim();
+      const oauthClientJson = wrap.querySelector('#auth-google-json').value.trim();
+
+      if (!clientId && !oauthClientJson) {
+        msg.innerHTML = `<div class="alert alert-error">Enter OAuth Client ID or paste OAuth JSON.</div>`;
+        return;
+      }
+      if (!hostedDomain) {
+        msg.innerHTML = `<div class="alert alert-error">Hosted Domain is required.</div>`;
+        return;
+      }
+
+      const payload = { clientId, hostedDomain };
+      if (clientSecret) payload.clientSecret = clientSecret;
+      if (oauthClientJson) payload.oauthClientJson = oauthClientJson;
+
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+      msg.innerHTML = '';
+      try {
+        await api.saveGoogleOidcSettings(payload);
+        msg.innerHTML = `<div class="alert alert-success">Google OIDC settings saved.</div>`;
+        await viewAuth(content);
+      } catch (err) {
+        msg.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to save Google OIDC settings.')}</div>`;
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Google OIDC Settings';
+      }
+    });
+  }
 }
 
 /* ---------- Audit ---------- */

@@ -7,6 +7,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { queryOne, execute } from '../db/connection.js';
+import { getGoogleOidcConfig, isGoogleOidcConfigured } from '../auth/google-oidc-config.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -16,6 +17,91 @@ router.use(requireRole('SUPER_ADMIN'));
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   const row = await queryOne(`SELECT * FROM general_settings WHERE id = 1`, []);
   res.json(row ?? { id: 1 });
+}));
+
+function readString(body: Record<string, unknown>, key: string): string | undefined {
+  const raw = body[key];
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function parseGoogleOauthClientJson(rawJson: string): { clientId: string; clientSecret: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    throw new Error('Invalid JSON. Paste the OAuth client JSON downloaded from Google Cloud Console.');
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('OAuth JSON is invalid. Expected an object with a "web" section.');
+  }
+
+  const root = parsed as Record<string, unknown>;
+  const web = (root['web'] && typeof root['web'] === 'object')
+    ? (root['web'] as Record<string, unknown>)
+    : root;
+
+  const clientId = typeof web['client_id'] === 'string' ? web['client_id'].trim() : '';
+  const clientSecret = typeof web['client_secret'] === 'string' ? web['client_secret'].trim() : '';
+
+  if (!clientId || !clientSecret) {
+    throw new Error('OAuth JSON must include web.client_id and web.client_secret.');
+  }
+
+  return { clientId, clientSecret };
+}
+
+router.get('/google-oidc', asyncHandler(async (_req: Request, res: Response) => {
+  const cfg = await getGoogleOidcConfig();
+  res.json({
+    clientId: cfg.clientId,
+    hostedDomain: cfg.hostedDomain,
+    hasClientSecret: Boolean(cfg.clientSecret),
+    source: cfg.source,
+    configured: isGoogleOidcConfigured(cfg),
+  });
+}));
+
+router.put('/google-oidc', asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as Record<string, unknown>;
+  const oauthJson = readString(body, 'oauthClientJson');
+  let jsonCreds: { clientId: string; clientSecret: string } | null = null;
+  if (oauthJson) {
+    jsonCreds = parseGoogleOauthClientJson(oauthJson);
+  }
+
+  const existing = await getGoogleOidcConfig();
+  const clientId = readString(body, 'clientId') ?? jsonCreds?.clientId ?? existing.clientId;
+  const clientSecret = readString(body, 'clientSecret') ?? jsonCreds?.clientSecret ?? existing.clientSecret;
+  const hostedDomain = readString(body, 'hostedDomain') ?? existing.hostedDomain;
+
+  if (!clientId || !clientSecret || !hostedDomain) {
+    res.status(400).json({
+      error: 'clientId, clientSecret, and hostedDomain are required (directly or from OAuth JSON).',
+    });
+    return;
+  }
+
+  const empId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? null;
+  await execute(
+    `INSERT INTO general_settings
+       (id, google_oidc_client_id, google_oidc_client_secret, google_oidc_hosted_domain, updated_by, updated_at)
+     VALUES (1, ?, ?, ?, ?, UTC_TIMESTAMP())
+     ON DUPLICATE KEY UPDATE
+       google_oidc_client_id = VALUES(google_oidc_client_id),
+       google_oidc_client_secret = VALUES(google_oidc_client_secret),
+       google_oidc_hosted_domain = VALUES(google_oidc_hosted_domain),
+       updated_by = VALUES(updated_by),
+       updated_at = UTC_TIMESTAMP()`,
+    [clientId, clientSecret, hostedDomain, empId],
+  );
+
+  res.json({
+    success: true,
+    configured: isGoogleOidcConfigured({ clientId, clientSecret, hostedDomain }),
+  });
 }));
 
 // PUT /

@@ -137,7 +137,7 @@ app.use('/', healthRouter);
 // ---------------------------------------------------------------------------
 // Auth endpoints
 // ---------------------------------------------------------------------------
-app.get('/auth/google',          googleLoginHandler);
+app.get('/auth/google',          (req, res) => { void googleLoginHandler(req, res); });
 app.get('/auth/google/callback', (req, res) => { void googleCallbackHandler(req, res); });
 // Zoho is no longer a portal sign-in method — Zoho Mail is consumed as a
 // SAML application via /saml/launch/zoho-mail (see seeded application).

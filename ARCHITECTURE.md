@@ -160,11 +160,15 @@ The IdP signing keys used by SAML are stored on named volume `saml-keys` mounted
 |---|---|---|
 | Local password | `POST /auth/local/login` | Live |
 | Local password + TOTP | `POST /auth/local/login` then `POST /auth/local/login/mfa-verify` | Live |
-| Google Workspace OIDC | `GET /auth/google` → `GET /auth/google/callback` | Live (requires `GOOGLE_CLIENT_ID`) |
+| Google Workspace OIDC | `GET /auth/google` → `GET /auth/google/callback` | Live (env defaults + optional Admin GUI DB override) |
 | WebAuthn / passkeys | — | Schema staged in migration 003; routes pending |
 | Risk-based MFA step-up | — | Risk engine schema staged; engine pending |
 
 > **Removed:** Zoho OIDC was an inbound sign-in provider in the original design. It has been removed — Zoho Mail is now consumed as a SAML application (see §6.4). The legacy `/auth/zoho` endpoints respond with HTTP 410 Gone.
+
+Google OIDC credentials are resolved in this order:
+1. `general_settings.google_oidc_*` (set from **Admin → Authentication**)
+2. `.env` fallback (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_HOSTED_DOMAIN`)
 
 ### 5.2 Session model
 
@@ -326,6 +330,7 @@ To add a new migration:
 | `workflow_runs` | Generic workflow run history |
 | `compliance_reports` | **(003)** Generated SOX / GDPR / HIPAA reports |
 | `notifications` | **(003, 011)** Email / Slack / Teams notification outbox — 011 adds `recipient_emp_id`, `subject`, `body`, `template_id`, `reference_id`, `reference_type`, `error` for service layer |
+| `general_settings` | **(006, 012, 021)** Singleton operational settings (login toggles, maintenance mode, portal TLS certs, Google OIDC GUI overrides) |
 
 > The legacy `src/db/schema.sql` is **still present** for reference; it is NOT applied automatically — the `migrations/` folder is authoritative.
 
@@ -386,6 +391,7 @@ To add a new migration:
 | `GET`/`POST`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry |
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
+| `GET`/`PUT` | `/api/admin/general-settings/google-oidc` | Read/update Google inbound OIDC credentials (SUPER_ADMIN) |
 | `GET` | `/api/admin/audit/saml` | SAML assertions log |
 | `GET` | `/api/admin/audit/system` | `audit_log` rows |
 | `GET` | `/api/admin/app-access-policy/summary` | Assignment / workflow / audit counts |
@@ -447,6 +453,7 @@ web/
 
 - **Login screen** — split: brand hero (gradient) + sign-in card. **Identity-first flow**: email step → password step (avatar + "Not you?" link) → optional MFA challenge inline. Google SSO button on email step.
 - **Console** — fixed top primary nav + contextual left sidebar (user or admin mode).
+- **Admin → Authentication** — shows Google OIDC status and supports SUPER_ADMIN save of Client ID / Secret / Hosted Domain (or pasted OAuth web-client JSON) into DB overrides.
 
 Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that switches by mode:
 
@@ -512,7 +519,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | `SAML_IDP_ENTITY_ID` | no | `<base>/saml/metadata` | IdP entity ID |
 | `SAML_IDP_PRIVATE_KEY_PEM` | yes for SAML | — | PEM (escape `\n` as literal `\n`) |
 | `SAML_IDP_CERT_PEM` | yes for SAML | — | PEM |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_HOSTED_DOMAIN` | yes for Google | — | Google Workspace OIDC inbound login |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_HOSTED_DOMAIN` | yes for Google fallback | — | Google Workspace OIDC inbound login defaults (can be overridden by `general_settings.google_oidc_*` from Admin GUI) |
 | `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` / `ZOHO_SCIM_BASE_URL` | optional | empty | **Outbound Zoho People SCIM provisioning only.** Not used for sign-in. Leave blank to disable. |
 | `AWS_REGION`, `AWS_ENDPOINT_URL`, `SQS_*` | yes | — | LocalStack URLs in dev |
 
@@ -522,7 +529,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 
 ### 11.1 Dev (single-tier docker-compose on `pam-2`)
 
-**Deploy model:** `pam-2` is a **deploy-only** checkout — never edit tracked files under `/opt/idp` on the server (manual patches to `scripts/*.sh` cause recurring `git pull` conflicts). Configuration lives in **`.env`** only (gitignored). All code changes happen in git; the server syncs with `git reset --hard origin/main`.
+**Deploy model:** `pam-2` is a **deploy-only** checkout — never edit tracked files under `/opt/idp` on the server (manual patches to `scripts/*.sh` cause recurring `git pull` conflicts). Baseline configuration lives in **`.env`** (gitignored); selected runtime settings (for example portal TLS and Google OIDC GUI overrides) are persisted in MySQL `general_settings`. All code changes happen in git; the server syncs with `git reset --hard origin/main`.
 
 **One command deploy** (sync + rebuild + restart API):
 
@@ -659,7 +666,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Connector dispatcher** — `src/services/connector-dispatcher.ts` routes `POST /api/iga/connectors/:id/sync` to the right sync service (AD or Google)
 - ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); tracks runs in `connector_runs`
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import and outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank scope syncs the full directory; non-empty filters combine with AND logic
-- ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); wired into `PUT /api/me/password`; logs to `password_writeback_log`
+- ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
 - ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate` — revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`
 - ✅ **Access review campaign generator** — `POST /api/iga/access-reviews` + `POST /api/iga/access-reviews/:id/items/:itemId/decision` in `src/services/access-review.ts` (scopes: ALL_USERS, APP_SPECIFIC, HIGH_RISK; auto-closes campaign when all items reviewed; REVOKE triggers user_entitlement revocation)
 - ✅ **SoD evaluator** — `src/services/sod-evaluator.ts` runs on every entitlement grant; populates `sod_violations`; full-scan available
@@ -712,6 +719,21 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### (pending) — 2026-06-07 — Admin GUI Google OIDC configuration with DB-backed overrides
+
+**Why** — Google sign-in troubleshooting required SSH + `.env` edits for OAuth client fixes, and teams often had the OAuth web-client JSON downloaded from Google Cloud Console but no direct in-product place to apply it.
+
+**What changed:**
+
+- **`migrations/021_google_oidc_gui_settings.sql`** — adds `general_settings.google_oidc_client_id`, `google_oidc_client_secret`, `google_oidc_hosted_domain`.
+- **`src/api/config-general-settings.ts`** — adds `GET/PUT /api/admin/general-settings/google-oidc`; `PUT` accepts direct fields or pasted OAuth JSON (`web.client_id`, `web.client_secret`).
+- **`src/auth/google-oidc-config.ts`** — central effective-config resolver (`general_settings` override → `.env` fallback) + configured-state helper.
+- **`src/auth/login-routes.ts`**, **`src/auth/middleware.ts`** — `/auth/google` + callback now use effective Google OIDC config from DB/env.
+- **`web/js/views-admin.js`**, **`web/js/api.js`** — Authentication page now includes a Google OIDC form in GUI (client ID, secret, hosted domain, optional OAuth JSON paste).
+- **`src/api/admin-dashboard.ts`** — dashboard Google OIDC status now reflects DB override + env fallback, not env-only.
+
+---
+
 ### (pending) — 2026-06-07 — AD group sync auto-discovery + stronger member mapping
 
 **Why** — AD group sync runs were importing users but returning 0 group imports in many setups because `syncGroups` was blank (treated as skip) and member resolution depended mostly on AD link/email fields.
@@ -755,6 +777,28 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/services/app-access-policy.ts`** — policy checks and grants honor identity-group membership; validates assignment targets.
 - **`src/api/config-app-access-policy.ts`** — assignments list resolves identity group names.
 - **`web/js/views-stubs.js`** — group-based assignment dropdown lists **Identity Groups** and tag groups.
+
+---
+
+### *(pending)* — 2026-06-07 — Password reset UI: keep result/error visible after reset
+
+**Why** — Reset success/failure banner flashed for under a second because `reloadProfile()` re-rendered the Password Reset tab immediately after showing results.
+
+**What changed:**
+
+- **`web/js/views-stubs.js`** — persist reset results on the tab; background profile refresh only; surface API `results`/`summary` on HTTP 400 errors.
+
+---
+
+### *(pending)* — 2026-06-07 — Password reset: auto-link AD/Google by corporate email before writeback
+
+**Why** — Admin password reset only updated Local when the user had no AD/Google identity links; corporate users expected Google and AD passwords to change too.
+
+**What changed:**
+
+- **`src/services/password-writeback.ts`** — before writeback, backfill AD and Google identity links from `email_corp`; report SKIPPED when connectors are active but no directory user matches.
+- **`src/services/google-sync.ts`** — `backfillGoogleIdentityLinkIfMissing()` (mirrors AD profile backfill).
+- **`web/js/views-stubs.js`** — password tab notes auto-linking on reset.
 
 ---
 
