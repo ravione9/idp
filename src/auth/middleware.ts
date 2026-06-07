@@ -9,9 +9,9 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { getPublicOrigin } from '../utils/request-context.js';
+import { getPublicOrigin, findClientLocalIp, enrichSessionHostname } from '../utils/request-context.js';
 import { config } from '../config.js';
-import { query, queryOne } from '../db/connection.js';
+import { query, queryOne, execute } from '../db/connection.js';
 import { redis } from './session-store.js';
 import logger from '../utils/logger.js';
 import { parseOAuthState } from './login-routes.js';
@@ -206,16 +206,26 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       return;
     }
 
+    const headerLocalIp = findClientLocalIp(req);
+
     const sessionId = await createSession({
-      empId:     emp.emp_id,
+      empId:         emp.emp_id,
       email,
-      role:      emp.role ?? 'EMPLOYEE',
-      iss:       'google',
+      role:          emp.role ?? 'EMPLOYEE',
+      iss:           'google',
       sub,
-      ttlHours:  config.session.ttlCorporateHours,
-      ip:        req.ip ?? '',
-      userAgent: req.get('user-agent') ?? '',
+      ttlHours:      config.session.ttlCorporateHours,
+      ip:            req.ip ?? '',
+      userAgent:     req.get('user-agent') ?? '',
+      clientLocalIp: headerLocalIp ?? null,
     });
+
+    enrichSessionHostname(sessionId, headerLocalIp, (sid, hostname) =>
+      execute(
+        'UPDATE idp_sessions SET client_hostname = ? WHERE session_id = ? AND client_hostname IS NULL',
+        [hostname, sid],
+      ).then(() => {}),
+    );
 
     setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
     const { returnTo } = parseOAuthState(req.query['state'] as string | undefined);

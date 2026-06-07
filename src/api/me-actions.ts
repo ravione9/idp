@@ -22,6 +22,7 @@ import {
 } from '../auth/mfa.js';
 import logger from '../utils/logger.js';
 import { sanitizeDeviceContext } from '../utils/device-context.js';
+import { findClientLocalIp, enrichSessionHostname } from '../utils/request-context.js';
 
 const router = Router();
 
@@ -100,11 +101,14 @@ router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
 // ---------------------------------------------------------------------------
 router.post('/sessions/device-context', async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
+
+  // Client may send nothing or a partial object — fall back to server-side header detection.
   const device = sanitizeDeviceContext(req.body);
-  if (!device) {
-    res.status(400).json({ error: 'Invalid device context' });
-    return;
-  }
+  const headerLocalIp = findClientLocalIp(req);
+
+  const effectiveLocalIp   = device?.localIp   ?? headerLocalIp ?? null;
+  const effectiveHostname   = device?.hostname  ?? null;
+  const effectiveMac        = device?.macAddress ?? null;
 
   await query(
     `UPDATE idp_sessions
@@ -112,8 +116,18 @@ router.post('/sessions/device-context', async (req: Request, res: Response): Pro
             client_local_ip  = COALESCE(client_local_ip, ?),
             client_mac       = COALESCE(client_mac, ?)
       WHERE session_id = ? AND emp_id = ? AND revoked_at IS NULL`,
-    [device.hostname, device.localIp, device.macAddress, user.sessionId, user.empId],
+    [effectiveHostname, effectiveLocalIp, effectiveMac, user.sessionId, user.empId],
   );
+
+  // Background: reverse-DNS on internal IP for hostname (fires even if client sent nothing)
+  if (!effectiveHostname) {
+    enrichSessionHostname(user.sessionId, effectiveLocalIp, (sid, hostname) =>
+      query(
+        'UPDATE idp_sessions SET client_hostname = ? WHERE session_id = ? AND client_hostname IS NULL',
+        [hostname, sid],
+      ).then(() => {}),
+    );
+  }
 
   res.json({ success: true });
 });

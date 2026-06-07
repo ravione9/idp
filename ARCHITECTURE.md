@@ -176,7 +176,10 @@ Google OIDC credentials are resolved in this order:
 - Session ID = `uuid v4`. Cookie value is `<id>.<HMAC-SHA256(SESSION_SECRET, id)>` (base64url).
 - TTL: 8 hours (corporate) / 12 hours (store) — configurable via env.
 - Cookie flags: `HttpOnly`, `SameSite=Lax`. `Secure` is on in production but **off** when `COOKIE_SECURE=false` (dev plain HTTP).
-- Each session records **public IP** (`ip`, from the request), **client hostname** (`client_hostname`), **local LAN IP** (`client_local_ip`), and **MAC** (`client_mac`). The browser collects these via WebRTC ICE + optional workstation agent (`scripts/device-context-agent.mjs` → `http://127.0.0.1:17891/device-context`) on the login page; values are sent with `POST /auth/local/login` or attached after Google OIDC via `POST /api/me/sessions/device-context`. Hostnames like `LOC-9D358FEE60EC` also derive MAC `9D:35:8F:EE:60:EC`. Admin user profile **Sessions** tab and end-user **Account → Sessions** show all four endpoint fields.
+- Each session records **public IP** (`ip`), **client hostname** (`client_hostname`), **local LAN IP** (`client_local_ip`), and **MAC** (`client_mac`). Attribution uses a two-tier approach (same technique as SMTP `Received:` / `X-Originating-IP` email headers):
+  1. **Server-side (automatic)** — walks the full `X-Forwarded-For` / `X-Real-IP` / `X-Originating-IP` chain at login time; first private RFC-1918 IP found becomes `client_local_ip`. An async reverse-DNS PTR lookup on that IP fills `client_hostname` (works when corporate DNS has PTR records for workstation IPs).
+  2. **Optional agent** (`scripts/device-context-agent.mjs` on the workstation → `http://127.0.0.1:17891/device-context`) — provides MAC and reliable hostname when DNS PTR records are absent. Install via `scripts/install-device-agent.ps1` (Windows scheduled task at logon).
+  - MAC address is Layer 2 and cannot be obtained server-side; it is populated only via the optional agent or derived from `LOC-{12hexchars}` AD hostnames.
 
 ### 5.3 Master administrator
 

@@ -12,7 +12,7 @@ import logger from '../utils/logger.js';
 import { createSession, setSessionCookie } from './session.js';
 import { redis } from './session-store.js';
 import { getMfaStatus, verifyTotp } from './mfa.js';
-import { query } from '../db/connection.js';
+import { query, execute } from '../db/connection.js';
 import {
   ensureMasterAdminFromEnv,
   findLocalAccountByEmail,
@@ -21,6 +21,7 @@ import {
   verifyLocalPassword,
 } from '../services/local-admin.js';
 import { sanitizeDeviceContext } from '../utils/device-context.js';
+import { findClientLocalIp, enrichSessionHostname } from '../utils/request-context.js';
 
 const MFA_CHALLENGE_PREFIX = 'lilg:mfa-challenge:';
 const MFA_CHALLENGE_TTL_S  = 300; // 5 min
@@ -70,6 +71,11 @@ async function issueSessionAndRespond(
   account:   { id: number; emp_id: string; email: string; role: string },
   device?:   { hostname: string | null; localIp: string | null; macAddress: string | null } | null,
 ): Promise<void> {
+  // Server-side: extract the client's internal LAN IP from the X-Forwarded-For chain.
+  // When a corporate proxy/VPN adds the workstation IP to forwarding headers, this
+  // resolves the private IP without requiring any client-side agent.
+  const headerLocalIp = findClientLocalIp(req);
+
   const sessionId = await createSession({
     empId:          account.emp_id,
     email:          account.email,
@@ -80,9 +86,19 @@ async function issueSessionAndRespond(
     ip:             req.ip ?? '',
     userAgent:      req.get('user-agent') ?? '',
     clientHostname: device?.hostname ?? null,
-    clientLocalIp:  device?.localIp ?? null,
+    clientLocalIp:  device?.localIp ?? headerLocalIp ?? null,
     clientMac:      device?.macAddress ?? null,
   });
+
+  // Background: reverse-DNS the internal IP to resolve hostname (like email Received: headers).
+  const localIpForDns = device?.localIp ?? headerLocalIp;
+  enrichSessionHostname(sessionId, localIpForDns, (sid, hostname) =>
+    execute(
+      'UPDATE idp_sessions SET client_hostname = ? WHERE session_id = ? AND client_hostname IS NULL',
+      [hostname, sid],
+    ).then(() => {}),
+  );
+
   await touchLocalLogin(account.id);
   setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
   logger.info({ empId: account.emp_id, email: account.email }, 'Local admin login');
