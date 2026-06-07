@@ -90,6 +90,40 @@ export async function reverseDnsLookup(ip: string): Promise<string | null> {
 }
 
 /**
+ * Derive the machine hostname from a LOC-{12hexchars} style emp_id.
+ *
+ * In Lenskart's AD setup each domain-joined machine has an account whose
+ * emp_id encodes the machine identity (e.g. LOC-9D358FEE60EC).  We can use
+ * that directly as the session hostname — zero network calls required.
+ *
+ * Returns null for normal person accounts (EMP001, AD-xxxxx, GW-xxxxx, etc.)
+ */
+export function hostnameFromEmpId(empId: string): string | null {
+  return /^LOC-[0-9A-F]{12}$/i.test(empId) ? empId.toUpperCase() : null;
+}
+
+/**
+ * Forward DNS A-record lookup: hostname → IPv4.
+ * Best-effort: tries bare hostname, then hostname + each suffix in order.
+ * Never throws.
+ */
+export async function forwardDnsLookup(
+  hostname: string,
+  suffixes: string[] = [],
+): Promise<string | null> {
+  const candidates = [hostname, ...suffixes.map((s) => `${hostname}.${s}`)];
+  for (const name of candidates) {
+    try {
+      const addrs = await dns.resolve4(name);
+      if (addrs?.length) return addrs[0];
+    } catch {
+      /* next candidate */
+    }
+  }
+  return null;
+}
+
+/**
  * After a session is created, attempt a background reverse-DNS lookup on the
  * client's internal IP and fill in client_hostname if not already set.
  * Fire-and-forget — never throws.

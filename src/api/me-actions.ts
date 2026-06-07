@@ -22,7 +22,7 @@ import {
 } from '../auth/mfa.js';
 import logger from '../utils/logger.js';
 import { sanitizeDeviceContext } from '../utils/device-context.js';
-import { findClientLocalIp, enrichSessionHostname } from '../utils/request-context.js';
+import { findClientLocalIp, enrichSessionHostname, hostnameFromEmpId, forwardDnsLookup } from '../utils/request-context.js';
 
 const router = Router();
 
@@ -106,8 +106,8 @@ router.post('/sessions/device-context', async (req: Request, res: Response): Pro
   const device = sanitizeDeviceContext(req.body);
   const headerLocalIp = findClientLocalIp(req);
 
-  const effectiveLocalIp  = device?.localIp  ?? headerLocalIp ?? null;
-  const effectiveHostname = device?.hostname ?? null;
+  const effectiveLocalIp  = device?.localIp ?? headerLocalIp ?? null;
+  const effectiveHostname = device?.hostname ?? hostnameFromEmpId(user.empId) ?? null;
 
   await query(
     `UPDATE idp_sessions
@@ -117,15 +117,22 @@ router.post('/sessions/device-context', async (req: Request, res: Response): Pro
     [effectiveHostname, effectiveLocalIp, user.sessionId, user.empId],
   );
 
-  // Background: reverse-DNS on internal IP for hostname
-  if (!effectiveHostname) {
-    enrichSessionHostname(user.sessionId, effectiveLocalIp, (sid, hostname) =>
-      query(
-        'UPDATE idp_sessions SET client_hostname = ? WHERE session_id = ? AND client_hostname IS NULL',
-        [hostname, sid],
-      ).then(() => {}),
-    );
+  // Best-effort: forward DNS for local IP if hostname known but local IP is not
+  if (!effectiveLocalIp && effectiveHostname) {
+    forwardDnsLookup(effectiveHostname).then((ip) => {
+      if (!ip) return;
+      return query(
+        'UPDATE idp_sessions SET client_local_ip = ? WHERE session_id = ? AND client_local_ip IS NULL',
+        [ip, user.sessionId],
+      );
+    }).catch(() => {});
   }
+  enrichSessionHostname(user.sessionId, effectiveLocalIp, (sid, hostname) =>
+    query(
+      'UPDATE idp_sessions SET client_hostname = ? WHERE session_id = ? AND client_hostname IS NULL',
+      [hostname, sid],
+    ).then(() => {}),
+  );
 
   res.json({ success: true });
 });

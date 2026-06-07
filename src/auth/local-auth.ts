@@ -21,7 +21,7 @@ import {
   verifyLocalPassword,
 } from '../services/local-admin.js';
 import { sanitizeDeviceContext } from '../utils/device-context.js';
-import { findClientLocalIp, enrichSessionHostname } from '../utils/request-context.js';
+import { findClientLocalIp, enrichSessionHostname, hostnameFromEmpId, forwardDnsLookup } from '../utils/request-context.js';
 
 const MFA_CHALLENGE_PREFIX = 'lilg:mfa-challenge:';
 const MFA_CHALLENGE_TTL_S  = 300; // 5 min
@@ -72,7 +72,10 @@ async function issueSessionAndRespond(
   // Server-side: extract the client's internal LAN IP from the X-Forwarded-For chain.
   // When a corporate proxy/VPN adds the workstation IP to forwarding headers, this
   // resolves the private IP without requiring any client-side agent.
+  // Derive hostname from LOC-{hex} emp_id (AD machine accounts embed machine name in emp_id).
+  const empHostname   = hostnameFromEmpId(account.emp_id);
   const headerLocalIp = findClientLocalIp(req);
+  const resolvedHostname = device?.hostname ?? empHostname ?? null;
 
   const sessionId = await createSession({
     empId:          account.emp_id,
@@ -83,13 +86,23 @@ async function issueSessionAndRespond(
     ttlHours:       config.session.ttlCorporateHours,
     ip:             req.ip ?? '',
     userAgent:      req.get('user-agent') ?? '',
-    clientHostname: device?.hostname ?? null,
+    clientHostname: resolvedHostname,
     clientLocalIp:  device?.localIp ?? headerLocalIp ?? null,
   });
 
-  // Background: reverse-DNS the internal IP to resolve hostname (like email Received: headers).
-  const localIpForDns = device?.localIp ?? headerLocalIp;
-  enrichSessionHostname(sessionId, localIpForDns, (sid, hostname) =>
+  // Background: if we have a hostname but no local IP, try forward DNS to get the LAN IP.
+  // Also try reverse DNS if we have a header-sourced local IP.
+  const knownLocalIp = device?.localIp ?? headerLocalIp ?? null;
+  if (!knownLocalIp && resolvedHostname) {
+    forwardDnsLookup(resolvedHostname).then((ip) => {
+      if (!ip) return;
+      return execute(
+        'UPDATE idp_sessions SET client_local_ip = ? WHERE session_id = ? AND client_local_ip IS NULL',
+        [ip, sessionId],
+      );
+    }).catch(() => {});
+  }
+  enrichSessionHostname(sessionId, knownLocalIp, (sid, hostname) =>
     execute(
       'UPDATE idp_sessions SET client_hostname = ? WHERE session_id = ? AND client_hostname IS NULL',
       [hostname, sid],
