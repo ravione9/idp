@@ -904,6 +904,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
+### `a046a59` — 2026-06-07 — Fix AD login stale hash + writeback retry exhaustion
+
+**Why** — Two follow-up bugs: (1) users with an existing `local_accounts` row whose password changed in AD could not log in because the stale-hash check never fell through to AD auth; (2) the writeback retry loop re-threw any non-"requires LDAPS" error (e.g. connection refused on StartTLS attempt) instead of continuing to the LDAPS attempt, so only one of three modes was ever tried.
+
+**What changed:**
+
+- **`src/auth/local-auth.ts`** — try AD corporate auth when local hash verify fails (not only when account is absent).
+- **`src/services/password-writeback.ts`** — all three connection-mode attempts (configured / StartTLS / LDAPS) now always run; error from each attempt is collected and the aggregate message is thrown only after all three fail.
+
+---
+
 ### `e6b2ee2` — 2026-06-07 — AD-synced login + password writeback reliability
 
 **Why** — Employees imported from AD could not sign in at `/login` (no `local_accounts` row) and admin password reset often failed to update AD when the connector used plain LDAP or identity links were missing.
