@@ -13,7 +13,7 @@ import {
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
   viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
-} from './views-admin.js?v=2026-06-08';
+} from './views-admin.js?v=2026-06-07-admin-dir';
 import {
   viewGroups, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,

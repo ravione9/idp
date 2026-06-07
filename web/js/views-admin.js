@@ -1065,20 +1065,25 @@ export async function viewUsers(content) {
 
 /* ---------- Administrators ---------- */
 export async function viewAdmins(content) {
-  const wrap = el(`<div>${header('Administrators', 'Portal console access — separate from job designation in the employee directory')}
+  const wrap = el(`<div>
+    ${header(
+      'Administrators',
+      'Grant portal console access to directory users or create a local login account',
+      '<button type="button" class="btn btn-primary btn-sm" id="afd-focus-btn">+ Add from Directory</button>',
+    )}
 
-    <!-- ── Add from Directory ──────────────────────────────────────────── -->
-    <details class="card" open style="margin-bottom:1rem">
-      <summary style="cursor:pointer;font-weight:600">Add user from directory as administrator</summary>
-      <p class="subtitle" style="margin:0.5rem 0 1rem">Search for an existing employee and assign them an admin role.</p>
+    <!-- ── Add from Directory (primary) ───────────────────────────────── -->
+    <div class="card" id="afd-card" style="margin-bottom:1rem;border-left:3px solid var(--primary,#2563eb)">
+      <h3 style="margin:0 0 0.25rem;font-size:1rem">Add from Directory</h3>
+      <p class="subtitle" style="margin:0 0 1rem">Search any employee synced from AD or Google and assign portal administrator access.</p>
       <div id="afd-area">
         <div style="display:flex;gap:0.6rem;align-items:flex-end;flex-wrap:wrap">
-          <div class="field" style="flex:1;min-width:200px;margin:0">
+          <div class="field" style="flex:1;min-width:220px;margin:0">
             <label>Search employee (name or email)</label>
-            <input id="afd-search" class="form-control" placeholder="Type to search…" autocomplete="off" />
+            <input id="afd-search" class="form-control" placeholder="e.g. mohit.sharma@lenskart.in" autocomplete="off" />
           </div>
           <div class="field" style="margin:0">
-            <label>Role</label>
+            <label>Portal role</label>
             <select id="afd-role" class="form-select">
               <option value="ADMIN">Admin</option>
               <option value="SUPER_ADMIN">Super Admin</option>
@@ -1089,7 +1094,7 @@ export async function viewAdmins(content) {
         <div id="afd-results" style="margin-top:0.5rem"></div>
         <div id="afd-msg" style="margin-top:0.4rem;font-size:0.85rem"></div>
       </div>
-    </details>
+    </div>
 
     <!-- ── Create brand-new local account ─────────────────────────────── -->
     <details class="card" style="margin-bottom:1rem">
@@ -1165,6 +1170,7 @@ export async function viewAdmins(content) {
   }
 
   // ── Add from Directory ───────────────────────────────────────────────────
+  const afdCard    = wrap.querySelector('#afd-card');
   const afdSearch  = wrap.querySelector('#afd-search');
   const afdResults = wrap.querySelector('#afd-results');
   const afdBtn     = wrap.querySelector('#afd-btn');
@@ -1172,6 +1178,11 @@ export async function viewAdmins(content) {
   const afdMsg     = wrap.querySelector('#afd-msg');
   let selectedEmp  = null;
   let searchTimer  = null;
+
+  wrap.querySelector('#afd-focus-btn')?.addEventListener('click', () => {
+    afdCard?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    afdSearch?.focus();
+  });
 
   function setMsg(text, isError = false) {
     afdMsg.textContent = text;
