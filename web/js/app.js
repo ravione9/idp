@@ -48,7 +48,7 @@ const ROUTES = {
   dashboard: { primary: 'admin', group: 'Overview', label: 'Dashboard', icon: 'dashboard', admin: true, view: viewDashboard },
 
   /* ── Admin > Identity ── */
-  users:            { primary: 'admin', group: 'Identity', label: 'Users / Identities',  icon: 'users',        admin: true, view: viewUsers },
+  users:            { primary: 'admin', group: 'Identity', label: 'Users / Identities',  icon: 'user',         admin: true, view: viewUsers },
   groups:           { primary: 'admin', group: 'Identity', label: 'Groups',              icon: 'users',        admin: true, view: viewGroups },
   admins:           { primary: 'admin', group: 'Identity', label: 'Administrators',      icon: 'userShield',   super: true, view: viewAdmins },
   systemUsers:      { primary: 'admin', group: 'Identity', label: 'System / Privileged', icon: 'userCog',      admin: true, view: viewSystemUsers },
@@ -56,17 +56,17 @@ const ROUTES = {
 
   /* ── Admin > Authentication ── */
   ssoConfig:          { primary: 'admin', group: 'Authentication', label: 'SSO Configuration',   icon: 'key',         admin: true, view: viewAuth },
-  mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', icon: 'shieldCheck', admin: true, view: viewMfaMethods },
+  mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', icon: 'fingerprint', admin: true, view: viewMfaMethods },
   adaptiveAuth:       { primary: 'admin', group: 'Authentication', label: 'Adaptive Auth',       icon: 'adaptive',    admin: true, view: viewAdaptiveAuth },
   passwordPolicies:   { primary: 'admin', group: 'Authentication', label: 'Password Policies',   icon: 'lock',        admin: true, view: viewPasswordPolicies },
   loginCustomization: { primary: 'admin', group: 'Authentication', label: 'Login Customization', icon: 'paint',       admin: true, view: viewLoginCustomization },
 
   /* ── Admin > Applications ── */
-  applications: { primary: 'admin', group: 'Applications', label: 'Applications', icon: 'app', admin: true, view: viewApplications },
+  applications: { primary: 'admin', group: 'Applications', label: 'Applications', icon: 'catalog', admin: true, view: viewApplications },
   appDiscovery: { primary: 'admin', group: 'Applications', label: 'App Discovery',       icon: 'search',  admin: true, view: viewAppDiscovery },
 
   /* ── Admin > Connections ── */
-  connectors:    { primary: 'admin', group: 'Connections', label: 'Connectors / Sources', icon: 'plug',    admin: true, view: viewConnectors },
+  connectors:    { primary: 'admin', group: 'Connections', label: 'Connectors / Sources', icon: 'link',    admin: true, view: viewConnectors },
   directorySync: { primary: 'admin', group: 'Connections', label: 'Directory Sync',       icon: 'refresh', admin: true, view: viewDirectorySync },
 
   /* ── Admin > Access Model ── */
@@ -102,21 +102,20 @@ const ROUTES = {
   systemHealth:     { primary: 'admin', group: 'Settings', label: 'System Health',   icon: 'pulse',       admin: true, view: viewSystemHealth },
 };
 
-/* Order of groups in the admin sidebar + their group icon */
+/* Order of groups in the admin sidebar */
 const ADMIN_GROUPS = [
-  { name: 'Overview',            icon: 'dashboard' },
-  { name: 'Identity',            icon: 'users' },
-  { name: 'Authentication',      icon: 'shieldCheck' },
-  { name: 'Applications',        icon: 'app' },
-  { name: 'Connections',         icon: 'plug' },
-  { name: 'Access Model',        icon: 'tag' },
-  { name: 'Privileged Access',   icon: 'server' },
-  { name: 'Identity Governance', icon: 'certificate' },
-  { name: 'Workflows',           icon: 'flow' },
-  { name: 'Reports',             icon: 'chart' },
-  { name: 'Settings',            icon: 'cog' },
+  'Overview',
+  'Identity',
+  'Authentication',
+  'Applications',
+  'Connections',
+  'Access Model',
+  'Privileged Access',
+  'Identity Governance',
+  'Workflows',
+  'Reports',
+  'Settings',
 ];
-const ADMIN_GROUP_ORDER = ADMIN_GROUPS.map((g) => g.name);
 
 /* Order of items in the primary top nav */
 const PRIMARY_NAV_ORDER = ['home', 'request', 'tasks', 'myaccess'];
@@ -155,10 +154,10 @@ function buildShell() {
     groupMap.get(r.group).push({ key, ...r });
   }
   const sidebarHtml = `<div class="sidebar-toggle-btn"><button id="sidebar-toggle" title="Toggle sidebar" aria-label="Collapse sidebar">${icon('chevronLeft')}</button></div>` +
-    ADMIN_GROUPS.map((g) => {
-      const items = groupMap.get(g.name);
+    ADMIN_GROUPS.map((group) => {
+      const items = groupMap.get(group);
       if (!items) return '';
-      return `<div class="nav-section"><span class="nav-section-icon">${icon(g.icon)}</span><span class="label-text">${esc(g.name)}</span></div>` +
+      return `<div class="nav-section">${esc(group)}</div>` +
         items.map((i) => `<button data-key="${esc(i.key)}" title="${esc(i.label)}"><span class="nav-icon">${icon(i.icon || 'grid')}</span><span class="label-text">${esc(i.label)}</span></button>`).join('');
     }).join('');
 
