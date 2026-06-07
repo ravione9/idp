@@ -773,6 +773,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
+### (pending) — 2026-06-07 — Google connector modal: Portal sign-in tab
+
+**Why** — Directory sync and portal Google OAuth were split across two admin screens; operators expected one Google Workspace configuration surface.
+
+**What changed:**
+
+- **`web/js/views-stubs.js`** — Google Workspace edit modal adds **Portal sign-in** tab; save persists connector + Google OIDC settings.
+- **`src/api/config-general-settings.ts`** — `GET/PUT /google-oidc` allowed for `ADMIN`+.
+
+---
+
 ### (pending) — 2026-06-07 — Multi-domain Google Workspace sync + portal login
 
 **Why** — Lenskart operates multiple Google Workspace domains (`lenskart.com`, `lenskart.in`, `dealskart.in`, …) on one tenant; single-domain OIDC checks blocked users on secondary domains.
