@@ -2487,9 +2487,9 @@ body.nav-locked { overflow: hidden; }
   /* Show hamburger */
   .mobile-menu-btn { display: inline-flex; }
 
-  /* Topnav — no overflow, fixed height */
+  /* Topnav — allow dropdowns to overflow below the bar */
   .topnav {
-    overflow: hidden;
+    overflow: visible;
     padding: 0 0.75rem;
     gap: 0.5rem;
   }

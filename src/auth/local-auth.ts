@@ -18,7 +18,7 @@ import logger from '../utils/logger.js';
 import { createSession, setSessionCookie } from './session.js';
 import { redis } from './session-store.js';
 import { getMfaStatus, verifyTotp } from './mfa.js';
-import { query } from '../db/connection.js';
+import { query, queryOne } from '../db/connection.js';
 import {
   ensureMasterAdminFromEnv,
   findLocalAccountByEmail,
@@ -51,6 +51,102 @@ interface MfaChallenge {
   createdAt: number;
   /** True when the adaptive engine returned STEP_UP (MFA + manager-approval hint). */
   stepUp?:   boolean;
+}
+
+interface MfaPolicyRow {
+  policy_key: string;
+  policy_value: string;
+}
+
+interface MfaRequirementContext {
+  userEnforced: boolean;
+  globalEnforce: boolean;
+  enforceForAdmins: boolean;
+  userInExcludedGroup: boolean;
+}
+
+const ADMIN_MFA_ROLES = new Set(['ADMIN', 'SUPER_ADMIN']);
+
+function parsePolicyBoolean(raw: unknown, fallback: boolean): boolean {
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'number') return raw !== 0;
+  if (typeof raw !== 'string') return fallback;
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (typeof parsed === 'boolean') return parsed;
+    if (typeof parsed === 'number') return parsed !== 0;
+  } catch {
+    // Keep fallback parsing below.
+  }
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') return true;
+  if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') return false;
+  return fallback;
+}
+
+function parsePolicyStringArray(raw: unknown): string[] {
+  const normalize = (arr: unknown[]): string[] => arr
+    .map((v) => String(v ?? '').trim())
+    .filter((v) => v.length > 0);
+
+  if (Array.isArray(raw)) return normalize(raw);
+  if (typeof raw !== 'string') return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (Array.isArray(parsed)) return normalize(parsed);
+  } catch {
+    // Fallback to comma-separated values.
+  }
+  return normalize(trimmed.split(','));
+}
+
+async function getMfaRequirementContext(empId: string): Promise<MfaRequirementContext> {
+  const employeeRowsPromise = query<{ mfa_enforced: number }>(
+    'SELECT mfa_enforced FROM employees WHERE emp_id = ? LIMIT 1',
+    [empId],
+  );
+  const policyRowsPromise = query<MfaPolicyRow>(
+    `SELECT policy_key, policy_value
+       FROM mfa_policy
+      WHERE policy_key IN ('global_enforce', 'enforce_for_admins', 'excluded_group_ids')`,
+    [],
+  ).catch((err) => {
+    logger.warn({ empId, err }, 'mfa_policy query failed');
+    return [] as MfaPolicyRow[];
+  });
+
+  const [employeeRows, policyRows] = await Promise.all([employeeRowsPromise, policyRowsPromise]);
+
+  const policyMap = new Map(policyRows.map((row) => [row.policy_key, row.policy_value]));
+  const globalEnforce = parsePolicyBoolean(policyMap.get('global_enforce'), false);
+  const enforceForAdmins = parsePolicyBoolean(policyMap.get('enforce_for_admins'), true);
+  const userEnforced = (employeeRows[0]?.mfa_enforced ?? 0) === 1;
+  const excludedGroupIds = parsePolicyStringArray(policyMap.get('excluded_group_ids'));
+
+  let userInExcludedGroup = false;
+  if (excludedGroupIds.length > 0) {
+    const placeholders = excludedGroupIds.map(() => '?').join(', ');
+    const membership = await queryOne<{ n: number }>(
+      `SELECT COUNT(*) AS n
+         FROM group_members
+        WHERE emp_id = ?
+          AND group_id IN (${placeholders})`,
+      [empId, ...excludedGroupIds],
+    ).catch((err) => {
+      logger.warn({ empId, err }, 'group exclusion lookup failed');
+      return null;
+    });
+    userInExcludedGroup = Number(membership?.n ?? 0) > 0;
+  }
+
+  return { userEnforced, globalEnforce, enforceForAdmins, userInExcludedGroup };
 }
 
 async function logAttempt(email: string, ip: string, success: boolean, reason?: string): Promise<void> {
@@ -130,7 +226,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     }
 
     // ── Adaptive auth evaluation (risk engine) ───────────────────────────────
-    const [mfa, adaptive] = await Promise.all([
+    const [mfa, adaptive, mfaRequirements] = await Promise.all([
       getMfaStatus(account.emp_id),
       evaluateAdaptiveAuth({
         ip,
@@ -139,6 +235,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
         role:      account.role,
         empId:     account.emp_id,
       }),
+      getMfaRequirementContext(account.emp_id),
     ]);
 
     if (adaptive.action === 'BLOCK') {
@@ -150,10 +247,22 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
 
     // MFA is required when:
     //   • adaptive engine returned MFA or STEP_UP (risk signal), or
-    //   • user already has TOTP enrolled (existing behaviour preserved)
+    //   • user already has TOTP enrolled (existing behaviour preserved), or
+    //   • policy requires MFA. Group exclusions only bypass global/admin policy;
+    //     explicit per-user enforcement still takes precedence.
+    const policyRequiresMfa = mfaRequirements.userEnforced
+      || (
+        !mfaRequirements.userInExcludedGroup
+        && (
+          mfaRequirements.globalEnforce
+          || (mfaRequirements.enforceForAdmins && ADMIN_MFA_ROLES.has((account.role || '').toUpperCase()))
+        )
+      );
+
     const mfaRequired = adaptive.action === 'MFA'
       || adaptive.action === 'STEP_UP'
-      || mfa.enabled;
+      || mfa.enabled
+      || policyRequiresMfa;
 
     if (mfaRequired) {
       if (!mfa.enrolled) {

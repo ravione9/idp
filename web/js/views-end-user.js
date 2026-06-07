@@ -556,15 +556,20 @@ export async function viewRequestAccess(content) {
     });
   }
 
-  // Load catalog — apps + entitlements + roles
+  // Load catalog — apps + entitlements + roles, excluding already-assigned items
   try {
-    const [appsR, entsR, rolesR] = await Promise.all([
+    const [appsR, entsR, rolesR, myAccessR] = await Promise.all([
       api.igaApps().catch(() => ({ data: [] })),
       api.igaEntitlements().catch(() => ({ data: [] })),
       api.listBusinessRoles().catch(() => ({ data: [] })),
+      api.igaMyAccess().catch(() => ({ data: [] })),
     ]);
-    const apps = (appsR.data || []).filter(a => a.active);
-    const ents = (entsR.data || []);
+    const myAccess = myAccessR.data || [];
+    const assignedAppSlugs = new Set(myAccess.map(r => r.app_slug).filter(Boolean));
+    const assignedEntitlementIds = new Set(myAccess.map(r => String(r.entitlement_id)));
+
+    const apps = (appsR.data || []).filter(a => a.active && !assignedAppSlugs.has(a.slug));
+    const ents = (entsR.data || []).filter(e => !assignedEntitlementIds.has(String(e.id)));
     const roles = (rolesR.data || []).filter(r => r.active);
     allItems = [
       ...apps.map(a => ({ ...a, _type: 'APP' })),

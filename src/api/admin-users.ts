@@ -34,6 +34,54 @@ import {
 const router = Router();
 router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
 
+function parsePolicyStringArray(raw: unknown): string[] {
+  const normalize = (arr: unknown[]): string[] => arr
+    .map((v) => String(v ?? '').trim())
+    .filter((v) => v.length > 0);
+
+  if (Array.isArray(raw)) return normalize(raw);
+  if (typeof raw !== 'string') return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (Array.isArray(parsed)) return normalize(parsed);
+  } catch {
+    // Fall back to comma-separated parsing.
+  }
+  return normalize(trimmed.split(','));
+}
+
+async function isUserExcludedFromPolicyMfa(empId: string): Promise<boolean> {
+  try {
+    const excludedRow = await queryOne<{ policy_value: string }>(
+      `SELECT policy_value
+         FROM mfa_policy
+        WHERE policy_key = 'excluded_group_ids'
+        LIMIT 1`,
+      [],
+    );
+    if (!excludedRow?.policy_value) return false;
+
+    const excludedGroupIds = parsePolicyStringArray(excludedRow.policy_value);
+    if (excludedGroupIds.length === 0) return false;
+
+    const placeholders = excludedGroupIds.map(() => '?').join(', ');
+    const row = await queryOne<{ n: number }>(
+      `SELECT COUNT(*) AS n
+         FROM group_members
+        WHERE emp_id = ?
+          AND group_id IN (${placeholders})`,
+      [empId, ...excludedGroupIds],
+    );
+    return Number(row?.n ?? 0) > 0;
+  } catch (err) {
+    logger.warn({ empId, err }, 'MFA group exclusion lookup failed');
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // GET /  — paginated employee list with linked identity sources
 // ---------------------------------------------------------------------------
@@ -196,9 +244,17 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
     enabled: false,
     remainingBackupCodes: 0,
     lastUsedAt: null,
+    policyExcludedByGroup: false,
   };
   try {
-    mfaStatus = await getMfaStatus(profileEmpId) as unknown as Record<string, unknown>;
+    const [status, policyExcludedByGroup] = await Promise.all([
+      getMfaStatus(profileEmpId),
+      isUserExcludedFromPolicyMfa(profileEmpId),
+    ]);
+    mfaStatus = {
+      ...(status as unknown as Record<string, unknown>),
+      policyExcludedByGroup,
+    };
   } catch (err) {
     logger.warn({ empId: profileEmpId, err }, 'mfa status query failed');
   }
@@ -225,8 +281,11 @@ router.get('/:empId/mfa', async (req: Request, res: Response): Promise<void> => 
     [empId],
   );
   if (!emp) { res.status(404).json({ error: 'Employee not found' }); return; }
-  const status = await getMfaStatus(emp.emp_id);
-  res.json(status);
+  const [status, policyExcludedByGroup] = await Promise.all([
+    getMfaStatus(emp.emp_id),
+    isUserExcludedFromPolicyMfa(emp.emp_id),
+  ]);
+  res.json({ ...status, policyExcludedByGroup });
 });
 
 router.post('/:empId/mfa/enroll', async (req: Request, res: Response): Promise<void> => {
@@ -351,7 +410,13 @@ router.get('/mfa-policy', async (_req: Request, res: Response): Promise<void> =>
 router.post('/mfa-policy', async (req: Request, res: Response): Promise<void> => {
   const adminId = (req as unknown as { session?: { emp_id?: string } }).session?.emp_id ?? 'system';
   const updates = req.body as Record<string, unknown>;
-  const allowed = new Set(['global_enforce', 'enforce_for_admins', 'grace_period_hours', 'allowed_methods']);
+  const allowed = new Set([
+    'global_enforce',
+    'enforce_for_admins',
+    'grace_period_hours',
+    'allowed_methods',
+    'excluded_group_ids',
+  ]);
   for (const [key, val] of Object.entries(updates)) {
     if (!allowed.has(key)) continue;
     await query(

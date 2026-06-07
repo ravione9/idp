@@ -193,6 +193,13 @@ A bootstrap account is provisioned from `MASTER_ADMIN_EMAIL` + `MASTER_ADMIN_PAS
 
 - Per-user secret in `mfa_secrets` (Base32, 160-bit).
 - 8 single-use **backup codes** (8 hex chars), bcrypt-hashed at rest.
+- MFA is required when **any** of these conditions match:
+  - adaptive engine returns `MFA` / `STEP_UP`
+  - user already has active MFA (`mfa_secrets.enabled = 1`)
+  - user-level enforcement (`employees.mfa_enforced = 1`)
+  - global policy `mfa_policy.global_enforce = true`
+  - admin policy `mfa_policy.enforce_for_admins = true` and role is `ADMIN` / `SUPER_ADMIN`
+- Group exclusions: `mfa_policy.excluded_group_ids` (JSON group-id array) bypasses **global/admin policy MFA** for matching users, but does not bypass adaptive risk MFA or explicit per-user enforcement.
 - Login flow when MFA is enabled:
   1. `POST /auth/local/login {email, password}` → returns `{mfaRequired:true, challengeId}`.
   2. UI prompts for 6-digit code (or backup code).
@@ -328,6 +335,7 @@ Add more apps via **Admin Central → SAML Applications → Register new SAML ap
 - Runner: `src/db/migrate.ts` — runs on startup before listening.
 - Tracking: `lilg_schema_migrations(name, checksum, applied_at, duration_ms)`.
 - Each file is executed as a single multi-statement batch (the runner opens a connection with `multipleStatements: true`).
+- Compatibility fallback: if MySQL rejects `ADD COLUMN IF NOT EXISTS` with `ER_PARSE_ERROR`, the runner retries that migration statement-by-statement and emulates `IF NOT EXISTS` via `information_schema.COLUMNS` checks before each `ALTER TABLE ... ADD COLUMN`.
 - Files are applied in lexicographic order; already-applied files are skipped.
 - A checksum mismatch (file was edited after apply) logs a warning but does **not** fail startup.
 - A failed migration aborts startup (`process.exit(1)`).
@@ -458,6 +466,9 @@ To add a new migration:
 | `POST` | `/api/admin/users/:empId/mfa/confirm` | Confirm user MFA with 6-digit code |
 | `POST` | `/api/admin/users/:empId/mfa/disable` | Disable MFA for a user |
 | `POST` | `/api/admin/users/:empId/mfa/regenerate-codes` | Regenerate user MFA backup codes |
+| `POST` | `/api/admin/users/:empId/mfa/enforce` | Set/clear per-user MFA enforcement |
+| `GET` | `/api/admin/users/mfa-policy` | Read global MFA policy |
+| `POST` | `/api/admin/users/mfa-policy` | Update global MFA policy (`global_enforce`, `enforce_for_admins`, `grace_period_hours`, `excluded_group_ids`) |
 | `POST` | `/api/admin/users/:empId/reset-password` | Admin password reset with AD/Google writeback |
 | `POST` | `/api/admin/users/:empId/link-identity` | Attach an external identity link |
 | `DELETE` | `/api/admin/users/:empId/identity-links/:linkId` | Remove an identity link |
@@ -795,6 +806,39 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-06-07 — Exclude groups from MFA policy
+
+**Why** — Security/ops teams needed a safe exception path to exempt selected groups from global/admin MFA enforcement without disabling adaptive MFA controls.
+
+**What changed:**
+
+- **Updated:** `web/js/views-stubs.js` — MFA policy UI now includes **Exclude Groups from Policy MFA** with group search and multi-select.
+- **Updated:** `src/api/admin-users.ts` — `POST /api/admin/users/mfa-policy` now accepts `excluded_group_ids`.
+- **Updated:** `src/auth/local-auth.ts` — login reads excluded groups from `mfa_policy`, checks `group_members`, and skips global/admin policy MFA for matched users (while still enforcing adaptive and per-user MFA policies).
+
+### TBD — 2026-06-07 — MFA reset now forces re-enrollment consistently
+
+**Why** — Admin “Reset MFA” UI was disabling existing MFA, but runtime login checks did not consistently enforce re-enrollment for the next sign-in. This created confusion for lost-device recovery.
+
+**What changed:**
+
+- **Updated:** `src/auth/local-auth.ts` — login now evaluates MFA policy requirements directly from `employees.mfa_enforced` and `mfa_policy` (`global_enforce`, `enforce_for_admins`) in addition to adaptive signals and existing enrollment state.
+- **Updated:** `web/js/views-stubs.js` — admin reset actions now perform `disable + enforce` in one flow so reset always means “fresh enrollment required at next login”.
+- **Updated:** `web/js/views-stubs.js` — admin disable actions now clear enforcement along with MFA disable so “Disable MFA” truly removes MFA requirement.
+
+### TBD — 2026-06-07 — Migration runner compatibility for older MySQL variants
+
+**Why** — Some environments failed to start because migration `026_mfa_enforce_policy.sql` uses `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, which is not accepted by certain MySQL builds despite reporting 8.0-compatible behavior.
+
+**What changed:**
+
+- **Updated:** `src/db/migrate.ts` now retries migrations that fail with `ER_PARSE_ERROR` on `ADD COLUMN IF NOT EXISTS`.
+- **Compatibility mode:** the fallback executes statements one-by-one and converts each `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...` into:
+  1. `information_schema.COLUMNS` existence check
+  2. conditional `ALTER TABLE ... ADD COLUMN ...` only when the column is missing
+- **Scope:** fallback is activated only for this specific parser error signature; all other migrations still run normally (single batch) and still fail-fast on real SQL errors.
+- **Outcome:** fresh and older servers can apply migration 026 without manual DB patching, preventing startup crash loops and Cloudflare `521` host errors caused by failed boot.
 
 ### TBD — 2026-06-07 — Adaptive / risk-based authentication engine (live)
 

@@ -5,7 +5,12 @@
  * yet recorded in the `lilg_schema_migrations` table, and tracks them.
  *
  * Idempotent — safe to run on every startup. Each migration file is executed
- * as a single multi-statement batch, so it should be one logical change.
+ * as a single multi-statement batch by default.
+ *
+ * Compatibility note:
+ * If a migration fails with ER_PARSE_ERROR for `ADD COLUMN IF NOT EXISTS`
+ * (seen on older MySQL variants), we retry that file statement-by-statement
+ * with an information_schema pre-check for each ADD COLUMN clause.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,6 +20,133 @@ import { config } from '../config.js';
 import logger from '../utils/logger.js';
 
 const MIGRATIONS_TABLE = 'lilg_schema_migrations';
+
+function splitSqlStatements(sql: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+  let inBacktick = false;
+  let prev = '';
+
+  for (const ch of sql) {
+    if (ch === '\'' && !inDouble && !inBacktick && prev !== '\\') {
+      inSingle = !inSingle;
+    } else if (ch === '"' && !inSingle && !inBacktick && prev !== '\\') {
+      inDouble = !inDouble;
+    } else if (ch === '`' && !inSingle && !inDouble) {
+      inBacktick = !inBacktick;
+    }
+
+    if (ch === ';' && !inSingle && !inDouble && !inBacktick) {
+      parts.push(current);
+      current = '';
+      prev = '';
+      continue;
+    }
+
+    current += ch;
+    prev = ch;
+  }
+
+  if (current.trim()) {
+    parts.push(current);
+  }
+
+  return parts;
+}
+
+function stripSqlLineComments(statement: string): string {
+  return statement
+    .split('\n')
+    .map((line) => line.replace(/^\s*--.*$/, ''))
+    .join('\n')
+    .trim();
+}
+
+function isAddColumnIfNotExistsParseError(err: unknown, sql: string): boolean {
+  const code = (err as NodeJS.ErrnoException & { code?: string })?.code ?? '';
+  const message = (err as Error)?.message ?? '';
+  return (
+    code === 'ER_PARSE_ERROR'
+    && /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i.test(sql)
+    && /IF\s+NOT\s+EXISTS/i.test(message)
+  );
+}
+
+function parseAddColumnIfNotExistsClauses(body: string): Array<{ column: string; definition: string }> {
+  const clauses: Array<{ column: string; definition: string }> = [];
+  const re = /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+`?([A-Za-z0-9_]+)`?\s+([\s\S]*?)(?=(?:,\s*ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\b)|$)/gi;
+  for (const m of body.matchAll(re)) {
+    const column = m[1]?.trim();
+    const definition = m[2]?.trim();
+    if (!column || !definition) continue;
+    clauses.push({ column, definition });
+  }
+  return clauses;
+}
+
+function quoteIdent(name: string): string {
+  return `\`${name.replace(/`/g, '``')}\``;
+}
+
+async function applyAddColumnCompatStatement(conn: mysql.Connection, statement: string): Promise<boolean> {
+  const normalized = stripSqlLineComments(statement);
+  if (!normalized) return true;
+
+  const m = normalized.match(/^ALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+([\s\S]+)$/i);
+  if (!m?.[1] || !m[2]) return false;
+
+  const tableName = m[1].trim();
+  const body = m[2];
+  const clauses = parseAddColumnIfNotExistsClauses(body);
+  if (clauses.length === 0) return false;
+
+  for (const clause of clauses) {
+    const [rows] = await conn.query<mysql.RowDataPacket[]>(
+      `SELECT COUNT(*) AS c
+         FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = ?
+          AND COLUMN_NAME = ?`,
+      [tableName, clause.column],
+    );
+    const exists = Number(rows[0]?.['c'] ?? 0) > 0;
+    if (exists) continue;
+
+    await conn.query(
+      `ALTER TABLE ${quoteIdent(tableName)} ADD COLUMN ${quoteIdent(clause.column)} ${clause.definition}`,
+    );
+  }
+
+  return true;
+}
+
+async function applyMigrationSql(conn: mysql.Connection, migration: MigrationFile): Promise<void> {
+  try {
+    await conn.query(migration.sql);
+    return;
+  } catch (err) {
+    if (!isAddColumnIfNotExistsParseError(err, migration.sql)) {
+      throw err;
+    }
+    logger.warn(
+      { name: migration.name },
+      'Retrying migration with compatibility mode for ADD COLUMN IF NOT EXISTS',
+    );
+  }
+
+  const statements = splitSqlStatements(migration.sql);
+  for (const raw of statements) {
+    const statement = stripSqlLineComments(raw);
+    if (!statement) continue;
+
+    const handled = await applyAddColumnCompatStatement(conn, statement);
+    if (!handled) {
+      await conn.query(statement);
+    }
+  }
+}
 
 function migrationsDir(): string {
   // dist/db/migrate.js  →  ../../migrations
@@ -132,7 +264,7 @@ export async function runMigrations(): Promise<void> {
       const start = Date.now();
       logger.info({ name: m.name }, 'Applying migration');
       try {
-        await conn.query(m.sql);
+        await applyMigrationSql(conn, m);
         const duration = Date.now() - start;
         await conn.query(
           `INSERT INTO ${MIGRATIONS_TABLE} (name, checksum, duration_ms) VALUES (?, ?, ?)`,

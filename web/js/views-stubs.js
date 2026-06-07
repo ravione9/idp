@@ -348,17 +348,41 @@ export async function viewMfaMethods(content) {
 
   async function loadMfaPage() {
     try {
-      const [status, policyRes] = await Promise.all([
+      const [status, policyRes, groupsRes] = await Promise.all([
         api.mfaStatus().catch(() => ({})),
         api.getMfaPolicy().catch(() => ({ data: {} })),
+        api.listGroups().catch(() => ({ data: [] })),
       ]);
       const policy = policyRes?.data || {};
+      const groups = norm(groupsRes);
       const enrolled = status?.methods || [];
       const liveOrSchemaCount = methods.filter(m => ['badge-success','badge-info'].includes(m.badge)).length;
       const enrolledCount = enrolled.length;
       const globalEnforce = !!policy['global_enforce'];
       const enforceAdmins = policy['enforce_for_admins'] !== false;
       const gracePeriod   = policy['grace_period_hours'] ?? 24;
+      const parseExcludedGroupIds = (raw) => {
+        if (Array.isArray(raw)) return raw.map((v) => String(v)).filter(Boolean);
+        if (typeof raw !== 'string') return [];
+        const trimmed = raw.trim();
+        if (!trimmed) return [];
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) return parsed.map((v) => String(v)).filter(Boolean);
+        } catch { /* ignore */ }
+        return trimmed.split(',').map((v) => v.trim()).filter(Boolean);
+      };
+      const excludedGroupIds = parseExcludedGroupIds(policy['excluded_group_ids']);
+      const excludedGroupSet = new Set(excludedGroupIds);
+      const groupRows = groups.length
+        ? groups.map((g) => `
+          <label class="mfa-exclude-row" data-label="${esc(String(g.name || g.id).toLowerCase())}"
+            style="display:flex;align-items:center;gap:0.55rem;padding:0.45rem 0.55rem;border-bottom:1px solid var(--border);cursor:pointer">
+            <input type="checkbox" class="mfa-exclude-group" value="${esc(String(g.id))}" ${excludedGroupSet.has(String(g.id)) ? 'checked' : ''}>
+            <span style="font-size:0.85rem">${esc(g.name || g.id)}</span>
+            <span class="muted" style="margin-left:auto;font-size:0.75rem">${esc(g.source_system || 'LOCAL')}</span>
+          </label>`).join('')
+        : `<div class="muted" style="padding:0.55rem;font-size:0.82rem">No groups found. Create/sync groups first in Identity → Groups.</div>`;
 
       const cards = methods.map(m => `
         <div class="card" style="position:relative">
@@ -417,13 +441,24 @@ export async function viewMfaMethods(content) {
               <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Allow login without MFA for this many hours after enforcement begins.</p>
               <input class="form-input" type="number" id="policy-grace" value="${esc(String(gracePeriod))}" min="0" max="168" />
             </div>
+            <div class="form-group" style="grid-column:1/-1">
+              <label class="form-label" style="font-weight:600">Exclude Groups from Policy MFA</label>
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Members of selected groups are excluded from global/admin MFA policy. Per-user enforce still applies.</p>
+              <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:center;margin-bottom:0.45rem;flex-wrap:wrap">
+                <input class="form-input" id="policy-exclude-search" placeholder="Search groups..." style="max-width:260px" />
+                <span class="muted" style="font-size:0.78rem"><span id="policy-exclude-count">0</span> groups selected</span>
+              </div>
+              <div id="policy-exclude-list" style="border:1px solid var(--border);border-radius:8px;max-height:210px;overflow:auto;background:var(--surface-2)">
+                ${groupRows}
+              </div>
+            </div>
           </div>
         </div>
 
         <!-- ── Per-User MFA Management ── -->
         <div class="card" style="margin-bottom:1.25rem">
           <div style="font-weight:700;font-size:1rem;margin-bottom:0.25rem">Per-User MFA Management</div>
-          <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">Search a user to enforce, reset, or disable their MFA.</p>
+          <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">Search a user to enforce, reset (force fresh enrollment), or disable MFA.</p>
           <div style="display:flex;gap:0.6rem;align-items:flex-end;flex-wrap:wrap;margin-bottom:0.75rem">
             <div class="form-group" style="flex:1;min-width:240px;margin:0">
               <label class="form-label">Search user (name or email)</label>
@@ -437,7 +472,7 @@ export async function viewMfaMethods(content) {
             <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
               <button class="btn btn-primary btn-sm" id="mfa-enforce-btn">🔒 Enforce MFA</button>
               <button class="btn btn-secondary btn-sm" id="mfa-unenforce-btn">Remove Enforcement</button>
-              <button class="btn btn-secondary btn-sm" id="mfa-reset-btn">↺ Reset MFA (re-enroll)</button>
+              <button class="btn btn-secondary btn-sm" id="mfa-reset-btn">↺ Reset MFA (force re-enrollment)</button>
               <button class="btn btn-danger btn-sm" id="mfa-disable-btn">Disable MFA</button>
             </div>
             <div id="mfa-action-msg" style="margin-top:0.5rem;font-size:0.85rem"></div>
@@ -448,15 +483,38 @@ export async function viewMfaMethods(content) {
           <a href="/?v=settings" class="btn btn-secondary">My Enrollment →</a>
         </div>`;
 
+      const excludeSearchEl = wrap.querySelector('#policy-exclude-search');
+      const excludeRows = Array.from(wrap.querySelectorAll('.mfa-exclude-row'));
+      const excludeChecks = Array.from(wrap.querySelectorAll('.mfa-exclude-group'));
+      const excludeCountEl = wrap.querySelector('#policy-exclude-count');
+
+      function updateExcludeCount() {
+        if (!excludeCountEl) return;
+        excludeCountEl.textContent = String(excludeChecks.filter((cb) => cb.checked).length);
+      }
+      excludeChecks.forEach((cb) => cb.addEventListener('change', updateExcludeCount));
+      excludeSearchEl?.addEventListener('input', () => {
+        const q = excludeSearchEl.value.trim().toLowerCase();
+        excludeRows.forEach((row) => {
+          const label = (row.dataset.label || '').toLowerCase();
+          row.style.display = (!q || label.includes(q)) ? 'flex' : 'none';
+        });
+      });
+      updateExcludeCount();
+
       // ── Save policy ────────────────────────────────────────────────────────
       wrap.querySelector('#save-policy-btn').addEventListener('click', async () => {
         const msg = wrap.querySelector('#policy-msg');
         msg.innerHTML = '';
+        const excludedGroups = Array
+          .from(wrap.querySelectorAll('.mfa-exclude-group:checked'))
+          .map((n) => n.value);
         try {
           await api.updateMfaPolicy({
             global_enforce:     parseInt(wrap.querySelector('#policy-global').value) === 1,
             enforce_for_admins: parseInt(wrap.querySelector('#policy-admins').value) === 1,
             grace_period_hours: parseInt(wrap.querySelector('#policy-grace').value) || 24,
+            excluded_group_ids: excludedGroups,
           });
           msg.innerHTML = `<div class="alert alert-success">Policy saved successfully.</div>`;
           await loadMfaPage();
@@ -507,7 +565,6 @@ export async function viewMfaMethods(content) {
                 // Fetch live MFA status
                 let mfaStatus = {};
                 try { mfaStatus = await api.adminMfaStatus(selectedUser.emp_id); } catch {}
-                const enrolled2 = mfaStatus?.enabled ? '✓ Enrolled' : 'Not enrolled';
                 wrap.querySelector('#mfa-user-info').innerHTML = `
                   <span class="avatar" style="width:36px;height:36px;font-size:0.85rem;flex-shrink:0">${esc((selectedUser.full_name||'?').charAt(0).toUpperCase())}</span>
                   <div>
@@ -517,6 +574,7 @@ export async function viewMfaMethods(content) {
                   <div style="margin-left:auto;display:flex;gap:0.4rem;flex-wrap:wrap">
                     ${mfaStatus?.enabled ? '<span class="badge badge-success">MFA Active</span>' : '<span class="badge badge-neutral">No MFA</span>'}
                     ${selectedUser.mfa_enforced ? '<span class="badge badge-danger">Enforced</span>' : '<span class="badge badge-neutral">Not Enforced</span>'}
+                    ${mfaStatus?.policyExcludedByGroup ? '<span class="badge badge-warning">Group Excluded</span>' : ''}
                   </div>`;
                 wrap.querySelector('#mfa-user-actions').style.display = 'block';
               });
@@ -555,10 +613,12 @@ export async function viewMfaMethods(content) {
 
       wrap.querySelector('#mfa-reset-btn').addEventListener('click', async () => {
         if (!selectedUser) return;
-        if (!confirm(`Reset MFA for ${selectedUser.full_name}? This will disable their current MFA so they can re-enroll.`)) return;
+        if (!confirm(`Reset MFA for ${selectedUser.full_name}? Current MFA will be removed and fresh enrollment will be required at next login.`)) return;
         try {
           await api.adminMfaDisable(selectedUser.emp_id);
-          setActionMsg(`✓ MFA reset for ${selectedUser.full_name}. They can now re-enroll on next login.`);
+          await api.adminMfaEnforce(selectedUser.emp_id, true);
+          selectedUser.mfa_enforced = true;
+          setActionMsg(`✓ MFA reset for ${selectedUser.full_name}. Fresh enrollment is now required on next login.`);
         } catch (e) { setActionMsg(e.message, true); }
       });
 
@@ -567,6 +627,8 @@ export async function viewMfaMethods(content) {
         if (!confirm(`Disable MFA for ${selectedUser.full_name}? This removes their MFA entirely. Are you sure?`)) return;
         try {
           await api.adminMfaDisable(selectedUser.emp_id);
+          await api.adminMfaEnforce(selectedUser.emp_id, false);
+          selectedUser.mfa_enforced = false;
           setActionMsg(`✓ MFA disabled for ${selectedUser.full_name}.`);
         } catch (e) { setActionMsg(e.message, true); }
       });
@@ -3243,6 +3305,11 @@ function initUsersTab(panel, me = null) {
             </span></div>
             <div class="pp-attr"><span class="pp-attr-label">Backup Codes Left</span><span class="pp-attr-value">${Number(mfaStatus.remainingBackupCodes || 0)}</span></div>
             <div class="pp-attr"><span class="pp-attr-label">Last Used</span><span class="pp-attr-value">${mfaStatus.lastUsedAt ? fmtDate(mfaStatus.lastUsedAt) : '—'}</span></div>
+            <div class="pp-attr"><span class="pp-attr-label">Policy Exclusion</span><span class="pp-attr-value">
+              ${mfaStatus.policyExcludedByGroup
+                ? '<span class="badge badge-warning">Excluded by group policy</span>'
+                : '<span class="badge badge-neutral">No exclusion</span>'}
+            </span></div>
           </div>
 
           <!-- Enforcement actions -->
@@ -3289,15 +3356,16 @@ function initUsersTab(panel, me = null) {
 
         if (mfaStatus.enabled) {
           actionsEl.innerHTML = `
-            <button class="btn btn-sm btn-secondary" id="pp-mfa-reset">↺ Reset MFA (force re-enroll)</button>
+            <button class="btn btn-sm btn-secondary" id="pp-mfa-reset">↺ Reset MFA (force fresh enrollment)</button>
             <button class="btn btn-sm btn-secondary" id="pp-mfa-regen">Regenerate Backup Codes</button>
             <button class="btn btn-sm btn-danger" id="pp-mfa-disable">Disable MFA</button>`;
 
           body.querySelector('#pp-mfa-reset').addEventListener('click', async () => {
-            if (!confirm(`Reset MFA for ${emp.full_name || empId}? This disables their current MFA so they can re-enroll.`)) return;
+            if (!confirm(`Reset MFA for ${emp.full_name || empId}? Current MFA will be removed and fresh enrollment will be required at next login.`)) return;
             try {
               await api.adminMfaDisable(empId);
-              msgEl.innerHTML = `<div class="pp-alert success">✓ MFA reset. User can now re-enroll.</div>`;
+              await api.adminMfaEnforce(empId, true);
+              msgEl.innerHTML = `<div class="pp-alert success">✓ MFA reset. User must enroll again at next login.</div>`;
               reloadProfile(true);
             } catch (e) { msgEl.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
           });
@@ -3320,6 +3388,7 @@ function initUsersTab(panel, me = null) {
             if (!confirm('Disable MFA for this user? They will login without second factor.')) return;
             try {
               await api.adminMfaDisable(empId);
+              await api.adminMfaEnforce(empId, false);
               msgEl.innerHTML = `<div class="pp-alert success">MFA disabled for user.</div>`;
               reloadProfile(true);
             } catch (e) { msgEl.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
