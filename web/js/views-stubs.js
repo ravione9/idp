@@ -223,6 +223,301 @@ export async function viewGroups(content) {
   await load();
 }
 
+// ─── 1b. Bulk User Import ─────────────────────────────────────────────────────
+const BULK_MAX_ROWS = 100_000;
+const BULK_BATCH_SIZE = 500;
+
+function parseCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') inQ = false;
+      else cur += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ',') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out.map((c) => c.trim());
+}
+
+function parseBulkCsv(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter((l) => l.trim());
+  if (!lines.length) return { rows: [], errors: ['File is empty'] };
+
+  const header = parseCsvLine(lines[0]).map((h) => h.toLowerCase().replace(/\s+/g, '_'));
+  const col = (names) => {
+    for (const n of names) {
+      const i = header.indexOf(n);
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+
+  const emailIdx = col(['email', 'email_corp', 'emailcorp']);
+  const nameIdx = col(['full_name', 'fullname', 'name']);
+  if (emailIdx < 0 || nameIdx < 0) {
+    return { rows: [], errors: ['CSV must include email and full_name columns'] };
+  }
+
+  const empIdx = col(['emp_id', 'empid', 'employee_id']);
+  const deptIdx = col(['dept_id', 'deptid', 'department']);
+  const typeIdx = col(['employment_type', 'employmenttype', 'type']);
+  const stateIdx = col(['ilg_state', 'ilgstate', 'state']);
+  const mgrIdx = col(['manager_emp_id', 'managerempid', 'manager']);
+  const grpIdx = col(['groups', 'group', 'group_names']);
+
+  const rows = [];
+  const errors = [];
+  const dataLines = lines.slice(1);
+
+  if (dataLines.length > BULK_MAX_ROWS) {
+    return { rows: [], errors: [`Maximum ${BULK_MAX_ROWS.toLocaleString()} rows allowed`] };
+  }
+
+  for (let i = 0; i < dataLines.length; i++) {
+    const cells = parseCsvLine(dataLines[i]);
+    const email = (cells[emailIdx] || '').trim();
+    const fullName = (cells[nameIdx] || '').trim();
+    if (!email && !fullName) continue;
+
+    const groupsRaw = grpIdx >= 0 ? (cells[grpIdx] || '') : '';
+    const groups = groupsRaw
+      ? groupsRaw.split(/[|;]/).map((g) => g.trim()).filter(Boolean)
+      : undefined;
+
+    rows.push({
+      line: i + 2,
+      email,
+      fullName,
+      empId: empIdx >= 0 ? (cells[empIdx] || '').trim() || undefined : undefined,
+      deptId: deptIdx >= 0 ? (cells[deptIdx] || '').trim() || undefined : undefined,
+      employmentType: typeIdx >= 0 ? (cells[typeIdx] || '').trim() || undefined : undefined,
+      ilgState: stateIdx >= 0 ? (cells[stateIdx] || '').trim() || undefined : undefined,
+      managerEmpId: mgrIdx >= 0 ? (cells[mgrIdx] || '').trim() || undefined : undefined,
+      groups,
+    });
+  }
+
+  if (!rows.length) errors.push('No data rows found');
+  return { rows, errors };
+}
+
+function chunkArray(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+export async function viewBulkUsers(content) {
+  content.replaceChildren(el(`<div>
+    ${header(
+      'Bulk User Import',
+      'Create or update up to 100,000 users in one job and assign local group membership',
+      '<button type="button" class="btn btn-secondary btn-sm" id="bulk-dl-template">Download template</button>',
+    )}
+    <div class="card" style="margin-bottom:1rem">
+      <h3 style="margin:0 0 0.5rem;font-size:1rem">Import settings</h3>
+      <div class="grid-2" style="gap:1rem">
+        <div class="field" style="margin:0">
+          <label>Mode</label>
+          <select id="bulk-mode" class="form-select">
+            <option value="upsert">Upsert — create new, update existing (by email)</option>
+            <option value="create">Create only — skip rows where email already exists</option>
+            <option value="update">Update only — skip rows where email is missing</option>
+          </select>
+        </div>
+        <div class="field" style="margin:0">
+          <label>CSV file</label>
+          <input type="file" id="bulk-file" accept=".csv,text/csv" class="form-input" />
+        </div>
+      </div>
+      <div class="field" style="margin:1rem 0 0">
+        <label>Or paste CSV</label>
+        <textarea id="bulk-paste" class="form-input" rows="6" placeholder="email,full_name,emp_id,dept_id,employment_type,ilg_state,manager_emp_id,groups&#10;user@example.com,Jane Doe,,ENG,CORPORATE,ACTIVE,,Team A|Team B"></textarea>
+      </div>
+      <p class="muted" style="font-size:0.82rem;margin:0.75rem 0 0">
+        <strong>groups</strong> column: pipe (<code>|</code>) or semicolon-separated local group names or IDs.
+        Synced (Google/AD) groups are skipped with a warning. Max <strong>${BULK_MAX_ROWS.toLocaleString()}</strong> rows per import.
+      </p>
+      <div style="display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap;align-items:center">
+        <button type="button" class="btn btn-primary" id="bulk-run" disabled>Start import</button>
+        <button type="button" class="btn btn-secondary" id="bulk-preview">Preview parse</button>
+        <span id="bulk-row-count" class="muted"></span>
+      </div>
+    </div>
+    <div id="bulk-progress" hidden style="margin-bottom:1rem">
+      <div style="display:flex;justify-content:space-between;font-size:0.85rem;margin-bottom:0.35rem">
+        <span id="bulk-progress-label">Processing…</span>
+        <span id="bulk-progress-pct">0%</span>
+      </div>
+      <div style="height:8px;background:var(--border,#e5e7eb);border-radius:4px;overflow:hidden">
+        <div id="bulk-progress-bar" style="height:100%;width:0;background:var(--primary,#2563eb);transition:width 0.2s"></div>
+      </div>
+    </div>
+    <div id="bulk-msg"></div>
+    <div id="bulk-results"></div>
+  </div>`));
+
+  const wrap = content.firstChild;
+  let parsedRows = [];
+
+  const templateCsv = [
+    'email,full_name,emp_id,dept_id,employment_type,ilg_state,manager_emp_id,groups',
+    'jane.doe@example.com,Jane Doe,,ENG,CORPORATE,ACTIVE,,Engineering|All Staff',
+    'john.smith@example.com,John Smith,EMP001,SALES,CORPORATE,ACTIVE,MGR001,Sales Team',
+  ].join('\n');
+
+  function setRowCount(n) {
+    wrap.querySelector('#bulk-row-count').textContent = n
+      ? `${n.toLocaleString()} row${n === 1 ? '' : 's'} ready`
+      : '';
+    wrap.querySelector('#bulk-run').disabled = n === 0;
+  }
+
+  function loadFromText(text) {
+    const { rows, errors } = parseBulkCsv(text);
+    parsedRows = rows;
+    const msgEl = wrap.querySelector('#bulk-msg');
+    if (errors.length) {
+      msgEl.innerHTML = errHtml(errors.join('; '));
+      setRowCount(0);
+      return;
+    }
+    msgEl.innerHTML = '';
+    setRowCount(rows.length);
+  }
+
+  wrap.querySelector('#bulk-dl-template').addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(templateCsv);
+    a.download = 'bulk-users-template.csv';
+    a.click();
+  });
+
+  wrap.querySelector('#bulk-file').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    wrap.querySelector('#bulk-paste').value = text;
+    loadFromText(text);
+  });
+
+  wrap.querySelector('#bulk-paste').addEventListener('input', () => {
+    const text = wrap.querySelector('#bulk-paste').value.trim();
+    if (!text) { parsedRows = []; setRowCount(0); return; }
+    loadFromText(text);
+  });
+
+  wrap.querySelector('#bulk-preview').addEventListener('click', () => {
+    const text = wrap.querySelector('#bulk-paste').value.trim();
+    if (!text) { wrap.querySelector('#bulk-msg').innerHTML = errHtml('Paste or upload a CSV first'); return; }
+    loadFromText(text);
+    if (!parsedRows.length) return;
+    const preview = parsedRows.slice(0, 5);
+    wrap.querySelector('#bulk-results').innerHTML = `
+      <div class="card"><h3 style="margin:0 0 0.75rem">Preview (first ${preview.length} rows)</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Line</th><th>Email</th><th>Name</th><th>Groups</th></tr></thead>
+        <tbody>${preview.map((r) => `<tr>
+          <td class="muted">${r.line}</td>
+          <td>${esc(r.email)}</td>
+          <td>${esc(r.fullName)}</td>
+          <td class="muted">${esc((r.groups || []).join(' | ') || '—')}</td>
+        </tr>`).join('')}</tbody>
+      </table></div></div>`;
+  });
+
+  wrap.querySelector('#bulk-run').addEventListener('click', async () => {
+    if (!parsedRows.length) return;
+    const mode = wrap.querySelector('#bulk-mode').value;
+    const runBtn = wrap.querySelector('#bulk-run');
+    const previewBtn = wrap.querySelector('#bulk-preview');
+    const progress = wrap.querySelector('#bulk-progress');
+    const bar = wrap.querySelector('#bulk-progress-bar');
+    const label = wrap.querySelector('#bulk-progress-label');
+    const pctEl = wrap.querySelector('#bulk-progress-pct');
+    const msgEl = wrap.querySelector('#bulk-msg');
+    const resultsEl = wrap.querySelector('#bulk-results');
+
+    runBtn.disabled = true;
+    previewBtn.disabled = true;
+    progress.hidden = false;
+    msgEl.innerHTML = '';
+    resultsEl.innerHTML = '';
+
+    const chunks = chunkArray(parsedRows, BULK_BATCH_SIZE);
+    const totals = { created: 0, updated: 0, failed: 0, groupsAdded: 0, processed: 0 };
+    const failedRows = [];
+
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const pct = Math.round((i / chunks.length) * 100);
+        bar.style.width = `${pct}%`;
+        pctEl.textContent = `${pct}%`;
+        label.textContent = `Batch ${i + 1} of ${chunks.length} (${chunk.length} rows)…`;
+
+        const r = await api.bulkUsersBatch(chunk, mode);
+        totals.created += r.created || 0;
+        totals.updated += r.updated || 0;
+        totals.failed += r.failed || 0;
+        totals.groupsAdded += r.groupsAdded || 0;
+        totals.processed += r.processed || chunk.length;
+
+        for (const row of (r.rows || [])) {
+          if (row.action === 'failed') failedRows.push(row);
+        }
+      }
+
+      bar.style.width = '100%';
+      pctEl.textContent = '100%';
+      label.textContent = 'Complete';
+
+      const tone = totals.failed ? 'alert-warning' : 'alert-success';
+      msgEl.innerHTML = `<div class="alert ${tone}">
+        Processed <strong>${totals.processed.toLocaleString()}</strong> rows —
+        created <strong>${totals.created.toLocaleString()}</strong>,
+        updated <strong>${totals.updated.toLocaleString()}</strong>,
+        failed <strong>${totals.failed.toLocaleString()}</strong>,
+        group memberships added <strong>${totals.groupsAdded.toLocaleString()}</strong>.
+      </div>`;
+
+      if (failedRows.length) {
+        const show = failedRows.slice(0, 100);
+        resultsEl.innerHTML = `<div class="card"><h3 style="margin:0 0 0.75rem">Errors (${failedRows.length.toLocaleString()})</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Line</th><th>Email</th><th>Error</th></tr></thead>
+            <tbody>${show.map((r) => `<tr>
+              <td class="muted">${r.line ?? '—'}</td>
+              <td>${esc(r.email || '')}</td>
+              <td class="muted">${esc(r.error || 'Unknown error')}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>
+          ${failedRows.length > 100 ? `<p class="muted" style="margin-top:0.5rem">Showing first 100 errors.</p>` : ''}
+          <button type="button" class="btn btn-secondary btn-sm" id="bulk-dl-errors" style="margin-top:0.75rem">Download errors CSV</button>
+        </div>`;
+        wrap.querySelector('#bulk-dl-errors')?.addEventListener('click', () => {
+          csvDownload('bulk-import-errors.csv', [
+            ['line', 'email', 'error'],
+            ...failedRows.map((r) => [r.line ?? '', r.email ?? '', r.error ?? '']),
+          ]);
+        });
+      }
+    } catch (err) {
+      msgEl.innerHTML = errHtml(err.message || 'Import failed');
+      progress.hidden = true;
+    }
+
+    runBtn.disabled = parsedRows.length === 0;
+    previewBtn.disabled = false;
+  });
+}
+
 // ─── 2. System Users ──────────────────────────────────────────────────────────
 export async function viewSystemUsers(content) {
   content.replaceChildren(el(`<div>${header('System Users', 'Service accounts and machine identities', `<button class="btn btn-primary" id="new-su-btn">+ Add Service User</button>`)}<div id="list-area">${loading()}</div></div>`));

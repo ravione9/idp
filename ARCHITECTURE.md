@@ -481,6 +481,7 @@ To add a new migration:
 | `POST` | `/api/admin/users/:empId/reset-password` | Admin password reset with AD/Google writeback |
 | `POST` | `/api/admin/users/:empId/link-identity` | Attach an external identity link |
 | `DELETE` | `/api/admin/users/:empId/identity-links/:linkId` | Remove an identity link |
+| `POST` | `/api/admin/bulk-users/batch` | Bulk create/update employees and add to local groups (max 500 rows per request; clients chunk up to 100,000 total) |
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD |
 | `GET`/`POST`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry |
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
@@ -569,7 +570,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | Group | Sidebar items |
 |---|---|
 | **Overview** | Dashboard |
-| **Identity** | Users / Identities · Groups · Administrators · System / Privileged Users · Identity Profiles |
+| **Identity** | Users / Identities · Groups · Bulk User Import · Administrators · System / Privileged Users · Identity Profiles |
 | **Authentication** | SSO Configuration · Strong Auth Methods · Adaptive Auth · Password Policies · Login Customization |
 | **Applications** | Application Catalog · SAML Applications · OIDC / OAuth · App Discovery |
 | **Connections** | Connectors / Sources · Directory Sync |
@@ -815,6 +816,20 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-06-07 — Bulk user import (create/update + group assignment)
+
+**Why** — Admins needed a single console workflow to create or update large user populations (up to 100,000 rows) and assign local group membership without one-by-one UI clicks.
+
+**What changed:**
+
+- **New:** `src/services/bulk-user-import.ts` — batch upsert employees by email with optional group membership (`INSERT IGNORE` into `group_members` for local groups only).
+- **New:** `src/api/admin-bulk-users.ts` — `POST /api/admin/bulk-users/batch` (max 500 rows per request; `upsert` / `create` / `update` modes).
+- **Updated:** `src/index.ts` — mounts `/api/admin/bulk-users`.
+- **Updated:** `web/js/views-stubs.js` — **Bulk User Import** admin page: CSV upload/paste, chunked progress bar, error export.
+- **Updated:** `web/js/app.js` — Identity sidebar route `bulkUsers`.
+- **Updated:** `web/js/api.js` — `bulkUsersBatch()` client.
+- **Updated:** `web/index.html` — asset cache version bump for deploy.
 
 ### TBD — 2026-06-07 — OIDC client delete removes registration from list
 

@@ -249,6 +249,10 @@ Object.assign(api, {
   linkIdentity:        (empId, data) => f(`/api/admin/users/${empId}/link-identity`, { method: 'POST', body: JSON.stringify(data) }),
   unlinkIdentity:      (empId, linkId) => f(`/api/admin/users/${empId}/identity-links/${linkId}`, { method: 'DELETE' }),
 
+  // Bulk user import (chunked — up to 100k rows total)
+  bulkUsersBatch: (rows, mode = 'upsert') =>
+    f('/api/admin/bulk-users/batch', { method: 'POST', body: JSON.stringify({ rows, mode }) }),
+
   // Access requests
   igaSubmitRequest:  (data) => f('/api/iga/access-requests', { method: 'POST', body: JSON.stringify(data) }),
   igaRequestDecision: (id, decision, comment) => f(`/api/iga/access-requests/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision, comment }) }),

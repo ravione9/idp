@@ -15,7 +15,7 @@ import {
   viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
 } from './views-admin.js';
 import {
-  viewGroups, viewSystemUsers, viewIdentityProfiles,
+  viewGroups, viewBulkUsers, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,
   viewAppDiscovery,
   viewDirectorySync,
@@ -48,6 +48,7 @@ const ROUTES = {
   /* ── Admin > Identity ── */
   users:            { primary: 'admin', group: 'Identity', label: 'Users / Identities',  icon: 'user',         admin: true, view: viewUsers },
   groups:           { primary: 'admin', group: 'Identity', label: 'Groups',              icon: 'users',        admin: true, view: viewGroups },
+  bulkUsers:        { primary: 'admin', group: 'Identity', label: 'Bulk User Import',    icon: 'refresh',      admin: true, view: viewBulkUsers },
   admins:           { primary: 'admin', group: 'Identity', label: 'Administrators',      icon: 'userShield',   super: true, view: viewAdmins },
   systemUsers:      { primary: 'admin', group: 'Identity', label: 'System / Privileged', icon: 'userCog',      admin: true, view: viewSystemUsers },
   identityProfiles: { primary: 'admin', group: 'Identity', label: 'Identity Profiles',   icon: 'identityCard', admin: true, view: viewIdentityProfiles },
