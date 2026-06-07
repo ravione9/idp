@@ -542,6 +542,23 @@ export class ADAdapter extends BaseAdapter {
     }
   }
 
+  /** Bind as the target user to confirm credentials (read-only LDAP is sufficient). */
+  async verifyUserCredentials(samAccountName: string, password: string): Promise<AdapterResult<void>> {
+    return this.safe(async () => {
+      await this.ensureConnected();
+      const entries = await this.findUser(samAccountName, ['dn', 'sAMAccountName', 'userAccountControl']);
+      if (!entries.length) {
+        throw new Error(`AD user not found for sAMAccountName=${samAccountName}`);
+      }
+      const uac = parseInt(getLdapAttr(entries[0], 'userAccountControl') || '512', 10);
+      if (uac & UAC_ACCOUNTDISABLE) {
+        throw new Error('AD account is disabled');
+      }
+      await this.verifyUserPassword(entries[0].dn, password);
+      logger.info({ samAccountName }, 'AD user credentials verified');
+    });
+  }
+
   /** Set password for a user identified by sAMAccountName (requires LDAPS or StartTLS). */
   async setUserPassword(samAccountName: string, newPassword: string): Promise<AdapterResult<void>> {
     return this.safe(async () => {

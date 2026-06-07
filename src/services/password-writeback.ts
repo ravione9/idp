@@ -52,11 +52,22 @@ async function loadConnectorConfig(
   return parseConnectorConfig(row.config_json);
 }
 
-function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
+function createAdAdapterFromConfig(
+  cfg: Record<string, unknown>,
+  overrides: { useSsl?: boolean; startTls?: boolean; port?: number } = {},
+): ADAdapter {
+  const useSsl = overrides.useSsl !== undefined
+    ? overrides.useSsl
+    : cfg['useSsl'] !== undefined
+      ? Boolean(cfg['useSsl'])
+      : config.ad.url.startsWith('ldaps');
+  const startTls = overrides.startTls !== undefined
+    ? overrides.startTls
+    : cfg['startTls'] !== undefined
+      ? Boolean(cfg['startTls'])
+      : false;
   const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
-  const port = Number(cfg['port'] ?? (cfg['useSsl'] ? 636 : 389));
-  const useSsl = cfg['useSsl'] !== undefined ? Boolean(cfg['useSsl']) : config.ad.url.startsWith('ldaps');
-  const startTls = cfg['startTls'] !== undefined ? Boolean(cfg['startTls']) : false;
+  const port = overrides.port ?? Number(cfg['port'] ?? (useSsl ? 636 : 389));
   const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
   const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
   const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
@@ -111,19 +122,46 @@ async function writebackToAD(
   if (!cfg) {
     throw new Error('No active Active Directory connector configured');
   }
-  const adapter = createAdAdapterFromConfig(cfg);
-  try {
-    await adapter.connect();
-    const result = await adapter.setUserPassword(externalId, newPassword);
-    if (!result.success) {
-      throw new Error(result.error ?? 'AD password writeback failed');
+
+  const attempts: Array<{ useSsl?: boolean; startTls?: boolean; port?: number; label: string }> = [
+    { label: 'configured' },
+    { label: 'starttls', startTls: true },
+    { label: 'ldaps', useSsl: true, port: 636 },
+  ];
+
+  let lastError = 'AD password writeback failed';
+
+  for (const attempt of attempts) {
+    const adapter = createAdAdapterFromConfig(cfg, attempt);
+    try {
+      await adapter.resetCircuitBreaker();
+      await adapter.connect();
+      if (!adapter.connectionIsSecure()) {
+        lastError = 'AD password reset requires LDAPS or LDAP+StartTLS — set Protocol to LDAPS or StartTLS in the AD connector';
+        continue;
+      }
+      const result = await adapter.setUserPassword(externalId, newPassword);
+      if (result.success) {
+        return;
+      }
+      lastError = result.error ?? lastError;
+      if (!result.error?.includes('requires LDAPS')) {
+        throw new Error(lastError);
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      if (!lastError.includes('requires LDAPS') && !lastError.includes('StartTLS')) {
+        throw err instanceof Error ? err : new Error(lastError);
+      }
+    } finally {
+      await adapter.disconnect().catch(() => undefined);
     }
-  } finally {
-    await adapter.disconnect().catch(() => undefined);
   }
+
+  throw new Error(lastError);
 }
 
-async function ensureWritebackIdentityLinks(empId: string): Promise<string> {
+export async function ensureWritebackIdentityLinks(empId: string): Promise<string> {
   const employee = await queryOne<{ email_corp: string | null }>(
     `SELECT email_corp FROM employees WHERE emp_id = ?`,
     [empId],

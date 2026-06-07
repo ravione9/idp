@@ -20,6 +20,7 @@ import {
   touchLocalLogin,
   verifyLocalPassword,
 } from '../services/local-admin.js';
+import { authenticateAdCorporateUser } from '../services/ad-auth.js';
 import { getClientIp } from '../utils/request-context.js';
 
 const MFA_CHALLENGE_PREFIX = 'lilg:mfa-challenge:';
@@ -92,6 +93,10 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     if (!account && isMasterAdminCredentials(email, password)) {
       await ensureMasterAdminFromEnv();
       account = await findLocalAccountByEmail(email);
+    }
+
+    if (!account) {
+      account = await authenticateAdCorporateUser(email, password);
     }
 
     if (!account) {

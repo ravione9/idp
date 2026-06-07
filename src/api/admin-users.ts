@@ -16,7 +16,7 @@ import bcrypt from 'bcryptjs';
 import { requireAuth } from '../auth/middleware.js';
 import { requireRole } from '../auth/rbac.js';
 import { query, queryOne, execute } from '../db/connection.js';
-import { writebackPassword } from '../services/password-writeback.js';
+import { writebackPassword, ensureWritebackIdentityLinks } from '../services/password-writeback.js';
 import { backfillAdIdentityLinkIfMissing } from '../services/ad-sync.js';
 import { hashPassword } from '../services/local-admin.js';
 import { asyncHandler } from '../utils/async-handler.js';
@@ -363,7 +363,7 @@ const resetPwdSchema = z.object({
 });
 
 router.post('/:empId/reset-password', asyncHandler(async (req: Request, res: Response) => {
-  const { empId } = req.params;
+  const { empId: requestedEmpId } = req.params;
   const parsed = resetPwdSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -374,12 +374,14 @@ router.post('/:empId/reset-password', asyncHandler(async (req: Request, res: Res
 
   const employee = await queryOne<{ emp_id: string; email_corp: string; role: string | null }>(
     `SELECT emp_id, email_corp, role FROM employees WHERE emp_id = ?`,
-    [empId],
+    [requestedEmpId],
   );
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
   }
+
+  const empId = await ensureWritebackIdentityLinks(requestedEmpId);
 
   const localResults: { system: string; status: string; error?: string }[] = [];
 

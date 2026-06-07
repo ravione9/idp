@@ -159,6 +159,7 @@ The IdP signing keys used by SAML are stored on named volume `saml-keys` mounted
 | Method | Endpoint | Status |
 |---|---|---|
 | Local password | `POST /auth/local/login` | Live |
+| AD-synced corporate password | `POST /auth/local/login` (LDAP bind fallback when no `local_accounts` row) | Live |
 | Local password + TOTP | `POST /auth/local/login` then `POST /auth/local/login/mfa-verify` | Live |
 | Google Workspace OIDC | `GET /auth/google` → `GET /auth/google/callback` | Live (env defaults + optional Admin GUI DB override) |
 | WebAuthn / passkeys | — | Schema staged in migration 003; routes pending |
@@ -679,7 +680,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Connector dispatcher** — `src/services/connector-dispatcher.ts` routes `POST /api/iga/connectors/:id/sync` to the right sync service (AD or Google)
 - ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); tracks runs in `connector_runs`
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import and outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank scope syncs the full directory; non-empty filters combine with AND logic
-- ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
+- ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; AD writeback auto-retries StartTLS/LDAPS when the connector uses plain LDAP; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
 - ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate` — revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`
 - ✅ **Access review campaign generator** — `POST /api/iga/access-reviews` + `POST /api/iga/access-reviews/:id/items/:itemId/decision` in `src/services/access-review.ts` (scopes: ALL_USERS, APP_SPECIFIC, HIGH_RISK; auto-closes campaign when all items reviewed; REVOKE triggers user_entitlement revocation)
 - ✅ **SoD evaluator** — `src/services/sod-evaluator.ts` runs on every entitlement grant; populates `sod_violations`; full-scan available
@@ -900,6 +901,20 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/services/app-access-policy.ts`** — policy checks and grants honor identity-group membership; validates assignment targets.
 - **`src/api/config-app-access-policy.ts`** — assignments list resolves identity group names.
 - **`web/js/views-stubs.js`** — group-based assignment dropdown lists **Identity Groups** and tag groups.
+
+---
+
+### (pending) — 2026-06-07 — AD-synced login + password writeback reliability
+
+**Why** — Employees imported from AD could not sign in at `/login` (no `local_accounts` row) and admin password reset often failed to update AD when the connector used plain LDAP or identity links were missing.
+
+**What changed:**
+
+- **`src/services/ad-auth.ts`** — LDAP bind fallback for AD-synced employees; provisions `local_accounts` on first successful AD login.
+- **`src/auth/local-auth.ts`** — tries AD corporate auth when no local account exists.
+- **`src/adapters/ad-adapter.ts`** — `verifyUserCredentials()` for read-only AD password checks.
+- **`src/services/password-writeback.ts`** — export `ensureWritebackIdentityLinks()`; AD writeback resets circuit breaker and retries StartTLS/LDAPS; clearer error when encryption is required.
+- **`src/api/admin-users.ts`** — resolve identity links / emp_id migration before local reset + writeback.
 
 ---
 
