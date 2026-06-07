@@ -6,18 +6,23 @@
  *        → { success, redirect }               (low risk, no MFA)
  *        → { mfaRequired:true, challengeId }   (MFA required by policy or enrollment)
  *        → HTTP 403 ADAPTIVE_BLOCKED           (policy says BLOCK)
- *        → HTTP 403 MFA_ENROLL_REQUIRED        (policy demands MFA but user not enrolled)
+ *        → { enrollRequired:true, enrollChallengeId } (policy demands MFA but user not enrolled)
  *   2. POST /auth/local/login/mfa-verify { challengeId, code }
  *        → { success:true, redirect:'/' }
+ *   2b. POST /auth/local/login/mfa-enroll { enrollChallengeId }
+ *        → { secret, qrDataUrl }  (start TOTP setup without a session)
+ *   2c. POST /auth/local/login/mfa-enroll/confirm { enrollChallengeId, code }
+ *        → { success:true, redirect:'/', backupCodes }  (enable MFA + session)
  */
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import crypto from 'node:crypto';
+import qrcode from 'qrcode';
 import { config } from '../config.js';
 import logger from '../utils/logger.js';
 import { createSession, setSessionCookie } from './session.js';
 import { redis } from './session-store.js';
-import { getMfaStatus, verifyTotp } from './mfa.js';
+import { confirmEnrollment, getMfaStatus, startEnrollment, verifyTotp } from './mfa.js';
 import { query, queryOne } from '../db/connection.js';
 import {
   ensureMasterAdminFromEnv,
@@ -30,8 +35,9 @@ import { authenticateAdCorporateUser } from '../services/ad-auth.js';
 import { getClientIp } from '../utils/request-context.js';
 import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
 
-const MFA_CHALLENGE_PREFIX = 'lilg:mfa-challenge:';
-const MFA_CHALLENGE_TTL_S  = 300; // 5 min
+const MFA_CHALLENGE_PREFIX        = 'lilg:mfa-challenge:';
+const MFA_ENROLL_CHALLENGE_PREFIX = 'lilg:mfa-enroll-challenge:';
+const MFA_CHALLENGE_TTL_S         = 300; // 5 min
 
 const loginSchema = z.object({
   email:    z.string().email(),
@@ -43,6 +49,15 @@ const verifySchema = z.object({
   code:        z.string().min(6).max(8),
 });
 
+const enrollChallengeSchema = z.object({
+  enrollChallengeId: z.string().uuid(),
+});
+
+const enrollConfirmSchema = z.object({
+  enrollChallengeId: z.string().uuid(),
+  code:              z.string().min(6).max(8),
+});
+
 interface MfaChallenge {
   empId:     string;
   email:     string;
@@ -51,6 +66,14 @@ interface MfaChallenge {
   createdAt: number;
   /** True when the adaptive engine returned STEP_UP (MFA + manager-approval hint). */
   stepUp?:   boolean;
+}
+
+interface MfaEnrollChallenge {
+  empId:     string;
+  email:     string;
+  role:      string;
+  accountId: number;
+  createdAt: number;
 }
 
 interface MfaPolicyRow {
@@ -266,9 +289,22 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
 
     if (mfaRequired) {
       if (!mfa.enrolled) {
-        // Policy demands MFA but the user hasn't enrolled — block with hint.
-        await logAttempt(email, ip, false, 'mfa-enroll-required');
-        res.status(403).json({ error: 'MFA enrollment required — please set up an authenticator app', code: 'MFA_ENROLL_REQUIRED' });
+        const enrollChallengeId = crypto.randomUUID();
+        const enrollChallenge: MfaEnrollChallenge = {
+          empId:     account.emp_id,
+          email:     account.email,
+          role:      account.role,
+          accountId: account.id,
+          createdAt: Date.now(),
+        };
+        await redis.set(
+          `${MFA_ENROLL_CHALLENGE_PREFIX}${enrollChallengeId}`,
+          JSON.stringify(enrollChallenge),
+          'EX',
+          MFA_CHALLENGE_TTL_S,
+        );
+        await logAttempt(email, ip, true, 'password-ok-mfa-enroll-pending');
+        res.json({ enrollRequired: true, enrollChallengeId });
         return;
       }
 
@@ -331,4 +367,77 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
     email:  challenge.email,
     role:   challenge.role,
   });
+}
+
+async function loadEnrollChallenge(enrollChallengeId: string): Promise<MfaEnrollChallenge | null> {
+  const raw = await redis.get(`${MFA_ENROLL_CHALLENGE_PREFIX}${enrollChallengeId}`);
+  if (!raw) return null;
+  return JSON.parse(raw) as MfaEnrollChallenge;
+}
+
+export async function localLoginMfaEnrollHandler(req: Request, res: Response): Promise<void> {
+  const parsed = enrollChallengeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid enrollment request' });
+    return;
+  }
+
+  const challenge = await loadEnrollChallenge(parsed.data.enrollChallengeId);
+  if (!challenge) {
+    res.status(401).json({ error: 'Enrollment session expired — sign in again' });
+    return;
+  }
+
+  try {
+    const result = await startEnrollment(challenge.empId, challenge.email);
+    const qrDataUrl = await qrcode.toDataURL(result.otpauthUrl, { margin: 1, width: 220 });
+    res.json({
+      secret:     result.secret,
+      otpauthUrl: result.otpauthUrl,
+      qrDataUrl,
+    });
+  } catch (err) {
+    logger.error({ err, empId: challenge.empId }, 'Login-time MFA enrollment start failed');
+    res.status(500).json({ error: 'Could not start MFA enrollment' });
+  }
+}
+
+export async function localLoginMfaEnrollConfirmHandler(req: Request, res: Response): Promise<void> {
+  const parsed = enrollConfirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid enrollment confirmation' });
+    return;
+  }
+
+  const key = `${MFA_ENROLL_CHALLENGE_PREFIX}${parsed.data.enrollChallengeId}`;
+  const challenge = await loadEnrollChallenge(parsed.data.enrollChallengeId);
+  if (!challenge) {
+    res.status(401).json({ error: 'Enrollment session expired — sign in again' });
+    return;
+  }
+
+  try {
+    const { backupCodes } = await confirmEnrollment(challenge.empId, parsed.data.code);
+    await redis.del(key);
+    await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-ok');
+
+    const sessionId = await createSession({
+      empId:     challenge.empId,
+      email:     challenge.email,
+      role:      challenge.role,
+      iss:       'local',
+      sub:       `local:${challenge.accountId}`,
+      ttlHours:  config.session.ttlCorporateHours,
+      ip:        getClientIp(req),
+      userAgent: req.get('user-agent') ?? '',
+    });
+
+    await touchLocalLogin(challenge.accountId);
+    setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
+    logger.info({ empId: challenge.empId, email: challenge.email }, 'Local login after MFA enrollment');
+    res.json({ success: true, redirect: '/', backupCodes });
+  } catch (err) {
+    await logAttempt(challenge.email, getClientIp(req), false, 'mfa-enroll-bad-code');
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Verification failed' });
+  }
 }

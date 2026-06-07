@@ -59,7 +59,7 @@ import {
   requireAuth,
 } from './auth/middleware.js';
 import { googleLoginHandler } from './auth/login-routes.js';
-import { localLoginHandler, localLoginMfaVerifyHandler } from './auth/local-auth.js';
+import { localLoginHandler, localLoginMfaEnrollConfirmHandler, localLoginMfaEnrollHandler, localLoginMfaVerifyHandler } from './auth/local-auth.js';
 import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
 const WEB_ROOT = path.join(process.cwd(), 'web');
@@ -149,8 +149,10 @@ const loginRateLimiter = rateLimit({
   windowMs: 60_000,
   keyFn:    (req) => `${getClientIp(req)}:${(req.body && req.body.email) || 'unknown'}`,
 });
-app.post('/auth/local/login',            loginRateLimiter, (req, res) => { void localLoginHandler(req, res); });
-app.post('/auth/local/login/mfa-verify', loginRateLimiter, (req, res) => { void localLoginMfaVerifyHandler(req, res); });
+app.post('/auth/local/login',                    loginRateLimiter, (req, res) => { void localLoginHandler(req, res); });
+app.post('/auth/local/login/mfa-verify',         loginRateLimiter, (req, res) => { void localLoginMfaVerifyHandler(req, res); });
+app.post('/auth/local/login/mfa-enroll',         loginRateLimiter, (req, res) => { void localLoginMfaEnrollHandler(req, res); });
+app.post('/auth/local/login/mfa-enroll/confirm', loginRateLimiter, (req, res) => { void localLoginMfaEnrollConfirmHandler(req, res); });
 
 // ---------------------------------------------------------------------------
 // SAML IdP (enterprise application SSO)

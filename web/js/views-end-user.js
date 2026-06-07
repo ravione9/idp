@@ -109,6 +109,61 @@ export function renderLogin() {
 
   const panel = root.querySelector('.auth-panel');
 
+  function renderMfaEnrollStep(enrollChallengeId, email) {
+    const card = el(`
+      <div class="auth-card">
+        <h2>Set up two-factor authentication</h2>
+        <p class="muted">MFA is required for ${esc(email)}. Scan the QR code with Google Authenticator, Authy, or 1Password.</p>
+        <div id="enroll-error"></div>
+        <div id="enroll-loading" class="muted">Loading setup…</div>
+        <div id="enroll-body" hidden></div>
+      </div>
+    `);
+    panel.replaceChildren(card);
+    const errEl = card.querySelector('#enroll-error');
+    const bodyEl = card.querySelector('#enroll-body');
+    const loadingEl = card.querySelector('#enroll-loading');
+
+    api.localLoginMfaEnroll(enrollChallengeId).then((r) => {
+      loadingEl.hidden = true;
+      bodyEl.hidden = false;
+      bodyEl.innerHTML = `
+        <img src="${esc(r.qrDataUrl)}" alt="" style="background:white;padding:0.5rem;border-radius:8px;display:block;margin:0 auto" />
+        <p class="subtitle" style="margin-top:0.75rem;text-align:center">Or enter this secret: <code>${esc(r.secret)}</code></p>
+        <form id="enroll-confirm-form" style="margin-top:1rem">
+          <div class="field"><label>6-digit code</label>
+            <input name="code" required pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg">Verify and sign in</button>
+        </form>
+        <div id="enroll-confirm-result"></div>`;
+      bodyEl.querySelector('#enroll-confirm-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const out = bodyEl.querySelector('#enroll-confirm-result');
+        out.innerHTML = '';
+        try {
+          const code = new FormData(e.target).get('code');
+          const r2 = await api.localLoginMfaEnrollConfirm(enrollChallengeId, code);
+          out.innerHTML = `<div class="alert alert-success" style="margin-top:1rem">Two-factor enabled. Save your backup codes — shown only once.</div>
+            <div class="alert alert-warning" style="margin-top:0.5rem"><div>
+              <div style="font-weight:600;margin-bottom:0.5rem">Backup codes</div>
+              <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.4rem;font-family:var(--font-mono);font-size:0.9rem">
+                ${r2.backupCodes.map((c) => `<div>${esc(c)}</div>`).join('')}
+              </div></div></div>
+            <button type="button" class="btn btn-primary btn-block btn-lg" id="enroll-done" style="margin-top:1rem">Continue</button>`;
+          out.querySelector('#enroll-done').addEventListener('click', () => {
+            location.href = returnTo;
+          });
+        } catch (err) {
+          out.innerHTML = `<div class="alert alert-error" style="margin-top:1rem">${esc(err.message)}</div>`;
+        }
+      });
+    }).catch((err) => {
+      loadingEl.hidden = true;
+      errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    });
+  }
+
   function renderMfaStep(challengeId, email) {
     const card = el(`
       <div class="auth-card">
@@ -172,6 +227,10 @@ export function renderLogin() {
       const password = new FormData(e.target).get('password');
       try {
         const r = await api.localLogin(email, password);
+        if (r && r.enrollRequired && r.enrollChallengeId) {
+          renderMfaEnrollStep(r.enrollChallengeId, email);
+          return;
+        }
         if (r && r.mfaRequired && r.challengeId) {
           renderMfaStep(r.challengeId, email);
           return;

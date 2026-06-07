@@ -204,11 +204,15 @@ A bootstrap account is provisioned from `MASTER_ADMIN_EMAIL` + `MASTER_ADMIN_PAS
   1. `POST /auth/local/login {email, password}` → returns `{mfaRequired:true, challengeId}`.
   2. UI prompts for 6-digit code (or backup code).
   3. `POST /auth/local/login/mfa-verify {challengeId, code}` → session issued.
-- Challenge lives in Redis with 5-minute TTL.
+- Login flow when MFA is **required but not yet enrolled**:
+  1. `POST /auth/local/login {email, password}` → returns `{enrollRequired:true, enrollChallengeId}` (password verified; no session yet).
+  2. UI shows QR / manual secret via `POST /auth/local/login/mfa-enroll {enrollChallengeId}` (no auth cookie required).
+  3. User confirms TOTP → `POST /auth/local/login/mfa-enroll/confirm {enrollChallengeId, code}` → MFA enabled, backup codes returned, session issued.
+- MFA verify and enroll challenges live in Redis with 5-minute TTL.
 
 ### 5.5 Rate limiting
 
-`/auth/local/login` and `/auth/local/login/mfa-verify` are rate limited at **10 requests / minute / (IP+email)** via in-process sliding window (`src/auth/rate-limit.ts`).
+`/auth/local/login`, `/auth/local/login/mfa-verify`, `/auth/local/login/mfa-enroll`, and `/auth/local/login/mfa-enroll/confirm` are rate limited at **10 requests / minute / (IP+email or IP+challenge)** via in-process sliding window (`src/auth/rate-limit.ts`).
 Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 ### 5.6 Adaptive / Risk-based Authentication
@@ -264,7 +268,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 2. Adaptive engine evaluates context → `ALLOW / MFA / STEP_UP / BLOCK`.
 3. `BLOCK` → HTTP 403 `ADAPTIVE_BLOCKED` — login rejected immediately.
 4. `MFA` or `STEP_UP` → MFA challenge issued (`{mfaRequired:true, challengeId, stepUp}`).
-   - If user has not enrolled TOTP → HTTP 403 `MFA_ENROLL_REQUIRED`.
+   - If user has not enrolled TOTP → `{enrollRequired:true, enrollChallengeId}` and inline enrollment UI (QR + confirm).
 5. `ALLOW` and user has TOTP enrolled → MFA challenge issued (preserves existing voluntary MFA).
 6. `ALLOW` and no TOTP → session issued directly.
 
@@ -432,8 +436,10 @@ To add a new migration:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/auth/local/login` | Local password (returns session OR MFA challenge) |
+| `POST` | `/auth/local/login` | Local password (returns session OR MFA challenge OR enroll challenge) |
 | `POST` | `/auth/local/login/mfa-verify` | Submit TOTP / backup code |
+| `POST` | `/auth/local/login/mfa-enroll` | Start TOTP enrollment during login (QR + secret; no session) |
+| `POST` | `/auth/local/login/mfa-enroll/confirm` | Confirm TOTP during login → enable MFA + issue session |
 | `GET`  | `/auth/google` `/auth/google/callback` | Google Workspace OIDC |
 | `POST` | `/auth/logout` | End current session |
 | `GET`  | `/auth/zoho` `/auth/zoho/callback` | **Removed** — returns HTTP 410 Gone (Zoho Mail is now a SAML SP) |
@@ -537,7 +543,7 @@ web/
 
 ### 9.2 Layout
 
-- **Login screen** — split: brand hero (gradient) + sign-in card. **Identity-first flow**: email step → password step (avatar + "Not you?" link) → optional MFA challenge inline. Google SSO button on email step.
+- **Login screen** — split: brand hero (gradient) + sign-in card. **Identity-first flow**: email step → password step (avatar + "Not you?" link) → optional MFA verify or MFA enrollment (QR) inline when required. Google SSO button on email step.
 - **Console** — fixed top primary nav + contextual left sidebar (user or admin mode).
 - **Routing** — SPA state is reflected in the URL: `/?v=<route>` (e.g. `users`, `settings`, `applications`) with optional `?tab=<subtab>` (e.g. `sessions`, `prebuilt`, `favs`). A full page refresh restores the same view and sub-tab. Per-page search/filter text is persisted in `sessionStorage` via `persistSearch()` and re-applied on load.
 - **Admin → Authentication** — shows Google OIDC status and supports SUPER_ADMIN save of Client ID / Secret / Hosted Domain (or pasted OAuth web-client JSON) into DB overrides.
@@ -807,6 +813,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-06-07 — Login-time MFA enrollment for enforced users
+
+**Why** — Users with MFA enforced by policy saw a dead-end error on the password step instead of being guided to enroll TOTP before sign-in.
+
+**What changed:**
+
+- **Updated:** `src/auth/local-auth.ts` — password OK + MFA required but not enrolled now returns `{enrollRequired, enrollChallengeId}` instead of HTTP 403; added Redis-backed `POST /auth/local/login/mfa-enroll` and `POST /auth/local/login/mfa-enroll/confirm` (no session cookie required until confirm succeeds).
+- **Updated:** `web/js/views-end-user.js` — login flow renders inline QR enrollment step after password verification.
+- **Updated:** `web/js/api.js` — client helpers for login-time MFA enrollment endpoints.
 
 ### TBD — 2026-06-07 — Avoid false adaptive blocks before MFA enrollment
 
