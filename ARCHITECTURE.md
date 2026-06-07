@@ -904,7 +904,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
-### (pending) — 2026-06-07 — AD-synced login + password writeback reliability
+### `e6b2ee2` — 2026-06-07 — AD-synced login + password writeback reliability
 
 **Why** — Employees imported from AD could not sign in at `/login` (no `local_accounts` row) and admin password reset often failed to update AD when the connector used plain LDAP or identity links were missing.
 
