@@ -301,6 +301,71 @@ router.post('/:empId/mfa/regenerate-codes', async (req: Request, res: Response):
 });
 
 // ---------------------------------------------------------------------------
+// POST /:empId/mfa/enforce  — set or clear MFA enforcement for one user
+// ---------------------------------------------------------------------------
+router.post('/:empId/mfa/enforce', async (req: Request, res: Response): Promise<void> => {
+  const { empId } = req.params;
+  const enforce: boolean = req.body?.enforce !== false;
+  const emp = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees WHERE emp_id = ?`,
+    [empId],
+  );
+  if (!emp) { res.status(404).json({ error: 'Employee not found' }); return; }
+
+  const adminId = (req as unknown as { session?: { emp_id?: string } }).session?.emp_id ?? 'system';
+  if (enforce) {
+    await query(
+      `UPDATE employees SET mfa_enforced = 1, mfa_enforced_at = NOW(), mfa_enforced_by = ? WHERE emp_id = ?`,
+      [adminId, emp.emp_id],
+    );
+  } else {
+    await query(
+      `UPDATE employees SET mfa_enforced = 0, mfa_enforced_at = NULL, mfa_enforced_by = NULL WHERE emp_id = ?`,
+      [emp.emp_id],
+    );
+  }
+  logger.info({ empId: emp.emp_id, enforce, by: adminId }, 'Admin set MFA enforcement for user');
+  res.json({ success: true, mfa_enforced: enforce });
+});
+
+// ---------------------------------------------------------------------------
+// GET  /mfa-policy   — read global MFA policy settings
+// POST /mfa-policy   — update global MFA policy settings
+// ---------------------------------------------------------------------------
+router.get('/mfa-policy', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const rows = await query<{ policy_key: string; policy_value: string }>(
+      `SELECT policy_key, policy_value FROM mfa_policy`,
+      [],
+    );
+    const policy: Record<string, unknown> = {};
+    for (const r of rows) {
+      try { policy[r.policy_key] = JSON.parse(r.policy_value); } catch { policy[r.policy_key] = r.policy_value; }
+    }
+    res.json({ data: policy });
+  } catch {
+    res.json({ data: {} });
+  }
+});
+
+router.post('/mfa-policy', async (req: Request, res: Response): Promise<void> => {
+  const adminId = (req as unknown as { session?: { emp_id?: string } }).session?.emp_id ?? 'system';
+  const updates = req.body as Record<string, unknown>;
+  const allowed = new Set(['global_enforce', 'enforce_for_admins', 'grace_period_hours', 'allowed_methods']);
+  for (const [key, val] of Object.entries(updates)) {
+    if (!allowed.has(key)) continue;
+    await query(
+      `INSERT INTO mfa_policy (policy_key, policy_value, updated_by)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE policy_value = VALUES(policy_value), updated_by = VALUES(updated_by)`,
+      [key, JSON.stringify(val), adminId],
+    );
+  }
+  logger.info({ by: adminId, updates }, 'Admin updated MFA global policy');
+  res.json({ success: true });
+});
+
+// ---------------------------------------------------------------------------
 // POST /local  — create a brand-new local employee + local account
 // ---------------------------------------------------------------------------
 const createLocalSchema = z.object({

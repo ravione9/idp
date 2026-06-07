@@ -734,6 +734,22 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### TBD — 2026-06-08 — MFA enforcement policy and per-user MFA management
+
+**Why** — Admins needed a way to require MFA for specific users or globally, and to reset/disable MFA directly from the user profile panel without the user needing to act.
+
+**What changed:**
+
+- **Migration 026** — adds `employees.mfa_enforced`, `mfa_enforced_at`, `mfa_enforced_by` columns and a new `mfa_policy` table for global settings (global_enforce, enforce_for_admins, grace_period_hours, allowed_methods).
+- **New API routes** (`/api/admin/users`):
+  - `POST /:empId/mfa/enforce` — set or clear per-user MFA enforcement flag.
+  - `GET  /mfa-policy` — read global MFA policy key/value settings.
+  - `POST /mfa-policy` — update global MFA policy settings.
+- **MFA Methods page** (`Authentication → Strong Auth Methods`) — redesigned with: global enforcement policy form, per-user MFA search with Enforce / Remove Enforcement / Reset / Disable buttons.
+- **User Profile Panel → MFA tab** — added Enforce MFA, Remove Enforcement, and Reset MFA (force re-enroll) buttons alongside existing Disable and Enroll actions.
+
+---
+
 ### TBD — 2026-06-07 — Separate portal administrator from job designation
 
 **Why** — `employees.role` holds HR/job designation (e.g. "Senior Executive - Human Capital") from directory sync. Portal console access (ADMIN / SUPER_ADMIN) is a separate duty and must not overwrite or display as designation.

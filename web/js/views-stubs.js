@@ -332,43 +332,251 @@ export async function viewIdentityProfiles(content) {
 
 // ─── 4. MFA Methods ───────────────────────────────────────────────────────────
 export async function viewMfaMethods(content) {
-  content.replaceChildren(el(`<div>${header('MFA Methods', 'Multi-factor authentication enrollment and policy')}<div id="mfa-area">${loading()}</div></div>`));
+  content.replaceChildren(el(`<div>
+    ${header('MFA Methods', 'Multi-factor authentication enrollment and enforcement policy')}
+    <div id="mfa-area">${loading()}</div>
+  </div>`));
   const wrap = content.firstChild;
-  try {
-    const status = await api.mfaStatus();
-    const methods = [
-      { key: 'totp', label: 'Authenticator App (TOTP)', badge: 'badge-success', badgeText: '● Live', desc: 'Time-based one-time passwords via Google Authenticator, Authy, etc.' },
-      { key: 'backup_codes', label: 'Backup Codes', badge: 'badge-success', badgeText: '● Live', desc: 'Single-use emergency recovery codes.' },
-      { key: 'webauthn', label: 'WebAuthn / Passkeys', badge: 'badge-info', badgeText: '◍ Schema', desc: 'Hardware security keys and biometric passkeys.' },
-      { key: 'email_otp', label: 'Email OTP', badge: 'badge-warning', badgeText: '○ Planned', desc: 'One-time code sent to registered email address.' },
-      { key: 'sms_otp', label: 'SMS OTP', badge: 'badge-warning', badgeText: '○ Planned', desc: 'One-time code sent via SMS.' },
-    ];
-    const enrolled = status?.methods || [];
-    const cards = methods.map(m => `
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
-          <strong>${esc(m.label)}</strong>
-          <span class="badge ${m.badge}">${m.badgeText}</span>
+
+  const methods = [
+    { key: 'totp',         label: 'Authenticator App (TOTP)', badge: 'badge-success', badgeText: '● Live',   desc: 'Time-based one-time passwords via Google Authenticator, Authy, etc.' },
+    { key: 'backup_codes', label: 'Backup Codes',             badge: 'badge-success', badgeText: '● Live',   desc: 'Single-use emergency recovery codes.' },
+    { key: 'webauthn',     label: 'WebAuthn / Passkeys',      badge: 'badge-info',    badgeText: '◍ Schema', desc: 'Hardware security keys and biometric passkeys.' },
+    { key: 'email_otp',    label: 'Email OTP',                badge: 'badge-warning', badgeText: '○ Planned',desc: 'One-time code sent to registered email address.' },
+    { key: 'sms_otp',      label: 'SMS OTP',                  badge: 'badge-warning', badgeText: '○ Planned',desc: 'One-time code sent via SMS.' },
+  ];
+
+  async function loadMfaPage() {
+    try {
+      const [status, policyRes] = await Promise.all([
+        api.mfaStatus().catch(() => ({})),
+        api.getMfaPolicy().catch(() => ({ data: {} })),
+      ]);
+      const policy = policyRes?.data || {};
+      const enrolled = status?.methods || [];
+      const liveOrSchemaCount = methods.filter(m => ['badge-success','badge-info'].includes(m.badge)).length;
+      const enrolledCount = enrolled.length;
+      const globalEnforce = !!policy['global_enforce'];
+      const enforceAdmins = policy['enforce_for_admins'] !== false;
+      const gracePeriod   = policy['grace_period_hours'] ?? 24;
+
+      const cards = methods.map(m => `
+        <div class="card" style="position:relative">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+            <strong>${esc(m.label)}</strong>
+            <span class="badge ${m.badge}">${m.badgeText}</span>
+          </div>
+          <p class="muted" style="font-size:0.875rem;margin-bottom:0.75rem">${esc(m.desc)}</p>
+          ${enrolled.includes(m.key)
+            ? '<span class="badge badge-success">● Enrolled</span>'
+            : '<span class="badge badge-neutral">Not enrolled</span>'}
+        </div>`).join('');
+
+      wrap.querySelector('#mfa-area').innerHTML = `
+        <!-- ── Stats ── -->
+        <div class="stat-grid" style="margin-bottom:1.5rem">
+          ${statCard('shieldCheck', 'Methods Enrolled',   enrolledCount,      status?.enabled ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Not active</span>', 'primary')}
+          ${statCard('check',       'Live / Schema',      liveOrSchemaCount,  'available now',            'success')}
+          ${statCard('bolt',        'Planned',            2,                  'arriving in next milestone','warning')}
+          ${statCard('shield',      'Global Enforce',     globalEnforce ? 'ON' : 'OFF', globalEnforce ? '<span class="badge badge-danger">MFA required for all</span>' : '<span class="badge badge-neutral">Off</span>', globalEnforce ? 'danger' : 'primary')}
         </div>
-        <p class="muted" style="font-size:0.875rem;margin-bottom:0.75rem">${esc(m.desc)}</p>
-        ${enrolled.includes(m.key) ? '<span class="badge badge-success">Enrolled</span>' : '<span class="badge badge-neutral">Not enrolled</span>'}
-      </div>`).join('');
-    const liveOrSchemaCount = methods.filter(m=>['badge-success','badge-info'].includes(m.badge)).length;
-    const enrolledCount = enrolled.length;
-    const enrollmentBadge = status?.enabled
-      ? '<span class="badge badge-success">Active</span>'
-      : status?.enrolled
-        ? '<span class="badge badge-warning">Pending</span>'
-        : '<span class="badge badge-neutral">Not enrolled</span>';
-    wrap.querySelector('#mfa-area').innerHTML = `
-      <div class="stat-grid" style="margin-bottom:1.5rem">
-        ${statCard('shieldCheck', 'Methods Enrolled', enrolledCount,    enrollmentBadge,                'primary')}
-        ${statCard('check',       'Live / Schema',   liveOrSchemaCount, 'available now',                'success')}
-        ${statCard('bolt',        'Planned',         2,                 'arriving in next milestone',   'warning')}
-      </div>
-      <div class="grid-3">${cards}</div>
-      <div style="margin-top:1rem"><a href="/?v=settings" class="btn btn-primary">Manage Enrollment →</a></div>`;
-  } catch(e) { wrap.querySelector('#mfa-area').innerHTML = errHtml(e.message); }
+
+        <!-- ── Method cards ── -->
+        <div class="section-title">Available Methods</div>
+        <div class="grid-3" style="margin-bottom:1.5rem">${cards}</div>
+
+        <!-- ── Enforce Policy ── -->
+        <div class="card" style="margin-bottom:1.25rem;border-left:3px solid var(--primary)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem">
+            <div>
+              <div style="font-weight:700;font-size:1rem">MFA Enforcement Policy</div>
+              <p class="muted" style="font-size:0.85rem;margin:0">Control who must complete MFA before accessing the portal.</p>
+            </div>
+            <button class="btn btn-primary" id="save-policy-btn">Save Policy</button>
+          </div>
+          <div id="policy-msg" style="margin-bottom:0.75rem"></div>
+          <div class="grid-2" style="gap:1rem">
+            <div class="form-group">
+              <label class="form-label" style="font-weight:600">Global Enforcement</label>
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Require MFA for ALL users at login.</p>
+              <select class="form-select" id="policy-global">
+                <option value="1" ${globalEnforce?'selected':''}>Enabled — everyone must enroll MFA</option>
+                <option value="0" ${!globalEnforce?'selected':''}>Disabled — MFA is optional (unless per-user enforced)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" style="font-weight:600">Always Enforce for Admins</label>
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Admins and Super-Admins always require MFA.</p>
+              <select class="form-select" id="policy-admins">
+                <option value="1" ${enforceAdmins?'selected':''}>Yes — admins must always have MFA</option>
+                <option value="0" ${!enforceAdmins?'selected':''}>No — follow global policy only</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" style="font-weight:600">Grace Period (hours)</label>
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Allow login without MFA for this many hours after enforcement begins.</p>
+              <input class="form-input" type="number" id="policy-grace" value="${esc(String(gracePeriod))}" min="0" max="168" />
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Per-User MFA Management ── -->
+        <div class="card" style="margin-bottom:1.25rem">
+          <div style="font-weight:700;font-size:1rem;margin-bottom:0.25rem">Per-User MFA Management</div>
+          <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">Search a user to enforce, reset, or disable their MFA.</p>
+          <div style="display:flex;gap:0.6rem;align-items:flex-end;flex-wrap:wrap;margin-bottom:0.75rem">
+            <div class="form-group" style="flex:1;min-width:240px;margin:0">
+              <label class="form-label">Search user (name or email)</label>
+              <input class="form-input" id="mfa-user-search" placeholder="e.g. ravi.verma@lenskart.in" autocomplete="off" />
+            </div>
+          </div>
+          <div id="mfa-user-results"></div>
+          <div id="mfa-user-actions" style="display:none">
+            <div id="mfa-user-info" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem;background:var(--surface-3);border-radius:var(--radius);margin-bottom:0.75rem;flex-wrap:wrap">
+            </div>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+              <button class="btn btn-primary btn-sm" id="mfa-enforce-btn">🔒 Enforce MFA</button>
+              <button class="btn btn-secondary btn-sm" id="mfa-unenforce-btn">Remove Enforcement</button>
+              <button class="btn btn-secondary btn-sm" id="mfa-reset-btn">↺ Reset MFA (re-enroll)</button>
+              <button class="btn btn-danger btn-sm" id="mfa-disable-btn">Disable MFA</button>
+            </div>
+            <div id="mfa-action-msg" style="margin-top:0.5rem;font-size:0.85rem"></div>
+          </div>
+        </div>
+
+        <div style="margin-top:0.5rem">
+          <a href="/?v=settings" class="btn btn-secondary">My Enrollment →</a>
+        </div>`;
+
+      // ── Save policy ────────────────────────────────────────────────────────
+      wrap.querySelector('#save-policy-btn').addEventListener('click', async () => {
+        const msg = wrap.querySelector('#policy-msg');
+        msg.innerHTML = '';
+        try {
+          await api.updateMfaPolicy({
+            global_enforce:     parseInt(wrap.querySelector('#policy-global').value) === 1,
+            enforce_for_admins: parseInt(wrap.querySelector('#policy-admins').value) === 1,
+            grace_period_hours: parseInt(wrap.querySelector('#policy-grace').value) || 24,
+          });
+          msg.innerHTML = `<div class="alert alert-success">Policy saved successfully.</div>`;
+          await loadMfaPage();
+        } catch (e) { msg.innerHTML = errHtml(e.message); }
+      });
+
+      // ── Per-user search & actions ───────────────────────────────────────────
+      let selectedUser = null;
+      let searchTimer = null;
+
+      wrap.querySelector('#mfa-user-search').addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        selectedUser = null;
+        wrap.querySelector('#mfa-user-actions').style.display = 'none';
+        wrap.querySelector('#mfa-action-msg').textContent = '';
+        const q = wrap.querySelector('#mfa-user-search').value.trim();
+        if (q.length < 2) { wrap.querySelector('#mfa-user-results').innerHTML = ''; return; }
+        searchTimer = setTimeout(async () => {
+          try {
+            const r = await api.listUsersUnified(q, '', '', 10, 0);
+            const items = (r?.data || []);
+            if (!items.length) {
+              wrap.querySelector('#mfa-user-results').innerHTML = `<p class="muted" style="font-size:0.85rem;margin:0.3rem 0">No users found.</p>`;
+              return;
+            }
+            wrap.querySelector('#mfa-user-results').innerHTML = `
+              <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;max-height:220px;overflow-y:auto;margin-bottom:0.5rem">
+                ${items.map(u => `
+                  <div class="search-dropdown-item" style="padding:0.55rem 0.85rem;cursor:pointer;display:flex;align-items:center;gap:0.6rem;border-bottom:1px solid var(--border)"
+                    data-user='${JSON.stringify({ emp_id: u.emp_id, full_name: u.full_name, email: u.email_corp, mfa_enforced: !!u.mfa_enforced })}'>
+                    <span class="avatar" style="width:28px;height:28px;font-size:0.7rem;flex-shrink:0">${esc((u.full_name||'?').charAt(0).toUpperCase())}</span>
+                    <div>
+                      <div style="font-weight:600;font-size:0.875rem">${esc(u.full_name || u.emp_id)}</div>
+                      <div class="muted" style="font-size:0.75rem">${esc(u.email_corp || '')} · ${esc(u.emp_id)}</div>
+                    </div>
+                    ${u.mfa_enforced ? '<span class="badge badge-danger" style="margin-left:auto">Enforced</span>' : ''}
+                  </div>`).join('')}
+              </div>`;
+            wrap.querySelectorAll('.search-dropdown-item').forEach(item => {
+              item.addEventListener('mouseenter', () => { item.style.background = 'var(--surface-2)'; });
+              item.addEventListener('mouseleave', () => { item.style.background = ''; });
+              item.addEventListener('click', async () => {
+                selectedUser = JSON.parse(item.dataset.user);
+                wrap.querySelector('#mfa-user-search').value = `${selectedUser.full_name} — ${selectedUser.email}`;
+                wrap.querySelector('#mfa-user-results').innerHTML = '';
+                wrap.querySelector('#mfa-action-msg').textContent = '';
+
+                // Fetch live MFA status
+                let mfaStatus = {};
+                try { mfaStatus = await api.adminMfaStatus(selectedUser.emp_id); } catch {}
+                const enrolled2 = mfaStatus?.enabled ? '✓ Enrolled' : 'Not enrolled';
+                wrap.querySelector('#mfa-user-info').innerHTML = `
+                  <span class="avatar" style="width:36px;height:36px;font-size:0.85rem;flex-shrink:0">${esc((selectedUser.full_name||'?').charAt(0).toUpperCase())}</span>
+                  <div>
+                    <div style="font-weight:600">${esc(selectedUser.full_name)}</div>
+                    <div class="muted" style="font-size:0.78rem">${esc(selectedUser.email)}</div>
+                  </div>
+                  <div style="margin-left:auto;display:flex;gap:0.4rem;flex-wrap:wrap">
+                    ${mfaStatus?.enabled ? '<span class="badge badge-success">MFA Active</span>' : '<span class="badge badge-neutral">No MFA</span>'}
+                    ${selectedUser.mfa_enforced ? '<span class="badge badge-danger">Enforced</span>' : '<span class="badge badge-neutral">Not Enforced</span>'}
+                  </div>`;
+                wrap.querySelector('#mfa-user-actions').style.display = 'block';
+              });
+            });
+          } catch (e) {
+            wrap.querySelector('#mfa-user-results').innerHTML = errHtml(e.message);
+          }
+        }, 300);
+      });
+
+      function setActionMsg(msg2, isError = false) {
+        const el2 = wrap.querySelector('#mfa-action-msg');
+        el2.innerHTML = isError
+          ? `<span style="color:var(--danger)">${esc(msg2)}</span>`
+          : `<span style="color:var(--success)">${esc(msg2)}</span>`;
+      }
+
+      wrap.querySelector('#mfa-enforce-btn').addEventListener('click', async () => {
+        if (!selectedUser) return;
+        if (!confirm(`Enforce MFA for ${selectedUser.full_name}? They will be required to enroll at next login.`)) return;
+        try {
+          await api.adminMfaEnforce(selectedUser.emp_id, true);
+          selectedUser.mfa_enforced = true;
+          setActionMsg(`✓ MFA enforcement enabled for ${selectedUser.full_name}`);
+        } catch (e) { setActionMsg(e.message, true); }
+      });
+
+      wrap.querySelector('#mfa-unenforce-btn').addEventListener('click', async () => {
+        if (!selectedUser) return;
+        try {
+          await api.adminMfaEnforce(selectedUser.emp_id, false);
+          selectedUser.mfa_enforced = false;
+          setActionMsg(`✓ MFA enforcement removed for ${selectedUser.full_name}`);
+        } catch (e) { setActionMsg(e.message, true); }
+      });
+
+      wrap.querySelector('#mfa-reset-btn').addEventListener('click', async () => {
+        if (!selectedUser) return;
+        if (!confirm(`Reset MFA for ${selectedUser.full_name}? This will disable their current MFA so they can re-enroll.`)) return;
+        try {
+          await api.adminMfaDisable(selectedUser.emp_id);
+          setActionMsg(`✓ MFA reset for ${selectedUser.full_name}. They can now re-enroll on next login.`);
+        } catch (e) { setActionMsg(e.message, true); }
+      });
+
+      wrap.querySelector('#mfa-disable-btn').addEventListener('click', async () => {
+        if (!selectedUser) return;
+        if (!confirm(`Disable MFA for ${selectedUser.full_name}? This removes their MFA entirely. Are you sure?`)) return;
+        try {
+          await api.adminMfaDisable(selectedUser.emp_id);
+          setActionMsg(`✓ MFA disabled for ${selectedUser.full_name}.`);
+        } catch (e) { setActionMsg(e.message, true); }
+      });
+
+    } catch(e) {
+      wrap.querySelector('#mfa-area').innerHTML = errHtml(e.message);
+    }
+  }
+
+  await loadMfaPage();
 }
 
 // ─── 5. Adaptive Auth ─────────────────────────────────────────────────────────
@@ -3016,6 +3224,8 @@ function initUsersTab(panel, me = null) {
 
       // ── MFA tab ─────────────────────────────────────────────────────────────
       else if (tab === 'mfa') {
+        const emp = profileData.employee || {};
+        const isEnforced = !!(emp.mfa_enforced);
         const statusBadge = mfaStatus.enabled
           ? `<span class="badge badge-success">Enabled</span>`
           : mfaStatus.enrolled
@@ -3024,21 +3234,73 @@ function initUsersTab(panel, me = null) {
 
         body.innerHTML = `
           <p class="pp-section-title">Multi-factor Authentication</p>
-          <div class="pp-attr-grid">
+          <div class="pp-attr-grid" style="margin-bottom:1rem">
             <div class="pp-attr"><span class="pp-attr-label">Status</span><span class="pp-attr-value">${statusBadge}</span></div>
+            <div class="pp-attr"><span class="pp-attr-label">Enforcement</span><span class="pp-attr-value">
+              ${isEnforced
+                ? '<span class="badge badge-danger">🔒 Enforced</span>'
+                : '<span class="badge badge-neutral">Not enforced</span>'}
+            </span></div>
             <div class="pp-attr"><span class="pp-attr-label">Backup Codes Left</span><span class="pp-attr-value">${Number(mfaStatus.remainingBackupCodes || 0)}</span></div>
             <div class="pp-attr"><span class="pp-attr-label">Last Used</span><span class="pp-attr-value">${mfaStatus.lastUsedAt ? fmtDate(mfaStatus.lastUsedAt) : '—'}</span></div>
           </div>
-          <div id="pp-mfa-actions" style="margin-top:1rem"></div>
-          <div id="pp-mfa-msg" style="margin-top:1rem"></div>`;
+
+          <!-- Enforcement actions -->
+          <div style="background:var(--surface-3);border-radius:var(--radius);padding:0.85rem;margin-bottom:1rem;border:1px solid var(--border)">
+            <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.5rem">🔒 MFA Enforcement</div>
+            <p class="muted" style="font-size:0.82rem;margin-bottom:0.65rem">
+              Enforced users must complete MFA setup before accessing the portal, regardless of global policy.
+            </p>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+              <button class="btn btn-sm ${isEnforced ? 'btn-secondary' : 'btn-primary'}" id="pp-mfa-enforce">
+                ${isEnforced ? '✓ Enforcement Active' : '🔒 Enforce MFA for this user'}
+              </button>
+              ${isEnforced ? `<button class="btn btn-sm btn-ghost" id="pp-mfa-unenforce">Remove Enforcement</button>` : ''}
+            </div>
+          </div>
+
+          <!-- MFA management actions -->
+          <div style="margin-bottom:0.75rem">
+            <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.5rem">MFA Management</div>
+            <div id="pp-mfa-actions" style="display:flex;gap:0.5rem;flex-wrap:wrap"></div>
+          </div>
+          <div id="pp-mfa-msg" style="margin-top:0.75rem"></div>`;
 
         const actionsEl = body.querySelector('#pp-mfa-actions');
         const msgEl = body.querySelector('#pp-mfa-msg');
 
+        // Enforce / un-enforce
+        body.querySelector('#pp-mfa-enforce')?.addEventListener('click', async () => {
+          if (isEnforced) return;
+          if (!confirm(`Enforce MFA for ${emp.full_name || empId}? They will be required to enroll at next login.`)) return;
+          try {
+            await api.adminMfaEnforce(empId, true);
+            msgEl.innerHTML = `<div class="pp-alert success">✓ MFA enforcement enabled. Reloading…</div>`;
+            setTimeout(() => reloadProfile(true), 1000);
+          } catch (e) { msgEl.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
+        });
+        body.querySelector('#pp-mfa-unenforce')?.addEventListener('click', async () => {
+          try {
+            await api.adminMfaEnforce(empId, false);
+            msgEl.innerHTML = `<div class="pp-alert success">✓ MFA enforcement removed. Reloading…</div>`;
+            setTimeout(() => reloadProfile(true), 1000);
+          } catch (e) { msgEl.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
+        });
+
         if (mfaStatus.enabled) {
           actionsEl.innerHTML = `
-            <button class="btn btn-secondary" id="pp-mfa-regen">Regenerate Backup Codes</button>
-            <button class="btn btn-danger" id="pp-mfa-disable" style="margin-left:0.5rem">Disable MFA</button>`;
+            <button class="btn btn-sm btn-secondary" id="pp-mfa-reset">↺ Reset MFA (force re-enroll)</button>
+            <button class="btn btn-sm btn-secondary" id="pp-mfa-regen">Regenerate Backup Codes</button>
+            <button class="btn btn-sm btn-danger" id="pp-mfa-disable">Disable MFA</button>`;
+
+          body.querySelector('#pp-mfa-reset').addEventListener('click', async () => {
+            if (!confirm(`Reset MFA for ${emp.full_name || empId}? This disables their current MFA so they can re-enroll.`)) return;
+            try {
+              await api.adminMfaDisable(empId);
+              msgEl.innerHTML = `<div class="pp-alert success">✓ MFA reset. User can now re-enroll.</div>`;
+              reloadProfile(true);
+            } catch (e) { msgEl.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
+          });
 
           body.querySelector('#pp-mfa-regen').addEventListener('click', async () => {
             if (!confirm('Regenerate backup codes? Existing codes will stop working immediately.')) return;
@@ -3051,58 +3313,48 @@ function initUsersTab(panel, me = null) {
                 </div>
               </div>`;
               reloadProfile(true);
-            } catch (e) {
-              msgEl.innerHTML = `<div class="pp-alert error">Failed to regenerate codes: ${esc(e.message)}</div>`;
-            }
+            } catch (e) { msgEl.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
           });
 
           body.querySelector('#pp-mfa-disable').addEventListener('click', async () => {
-            if (!confirm('Disable MFA for this user? They will login without second factor until re-enabled.')) return;
+            if (!confirm('Disable MFA for this user? They will login without second factor.')) return;
             try {
               await api.adminMfaDisable(empId);
               msgEl.innerHTML = `<div class="pp-alert success">MFA disabled for user.</div>`;
               reloadProfile(true);
-            } catch (e) {
-              msgEl.innerHTML = `<div class="pp-alert error">Failed to disable MFA: ${esc(e.message)}</div>`;
-            }
+            } catch (e) { msgEl.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
           });
+
         } else {
           actionsEl.innerHTML = `
-            <p class="muted" style="font-size:0.85rem;margin-bottom:0.75rem">
-              Start enrollment to generate a QR code. Ask the user to scan and share the 6-digit code so you can confirm setup.
-            </p>
-            <button class="btn btn-primary" id="pp-mfa-start">Start MFA Enrollment</button>
-            <div id="pp-mfa-enroll" style="margin-top:1rem"></div>`;
+            <button class="btn btn-sm btn-primary" id="pp-mfa-start">Start MFA Enrollment for User</button>`;
+          const enrollDiv = document.createElement('div');
+          enrollDiv.style.marginTop = '1rem';
+          body.appendChild(enrollDiv);
 
           body.querySelector('#pp-mfa-start').addEventListener('click', async () => {
-            const enrollEl = body.querySelector('#pp-mfa-enroll');
             const btn = body.querySelector('#pp-mfa-start');
-            btn.disabled = true;
-            btn.textContent = 'Generating…';
+            btn.disabled = true; btn.textContent = 'Generating…';
             try {
               const r = await api.adminMfaEnroll(empId);
-              enrollEl.innerHTML = `
+              enrollDiv.innerHTML = `
                 <div style="display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap">
                   <img src="${r.qrDataUrl}" alt="MFA QR" style="width:180px;height:180px;border:1px solid var(--border);border-radius:8px;background:#fff">
                   <div style="flex:1;min-width:240px">
-                    <div class="muted" style="font-size:0.8rem;margin-bottom:0.35rem">Manual secret</div>
+                    <div class="muted" style="font-size:0.8rem;margin-bottom:0.35rem">Manual secret (if can't scan)</div>
                     <code style="display:block;padding:0.5rem;border-radius:6px;background:rgba(0,0,0,0.05);word-break:break-all">${esc(r.secret)}</code>
                     <div style="margin-top:0.85rem">
-                      <label class="form-label">Verification code</label>
-                      <input class="form-input" id="pp-mfa-code" maxlength="6" placeholder="6-digit code">
-                      <button class="btn btn-success" id="pp-mfa-confirm" style="margin-top:0.5rem">Confirm MFA</button>
+                      <label class="form-label">Verification code (6 digits)</label>
+                      <input class="form-input" id="pp-mfa-code" maxlength="6" placeholder="123456">
+                      <button class="btn btn-primary btn-sm" id="pp-mfa-confirm" style="margin-top:0.5rem">Confirm MFA Setup</button>
                     </div>
                     <div id="pp-mfa-confirm-msg" style="margin-top:0.75rem"></div>
                   </div>
                 </div>`;
-
-              enrollEl.querySelector('#pp-mfa-confirm').addEventListener('click', async () => {
-                const code = enrollEl.querySelector('#pp-mfa-code').value.trim();
-                const out = enrollEl.querySelector('#pp-mfa-confirm-msg');
-                if (!/^\d{6}$/.test(code)) {
-                  out.innerHTML = `<div class="pp-alert error">Code must be 6 digits.</div>`;
-                  return;
-                }
+              enrollDiv.querySelector('#pp-mfa-confirm').addEventListener('click', async () => {
+                const code = enrollDiv.querySelector('#pp-mfa-code').value.trim();
+                const out = enrollDiv.querySelector('#pp-mfa-confirm-msg');
+                if (!/^\d{6}$/.test(code)) { out.innerHTML = `<div class="pp-alert error">Code must be 6 digits.</div>`; return; }
                 try {
                   const r2 = await api.adminMfaConfirm(empId, code);
                   out.innerHTML = `<div class="pp-alert warning">
@@ -3112,15 +3364,10 @@ function initUsersTab(panel, me = null) {
                     </div>
                   </div>`;
                   reloadProfile(true);
-                } catch (e) {
-                  out.innerHTML = `<div class="pp-alert error">Failed to confirm MFA: ${esc(e.message)}</div>`;
-                }
+                } catch (e) { out.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
               });
-            } catch (e) {
-              enrollEl.innerHTML = `<div class="pp-alert error">Failed to start enrollment: ${esc(e.message)}</div>`;
-            }
-            btn.disabled = false;
-            btn.textContent = 'Start MFA Enrollment';
+            } catch (e) { enrollDiv.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
+            btn.disabled = false; btn.textContent = 'Start MFA Enrollment for User';
           });
         }
       }
