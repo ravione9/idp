@@ -726,6 +726,19 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, and summary.
 
+### f632254 — 2026-06-07 — Persist SPA route and search across page refresh
+
+**Why** — Refreshing the console reset the active page/sub-tab and cleared in-progress search filters.
+
+**What changed:**
+
+- **`web/js/ui.js`** — `syncAppUrl()` / `getAppTab()` for URL-backed routing; `persistSearch()` dispatches `input` after restore so filters re-apply.
+- **`web/js/app.js`** — router reads/writes `?v=` + `?tab=` on navigate and startup; sub-tab defaults for applications, settings, home, audit, directory sync.
+- **`web/js/views-end-user.js`**, **`web/js/views-admin.js`**, **`web/js/views-stubs.js`** — settings, audit, directory sync, and home tabs sync URL; search boxes wired after listeners.
+- **`web/index.html`** — cache-bust query string for refreshed assets.
+
+---
+
 ### 43827f3 — 2026-06-07 — Session UI fixes, search persistence, agent cleanup
 
 **Why** — Post-refactor verification found a sessions table column bug, stale docs/dead agent code, and missing Cloudflare-aware IP capture; search boxes lost typed text on refresh.
