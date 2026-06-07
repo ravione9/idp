@@ -12,13 +12,6 @@ import { parseGoogleHostedDomains } from '../auth/google-domains.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('SUPER_ADMIN'));
-
-// GET /
-router.get('/', asyncHandler(async (_req: Request, res: Response) => {
-  const row = await queryOne(`SELECT * FROM general_settings WHERE id = 1`, []);
-  res.json(row ?? { id: 1 });
-}));
 
 function readString(body: Record<string, unknown>, key: string): string | undefined {
   const raw = body[key];
@@ -54,7 +47,7 @@ function parseGoogleOauthClientJson(rawJson: string): { clientId: string; client
   return { clientId, clientSecret };
 }
 
-router.get('/google-oidc', asyncHandler(async (_req: Request, res: Response) => {
+router.get('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (_req: Request, res: Response) => {
   const cfg = await getGoogleOidcConfig();
   res.json({
     clientId: cfg.clientId,
@@ -66,7 +59,7 @@ router.get('/google-oidc', asyncHandler(async (_req: Request, res: Response) => 
   });
 }));
 
-router.put('/google-oidc', asyncHandler(async (req: Request, res: Response) => {
+router.put('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const oauthJson = readString(body, 'oauthClientJson');
   let jsonCreds: { clientId: string; clientSecret: string } | null = null;
@@ -82,9 +75,13 @@ router.put('/google-oidc', asyncHandler(async (req: Request, res: Response) => {
   const hostedDomains = parseGoogleHostedDomains(hostedDomainRaw);
   const hostedDomainStored = hostedDomains.join('\n');
 
-  if (!clientId || !clientSecret || !hostedDomains.length) {
+  if (!hostedDomains.length) {
+    res.status(400).json({ error: 'At least one Workspace domain is required.' });
+    return;
+  }
+  if (!clientId || !clientSecret) {
     res.status(400).json({
-      error: 'clientId, clientSecret, and at least one hosted domain are required (directly or from OAuth JSON).',
+      error: 'OAuth Client ID and Client Secret are required for portal Google sign-in.',
     });
     return;
   }
@@ -107,6 +104,14 @@ router.put('/google-oidc', asyncHandler(async (req: Request, res: Response) => {
     success: true,
     configured: isGoogleOidcConfigured({ clientId, clientSecret, hostedDomains }),
   });
+}));
+
+router.use(requireRole('SUPER_ADMIN'));
+
+// GET /
+router.get('/', asyncHandler(async (_req: Request, res: Response) => {
+  const row = await queryOne(`SELECT * FROM general_settings WHERE id = 1`, []);
+  res.json(row ?? { id: 1 });
 }));
 
 // PUT /

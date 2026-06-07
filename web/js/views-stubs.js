@@ -2329,21 +2329,43 @@ function initSourcesTab(panel) {
 
     const adConnFields = (meta.connectionFields || fieldList).map(renderConfigField).join('');
     const adScopeFields = (meta.scopeFields || []).map(renderConfigField).join('');
+    const redirectUri = `${window.location.origin}/auth/google/callback`;
+    const oidcClientId = esc(String(defaults.oidcClientId || ''));
+    const oidcHasSecret = defaults.oidcHasClientSecret ? true : false;
+
+    const googleAuthFields = `
+          <p class="muted" style="font-size:0.82rem;margin:0 0 1rem">OAuth <strong>Web client</strong> for <em>Continue with Google</em> on the login page. The service account on the Connection tab is for directory sync only.</p>
+          <div class="form-group" style="grid-column:1/-1">
+            <label class="form-label">OAuth Client ID</label>
+            <input class="form-input" id="cfg-oidcClientId" value="${oidcClientId}" placeholder="123456789.apps.googleusercontent.com">
+          </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label class="form-label">OAuth Client Secret</label>
+            <input class="form-input" id="cfg-oidcClientSecret" type="password" placeholder="${oidcHasSecret ? 'Saved (leave blank to keep current)' : 'GOCSPX-...'}">
+          </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label class="form-label">OAuth JSON (optional)</label>
+            <textarea class="form-textarea" id="cfg-oidcOAuthJson" rows="3" placeholder='Paste OAuth Web client JSON from Google Cloud Console'></textarea>
+          </div>
+          <div class="alert alert-info" style="font-size:0.8rem;margin-bottom:0">
+            In Google Cloud Console → Credentials → OAuth Web client, add redirect URI:<br>
+            <code style="font-size:0.75rem">${esc(redirectUri)}</code>
+          </div>`;
+
     const scopedFieldsBlock = useScopeTabs ? `
-        <div class="cfg-tab-bar" style="display:flex;gap:0.5rem;margin-bottom:1rem;border-bottom:1px solid var(--border)">
+        <div class="cfg-tab-bar" style="display:flex;gap:0.5rem;margin-bottom:1rem;border-bottom:1px solid var(--border);flex-wrap:wrap">
           <button type="button" class="cfg-tab btn btn-sm btn-secondary active" data-pane="conn" style="border-radius:6px 6px 0 0;margin-bottom:-1px">🔌 Connection</button>
+          ${isGoogle ? `<button type="button" class="cfg-tab btn btn-sm btn-secondary" data-pane="auth" style="border-radius:6px 6px 0 0;margin-bottom:-1px">🔑 Portal sign-in</button>` : ''}
           <button type="button" class="cfg-tab btn btn-sm btn-secondary" data-pane="scope" style="border-radius:6px 6px 0 0;margin-bottom:-1px">🎯 Sync Scope</button>
         </div>
         <div id="cfg-pane-conn" class="cfg-pane">
-          ${isGoogle ? `<div class="alert alert-info" style="font-size:0.8rem;margin-bottom:1rem;line-height:1.45">
-            <strong>Domain-wide delegation setup</strong> (one-time in Google):<br>
-            1) Cloud Console → Service account → enable <em>Domain-wide delegation</em><br>
-            2) Admin Console → Security → API controls → Domain-wide delegation → add the SA <strong>Client ID</strong> with scope:
+          <div style="display:grid;grid-template-columns:1fr;gap:0">${isGoogle ? googleConnFields : adConnFields}</div>
+          ${isGoogle ? `<div class="alert alert-info" style="font-size:0.8rem;margin-top:1rem;line-height:1.45">
+            <strong>Domain-wide delegation</strong> (one-time in Google): Cloud Console → Service account → enable delegation → Admin Console → API controls → add SA Client ID with scope
             <code style="font-size:0.72rem">https://www.googleapis.com/auth/admin.directory.user</code>
-            (add <code style="font-size:0.72rem">...group.readonly</code> only if you filter by Sync Groups)
           </div>` : ''}
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">${isGoogle ? googleConnFields : adConnFields}</div>
         </div>
+        ${isGoogle ? `<div id="cfg-pane-auth" class="cfg-pane" style="display:none">${googleAuthFields}</div>` : ''}
         <div id="cfg-pane-scope" class="cfg-pane" style="display:none">
           ${isGoogle
             ? '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">Choose which OUs, groups, and users to import. Leave all blank to sync the <strong>entire</strong> Google directory.</p>'
@@ -2408,6 +2430,8 @@ function initSourcesTab(panel) {
           tab.classList.remove('btn-secondary');
           const pane = tab.dataset.pane;
           bd.querySelector('#cfg-pane-conn').style.display = pane === 'conn' ? '' : 'none';
+          const authPane = bd.querySelector('#cfg-pane-auth');
+          if (authPane) authPane.style.display = pane === 'auth' ? '' : 'none';
           bd.querySelector('#cfg-pane-scope').style.display = pane === 'scope' ? '' : 'none';
         });
       });
@@ -2428,6 +2452,7 @@ function initSourcesTab(panel) {
         if (isEdit) {
           const data = collectFormData(bd, connectorType);
           await api.updateConnector(existingId, data);
+          if (isGoogle) await saveGooglePortalAuth(bd);
           const r = await api.testConnector(existingId);
           bd.querySelector('#cfg-err').innerHTML = `<div class="alert ${r.success?'alert-success':'alert-error'}">${esc(r.message||'')}</div>`;
         } else {
@@ -2449,8 +2474,14 @@ function initSourcesTab(panel) {
         if (!data.name) { bd.querySelector('#cfg-err').innerHTML = errHtml('Display Name is required'); saveBtn.disabled=false; saveBtn.textContent=isEdit?'Save Changes':'Add Source'; return; }
         if (isEdit) {
           await api.updateConnector(existingId, data);
+          if (isGoogle) await saveGooglePortalAuth(bd);
         } else {
-          await api.createConnector(data);
+          const created = await api.createConnector(data);
+          if (isGoogle && created?.id) {
+            try { await saveGooglePortalAuth(bd); } catch (oidcErr) {
+              showToast('Connector saved. Complete Portal sign-in tab for Google login.', true);
+            }
+          }
         }
         bd.remove();
         await load();
@@ -2460,6 +2491,20 @@ function initSourcesTab(panel) {
   }
 
   // ── collect form values from config modal ───────────────────────────────────
+  async function saveGooglePortalAuth(bd) {
+    const clientId = bd.querySelector('#cfg-oidcClientId')?.value.trim() || '';
+    const clientSecret = bd.querySelector('#cfg-oidcClientSecret')?.value.trim() || '';
+    const oauthClientJson = bd.querySelector('#cfg-oidcOAuthJson')?.value.trim() || '';
+    const hostedDomain = bd.querySelector('#cfg-customerDomain')?.value.trim() || '';
+    const payload = {};
+    if (hostedDomain) payload.hostedDomain = hostedDomain;
+    if (clientId) payload.clientId = clientId;
+    if (clientSecret) payload.clientSecret = clientSecret;
+    if (oauthClientJson) payload.oauthClientJson = oauthClientJson;
+    if (!payload.hostedDomain && !payload.clientId && !payload.oauthClientJson) return;
+    await api.saveGoogleOidcSettings(payload);
+  }
+
   function collectFormData(bd, connectorType) {
     connectorType = normalizeConnectorType(connectorType);
     const meta = CONNECTOR_TYPES[connectorType] || { fields: [] };
@@ -2496,6 +2541,18 @@ function initSourcesTab(panel) {
         sync_schedule: c.sync_schedule,
         ...(c.config || {}),
       };
+      if (normalizeConnectorType(c.connector_type) === 'GOOGLE_WORKSPACE') {
+        try {
+          const oidc = await api.getGoogleOidcSettings();
+          defaults.oidcClientId = oidc.clientId || '';
+          defaults.oidcHasClientSecret = oidc.hasClientSecret;
+          if (!defaults.customerDomain && oidc.hostedDomains?.length) {
+            defaults.customerDomain = oidc.hostedDomains.join('\n');
+          }
+        } catch {
+          // OIDC settings optional until Portal sign-in tab is filled
+        }
+      }
       openConfigModal(connectorId, btnData.type || c.connector_type, defaults);
     } catch(e) { alert('Could not load connector: ' + e.message); }
   }
