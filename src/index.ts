@@ -209,7 +209,9 @@ app.use(
     maxAge: 0,
     setHeaders: (res, filePath) => {
       if (/\.(js|css|html)$/.test(filePath)) {
-        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('CDN-Cache-Control', 'no-store');
+        res.setHeader('Pragma', 'no-cache');
       }
     },
   }),

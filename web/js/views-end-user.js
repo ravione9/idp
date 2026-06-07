@@ -1,6 +1,6 @@
 /* End-user views: Home (app launcher), My Access, Request Access, My Tasks, Settings. */
-import { api } from './api.js?v=2026-06-07-groups-sync';
-import { el, esc, fmtDate, ilgBadge, initials, persistSearch, syncAppUrl, isPortalAdmin } from './ui.js?v=2026-06-08';
+import { api } from './api.js';
+import { el, esc, fmtDate, ilgBadge, initials, persistSearch, syncAppUrl, isPortalAdmin } from './ui.js';
 import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 

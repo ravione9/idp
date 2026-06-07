@@ -1,9 +1,9 @@
 /* Admin views: Dashboard, SAML apps, App catalog, Connectors, Users, Admins,
    Reviews, SoD, Risk, Authentication, Audit, Reports. */
-import { api } from './api.js?v=2026-06-07-groups-sync';
-import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut, persistSearch, syncAppUrl, isPortalSuperAdmin } from './ui.js?v=2026-06-08';
+import { api } from './api.js';
+import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut, persistSearch, syncAppUrl, isPortalSuperAdmin } from './ui.js';
 import { icon as svgIcon } from './icons.js';
-import { viewOidcApps, viewPrebuiltApps } from './views-stubs.js?v=2026-06-07-c';
+import { viewOidcApps, viewPrebuiltApps } from './views-stubs.js';
 
 // Shared helpers (mirrors views-stubs.js — not yet in a shared module)
 function openModal(html) {

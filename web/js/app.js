@@ -3,17 +3,17 @@
    Top nav (workspace) + admin sidebar (when in Admin).
    Layout: SailPoint top nav + miniOrange-style admin sidebar.
    ============================================================ */
-import { api } from './api.js?v=2026-06-07-device-v2';
-import { el, esc, initials, persistSearch, syncAppUrl, portalRoleOf, isPortalAdmin, isPortalSuperAdmin } from './ui.js?v=2026-06-08';
+import { api } from './api.js';
+import { el, esc, initials, persistSearch, syncAppUrl, portalRoleOf, isPortalAdmin, isPortalSuperAdmin } from './ui.js';
 import { icon } from './icons.js';
 import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import {
   renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
-} from './views-end-user.js?v=2026-06-08';
+} from './views-end-user.js';
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
   viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
-} from './views-admin.js?v=2026-06-07-admin-dir';
+} from './views-admin.js';
 import {
   viewGroups, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,
@@ -24,7 +24,7 @@ import {
   viewWorkflowLibrary, viewEventTriggers, viewNotifications,
   viewSsoReports,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
-} from './views-stubs.js?v=2026-06-08';
+} from './views-stubs.js';
 
 /* ----------------------------------------------------------------
    ROUTES — every navigable destination, indexed by key.
