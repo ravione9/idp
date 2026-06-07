@@ -192,6 +192,26 @@ body {
   overflow: hidden;
 }
 
+/* app-root wrapper — must carry height:100% down to .shell */
+.app-root {
+  height: 100%;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+#app:has(.app-root) {
+  height: 100vh;
+  overflow: hidden;
+}
+.app-root:has(.shell) {
+  height: 100vh;
+  overflow: hidden;
+}
+.app-root > .shell {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
 a { color: var(--primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
@@ -2422,16 +2442,10 @@ td code, .td-code { font-size: 0.78rem; }
 
 /* ============================================================
    RESPONSIVE — mobile, tablet, laptop
-   Breakpoints: 480px phone · 768px tablet · 900px nav drawer · 1100px tablet-wide
+   Breakpoints: 480 · 768 · 900 · 1100
    ============================================================ */
 
-.app-root {
-  min-height: 100vh;
-  width: 100%;
-  max-width: 100%;
-  overflow-x: hidden;
-}
-
+/* ── Hamburger button (hidden on desktop) ── */
 .mobile-menu-btn {
   display: none;
   align-items: center;
@@ -2450,161 +2464,151 @@ td code, .td-code { font-size: 0.78rem; }
 .mobile-menu-btn .i { width: 20px; height: 20px; }
 .mobile-menu-btn:hover { border-color: var(--accent); color: var(--topnav-active); }
 
+/* ── Backdrop overlay behind open sidebar ── */
 .mobile-backdrop {
   display: none;
   position: fixed;
   inset: 0;
   top: 56px;
   background: var(--overlay);
-  z-index: 110;
+  z-index: 115;
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
 }
+.mobile-nav-open .mobile-backdrop { display: block; }
 
 body.nav-locked { overflow: hidden; }
 
+/* ═══════════════════════════════════════════════════════════════
+   ≤ 900px — MOBILE NAV DRAWER
+   ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 900px) {
+
+  /* Show hamburger */
   .mobile-menu-btn { display: inline-flex; }
-  .topnav { overflow: hidden; }
+
+  /* Topnav — no overflow, fixed height */
+  .topnav {
+    overflow: hidden;
+    padding: 0 0.75rem;
+    gap: 0.5rem;
+  }
+  .topnav .brand span:not(.brand-logo) { display: none; }
+  .topnav .brand { padding-right: 0.5rem; border-right: none; }
+  .search-global { display: none; }
+  .profile-menu .profile-name, .profile-menu .profile-role { display: none; }
+
+  /* Primary nav — compact scrollable strip (admin labels) */
   .primary-nav {
     min-width: 0;
     overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }
+  .primary-nav::-webkit-scrollbar { display: none; }
+  /* Hide all per-route buttons in user mode (sidebar handles them) */
+  .shell.user-mode .primary-nav .user-nav-btn { display: none; }
+  .shell.user-mode .primary-nav .admin-pill { display: inline-flex; }
 
-  .mobile-backdrop { display: none; }
-  .shell.mobile-nav-open + .mobile-backdrop,
-  .app-root.mobile-nav-open .mobile-backdrop { display: block; }
-
-  .app-root .mobile-backdrop {
-    position: fixed;
-    inset: 0;
-    top: 56px;
+  /* Single-column content grid — sidebar is taken out of flow via position:fixed */
+  .admin-body {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: minmax(0, 1fr) !important;
   }
-  .shell.mobile-nav-open .content {
+
+  /* Content area — no horizontal overflow */
+  .content {
+    overflow-x: hidden;
+    padding: 0.85rem;
+  }
+  .content > div { min-width: 0; max-width: 100%; }
+  /* Dim & block interaction with content when sidebar is open */
+  .mobile-nav-open .content {
     pointer-events: none;
     user-select: none;
   }
-  .content {
-    overflow-x: hidden;
-  }
-  .content > div {
-    min-width: 0;
-    max-width: 100%;
-  }
+
+  /* Tables scroll horizontally inside their wrapper */
   .table-wrap {
-    max-width: 100%;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
-  table { min-width: 560px; }
-  .page-header-actions {
-    width: 100%;
-    flex-wrap: wrap;
-  }
-  .page-header-actions > * {
-    flex: 1 1 180px;
-    min-width: 0;
-  }
+  table { min-width: 540px; }
 
-  /* User sidebar — left drawer (replaces horizontal strip) */
-  .shell.user-mode .user-sidebar {
-    position: fixed;
-    top: 56px;
-    left: 0;
-    bottom: 0;
-    width: min(280px, 88vw);
-    height: auto;
-    max-height: none;
-    border-right: 1px solid var(--border);
-    border-bottom: none;
-    flex-direction: column;
-    flex-wrap: nowrap;
-    overflow-x: hidden;
-    overflow-y: auto;
-    z-index: 120;
-    transform: translateX(-105%);
-    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: var(--shadow-lg);
+  /* Page header actions wrap */
+  .page-header-actions { width: 100%; flex-wrap: wrap; }
+  .chart-row { grid-template-columns: 1fr; }
+  .form-2col { grid-template-columns: 1fr; }
+  .form-2col > .span2, .form-2col .form-group.span2 { grid-column: 1; }
+
+  /* ── SHARED DRAWER STYLES (admin & user sidebars) ─────────── */
+  .admin-sidebar:not(.hidden),
+  .user-sidebar:not(.hidden) {
+    position: fixed !important;
+    top: 56px !important;
+    left: 0 !important;
+    bottom: 0 !important;
+    width: min(288px, 88vw) !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    z-index: 120 !important;
+    transform: translateX(-110%) !important;
+    transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    box-shadow: none !important;
+    border-right: 1px solid var(--border) !important;
     -webkit-overflow-scrolling: touch;
   }
-  .shell.user-mode .user-sidebar-header { display: block; }
-  .shell.user-mode .user-sidebar button {
+
+  /* Slide in when nav open */
+  .mobile-nav-open .admin-sidebar:not(.hidden),
+  .mobile-nav-open .user-sidebar:not(.hidden) {
+    transform: translateX(0) !important;
+    box-shadow: var(--shadow-lg) !important;
+  }
+
+  /* Uncollapse the admin sidebar when in drawer mode */
+  .admin-sidebar.collapsed {
+    width: min(288px, 88vw) !important;
+  }
+  .admin-sidebar.collapsed .nav-section,
+  .admin-sidebar.collapsed .label-text {
+    display: block !important;
+    height: auto !important;
+    font-size: inherit !important;
+    color: inherit !important;
+    overflow: visible !important;
+  }
+  .admin-sidebar.collapsed button {
+    justify-content: flex-start !important;
+    padding: 0.38rem 0.85rem 0.38rem 1rem !important;
+  }
+  /* Hide the desktop collapse toggle in mobile drawer */
+  .admin-sidebar .sidebar-toggle-btn { display: none !important; }
+
+  /* User sidebar nav items */
+  .user-sidebar button {
     width: 100%;
-    flex: 0 0 auto;
-    padding: 0.75rem 1.25rem;
     min-height: 44px;
+    padding: 0.75rem 1.25rem;
     white-space: normal;
   }
-  .shell.user-mode .user-sidebar button.active::before {
+  .user-sidebar button.active::before {
     left: 0; top: 0; bottom: 0;
     width: 3px; height: auto;
     border-radius: 0 3px 3px 0;
   }
-  .shell.user-mode.mobile-nav-open .user-sidebar:not(.hidden) {
-    transform: translateX(0);
-  }
+  .user-sidebar-header { display: block !important; }
 
-  /* Admin sidebar — left drawer */
-  .shell.admin-mode .admin-sidebar:not(.hidden) {
-    position: fixed;
-    top: 56px;
-    left: 0;
-    bottom: 0;
-    width: min(280px, 88vw) !important;
-    max-height: none !important;
-    height: auto;
-    z-index: 120;
-    transform: translateX(-105%);
-    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: var(--shadow-lg);
-    -webkit-overflow-scrolling: touch;
-  }
-  .shell.admin-mode.mobile-nav-open .admin-sidebar:not(.hidden) {
-    transform: translateX(0);
-  }
-  .shell.admin-mode .admin-sidebar.collapsed {
-    width: min(280px, 88vw) !important;
-  }
-  .shell.admin-mode .admin-sidebar.collapsed .nav-section,
-  .shell.admin-mode .admin-sidebar.collapsed .label-text {
-    display: block;
-    height: auto;
-    font-size: inherit;
-    color: inherit;
-    overflow: visible;
-  }
-  .shell.admin-mode .admin-sidebar.collapsed button {
-    justify-content: flex-start;
-    padding: 0.38rem 0.85rem 0.38rem 1rem;
-  }
-  .shell.admin-mode .admin-sidebar .sidebar-toggle-btn { display: none; }
-
-  /* Hide duplicate user nav in top bar when sidebar drawer is used */
-  .shell.user-mode .primary-nav .user-nav-btn { display: none; }
-
-  /* User mode: hide workspace tabs; keep Admin pill for portal admins */
-  .shell.user-mode .primary-nav {
-    display: flex;
-    flex: 0 0 auto;
-    min-width: 0;
-    overflow: visible;
-  }
-  .shell.user-mode .primary-nav .admin-pill { display: inline-flex; }
-
-  /* Admin mode: compact top nav buttons for narrow screens */
-  .shell.admin-mode .primary-nav button {
-    padding: 0 0.65rem;
-    font-size: 0.8125rem;
-    min-height: 44px;
-  }
-  .shell.admin-mode .primary-nav .admin-pill {
-    padding: 0.35rem 0.75rem;
-    font-size: 0.8125rem;
-  }
+  .modal { max-height: 95vh; }
+  .page-header { align-items: flex-start; }
 }
 
-/* Tablet portrait & small laptop */
+/* ═══════════════════════════════════════════════════════════════
+   ≤ 768px — TABLET PORTRAIT
+   ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
   .welcome-banner {
     flex-direction: column;
@@ -2630,11 +2634,7 @@ body.nav-locked { overflow: hidden; }
   .filter-toolbar .form-select,
   .filter-toolbar-search,
   .filter-bar .form-input,
-  .filter-bar .form-select {
-    width: 100%;
-    max-width: none;
-    min-width: 0;
-  }
+  .filter-bar .form-select { width: 100%; max-width: none; min-width: 0; }
   .filter-toolbar-spacer { display: none; }
 
   .pp-header {
@@ -2654,17 +2654,12 @@ body.nav-locked { overflow: hidden; }
   .pp-attr-grid { grid-template-columns: 1fr; }
 
   .profile-panel { width: 100%; max-width: 100vw; }
-
   .kv { grid-template-columns: 1fr; gap: 0.25rem; }
 
   .home-toolbar { flex-direction: column; align-items: stretch; }
   .home-toolbar .form-input { max-width: none; }
 
-  .app-grid {
-    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-    gap: 0.65rem;
-  }
-
+  .app-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 0.65rem; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
 
   .tabs, .inline-tabs, .home-tabs {
@@ -2680,10 +2675,7 @@ body.nav-locked { overflow: hidden; }
 
   .table-toolbar { flex-direction: column; align-items: stretch; }
   .search-input { max-width: none; width: 100%; }
-  table {
-    min-width: 480px;
-    font-size: 0.8125rem;
-  }
+  table { min-width: 460px; font-size: 0.8125rem; }
   th, td { padding: 0.6rem 0.7rem; }
 
   .aap-actions { flex-direction: column; }
@@ -2703,7 +2695,9 @@ body.nav-locked { overflow: hidden; }
   .auth-theme-bar { top: 0.65rem; right: 0.65rem; }
 }
 
-/* Phone */
+/* ═══════════════════════════════════════════════════════════════
+   ≤ 480px — PHONE
+   ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 480px) {
   body { font-size: 13px; }
 
@@ -2722,11 +2716,9 @@ body.nav-locked { overflow: hidden; }
 
   .btn { min-height: 40px; }
   .btn-sm { min-height: 34px; }
-
   .page-header-actions .btn { flex: 1 1 auto; }
 
   .apps-section { padding: 1rem; }
-
   .app-grid { grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); }
 
   .wizard-stepper { padding: 0.65rem 0.75rem; }
@@ -2743,25 +2735,32 @@ body.nav-locked { overflow: hidden; }
   .auth-card h2 { font-size: 1.25rem; }
 
   .theme-picker-grid { grid-template-columns: 1fr; }
-  table { min-width: 420px; }
+  table { min-width: 380px; }
 }
 
-/* Safe areas for notched phones */
+/* ── Notch / safe-area padding ── */
 @supports (padding: env(safe-area-inset-top)) {
   .topnav {
     padding-left: max(0.75rem, env(safe-area-inset-left));
     padding-right: max(0.75rem, env(safe-area-inset-right));
   }
-  .content {
-    padding-bottom: max(0.85rem, env(safe-area-inset-bottom));
-  }
-  .shell.user-mode .user-sidebar,
-  .shell.admin-mode .admin-sidebar:not(.hidden) {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-  .profile-panel {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
+  .content { padding-bottom: max(0.85rem, env(safe-area-inset-bottom)); }
+  .admin-sidebar, .user-sidebar { padding-bottom: env(safe-area-inset-bottom); }
+  .profile-panel { padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* Touch devices — remove hover-only micro-interactions */
+@media (hover: none) and (pointer: coarse) {
+  .app-fav-btn { opacity: 1; }
+  .app-tile:hover { transform: none; }
+  .stat-card:hover { box-shadow: var(--shadow-sm); }
+}
+
+/* Landscape phone */
+@media (max-height: 500px) and (orientation: landscape) {
+  .auth-panel { min-height: auto; padding: 1rem; }
+  .auth-hero { padding: 1.5rem; }
+  .modal { max-height: 98vh; }
 }
 
 /* Touch-friendly: reduce hover-only interactions on coarse pointers */
