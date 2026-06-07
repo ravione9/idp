@@ -123,13 +123,16 @@ async function writebackToAD(
     throw new Error('No active Active Directory connector configured');
   }
 
+  // Try three connection modes in order: as-configured → StartTLS on 389 → LDAPS on 636.
+  // AD refuses unicodePwd changes over plain LDAP, so we escalate automatically.
+  // Each attempt is fully independent (fresh adapter + circuit breaker reset).
   const attempts: Array<{ useSsl?: boolean; startTls?: boolean; port?: number; label: string }> = [
     { label: 'configured' },
     { label: 'starttls', startTls: true },
     { label: 'ldaps', useSsl: true, port: 636 },
   ];
 
-  let lastError = 'AD password writeback failed';
+  const errors: string[] = [];
 
   for (const attempt of attempts) {
     const adapter = createAdAdapterFromConfig(cfg, attempt);
@@ -137,28 +140,27 @@ async function writebackToAD(
       await adapter.resetCircuitBreaker();
       await adapter.connect();
       if (!adapter.connectionIsSecure()) {
-        lastError = 'AD password reset requires LDAPS or LDAP+StartTLS — set Protocol to LDAPS or StartTLS in the AD connector';
+        errors.push(`[${attempt.label}] plain LDAP cannot write unicodePwd`);
         continue;
       }
       const result = await adapter.setUserPassword(externalId, newPassword);
       if (result.success) {
+        logger.info({ externalId, attempt: attempt.label }, 'AD password writeback succeeded');
         return;
       }
-      lastError = result.error ?? lastError;
-      if (!result.error?.includes('requires LDAPS')) {
-        throw new Error(lastError);
-      }
+      errors.push(`[${attempt.label}] ${result.error ?? 'setUserPassword failed'}`);
     } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      if (!lastError.includes('requires LDAPS') && !lastError.includes('StartTLS')) {
-        throw err instanceof Error ? err : new Error(lastError);
-      }
+      errors.push(`[${attempt.label}] ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       await adapter.disconnect().catch(() => undefined);
     }
   }
 
-  throw new Error(lastError);
+  throw new Error(
+    `AD password writeback failed across all connection modes. ` +
+    `Ensure the AD connector is set to LDAPS (port 636) or StartTLS. ` +
+    `Details: ${errors.join(' | ')}`,
+  );
 }
 
 export async function ensureWritebackIdentityLinks(empId: string): Promise<string> {

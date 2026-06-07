@@ -96,20 +96,28 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     }
 
     if (!account) {
+      // No local account at all — try AD corporate auth.
       account = await authenticateAdCorporateUser(email, password);
-    }
-
-    if (!account) {
-      await logAttempt(email, ip, false, 'no-such-account');
-      res.status(401).json({ error: 'Invalid email or password' });
-      return;
-    }
-
-    const valid = await verifyLocalPassword(password, account.password_hash);
-    if (!valid) {
-      await logAttempt(email, ip, false, 'bad-password');
-      res.status(401).json({ error: 'Invalid email or password' });
-      return;
+      if (!account) {
+        await logAttempt(email, ip, false, 'no-such-account');
+        res.status(401).json({ error: 'Invalid email or password' });
+        return;
+      }
+      // AD auth succeeded and stored a fresh hash — fall through to session.
+    } else {
+      // Local account found — verify password.
+      // If it fails, the local hash may be stale (AD password changed since last sync/login).
+      // Try AD before rejecting.
+      const valid = await verifyLocalPassword(password, account.password_hash);
+      if (!valid) {
+        const adAccount = await authenticateAdCorporateUser(email, password);
+        if (!adAccount) {
+          await logAttempt(email, ip, false, 'bad-password');
+          res.status(401).json({ error: 'Invalid email or password' });
+          return;
+        }
+        account = adAccount; // refreshed account with updated hash
+      }
     }
 
     const mfa = await getMfaStatus(account.emp_id);
