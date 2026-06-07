@@ -205,14 +205,15 @@ A bootstrap account is provisioned from `MASTER_ADMIN_EMAIL` + `MASTER_ADMIN_PAS
   2. UI prompts for 6-digit code (or backup code).
   3. `POST /auth/local/login/mfa-verify {challengeId, code}` → session issued.
 - Login flow when MFA is **required but not yet enrolled**:
-  1. `POST /auth/local/login {email, password}` → returns `{enrollRequired:true, enrollChallengeId}` (password verified; no session yet).
+  1. `POST /auth/local/login {email, password}` → returns `{enrollRequired:true, enrollChallengeId, gracePeriodHours, graceActive}` (password verified; no session yet).
   2. UI shows QR / manual secret via `POST /auth/local/login/mfa-enroll {enrollChallengeId}` (no auth cookie required).
   3. User confirms TOTP → `POST /auth/local/login/mfa-enroll/confirm {enrollChallengeId, code}` → MFA enabled, backup codes returned, session issued.
+  4. User may defer → `POST /auth/local/login/mfa-enroll/defer {enrollChallengeId}` → returns to sign-in without a session, or issues a session during the policy **grace period** (`mfa_policy.grace_period_hours`, tracked in Redis from first required login).
 - MFA verify and enroll challenges live in Redis with 5-minute TTL.
 
 ### 5.5 Rate limiting
 
-`/auth/local/login`, `/auth/local/login/mfa-verify`, `/auth/local/login/mfa-enroll`, and `/auth/local/login/mfa-enroll/confirm` are rate limited at **10 requests / minute / (IP+email or IP+challenge)** via in-process sliding window (`src/auth/rate-limit.ts`).
+`/auth/local/login`, `/auth/local/login/mfa-verify`, `/auth/local/login/mfa-enroll`, `/auth/local/login/mfa-enroll/confirm`, and `/auth/local/login/mfa-enroll/defer` are rate limited at **10 requests / minute / (IP+email or IP+challenge)** via in-process sliding window (`src/auth/rate-limit.ts`).
 Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 ### 5.6 Adaptive / Risk-based Authentication
@@ -440,6 +441,7 @@ To add a new migration:
 | `POST` | `/auth/local/login/mfa-verify` | Submit TOTP / backup code |
 | `POST` | `/auth/local/login/mfa-enroll` | Start TOTP enrollment during login (QR + secret; no session) |
 | `POST` | `/auth/local/login/mfa-enroll/confirm` | Confirm TOTP during login → enable MFA + issue session |
+| `POST` | `/auth/local/login/mfa-enroll/defer` | Defer enrollment (sign in during grace period, or return to login) |
 | `GET`  | `/auth/google` `/auth/google/callback` | Google Workspace OIDC |
 | `POST` | `/auth/logout` | End current session |
 | `GET`  | `/auth/zoho` `/auth/zoho/callback` | **Removed** — returns HTTP 410 Gone (Zoho Mail is now a SAML SP) |
@@ -813,6 +815,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-06-07 — Defer MFA enrollment to next sign-in
+
+**Why** — Users forced into login-time MFA setup had no way to exit the flow; they needed a clear path to complete setup on a later sign-in (with optional grace-period access).
+
+**What changed:**
+
+- **Updated:** `src/auth/local-auth.ts` — `POST /auth/local/login/mfa-enroll/defer` clears the enroll challenge; during `grace_period_hours` (Redis-tracked from first required login) issues a session, otherwise returns `{ deferred, session:false }`.
+- **Updated:** `web/js/views-end-user.js` — enrollment step shows **Set up on next sign-in** (or **Continue without MFA for now** during grace).
+- **Updated:** `web/js/api.js` — client helper for defer endpoint.
 
 ### TBD — 2026-06-07 — Login-time MFA enrollment for enforced users
 

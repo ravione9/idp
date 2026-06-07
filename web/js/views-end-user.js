@@ -109,7 +109,28 @@ export function renderLogin() {
 
   const panel = root.querySelector('.auth-panel');
 
-  function renderMfaEnrollStep(enrollChallengeId, email) {
+  function renderMfaEnrollStep(enrollChallengeId, email, { graceActive = false, gracePeriodHours = 24 } = {}) {
+    const deferLabel = graceActive ? 'Continue without MFA for now' : 'Set up on next sign-in';
+    const deferHint = graceActive
+      ? `MFA must be enabled within ${gracePeriodHours} hour${gracePeriodHours === 1 ? '' : 's'} of your first required sign-in.`
+      : 'You will be prompted to set up MFA the next time you sign in.';
+
+    async function deferEnrollment() {
+      try {
+        const r = await api.localLoginMfaEnrollDefer(enrollChallengeId);
+        if (r && r.success && r.redirect) {
+          location.href = returnTo;
+          return;
+        }
+        showPasswordStep(
+          email,
+          r?.message || 'Two-factor setup is required. You can complete it on your next sign-in.',
+        );
+      } catch (err) {
+        showPasswordStep(email, err.message);
+      }
+    }
+
     const card = el(`
       <div class="auth-card">
         <h2>Set up two-factor authentication</h2>
@@ -117,9 +138,14 @@ export function renderLogin() {
         <div id="enroll-error"></div>
         <div id="enroll-loading" class="muted">Loading setup…</div>
         <div id="enroll-body" hidden></div>
+        <div style="text-align:center;margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+          <button type="button" class="btn btn-link" id="enroll-defer">${esc(deferLabel)}</button>
+          <p class="hint" style="margin-top:0.35rem">${esc(deferHint)}</p>
+        </div>
       </div>
     `);
     panel.replaceChildren(card);
+    card.querySelector('#enroll-defer').addEventListener('click', () => { void deferEnrollment(); });
     const errEl = card.querySelector('#enroll-error');
     const bodyEl = card.querySelector('#enroll-body');
     const loadingEl = card.querySelector('#enroll-loading');
@@ -192,7 +218,7 @@ export function renderLogin() {
     });
   }
 
-  function showPasswordStep(email) {
+  function showPasswordStep(email, infoMessage) {
     const initial = (email.trim().charAt(0) || '?').toUpperCase();
     const card = el(`
       <div class="auth-card" id="step-password">
@@ -202,6 +228,7 @@ export function renderLogin() {
           <span>${esc(email)}</span>
           <a href="#" id="back-to-email">· Not you?</a>
         </div>
+        <div id="pw-info"></div>
         <div id="pw-error"></div>
         <form id="password-form">
           <div class="field">
@@ -214,6 +241,10 @@ export function renderLogin() {
     `);
     panel.replaceChildren(card);
     card.querySelector('#password').focus();
+
+    if (infoMessage) {
+      card.querySelector('#pw-info').innerHTML = `<div class="alert alert-warning">${esc(infoMessage)}</div>`;
+    }
 
     card.querySelector('#back-to-email').addEventListener('click', (e) => {
       e.preventDefault();
@@ -228,7 +259,10 @@ export function renderLogin() {
       try {
         const r = await api.localLogin(email, password);
         if (r && r.enrollRequired && r.enrollChallengeId) {
-          renderMfaEnrollStep(r.enrollChallengeId, email);
+          renderMfaEnrollStep(r.enrollChallengeId, email, {
+            graceActive: !!r.graceActive,
+            gracePeriodHours: r.gracePeriodHours ?? 24,
+          });
           return;
         }
         if (r && r.mfaRequired && r.challengeId) {

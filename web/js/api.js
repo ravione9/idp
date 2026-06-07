@@ -53,6 +53,8 @@ Object.assign(api, {
     f('/auth/local/login/mfa-enroll', { method: 'POST', body: JSON.stringify({ enrollChallengeId }) }),
   localLoginMfaEnrollConfirm: (enrollChallengeId, code) =>
     f('/auth/local/login/mfa-enroll/confirm', { method: 'POST', body: JSON.stringify({ enrollChallengeId, code }) }),
+  localLoginMfaEnrollDefer: (enrollChallengeId) =>
+    f('/auth/local/login/mfa-enroll/defer', { method: 'POST', body: JSON.stringify({ enrollChallengeId }) }),
   logout:           () => f('/auth/logout', { method: 'POST' }),
   changePassword:   (currentPassword, newPassword) =>
     f('/api/me/password', { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) }),

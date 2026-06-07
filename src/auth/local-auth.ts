@@ -13,6 +13,8 @@
  *        → { secret, qrDataUrl }  (start TOTP setup without a session)
  *   2c. POST /auth/local/login/mfa-enroll/confirm { enrollChallengeId, code }
  *        → { success:true, redirect:'/', backupCodes }  (enable MFA + session)
+ *   2d. POST /auth/local/login/mfa-enroll/defer { enrollChallengeId }
+ *        → { deferred:true, session:false } OR { success:true, redirect } during grace period
  */
 import { Request, Response } from 'express';
 import { z } from 'zod';
@@ -37,6 +39,7 @@ import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
 
 const MFA_CHALLENGE_PREFIX        = 'lilg:mfa-challenge:';
 const MFA_ENROLL_CHALLENGE_PREFIX = 'lilg:mfa-enroll-challenge:';
+const MFA_GRACE_PREFIX            = 'lilg:mfa-grace:';
 const MFA_CHALLENGE_TTL_S         = 300; // 5 min
 
 const loginSchema = z.object({
@@ -86,6 +89,7 @@ interface MfaRequirementContext {
   globalEnforce: boolean;
   enforceForAdmins: boolean;
   userInExcludedGroup: boolean;
+  gracePeriodHours: number;
 }
 
 const ADMIN_MFA_ROLES = new Set(['ADMIN', 'SUPER_ADMIN']);
@@ -109,6 +113,21 @@ function parsePolicyBoolean(raw: unknown, fallback: boolean): boolean {
   if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') return true;
   if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') return false;
   return fallback;
+}
+
+function parsePolicyNumber(raw: unknown, fallback: number): number {
+  if (typeof raw === 'number' && !Number.isNaN(raw)) return raw;
+  if (typeof raw !== 'string') return fallback;
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (typeof parsed === 'number' && !Number.isNaN(parsed)) return parsed;
+  } catch {
+    // Keep fallback parsing below.
+  }
+  const n = parseInt(trimmed, 10);
+  return Number.isNaN(n) ? fallback : n;
 }
 
 function parsePolicyStringArray(raw: unknown): string[] {
@@ -138,7 +157,7 @@ async function getMfaRequirementContext(empId: string): Promise<MfaRequirementCo
   const policyRowsPromise = query<MfaPolicyRow>(
     `SELECT policy_key, policy_value
        FROM mfa_policy
-      WHERE policy_key IN ('global_enforce', 'enforce_for_admins', 'excluded_group_ids')`,
+      WHERE policy_key IN ('global_enforce', 'enforce_for_admins', 'excluded_group_ids', 'grace_period_hours')`,
     [],
   ).catch((err) => {
     logger.warn({ empId, err }, 'mfa_policy query failed');
@@ -169,7 +188,36 @@ async function getMfaRequirementContext(empId: string): Promise<MfaRequirementCo
     userInExcludedGroup = Number(membership?.n ?? 0) > 0;
   }
 
-  return { userEnforced, globalEnforce, enforceForAdmins, userInExcludedGroup };
+  const gracePeriodHours = Math.max(
+    0,
+    parsePolicyNumber(policyMap.get('grace_period_hours'), 24),
+  );
+
+  return { userEnforced, globalEnforce, enforceForAdmins, userInExcludedGroup, gracePeriodHours };
+}
+
+function mfaGraceKey(empId: string): string {
+  return `${MFA_GRACE_PREFIX}${empId}`;
+}
+
+async function ensureMfaGraceStarted(empId: string, gracePeriodHours: number): Promise<void> {
+  if (gracePeriodHours <= 0) return;
+  const ttlS = Math.max(gracePeriodHours * 3600, 3600);
+  await redis.set(mfaGraceKey(empId), String(Date.now()), 'EX', ttlS, 'NX');
+}
+
+async function getGraceRemainingMs(empId: string, gracePeriodHours: number): Promise<number> {
+  if (gracePeriodHours <= 0) return 0;
+  const raw = await redis.get(mfaGraceKey(empId));
+  if (!raw) return 0;
+  const startedAt = Number(raw);
+  if (Number.isNaN(startedAt)) return 0;
+  const remaining = startedAt + gracePeriodHours * 3600 * 1000 - Date.now();
+  return remaining > 0 ? remaining : 0;
+}
+
+async function clearMfaGrace(empId: string): Promise<void> {
+  await redis.del(mfaGraceKey(empId));
 }
 
 async function logAttempt(email: string, ip: string, success: boolean, reason?: string): Promise<void> {
@@ -303,8 +351,15 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
           'EX',
           MFA_CHALLENGE_TTL_S,
         );
+        await ensureMfaGraceStarted(account.emp_id, mfaRequirements.gracePeriodHours);
+        const graceRemainingMs = await getGraceRemainingMs(account.emp_id, mfaRequirements.gracePeriodHours);
         await logAttempt(email, ip, true, 'password-ok-mfa-enroll-pending');
-        res.json({ enrollRequired: true, enrollChallengeId });
+        res.json({
+          enrollRequired: true,
+          enrollChallengeId,
+          gracePeriodHours: mfaRequirements.gracePeriodHours,
+          graceActive: graceRemainingMs > 0,
+        });
         return;
       }
 
@@ -419,6 +474,7 @@ export async function localLoginMfaEnrollConfirmHandler(req: Request, res: Respo
   try {
     const { backupCodes } = await confirmEnrollment(challenge.empId, parsed.data.code);
     await redis.del(key);
+    await clearMfaGrace(challenge.empId);
     await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-ok');
 
     const sessionId = await createSession({
@@ -440,4 +496,55 @@ export async function localLoginMfaEnrollConfirmHandler(req: Request, res: Respo
     await logAttempt(challenge.email, getClientIp(req), false, 'mfa-enroll-bad-code');
     res.status(400).json({ error: err instanceof Error ? err.message : 'Verification failed' });
   }
+}
+
+export async function localLoginMfaEnrollDeferHandler(req: Request, res: Response): Promise<void> {
+  const parsed = enrollChallengeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid defer request' });
+    return;
+  }
+
+  const enrollChallengeId = parsed.data.enrollChallengeId;
+  const key = `${MFA_ENROLL_CHALLENGE_PREFIX}${enrollChallengeId}`;
+  const challenge = await loadEnrollChallenge(enrollChallengeId);
+  if (!challenge) {
+    res.status(401).json({ error: 'Enrollment session expired — sign in again' });
+    return;
+  }
+
+  const mfaRequirements = await getMfaRequirementContext(challenge.empId);
+  const graceRemainingMs = await getGraceRemainingMs(challenge.empId, mfaRequirements.gracePeriodHours);
+  await redis.del(key);
+
+  if (graceRemainingMs > 0) {
+    await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-deferred-grace');
+    const sessionId = await createSession({
+      empId:     challenge.empId,
+      email:     challenge.email,
+      role:      challenge.role,
+      iss:       'local',
+      sub:       `local:${challenge.accountId}`,
+      ttlHours:  config.session.ttlCorporateHours,
+      ip:        getClientIp(req),
+      userAgent: req.get('user-agent') ?? '',
+    });
+    await touchLocalLogin(challenge.accountId);
+    setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
+    logger.info({ empId: challenge.empId, email: challenge.email }, 'Local login with deferred MFA enrollment');
+    res.json({
+      success: true,
+      redirect: '/',
+      deferredEnrollment: true,
+      graceRemainingHours: Math.ceil(graceRemainingMs / 3_600_000),
+    });
+    return;
+  }
+
+  await logAttempt(challenge.email, getClientIp(req), false, 'mfa-enroll-deferred');
+  res.json({
+    deferred: true,
+    session: false,
+    message: 'Two-factor setup is required. You can complete it on your next sign-in.',
+  });
 }
