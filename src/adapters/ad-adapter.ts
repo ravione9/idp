@@ -524,39 +524,129 @@ export class ADAdapter extends BaseAdapter {
     });
   }
 
-  /** Bind as the target user to confirm unicodePwd was actually applied on this DC. */
-  private async verifyUserPassword(dn: string, password: string): Promise<void> {
+  /** Bind as an end-user principal (UPN, email, DN). Does not use the circuit breaker. */
+  private async bindAsUserPrincipal(principal: string, password: string): Promise<void> {
     const probe = this.createClient();
     try {
       if (this.startTls && !this.url.startsWith('ldaps://')) {
         await probe.startTLS(this.tlsOpts);
       }
-      await probe.bind(dn, password);
-      logger.info({ dn }, 'AD password verified via user bind');
-    } catch (err) {
-      throw new Error(
-        `AD password verification failed — the directory did not accept the new password (${formatLdapError(err)})`,
-      );
+      await probe.bind(principal, password);
     } finally {
       await probe.unbind().catch(() => undefined);
     }
   }
 
+  /** Bind as the target user to confirm unicodePwd was actually applied on this DC. */
+  private async verifyUserPassword(dn: string, password: string): Promise<void> {
+    try {
+      await this.bindAsUserPrincipal(dn, password);
+      logger.info({ dn }, 'AD password verified via user bind');
+    } catch (err) {
+      throw new Error(
+        `AD password verification failed — the directory did not accept the new password (${formatLdapError(err)})`,
+      );
+    }
+  }
+
+  private buildLoginPrincipalCandidates(
+    email: string,
+    entry?: Record<string, unknown>,
+  ): string[] {
+    const normalized = email.toLowerCase().trim();
+    const out: string[] = [];
+    const add = (value: string) => {
+      const v = value.trim();
+      if (v && !out.includes(v)) out.push(v);
+    };
+
+    add(normalized);
+    if (entry) {
+      add(getLdapAttr(entry, 'userPrincipalName'));
+      add(getLdapAttr(entry, 'mail'));
+      add(getLdapAttr(entry, 'dn'));
+    }
+
+    const domain = domainFromBaseDn(this.dir.domainRoot);
+    if (domain) {
+      const localPart = normalized.split('@')[0];
+      if (localPart) add(`${localPart}@${domain}`);
+    }
+
+    return out;
+  }
+
+  /**
+   * Verify credentials using corporate email / UPN binds first (no service-account search).
+   * Intentionally bypasses the circuit breaker — wrong passwords must not trip AD sync/writeback.
+   */
+  async verifyUserCredentialsByEmail(email: string, password: string): Promise<AdapterResult<void>> {
+    const principals = this.buildLoginPrincipalCandidates(email);
+    const errors: string[] = [];
+
+    for (const principal of principals) {
+      try {
+        await this.bindAsUserPrincipal(principal, password);
+        logger.info({ email, principal }, 'AD user credentials verified via direct bind');
+        return { success: true, data: undefined };
+      } catch (err) {
+        errors.push(`${principal}: ${formatLdapError(err)}`);
+      }
+    }
+
+    return {
+      success: false,
+      error: errors.join(' | ') || 'AD direct bind failed',
+      retryable: true,
+    };
+  }
+
   /** Bind as the target user to confirm credentials (read-only LDAP is sufficient). */
   async verifyUserCredentials(samAccountName: string, password: string): Promise<AdapterResult<void>> {
-    return this.safe(async () => {
+    try {
       await this.ensureConnected();
-      const entries = await this.findUser(samAccountName, ['dn', 'sAMAccountName', 'userAccountControl']);
+      const entries = await this.findUser(samAccountName, [
+        'dn', 'sAMAccountName', 'userPrincipalName', 'mail', 'userAccountControl',
+      ]);
       if (!entries.length) {
-        throw new Error(`AD user not found for sAMAccountName=${samAccountName}`);
+        return {
+          success: false,
+          error: `AD user not found for sAMAccountName=${samAccountName}`,
+          retryable: false,
+        };
       }
-      const uac = parseInt(getLdapAttr(entries[0], 'userAccountControl') || '512', 10);
+
+      const entry = entries[0] as Record<string, unknown>;
+      const uac = parseInt(getLdapAttr(entry, 'userAccountControl') || '512', 10);
       if (uac & UAC_ACCOUNTDISABLE) {
-        throw new Error('AD account is disabled');
+        return { success: false, error: 'AD account is disabled', retryable: false };
       }
-      await this.verifyUserPassword(entries[0].dn, password);
-      logger.info({ samAccountName }, 'AD user credentials verified');
-    });
+
+      const principals = this.buildLoginPrincipalCandidates(
+        getLdapAttr(entry, 'userPrincipalName') || getLdapAttr(entry, 'mail') || samAccountName,
+        entry,
+      );
+      const errors: string[] = [];
+      for (const principal of principals) {
+        try {
+          await this.bindAsUserPrincipal(principal, password);
+          logger.info({ samAccountName, principal }, 'AD user credentials verified');
+          return { success: true, data: undefined };
+        } catch (err) {
+          errors.push(`${principal}: ${formatLdapError(err)}`);
+        }
+      }
+
+      return {
+        success: false,
+        error: errors.join(' | ') || 'AD credential verification failed',
+        retryable: true,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ samAccountName, error: message }, 'AD credential lookup failed');
+      return { success: false, error: message, retryable: true };
+    }
   }
 
   /** Set password for a user identified by sAMAccountName (requires LDAPS or StartTLS). */

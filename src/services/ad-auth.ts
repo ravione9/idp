@@ -3,7 +3,7 @@
  * AD-synced employees may not have a local_accounts row until first login or admin reset.
  */
 
-import { ADAdapter } from '../adapters/ad-adapter.js';
+import { ADAdapter, getLdapAttr } from '../adapters/ad-adapter.js';
 import { config } from '../config.js';
 import { queryOne, execute } from '../db/connection.js';
 import { redis } from '../auth/session-store.js';
@@ -13,11 +13,26 @@ import { hashPassword } from './local-admin.js';
 import { backfillAdIdentityLinkIfMissing } from './ad-sync.js';
 
 const VALID_ROLES = new Set(['USER', 'MANAGER', 'HRBP', 'ADMIN', 'SUPER_ADMIN']);
+const BLOCKED_ILG_STATES = new Set(['DEPARTED', 'DEPROVISIONED']);
+
+type ConnectionAttempt = { useSsl?: boolean; startTls?: boolean; port?: number; label: string };
+
+const CONNECTION_ATTEMPTS: ConnectionAttempt[] = [
+  { label: 'configured' },
+  { label: 'starttls', startTls: true },
+  { label: 'ldaps', useSsl: true, port: 636 },
+];
 
 function parseConnectorConfig(raw: string | Record<string, unknown>): Record<string, unknown> {
   return typeof raw === 'string'
     ? JSON.parse(raw || '{}') as Record<string, unknown>
     : (raw ?? {});
+}
+
+function resolveBindPassword(cfg: Record<string, unknown>): string {
+  const raw = String(cfg['bindPassword'] ?? '').trim();
+  if (!raw || raw === '••••••••') return config.ad.bindPassword;
+  return raw;
 }
 
 async function loadActiveAdConnectorConfig(): Promise<Record<string, unknown> | null> {
@@ -38,13 +53,20 @@ async function loadActiveAdConnectorConfig(): Promise<Record<string, unknown> | 
   return parseConnectorConfig(row.config_json);
 }
 
-function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
+function createAdAdapterFromConfig(
+  cfg: Record<string, unknown>,
+  overrides: ConnectionAttempt = { label: 'configured' },
+): ADAdapter {
+  const useSsl = overrides.useSsl !== undefined
+    ? overrides.useSsl
+    : parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
+  const startTls = overrides.startTls !== undefined
+    ? overrides.startTls
+    : parseConnectorBoolean(cfg['startTls'], false);
   const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
-  const useSsl = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls = parseConnectorBoolean(cfg['startTls'], false);
-  const port = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
+  const port = overrides.port ?? parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
   const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
-  const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
+  const bindPass = resolveBindPassword(cfg);
   const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
   const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
   const adUrl = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
@@ -60,6 +82,71 @@ export interface AdLoginAccount {
   active:        number;
   ilg_state:     string;
   hrms_status:   string;
+}
+
+async function upsertAdIdentityLink(empId: string, sam: string): Promise<void> {
+  await execute(
+    `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind, last_synced_at)
+     VALUES (?, 'AD', ?, 'ACTIVE', 'LDAP', UTC_TIMESTAMP())
+     ON DUPLICATE KEY UPDATE
+       external_id = VALUES(external_id),
+       status = 'ACTIVE',
+       last_synced_at = UTC_TIMESTAMP()`,
+    [empId, sam],
+  );
+}
+
+async function verifyAdLoginPassword(
+  cfg: Record<string, unknown>,
+  email: string,
+  password: string,
+  samHint?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const errors: string[] = [];
+
+  for (const attempt of CONNECTION_ATTEMPTS) {
+    const adapter = createAdAdapterFromConfig(cfg, attempt);
+    try {
+      await adapter.resetCircuitBreaker();
+
+      const direct = await adapter.verifyUserCredentialsByEmail(email, password);
+      if (direct.success) {
+        return { ok: true };
+      }
+      if (direct.error) errors.push(`[${attempt.label}/upn] ${direct.error}`);
+
+      if (samHint) {
+        await adapter.connect();
+        const bySam = await adapter.verifyUserCredentials(samHint, password);
+        if (bySam.success) {
+          return { ok: true };
+        }
+        if (bySam.error) errors.push(`[${attempt.label}/sam] ${bySam.error}`);
+      }
+
+      await adapter.connect();
+      const entryResult = await adapter.getDirectoryEntryByEmail(email);
+      if (entryResult.success) {
+        const entry = entryResult.data as Record<string, unknown>;
+        const sam = getLdapAttr(entry, 'sAMAccountName');
+        if (sam) {
+          const byEntry = await adapter.verifyUserCredentials(sam, password);
+          if (byEntry.success) {
+            return { ok: true };
+          }
+          if (byEntry.error) errors.push(`[${attempt.label}/lookup] ${byEntry.error}`);
+        }
+      } else if (entryResult.error) {
+        errors.push(`[${attempt.label}/lookup] ${entryResult.error}`);
+      }
+    } catch (err) {
+      errors.push(`[${attempt.label}] ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      await adapter.disconnect().catch(() => undefined);
+    }
+  }
+
+  return { ok: false, error: errors.join(' | ') || 'AD login verification failed' };
 }
 
 /**
@@ -80,10 +167,21 @@ export async function authenticateAdCorporateUser(
     hrms_status: string;
   }>(
     `SELECT emp_id, email_corp, role, ilg_state, hrms_status
-       FROM employees WHERE email_corp = ?`,
+       FROM employees WHERE LOWER(email_corp) = ?`,
     [normalizedEmail],
   );
-  if (!employee || !['ACTIVE', 'REACTIVATED'].includes(employee.ilg_state)) {
+  if (!employee) {
+    logger.info({ email: normalizedEmail }, 'AD login: no employee row for corporate email');
+    return null;
+  }
+  if (BLOCKED_ILG_STATES.has(employee.ilg_state)) {
+    logger.info({ email: normalizedEmail, ilg_state: employee.ilg_state }, 'AD login: employee lifecycle blocked');
+    return null;
+  }
+
+  const cfg = await loadActiveAdConnectorConfig();
+  if (!cfg) {
+    logger.warn({ email: normalizedEmail }, 'AD login: no AD/LDAP connector config found');
     return null;
   }
 
@@ -97,32 +195,45 @@ export async function authenticateAdCorporateUser(
       WHERE emp_id = ? AND \`system\` = 'AD' AND status = 'ACTIVE'`,
     [effectiveEmpId],
   );
+
+  const verified = await verifyAdLoginPassword(
+    cfg,
+    normalizedEmail,
+    password,
+    adLink?.external_id,
+  );
+  if (!verified.ok) {
+    logger.warn(
+      { email: normalizedEmail, empId: effectiveEmpId, error: verified.error },
+      'AD corporate login failed',
+    );
+    return null;
+  }
+
   if (!adLink?.external_id) {
-    return null;
-  }
-
-  const cfg = await loadActiveAdConnectorConfig();
-  if (!cfg) {
-    return null;
-  }
-
-  const adapter = createAdAdapterFromConfig(cfg);
-  try {
-    await adapter.resetCircuitBreaker();
-    await adapter.connect();
-    const verified = await adapter.verifyUserCredentials(adLink.external_id, password);
-    if (!verified.success) {
-      logger.debug(
-        { email: normalizedEmail, error: verified.error },
-        'AD credential verification failed',
-      );
-      return null;
+    const adapter = createAdAdapterFromConfig(cfg);
+    try {
+      await adapter.resetCircuitBreaker();
+      await adapter.connect();
+      const entryResult = await adapter.getDirectoryEntryByEmail(normalizedEmail);
+      const sam = entryResult.success
+        ? getLdapAttr(entryResult.data as Record<string, unknown>, 'sAMAccountName')
+        : '';
+      if (sam) {
+        await upsertAdIdentityLink(effectiveEmpId, sam);
+      }
+    } catch (err) {
+      logger.warn({ email: normalizedEmail, err }, 'AD login: identity link backfill after auth failed');
+    } finally {
+      await adapter.disconnect().catch(() => undefined);
     }
-  } catch (err) {
-    logger.warn({ email: normalizedEmail, err }, 'AD login bind failed');
-    return null;
-  } finally {
-    await adapter.disconnect().catch(() => undefined);
+  }
+
+  if (!['ACTIVE', 'REACTIVATED'].includes(employee.ilg_state)) {
+    await execute(
+      `UPDATE employees SET ilg_state = 'ACTIVE', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+      [effectiveEmpId],
+    );
   }
 
   const role = employee.role && VALID_ROLES.has(employee.role) ? employee.role : 'USER';

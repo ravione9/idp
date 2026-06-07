@@ -904,6 +904,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
+### (pending) — 2026-06-07 — AD corporate login: UPN bind + circuit-breaker isolation
+
+**Why** — AD password login still failed for synced users because verification only tried sAMAccountName/DN lookup, wrong-password attempts could trip the AD circuit breaker, and login required a pre-existing identity link.
+
+**What changed:**
+
+- **`src/adapters/ad-adapter.ts`** — direct UPN/email bind (`verifyUserCredentialsByEmail`); credential checks bypass circuit breaker; multi-principal bind fallback (UPN, mail, DN).
+- **`src/services/ad-auth.ts`** — login retries configured/StartTLS/LDAPS; case-insensitive email lookup; identity-link auto-backfill after successful auth; redacted connector bind password falls back to `.env`.
+
+---
+
 ### `07bc5c9` — 2026-06-07 — Application Access Policy: identity group assignments
 
 **Why** — Admins created groups under **Identity → Groups** (e.g. "zoho mail") but the **Assign Application Access** modal only listed tag groups, so the group never appeared in the dropdown.
