@@ -780,7 +780,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
-### `636f5ab` — 2026-06-07 — AD password reset: verify with user bind after unicodePwd modify
+### `4ba8522` — 2026-06-07 — AD password reset: verify with user bind after unicodePwd modify
 
 **Why** — Admin reset showed AD SUCCESS while the domain password was unchanged; LDAP modify alone was not verified before reporting success.
 
