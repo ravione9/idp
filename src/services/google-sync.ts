@@ -251,6 +251,54 @@ function isGoogleNotFound(err: unknown): boolean {
   return e?.code === 404 || e?.response?.status === 404;
 }
 
+/** Link a Google Workspace user by corporate email when missing (e.g. before password writeback). */
+export async function backfillGoogleIdentityLinkIfMissing(
+  empId: string,
+  emailCorp: string,
+): Promise<{ changed: boolean }> {
+  if (!emailCorp.trim()) return { changed: false };
+
+  const email = emailCorp.toLowerCase().trim();
+  const hasLink = await queryOne<{ id: number }>(
+    `SELECT id FROM identity_links
+      WHERE emp_id = ? AND \`system\` = 'GOOGLE' AND status != 'DELETED'`,
+    [empId],
+  );
+  if (hasLink) return { changed: false };
+
+  const conn = await queryOne<{ config_json: string | Record<string, unknown> }>(
+    `SELECT config_json FROM connectors
+      WHERE connector_type IN ('GOOGLE', 'GOOGLE_WORKSPACE') AND status = 'ACTIVE'
+      ORDER BY updated_at DESC LIMIT 1`,
+    [],
+  );
+  if (!conn) return { changed: false };
+
+  const cfg: Record<string, unknown> =
+    typeof conn.config_json === 'string'
+      ? JSON.parse(conn.config_json || '{}') as Record<string, unknown>
+      : (conn.config_json ?? {});
+
+  try {
+    const auth = buildGoogleJwtAuth(cfg);
+    const directory = google.admin({ version: 'directory_v1', auth });
+    const existing = await directory.users.get({ userKey: email });
+    const googleId = existing.data.id ?? email;
+    const suspended = existing.data.suspended === true;
+    const linkStatus = suspended ? 'DISABLED' : 'ACTIVE';
+    await upsertGoogleIdentityLink(empId, googleId, linkStatus);
+    logger.info({ empId, googleId, email }, 'Google identity link backfilled for password writeback');
+    return { changed: true };
+  } catch (err) {
+    if (isGoogleNotFound(err)) {
+      logger.info({ empId, email }, 'Google backfill: no Workspace user for corporate email');
+      return { changed: false };
+    }
+    logger.warn({ empId, email, err }, 'Google identity link backfill failed');
+    return { changed: false };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main sync function
 // ---------------------------------------------------------------------------

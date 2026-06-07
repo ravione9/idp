@@ -2729,6 +2729,26 @@ function initUsersTab(panel) {
     // State
     let profileData = null;
     let activeTab = 'overview';
+    let lastPasswordResetHtml = '';
+
+    function formatPasswordResetResults(r) {
+      const results = r.results || [];
+      const rows = results.map(res => `
+              <div class="pp-reset-result ${res.status === 'SUCCESS' ? 'success' : res.status === 'SKIPPED' ? '' : 'fail'}">
+                ${srcBadge(res.system)}
+                <span style="flex:1">${res.status === 'SUCCESS'
+                  ? '✓ Updated successfully'
+                  : res.status === 'SKIPPED'
+                    ? `— ${esc(res.error || 'Skipped')}`
+                    : `✗ ${esc(res.error || 'Failed')}`}</span>
+              </div>`).join('');
+
+      const summary = r.summary || (r.success ? 'Password reset across all linked systems' : 'Password reset failed');
+      const banner = r.success
+        ? `<div class="pp-alert success" style="margin-bottom:0.75rem">✓ ${esc(summary)}</div>`
+        : `<div class="pp-alert error"   style="margin-bottom:0.75rem">⚠ ${esc(summary)}</div>`;
+      return banner + rows;
+    }
 
     function activeLinks() {
       return (profileData?.identityLinks || []).filter(l => l.status !== 'DELETED');
@@ -3050,7 +3070,7 @@ function initUsersTab(panel) {
             The new password will be pushed to <strong>all linked systems simultaneously</strong>:
             ${systemsList.length ? systemsList.map(s => srcBadge(s)).join('') : '<span class="muted">No targets — add identity links or a corporate email</span>'}
           </p>
-          ${hasLocalLogin ? `<p class="muted" style="font-size:0.8rem;margin:-0.75rem 0 1rem">Local password applies to <strong>/login</strong> (email + password). Google / AD SSO is separate unless linked below.</p>` : ''}
+          ${hasLocalLogin ? `<p class="muted" style="font-size:0.8rem;margin:-0.75rem 0 1rem">Local password applies to <strong>/login</strong> (email + password). AD and Google passwords are updated when identity links exist — links are auto-created from corporate email on reset when connectors are active.</p>` : ''}
 
           <div class="form-group">
             <label class="form-label">New Password <span style="color:var(--danger)">*</span></label>
@@ -3067,13 +3087,13 @@ function initUsersTab(panel) {
             <button class="btn btn-primary" id="pp-reset-btn">Reset Password in All Systems</button>
             <button class="btn btn-secondary" id="pp-show-pwd">👁 Show</button>
           </div>
-          <div id="pp-reset-results" style="margin-top:1rem"></div>
+          <div id="pp-reset-results" style="margin-top:1rem">${lastPasswordResetHtml}</div>
 
           <div style="margin-top:2rem;padding:1rem;background:var(--surface-raised,#f8fafc);border-radius:8px;border:1px solid var(--border)">
             <p style="font-size:0.75rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-dim,#9ca3af);margin:0 0 0.5rem">Password Policy</p>
             <ul style="margin:0;padding-left:1.25rem;font-size:0.82rem;color:var(--text-muted);line-height:1.8">
               <li>Minimum 10 characters</li>
-              <li>Writeback applies to: Active Directory, Google Workspace, and any active identity link</li>
+              <li>Writeback applies to Active Directory and Google Workspace when connectors are active (auto-linked by corporate email)</li>
               <li>User will be prompted to change password on next login (if notify is enabled)</li>
             </ul>
           </div>`;
@@ -3101,29 +3121,29 @@ function initUsersTab(panel) {
           resultsEl.innerHTML  = '';
 
           try {
-            const r       = await api.adminResetPassword(empId, pwd, notify);
-            const results = r.results || [];
-
-            const rows = results.map(res => `
-              <div class="pp-reset-result ${res.status === 'SUCCESS' ? 'success' : res.status === 'SKIPPED' ? '' : 'fail'}">
-                ${srcBadge(res.system)}
-                <span style="flex:1">${res.status === 'SUCCESS'
-                  ? '✓ Updated successfully'
-                  : res.status === 'SKIPPED'
-                    ? `— ${esc(res.error || 'Skipped')}`
-                    : `✗ ${esc(res.error || 'Failed')}`}</span>
-              </div>`).join('');
-
-            const banner = r.success
-              ? `<div class="pp-alert success" style="margin-bottom:0.75rem">✓ ${esc(r.summary)}</div>`
-              : `<div class="pp-alert error"   style="margin-bottom:0.75rem">⚠ ${esc(r.summary)}</div>`;
-
-            resultsEl.innerHTML = banner + rows;
+            const r = await api.adminResetPassword(empId, pwd, notify);
+            lastPasswordResetHtml = formatPasswordResetResults(r);
+            resultsEl.innerHTML = lastPasswordResetHtml;
             pwdInput.value = '';
-            // Refresh writeback log in overview
-            reloadProfile(/* keepTab */ true);
-          } catch(e) {
-            resultsEl.innerHTML = `<div class="pp-alert error">Reset failed: ${esc(e.message)}</div>`;
+            // Refresh profile data for Overview writeback log without wiping this tab
+            api.getUserProfile(empId).then((data) => {
+              profileData = data;
+              renderHeader();
+              if (activeTab === 'overview') renderTab('overview');
+            }).catch(() => { /* keep reset results visible */ });
+          } catch (e) {
+            const body = e.body || {};
+            if (body.results?.length || body.summary) {
+              lastPasswordResetHtml = formatPasswordResetResults({
+                success: false,
+                summary: body.summary,
+                results: body.results,
+              });
+            } else {
+              lastPasswordResetHtml =
+                `<div class="pp-alert error">Reset failed: ${esc(e.message)}</div>`;
+            }
+            resultsEl.innerHTML = lastPasswordResetHtml;
           }
           resetBtn.disabled    = false;
           resetBtn.textContent = 'Reset Password in All Systems';

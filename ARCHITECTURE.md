@@ -780,25 +780,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
-### *(pending)* — 2026-06-07 — Password reset UI: keep result/error visible after reset
+### `663c1b9` — 2026-06-07 — Admin password reset: AD/Google writeback + persistent UI results
 
-**Why** — Reset success/failure banner flashed for under a second because `reloadProfile()` re-rendered the Password Reset tab immediately after showing results.
-
-**What changed:**
-
-- **`web/js/views-stubs.js`** — persist reset results on the tab; background profile refresh only; surface API `results`/`summary` on HTTP 400 errors.
-
----
-
-### *(pending)* — 2026-06-07 — Password reset: auto-link AD/Google by corporate email before writeback
-
-**Why** — Admin password reset only updated Local when the user had no AD/Google identity links; corporate users expected Google and AD passwords to change too.
+**Why** — Reset only updated Local when AD/Google identity links were missing; success/failure feedback flashed away because the profile drawer re-rendered the Password Reset tab immediately after reset.
 
 **What changed:**
 
-- **`src/services/password-writeback.ts`** — before writeback, backfill AD and Google identity links from `email_corp`; report SKIPPED when connectors are active but no directory user matches.
+- **`src/services/password-writeback.ts`** — backfill AD and Google identity links from `email_corp` before writeback; SKIPPED rows when connectors are active but no directory user matches.
 - **`src/services/google-sync.ts`** — `backfillGoogleIdentityLinkIfMissing()` (mirrors AD profile backfill).
-- **`web/js/views-stubs.js`** — password tab notes auto-linking on reset.
+- **`web/js/views-stubs.js`** — persist per-system reset results on the tab; background profile refresh only; surface API `results`/`summary` on HTTP 400.
 
 ---
 

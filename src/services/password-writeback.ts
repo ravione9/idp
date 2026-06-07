@@ -12,6 +12,8 @@ import { redis } from '../auth/session-store.js';
 import { ADAdapter } from '../adapters/ad-adapter.js';
 import logger from '../utils/logger.js';
 import { getIdentityLinksForEmp } from '../utils/outbox.js';
+import { backfillAdIdentityLinkIfMissing } from './ad-sync.js';
+import { backfillGoogleIdentityLinkIfMissing } from './google-sync.js';
 import {
   buildGoogleJwtAuth,
   parseGoogleServiceAccountKey,
@@ -121,6 +123,45 @@ async function writebackToAD(
   }
 }
 
+async function ensureWritebackIdentityLinks(empId: string): Promise<string> {
+  const employee = await queryOne<{ email_corp: string | null }>(
+    `SELECT email_corp FROM employees WHERE emp_id = ?`,
+    [empId],
+  );
+  const email = employee?.email_corp?.trim();
+  if (!email) return empId;
+
+  const adBackfill = await backfillAdIdentityLinkIfMissing(empId, email);
+  const effectiveEmpId = adBackfill.empId;
+  await backfillGoogleIdentityLinkIfMissing(effectiveEmpId, email);
+  return effectiveEmpId;
+}
+
+function appendSkippedWhenConnectorActive(
+  results: WritebackResult[],
+  activeLinks: { system: string }[],
+  adCfg: Record<string, unknown> | null,
+  googleCfg: Record<string, unknown> | null,
+): void {
+  const attempted = new Set(results.map((r) => r.system));
+  const linked = new Set(activeLinks.map((l) => l.system));
+
+  if (adCfg && !linked.has('AD') && !attempted.has('AD')) {
+    results.push({
+      system: 'AD',
+      status: 'SKIPPED',
+      error: 'No AD account found for corporate email — verify AD sync or add an identity link',
+    });
+  }
+  if (googleCfg && !linked.has('GOOGLE') && !attempted.has('GOOGLE')) {
+    results.push({
+      system: 'GOOGLE',
+      status: 'SKIPPED',
+      error: 'No Google Workspace user found for corporate email — verify Google sync or add an identity link',
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
@@ -129,20 +170,23 @@ export async function writebackPassword(
   newPassword: string,
   initiatedBy: string,
 ): Promise<WritebackResult[]> {
-  const links = await getIdentityLinksForEmp(empId);
-  const activeLinks = links.filter(
-    (l) => l.status === 'ACTIVE' && (l.system === 'GOOGLE' || l.system === 'AD'),
-  );
-
-  if (activeLinks.length === 0) {
-    logger.info({ empId }, 'Password writeback: no active identity links found');
-    return [];
-  }
+  const effectiveEmpId = await ensureWritebackIdentityLinks(empId);
 
   const adCfg = await loadConnectorConfig(['AD', 'LDAP']);
   const googleCfg = await loadConnectorConfig(['GOOGLE', 'GOOGLE_WORKSPACE']);
 
+  const links = await getIdentityLinksForEmp(effectiveEmpId);
+  const activeLinks = links.filter(
+    (l) => l.status === 'ACTIVE' && (l.system === 'GOOGLE' || l.system === 'AD'),
+  );
+
   const results: WritebackResult[] = [];
+
+  if (activeLinks.length === 0) {
+    logger.info({ empId: effectiveEmpId }, 'Password writeback: no active AD/Google identity links after backfill');
+    appendSkippedWhenConnectorActive(results, activeLinks, adCfg, googleCfg);
+    return results;
+  }
 
   for (const link of activeLinks) {
     const system = link.system;
@@ -167,11 +211,11 @@ export async function writebackPassword(
         status = 'SKIPPED';
         error = 'Unsupported system';
       }
-      logger.info({ empId, system, externalId: link.external_id }, 'Password writeback succeeded');
+      logger.info({ empId: effectiveEmpId, system, externalId: link.external_id }, 'Password writeback succeeded');
     } catch (err) {
       status = 'FAILED';
       error = err instanceof Error ? err.message : String(err);
-      logger.error({ empId, system, externalId: link.external_id, err }, 'Password writeback failed');
+      logger.error({ empId: effectiveEmpId, system, externalId: link.external_id, err }, 'Password writeback failed');
     }
 
     if (system === 'AD' || system === 'GOOGLE') {
@@ -179,15 +223,16 @@ export async function writebackPassword(
         await query(
           `INSERT INTO password_writeback_log (emp_id, target_system, status, error, initiated_by)
            VALUES (?, ?, ?, ?, ?)`,
-          [empId, system, status, error ?? null, initiatedBy],
+          [effectiveEmpId, system, status, error ?? null, initiatedBy],
         );
       } catch (logErr) {
-        logger.warn({ empId, system, logErr }, 'Failed to insert password_writeback_log row');
+        logger.warn({ empId: effectiveEmpId, system, logErr }, 'Failed to insert password_writeback_log row');
       }
     }
 
     results.push({ system, status, ...(error ? { error } : {}) });
   }
 
+  appendSkippedWhenConnectorActive(results, activeLinks, adCfg, googleCfg);
   return results;
 }
