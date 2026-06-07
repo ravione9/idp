@@ -287,6 +287,7 @@ function buildShell() {
 }
 
 function wireMobileNav(root) {
+  const appRoot = root;
   const shellEl = root.querySelector('.shell');
   const menuBtn = root.querySelector('#mobile-menu-btn');
   const backdrop = root.querySelector('#mobile-backdrop');
@@ -295,6 +296,7 @@ function wireMobileNav(root) {
   const mq = window.matchMedia('(max-width: 900px)');
 
   function closeMobileNav() {
+    appRoot.classList.remove('mobile-nav-open');
     shellEl.classList.remove('mobile-nav-open');
     menuBtn.setAttribute('aria-expanded', 'false');
     backdrop?.setAttribute('aria-hidden', 'true');
@@ -303,6 +305,7 @@ function wireMobileNav(root) {
 
   function openMobileNav() {
     if (!mq.matches) return;
+    appRoot.classList.add('mobile-nav-open');
     shellEl.classList.add('mobile-nav-open');
     menuBtn.setAttribute('aria-expanded', 'true');
     backdrop?.setAttribute('aria-hidden', 'false');

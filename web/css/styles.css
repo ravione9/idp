@@ -2425,7 +2425,12 @@ td code, .td-code { font-size: 0.78rem; }
    Breakpoints: 480px phone · 768px tablet · 900px nav drawer · 1100px tablet-wide
    ============================================================ */
 
-.app-root { min-height: 100vh; }
+.app-root {
+  min-height: 100vh;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
 
 .mobile-menu-btn {
   display: none;
@@ -2460,14 +2465,46 @@ body.nav-locked { overflow: hidden; }
 
 @media (max-width: 900px) {
   .mobile-menu-btn { display: inline-flex; }
+  .topnav { overflow: hidden; }
+  .primary-nav {
+    min-width: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 
   .mobile-backdrop { display: none; }
-  .shell.mobile-nav-open .mobile-backdrop { display: block; }
+  .shell.mobile-nav-open + .mobile-backdrop,
+  .app-root.mobile-nav-open .mobile-backdrop { display: block; }
 
   .app-root .mobile-backdrop {
     position: fixed;
     inset: 0;
     top: 56px;
+  }
+  .shell.mobile-nav-open .content {
+    pointer-events: none;
+    user-select: none;
+  }
+  .content {
+    overflow-x: hidden;
+  }
+  .content > div {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  table { min-width: 560px; }
+  .page-header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .page-header-actions > * {
+    flex: 1 1 180px;
+    min-width: 0;
   }
 
   /* User sidebar — left drawer (replaces horizontal strip) */
@@ -2643,6 +2680,11 @@ body.nav-locked { overflow: hidden; }
 
   .table-toolbar { flex-direction: column; align-items: stretch; }
   .search-input { max-width: none; width: 100%; }
+  table {
+    min-width: 480px;
+    font-size: 0.8125rem;
+  }
+  th, td { padding: 0.6rem 0.7rem; }
 
   .aap-actions { flex-direction: column; }
   .aap-actions-btns { width: 100%; }
@@ -2701,6 +2743,7 @@ body.nav-locked { overflow: hidden; }
   .auth-card h2 { font-size: 1.25rem; }
 
   .theme-picker-grid { grid-template-columns: 1fr; }
+  table { min-width: 420px; }
 }
 
 /* Safe areas for notched phones */
