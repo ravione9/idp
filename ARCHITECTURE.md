@@ -773,6 +773,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ---
 
+### (pending) — 2026-06-07 — Google login errors shown on portal login page
+
+**Why** — Google OIDC failures returned raw JSON in the browser; users could not see why sign-in failed.
+
+**What changed:**
+
+- **`src/auth/login-redirect.ts`** — redirects auth failures to `/login?authError=<code>`.
+- **`src/auth/middleware.ts`**, **`src/auth/login-routes.ts`** — Google callback/initiation use login redirect instead of JSON errors; successful callback redirects to `returnTo` (including `/`).
+- **`web/js/views-end-user.js`** — maps `authError` codes to user-visible alert messages on the login page.
+
+---
+
 ### (pending) — 2026-06-07 — Google connector modal: Portal sign-in tab
 
 **Why** — Directory sync and portal Google OAuth were split across two admin screens; operators expected one Google Workspace configuration surface.

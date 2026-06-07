@@ -18,6 +18,40 @@ function googleLoginHref(returnTo) {
     : `/auth/google?returnTo=${encodeURIComponent(returnTo)}`;
 }
 
+const AUTH_ERROR_MESSAGES = {
+  google_not_configured:
+    'Google sign-in is not configured yet. Ask an administrator to complete Portal sign-in under Directory Sync → Google Workspace.',
+  google_setup_failed:
+    'Google sign-in could not be started. Try again or sign in with email and password.',
+  missing_code:
+    'Google sign-in did not complete. Try again.',
+  google_access_denied:
+    'Google sign-in was cancelled or denied.',
+  google_oauth_error:
+    'Google returned an error during sign-in. Check OAuth client settings and redirect URI in Google Cloud Console.',
+  wrong_hosted_domain:
+    'This Google account is not from an allowed Workspace domain.',
+  domain_not_permitted:
+    'Your email domain is not allowed for this IdP. Use your corporate Workspace account or sign in with email and password.',
+  email_not_verified:
+    'Your Google email address is not verified.',
+  no_employee_record:
+    'No active account was found for this email. Ask an administrator to sync your user from Google Workspace or create your account.',
+  auth_failed:
+    'Google sign-in failed. Try again or use email and password.',
+};
+
+function showAuthErrorFromUrl(errEl) {
+  const params = new URLSearchParams(location.search);
+  const code = params.get('authError');
+  if (!code) return;
+  const msg = AUTH_ERROR_MESSAGES[code] || 'Sign-in failed. Try again or use email and password.';
+  errEl.innerHTML = `<div class="alert alert-error">${esc(msg)}</div>`;
+  params.delete('authError');
+  const qs = params.toString();
+  history.replaceState(null, '', `/login${qs ? `?${qs}` : ''}`);
+}
+
 /* ---------- Login ---------- */
 export function renderLogin() {
   const returnTo = loginReturnTo();
@@ -186,6 +220,7 @@ export function renderLogin() {
   }
 
   wireEmailForm(root.querySelector('#step-email'));
+  showAuthErrorFromUrl(root.querySelector('#login-error'));
 
   api.adminStatus().then((s) => {
     if (!s.bootstrapEnabled) return;

@@ -10,6 +10,7 @@ import { Request, Response } from 'express';
 import { getPublicOrigin } from '../utils/request-context.js';
 import logger from '../utils/logger.js';
 import { getGoogleOidcConfig, isGoogleOidcConfigured } from './google-oidc-config.js';
+import { redirectLoginAuthError } from './login-redirect.js';
 
 function baseUrl(req: Request): string {
   return getPublicOrigin(req);
@@ -25,7 +26,7 @@ export async function googleLoginHandler(req: Request, res: Response): Promise<v
   try {
     const oidc = await getGoogleOidcConfig();
     if (!isGoogleOidcConfigured(oidc)) {
-      res.status(503).json({ error: 'Google login is not configured yet' });
+      redirectLoginAuthError(res, 'google_not_configured', safeReturnTo(req.query['returnTo'] as string | undefined));
       return;
     }
 
@@ -50,7 +51,7 @@ export async function googleLoginHandler(req: Request, res: Response): Promise<v
     res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
   } catch (err) {
     logger.error({ err }, 'Failed to start Google OIDC login');
-    res.status(500).json({ error: 'Authentication setup failed' });
+    redirectLoginAuthError(res, 'google_setup_failed', safeReturnTo(req.query['returnTo'] as string | undefined));
   }
 }
 

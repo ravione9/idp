@@ -15,6 +15,7 @@ import { query, queryOne } from '../db/connection.js';
 import { redis } from './session-store.js';
 import logger from '../utils/logger.js';
 import { parseOAuthState } from './login-routes.js';
+import { redirectLoginAuthError } from './login-redirect.js';
 import { getGoogleOidcConfig, isGoogleOidcConfigured } from './google-oidc-config.js';
 import { emailAllowedForGoogleDomains } from './google-domains.js';
 import {
@@ -146,16 +147,29 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 // googleCallbackHandler
 // ---------------------------------------------------------------------------
 export async function googleCallbackHandler(req: Request, res: Response): Promise<void> {
+  const { returnTo } = parseOAuthState(req.query['state'] as string | undefined);
+
+  const googleOAuthError = req.query['error'] as string | undefined;
+  if (googleOAuthError) {
+    logger.warn({ googleOAuthError, returnTo }, 'Google OAuth returned error to callback');
+    redirectLoginAuthError(
+      res,
+      googleOAuthError === 'access_denied' ? 'google_access_denied' : 'google_oauth_error',
+      returnTo,
+    );
+    return;
+  }
+
   const code = req.query['code'] as string | undefined;
   if (!code) {
-    res.status(400).json({ error: 'Missing code' });
+    redirectLoginAuthError(res, 'missing_code', returnTo);
     return;
   }
 
   try {
     const oidc = await getGoogleOidcConfig();
     if (!isGoogleOidcConfigured(oidc)) {
-      res.status(503).json({ error: 'Google login is not configured yet' });
+      redirectLoginAuthError(res, 'google_not_configured', returnTo);
       return;
     }
 
@@ -186,17 +200,17 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
 
     const hd = typeof payload['hd'] === 'string' ? payload['hd'].trim().toLowerCase() : '';
     if (hd && !oidc.hostedDomains.includes(hd)) {
-      res.status(403).json({ error: 'Wrong hosted domain' });
+      redirectLoginAuthError(res, 'wrong_hosted_domain', returnTo);
       return;
     }
 
     const email = payload['email'] as string;
     if (!emailAllowedForGoogleDomains(email, oidc.hostedDomains)) {
-      res.status(403).json({ error: 'Email domain not permitted for this IdP' });
+      redirectLoginAuthError(res, 'domain_not_permitted', returnTo);
       return;
     }
     if (!payload['email_verified']) {
-      res.status(403).json({ error: 'Email not verified' });
+      redirectLoginAuthError(res, 'email_not_verified', returnTo);
       return;
     }
 
@@ -209,7 +223,8 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     );
 
     if (!emp) {
-      res.status(403).json({ error: 'No active employee record for this account' });
+      logger.warn({ email }, 'Google login: no active employee record');
+      redirectLoginAuthError(res, 'no_employee_record', returnTo);
       return;
     }
 
@@ -225,11 +240,10 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     });
 
     setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
-    const { returnTo } = parseOAuthState(req.query['state'] as string | undefined);
-    res.redirect(returnTo === '/' ? '/login' : returnTo);
+    res.redirect(returnTo);
   } catch (err) {
     logger.error({ err }, 'Google OIDC callback failed');
-    res.status(500).json({ error: 'Authentication failed' });
+    redirectLoginAuthError(res, 'auth_failed', returnTo);
   }
 }
 
