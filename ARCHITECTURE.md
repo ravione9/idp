@@ -211,7 +211,10 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 |---|---|
 | `GET  /saml/metadata` | IdP metadata XML (ADMIN+ session required; shared with SP admins during onboarding) |
 | `GET/POST /saml/sso` | SP-initiated SSO (`AuthnRequest` via Redirect or POST binding) |
+| `GET  /saml/resume/:pendingId` | Resume SP-initiated SSO after portal sign-in (pending `AuthnRequest` in Redis) |
 | `GET  /saml/launch/:slug` | IdP-initiated launch (browser → app tile click) |
+
+**Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which replays the stored request and posts the SAML assertion to the SP ACS.
 
 ### 6.2 Service Provider registry
 
@@ -612,6 +615,7 @@ docker logs idp-worker --tail 100 -f
 
 # Diagnostics
 bash scripts/diagnose.sh
+bash scripts/check-user-sso.sh test.a@itinfralenskart.com
 
 # DB shell
 docker exec -it idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg
@@ -764,6 +768,27 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/auth/session.ts`**, **`src/auth/local-auth.ts`**, **`src/auth/middleware.ts`** — store `device_info` at login; enrich `geo_location` in background; use `getClientIp()` for public IP.
 - **`src/api/me-actions.ts`**, **`src/api/admin-users.ts`** — session APIs return `device_info` + `geo_location` (removed `POST /api/me/sessions/device-context`).
 - **`web/js/views-stubs.js`**, **`web/js/views-end-user.js`** — Sessions tables show Device, Location, IP.
+
+---
+
+### (pending) — 2026-06-07 — `check-user-sso.sh` diagnostic for SP-initiated login
+
+**Why** — Admins need a quick read-only check (employee, local account, Zoho policy grant, SAML keys) before testing Zoho SP-initiated SSO for a user.
+
+**What changed:**
+
+- **`scripts/check-user-sso.sh`** — `bash scripts/check-user-sso.sh <email> [app-slug]` prints pass/fail for SSO readiness.
+
+---
+
+### (pending) — 2026-06-07 — SP-initiated SSO redirects to portal login (local + Google)
+
+**Why** — Unauthenticated users hitting `/saml/sso` (e.g. Zoho login page) were hard-redirected to `/auth/google`, which blocked local-password users and failed when Google OIDC was not configured.
+
+**What changed:**
+
+- **`src/api/saml.ts`** — unauthenticated SP-initiated SSO now redirects to `/login?returnTo=/saml/resume/<id>` instead of `/auth/google`.
+- **`web/js/views-end-user.js`** — login page honors `returnTo` after local password / MFA success; Google button preserves `returnTo`; SSO resume shows “Sign in to continue to your application.”
 
 ---
 

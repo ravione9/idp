@@ -6,8 +6,22 @@ import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 
 const ROLES_ADMIN = ['ADMIN', 'SUPER_ADMIN'];
 
+function loginReturnTo() {
+  const raw = new URLSearchParams(location.search).get('returnTo');
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//')) return '/';
+  return raw;
+}
+
+function googleLoginHref(returnTo) {
+  return returnTo === '/'
+    ? '/auth/google'
+    : `/auth/google?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
 /* ---------- Login ---------- */
 export function renderLogin() {
+  const returnTo = loginReturnTo();
+  const ssoResume = returnTo.startsWith('/saml/resume/');
   const root = el(`
     <div class="auth-shell">
       <aside class="auth-hero">
@@ -41,7 +55,7 @@ export function renderLogin() {
         </div>
         <div class="auth-card" id="step-email">
           <h2>Sign in to Lenskart IdP</h2>
-          <p class="muted">Enter your corporate email to continue.</p>
+          <p class="muted">${ssoResume ? 'Sign in to continue to your application.' : 'Enter your corporate email to continue.'}</p>
           <div id="login-error"></div>
           <form id="email-form">
             <div class="field">
@@ -51,7 +65,7 @@ export function renderLogin() {
             <button type="submit" class="btn btn-primary btn-block btn-lg">Continue →</button>
           </form>
           <div style="text-align:center;margin-top:1rem">
-            <a href="/auth/google" class="btn btn-secondary" style="width:100%">Continue with Google</a>
+            <a href="${esc(googleLoginHref(returnTo))}" class="btn btn-secondary" style="width:100%">Continue with Google</a>
           </div>
         </div>
       </main>
@@ -83,7 +97,7 @@ export function renderLogin() {
       merr.innerHTML = '';
       try {
         await api.localLoginMfa(challengeId, new FormData(e.target).get('code'));
-        location.href = '/';
+        location.href = returnTo;
       } catch (err) {
         merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }
@@ -129,7 +143,7 @@ export function renderLogin() {
           renderMfaStep(r.challengeId, email);
           return;
         }
-        location.href = '/';
+        location.href = returnTo;
       } catch (err) {
         pwErr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }
@@ -140,7 +154,7 @@ export function renderLogin() {
     const card = el(`
       <div class="auth-card" id="step-email">
         <h2>Sign in to Lenskart IdP</h2>
-        <p class="muted">Enter your corporate email to continue.</p>
+        <p class="muted">${ssoResume ? 'Sign in to continue to your application.' : 'Enter your corporate email to continue.'}</p>
         <div id="login-error"></div>
         <form id="email-form">
           <div class="field">
@@ -150,7 +164,7 @@ export function renderLogin() {
           <button type="submit" class="btn btn-primary btn-block btn-lg">Continue →</button>
         </form>
         <div style="text-align:center;margin-top:1rem">
-          <a href="/auth/google" class="btn btn-secondary" style="width:100%">Continue with Google</a>
+          <a href="${esc(googleLoginHref(returnTo))}" class="btn btn-secondary" style="width:100%">Continue with Google</a>
         </div>
       </div>
     `);

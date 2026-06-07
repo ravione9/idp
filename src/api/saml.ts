@@ -89,7 +89,7 @@ async function issueAssertion(
     });
     await redis.set(`${PENDING_SSO_PREFIX}${pendingId}`, payload, 'EX', PENDING_SSO_TTL_S);
     const returnTo = encodeURIComponent(`/saml/resume/${pendingId}`);
-    res.redirect(`/auth/google?returnTo=${returnTo}`);
+    res.redirect(`/login?returnTo=${returnTo}`);
     return;
   }
 
