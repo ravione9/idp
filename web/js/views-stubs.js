@@ -2988,6 +2988,7 @@ function initSourcesTab(panel) {
         return `<div class="form-group" style="grid-column:1/-1">
           <label class="form-label">${esc(label)}</label>
           <textarea class="form-textarea" id="cfg-${f}" rows="2" placeholder="alice@company.com&#10;bob@company.com">${val}</textarea>
+          <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">When set, only these users are imported (looked up by primary email). Outbound provision is limited to this list unless the employee already has a Google link. Click <strong>Save Changes</strong> before syncing.</p>
         </div>`;
       }
       if (f === 'includeSubOrgUnits' && isGoogle) {

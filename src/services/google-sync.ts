@@ -14,6 +14,7 @@ import logger from '../utils/logger.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   buildGoogleJwtAuth,
+  employeeEligibleForGoogleOutbound,
   listScopedGoogleUsers,
   resolveGoogleSyncScope,
   type GoogleSyncScope,
@@ -102,8 +103,13 @@ async function importGoogleDirectoryUsers(
   succeeded: number;
   failed: number;
   repaired: number;
+  notFoundEmails: string[];
 }> {
-  const googleUsers = await listScopedGoogleUsers(directory, scope);
+  const scoped = await listScopedGoogleUsers(directory, scope);
+  const googleUsers = scoped.users;
+  for (const email of scoped.notFoundEmails) {
+    errors.push(`Google user not found: ${email}`);
+  }
   let imported = 0;
   let linked = 0;
   let skipped = 0;
@@ -231,7 +237,17 @@ async function importGoogleDirectoryUsers(
     logger.info({ repaired }, 'Google sync inbound: repaired orphan identity links');
   }
 
-  return { found: googleUsers.length, imported, linked, skipped, processed, succeeded, failed, repaired };
+  return {
+    found: googleUsers.length,
+    imported,
+    linked,
+    skipped,
+    processed,
+    succeeded,
+    failed,
+    repaired,
+    notFoundEmails: scoped.notFoundEmails,
+  };
 }
 
 /** Link employees that exist without a Google identity_link row. */
@@ -379,10 +395,15 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
         errors.push(...gs.errors);
       }
 
+      const notFoundHint = inbound.notFoundEmails.length
+        ? `, ${inbound.notFoundEmails.length} not in Google (${inbound.notFoundEmails.slice(0, 3).join(', ')}${inbound.notFoundEmails.length > 3 ? '…' : ''})`
+        : '';
+
       inboundSummary =
         `Inbound: ${inbound.found} Google users found, ${inbound.imported} imported, ${inbound.linked} linked` +
         (inbound.repaired ? `, ${inbound.repaired} links repaired` : '') +
         `, ${inbound.skipped} skipped` +
+        notFoundHint +
         groupSummary +
         (runOutbound ? ' | Outbound: see employee reconcile below' : '');
       logger.info({ connectorId, runId, inbound }, 'Google sync inbound phase complete');
@@ -400,17 +421,24 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
 
       logger.info({ connectorId, runId, count: employees.length }, 'Google sync outbound: processing employees');
 
+      let outboundSkipped = 0;
+
       for (const emp of employees) {
+        const link = await queryOne<IdentityLinkRow>(
+          `SELECT id, external_id, status
+             FROM identity_links
+            WHERE emp_id = ? AND \`system\` = 'GOOGLE' AND status NOT IN ('DELETED')`,
+          [emp.emp_id],
+        );
+
+        if (!employeeEligibleForGoogleOutbound(emp.email_corp, scope, !!link)) {
+          outboundSkipped++;
+          continue;
+        }
+
         itemsProcessed++;
 
         try {
-          const link = await queryOne<IdentityLinkRow>(
-            `SELECT id, external_id, status
-               FROM identity_links
-              WHERE emp_id = ? AND \`system\` = 'GOOGLE' AND status NOT IN ('DELETED')`,
-            [emp.emp_id],
-          );
-
           const isActive   = emp.ilg_state === 'ACTIVE' || emp.ilg_state === 'REACTIVATED';
           const isInactive = emp.ilg_state === 'SUSPENDED_HR'
                           || emp.ilg_state === 'SUSPENDED_AUTO'
@@ -481,6 +509,10 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
           errors.push(msg);
           logger.error({ empId: emp.emp_id, err }, 'Google sync outbound: per-employee error (non-fatal)');
         }
+      }
+
+      if (outboundSkipped > 0) {
+        logger.info({ connectorId, runId, outboundSkipped }, 'Google sync outbound: skipped employees outside sync scope');
       }
     }
   } catch (fatalErr) {

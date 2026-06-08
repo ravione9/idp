@@ -7,6 +7,7 @@ import type { admin_directory_v1 } from 'googleapis';
 import type { JWT } from 'google-auth-library';
 import { config } from '../config.js';
 import {
+  emailAllowedForGoogleDomains,
   parseGoogleHostedDomains,
   primaryGoogleHostedDomain,
 } from '../auth/google-domains.js';
@@ -212,17 +213,58 @@ async function listUsersInGroup(
   return members;
 }
 
+function isGoogleUserNotFound(err: unknown): boolean {
+  const e = err as { code?: number; response?: { status?: number } };
+  return e?.code === 404 || e?.response?.status === 404;
+}
+
+/** Direct lookup by primary email — reliable for explicit Sync Users allowlists. */
+async function fetchGoogleUsersByEmail(
+  directory: admin_directory_v1.Admin,
+  emails: string[],
+): Promise<{ users: admin_directory_v1.Schema$User[]; notFound: string[] }> {
+  const users: admin_directory_v1.Schema$User[] = [];
+  const notFound: string[] = [];
+
+  for (const email of emails) {
+    try {
+      const res = await directory.users.get({ userKey: email });
+      if (res.data) users.push(res.data);
+    } catch (err) {
+      if (isGoogleUserNotFound(err)) {
+        notFound.push(email);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return { users, notFound };
+}
+
+export interface ScopedGoogleUsersResult {
+  users: admin_directory_v1.Schema$User[];
+  notFoundEmails: string[];
+}
+
 /** List users matching connector OU / group / user scope (AND across non-empty filters). */
 export async function listScopedGoogleUsers(
   directory: admin_directory_v1.Admin,
   scope: GoogleSyncScope,
-): Promise<admin_directory_v1.Schema$User[]> {
+): Promise<ScopedGoogleUsersResult> {
   const hasOu     = scope.orgUnits.length > 0;
   const hasGroup  = scope.groups.length > 0;
   const hasUsers  = scope.users.length > 0;
+  const notFoundEmails: string[] = [];
 
   if (!hasOu && !hasGroup && !hasUsers) {
-    return listAllGoogleUsers(directory);
+    const users = await listAllGoogleUsers(directory);
+    return { users, notFoundEmails };
+  }
+
+  if (hasUsers && !hasOu && !hasGroup) {
+    const direct = await fetchGoogleUsersByEmail(directory, scope.users);
+    return { users: direct.users, notFoundEmails: direct.notFound };
   }
 
   let pool: admin_directory_v1.Schema$User[];
@@ -257,8 +299,51 @@ export async function listScopedGoogleUsers(
 
   if (hasUsers) {
     const allow = new Set(scope.users);
-    pool = pool.filter((u) => allow.has(userEmail(u)));
+    const matched = new Set(pool.map((u) => userEmail(u)).filter((e) => allow.has(e)));
+    const missingFromPool = scope.users.filter((e) => !matched.has(e));
+    if (missingFromPool.length > 0) {
+      const direct = await fetchGoogleUsersByEmail(directory, missingFromPool);
+      notFoundEmails.push(...direct.notFound);
+      const byId = new Map<string, admin_directory_v1.Schema$User>();
+      for (const u of pool) {
+        const id = u.id ?? userEmail(u);
+        if (id) byId.set(id, u);
+      }
+      for (const u of direct.users) {
+        const id = u.id ?? userEmail(u);
+        if (id && allow.has(userEmail(u))) byId.set(id, u);
+      }
+      pool = [...byId.values()].filter((u) => allow.has(userEmail(u)));
+    } else {
+      pool = pool.filter((u) => allow.has(userEmail(u)));
+    }
   }
 
-  return pool;
+  return { users: pool, notFoundEmails };
+}
+
+/** Whether outbound reconcile should touch this employee (respects sync scope). */
+export function employeeEligibleForGoogleOutbound(
+  emailCorp: string,
+  scope: GoogleSyncScope,
+  hasGoogleLink: boolean,
+): boolean {
+  if (hasGoogleLink) return true;
+
+  const email = emailCorp.trim().toLowerCase();
+  if (!email) return false;
+
+  if (scope.customerDomains.length > 0 && !emailAllowedForGoogleDomains(email, scope.customerDomains)) {
+    return false;
+  }
+
+  const hasScopeFilter = scope.orgUnits.length > 0 || scope.groups.length > 0 || scope.users.length > 0;
+  if (!hasScopeFilter) return true;
+
+  if (scope.users.length > 0) {
+    return scope.users.includes(email);
+  }
+
+  // OU / group scope is inbound-only — do not auto-provision every IdP employee to Google.
+  return false;
 }

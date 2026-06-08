@@ -585,10 +585,13 @@ router.post(
           if (scope.users.length) scopeParts.push(`${scope.users.length} explicit user(s)`);
           const scopeLabel = scopeParts.length ? scopeParts.join(', ') : 'entire directory';
           const domainLabel = scope.customerDomains.join(', ');
+          const notFoundHint = scopedUsers.notFoundEmails.length
+            ? ` Not found in Google: ${scopedUsers.notFoundEmails.join(', ')}.`
+            : '';
 
           res.json({
             success: true,
-            message: `Connected to Google Workspace (${domainLabel}). Sync scope: ${scopeLabel} — ${scopedUsers.length} user(s) matched. Portal login allows: ${domainLabel}.`,
+            message: `Connected to Google Workspace (${domainLabel}). Sync scope: ${scopeLabel} — ${scopedUsers.users.length} user(s) matched.${notFoundHint} Portal login allows: ${domainLabel}.`,
           });
         } catch (googleErr) {
           const friendly = formatGoogleAuthError(googleErr, cfg);

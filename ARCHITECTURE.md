@@ -817,6 +817,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### TBD — 2026-06-08 — Google sync: scoped user lookup and outbound limits
+
+**Why** — Sync with explicit Sync Users (e.g. `bipin.rai@lenskart.com`) reported 0 inbound users while outbound failed on 24 unrelated IdP employees (BIDIRECTIONAL tried to provision everyone).
+
+**What changed:**
+
+- **Fixed:** `src/services/google-directory-config.ts` — explicit Sync Users are fetched via `users.get` by email; reports not-found addresses; outbound skips employees outside scope (unless they already have a Google identity link).
+- **Updated:** `src/services/google-sync.ts`, `src/api/iga.ts` — consume scoped user result; sync history shows not-found emails.
+- **Updated:** `web/js/views-stubs.js` — Sync Users field hint (save before sync).
+
 ### TBD — 2026-06-08 — Google sync: fix outbound SQL column names
 
 **Why** — Google Workspace connector sync failed after inbound user import with `Unknown column 'department' in 'field list'` because outbound reconcile queried non-existent `department` / `title` columns on `employees` (schema uses `dept_id` / `role`).
