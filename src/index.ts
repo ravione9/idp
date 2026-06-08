@@ -204,6 +204,20 @@ app.use('/api/internal/saml', internalSamlRouter);
 // ---------------------------------------------------------------------------
 // Web UI (login + admin central)
 // ---------------------------------------------------------------------------
+const FAVICON_PATH = path.join(WEB_ROOT, 'favicon.svg');
+
+app.get('/favicon.ico', (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.type('image/svg+xml');
+  res.sendFile(FAVICON_PATH);
+});
+
+app.get('/favicon.svg', (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.type('image/svg+xml');
+  res.sendFile(FAVICON_PATH);
+});
+
 // Static assets — disable long-lived caching so deployed UI changes show up
 // immediately (small SPA, no fingerprinted bundles). ETag still allows 304s.
 app.use(
