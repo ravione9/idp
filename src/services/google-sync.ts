@@ -36,9 +36,6 @@ interface EmployeeRow {
   emp_id: string;
   full_name: string;
   email_corp: string;
-  department: string | null;
-  title: string | null;
-  role: string;
   ilg_state: string;
 }
 
@@ -395,7 +392,7 @@ export async function runGoogleSync(connectorId: string): Promise<SyncResult> {
       logger.info({ connectorId, direction }, 'Google sync: OUTBOUND skipped');
     } else {
       const employees = await query<EmployeeRow>(
-        `SELECT emp_id, full_name, email_corp, department, title, role, ilg_state
+        `SELECT emp_id, full_name, email_corp, ilg_state
            FROM employees
           ORDER BY emp_id`,
         [],

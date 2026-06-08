@@ -817,6 +817,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### TBD — 2026-06-08 — Google sync: fix outbound SQL column names
+
+**Why** — Google Workspace connector sync failed after inbound user import with `Unknown column 'department' in 'field list'` because outbound reconcile queried non-existent `department` / `title` columns on `employees` (schema uses `dept_id` / `role`).
+
+**What changed:**
+
+- **Fixed:** `src/services/google-sync.ts` — outbound phase selects only existing columns (`emp_id`, `full_name`, `email_corp`, `ilg_state`).
+- **Fixed:** `src/api/config-birthright.ts` — dry-run and run endpoints use `dept_id` instead of `department`.
+
 ### TBD — 2026-06-07 — Bulk user import (create/update + group assignment)
 
 **Why** — Admins needed a single console workflow to create or update large user populations (up to 100,000 rows) and assign local group membership without one-by-one UI clicks.

@@ -66,7 +66,7 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
 // GET /dry-run — simulate who would get what
 router.get('/dry-run', asyncHandler(async (_req: Request, res: Response) => {
   const rows = await query(
-    `SELECT e.emp_id, e.full_name, e.department,
+    `SELECT e.emp_id, e.full_name, e.dept_id,
        COUNT(ent.id) AS would_get_count
      FROM employees e
      CROSS JOIN entitlements ent WHERE ent.is_birthright=1 AND ent.active=1
@@ -83,14 +83,14 @@ router.get('/dry-run', asyncHandler(async (_req: Request, res: Response) => {
 // POST /run — actually run birthright assignment for all active employees (SUPER_ADMIN only)
 router.post('/run', requireRole('SUPER_ADMIN'), asyncHandler(async (_req: Request, res: Response) => {
   // Fetch all active employees and run birthright for each
-  const employees = await query<{ emp_id: string; department: string; employment_type: string }>(
-    `SELECT emp_id, COALESCE(department, '') AS department, COALESCE(employment_type, '') AS employment_type
+  const employees = await query<{ emp_id: string; dept_id: string; employment_type: string }>(
+    `SELECT emp_id, COALESCE(dept_id, '') AS dept_id, COALESCE(employment_type, '') AS employment_type
      FROM employees WHERE ilg_state = 'ACTIVE'`,
     [],
   );
   let totalAssigned = 0;
   for (const emp of employees) {
-    const count = await assignBirthrightEntitlements(emp.emp_id, emp.department, emp.employment_type);
+    const count = await assignBirthrightEntitlements(emp.emp_id, emp.dept_id, emp.employment_type);
     totalAssigned += count;
   }
   res.json({ success: true, assigned: totalAssigned, employees: employees.length });
