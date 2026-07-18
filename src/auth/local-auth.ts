@@ -343,7 +343,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
       || policyRequiresMfa;
 
     if (mfaRequired) {
-      if (!mfa.enrolled) {
+      if (!mfa.enabled) {
         const enrollChallengeId = crypto.randomUUID();
         const enrollChallenge: MfaEnrollChallenge = {
           empId:     account.emp_id,

@@ -1732,8 +1732,10 @@ export async function viewSod(content) {
           <option value="HIGH" selected>High</option><option value="CRITICAL">Critical</option>
         </select></div>
         <div class="form-group"><label class="form-label">Enforcement</label><select class="form-select" id="sp-enf">
-          <option value="ADVISORY">Advisory (warn only)</option>
-          <option value="BLOCKING">Blocking (prevent grant)</option>
+          <option value="ALERT">Alert (warn)</option>
+          <option value="MONITOR">Monitor only</option>
+          <option value="REQUIRE_APPROVAL">Require approval</option>
+          <option value="PREVENT">Prevent grant</option>
         </select></div>
         <div class="form-group"><label class="form-label">Conflict Groups (JSON)</label>
           <textarea class="form-textarea" id="sp-groups" rows="4" placeholder='[["entitlement-id-1","entitlement-id-2"],["role-id-a","role-id-b"]]'></textarea>
@@ -1758,7 +1760,7 @@ export async function viewSod(content) {
         description:   bd.querySelector('#sp-desc').value,
         severity:      bd.querySelector('#sp-sev').value,
         enforcement:   bd.querySelector('#sp-enf').value,
-        conflictGroups,
+        conflict_groups: conflictGroups,
       };
       if (!data.name) { bd.querySelector('#sp-err').innerHTML = `<div class="alert alert-error">Name required</div>`; return; }
       const btn = bd.querySelector('#sp-save');
@@ -1792,7 +1794,7 @@ export async function viewRisk(content) {
               <td><span class="badge ${u.score >= 80 ? 'badge-danger' : (u.score >= 60 ? 'badge-warning' : 'badge-info')}">${u.score}</span></td>
               <td class="muted">${fmtDate(u.updated_at)}</td>
             </tr>`).join('')}</tbody></table></div>`
-        : `<div class="card empty-state"><span class="empty-icon">◆</span>No risk scores computed yet. Risk engine runs in Phase 3.</div>`}`;
+        : `<div class="card empty-state"><span class="empty-icon">◆</span>No risk scores yet. Attendance-based suspensions are owned by <strong>Attendance IGA</strong> when enabled; legacy <code>/risk-scan</code> is skipped in that mode.</div>`}`;
   } catch (err) { wrap.querySelector('#rk').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; }
 }
 

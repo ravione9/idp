@@ -414,7 +414,17 @@ To add a new migration:
 | `attendance_events`, `leave_records` | HRMS-driven lifecycle inputs |
 | `abac_policies`, `role_bindings` | Legacy authorization model (will fold into `business_roles` + `entitlements`) |
 | `workflow_definitions` | **(007)** Workflow library definitions (`steps_json`, `trigger_event`) — backs `/api/admin/workflows` |
-| `workflow_runs` | Generic workflow run history |
+| `workflow_runs` | **(028)** Execution history for workflow_definitions (status, step progress, errors) |
+| `attendance_iga_config` | **(029, 030)** Singleton config: source (REST API / SFTP / file upload), API auth, SFTP credentials (`sftp_config`), polling interval, cutoff, approval, connector actions |
+| `attendance_iga_rules` | **(029)** Configurable rules A–H (action + ignore types) with priority |
+| `attendance_iga_exclusions` | **(029)** VIP users, departments, individual employees to skip |
+| `attendance_iga_import_runs` | **(029)** Import run metadata + aggregate report counters |
+| `attendance_iga_staging` | **(029)** Temporary validated attendance rows per import run |
+| `attendance_iga_evaluations` | **(029)** Rule engine output per employee per run |
+| `attendance_iga_approvals` | **(029)** Optional approval queue (approve / reject / skip) before execution |
+| `attendance_iga_executions` | **(029)** SSO actions taken + rollback snapshot JSON |
+| `attendance_iga_rollback_log` | **(029)** Admin rollback audit trail |
+| `event_triggers` | **(006)** Webhook / Slack / email subscriptions fired on platform events |
 | `compliance_reports` | **(003)** Generated SOX / GDPR / HIPAA reports |
 | `notifications` | **(003, 011)** Email / Slack / Teams notification outbox — 011 adds `recipient_emp_id`, `subject`, `body`, `template_id`, `reference_id`, `reference_type`, `error` for service layer |
 | `general_settings` | **(006, 012, 021)** Singleton operational settings (login toggles, maintenance mode, portal TLS certs, Google OIDC GUI overrides) |
@@ -496,6 +506,18 @@ To add a new migration:
 | `GET`/`POST`/`DELETE` | `/api/admin/app-access-policy/assignments[/:id]` | User, identity-group, or tag-group application grants |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/app-access-policy/workflows[/:id]` | Group access approval workflows |
 | `GET` | `/api/admin/app-access-policy/audit` | Application access policy audit log |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/workflows/definitions[/:id]` | Workflow library CRUD (trigger event + ordered steps) |
+| `GET` | `/api/admin/workflows/runs` | Workflow execution history |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/workflows/triggers[/:id]` | Event trigger CRUD (webhook / Slack / email on platform events) |
+| `GET` | `/api/admin/attendance-iga/dashboard` | Attendance IGA dashboard stats (imports, suspensions, approvals, connector health) |
+| `GET`/`PUT` | `/api/admin/attendance-iga/config` | Read/update attendance source, rules config, approval, notifications |
+| `GET`/`PUT` | `/api/admin/attendance-iga/rules[/:id]` | List/update rule definitions (A–H) |
+| `GET`/`POST`/`DELETE` | `/api/admin/attendance-iga/exclusions[/:id]` | VIP / department / employee exclusions |
+| `GET` | `/api/admin/attendance-iga/imports[/:id/staging]` | Import run history + staging rows |
+| `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (REST API, CSV upload, or evaluation-only) |
+| `GET`/`POST` | `/api/admin/attendance-iga/approvals[/:id/decision]` | Pending approvals; approve / reject / skip |
+| `GET`/`POST` | `/api/admin/attendance-iga/executions[/:id/rollback]` | Execution audit + rollback |
+| `GET` | `/api/admin/attendance-iga/rollbacks` | Rollback history |
 
 ### 8.5 IGA + multi-protocol AM (live read APIs; write paths return 501 until service layer ships)
 
@@ -508,8 +530,9 @@ To add a new migration:
 | `POST` | `/api/iga/connectors` | Register connector (501) |
 | `GET` | `/api/iga/connectors/:id/runs` | Connector run history |
 | `POST` | `/api/iga/connectors/:id/sync` | Trigger sync (501) |
-| `GET` | `/api/iga/entitlements[?appId=…]` | Entitlement catalog |
+| `GET` | `/api/iga/entitlements[?appId=…]` | Entitlement catalog (any authenticated user — Request Access) |
 | `GET` | `/api/iga/entitlements/me` | My current entitlements |
+| `GET` | `/api/iga/roles` | Active business roles for Request Access catalog |
 | `GET` | `/api/iga/access-requests?scope=mine\|tasks\|all` | List access requests by scope |
 | `POST` | `/api/iga/access-requests` | Submit access request (SoD pre-check + approval chain) |
 | `POST` | `/api/iga/access-requests/:id/decision` | Approve / reject pending request |
@@ -529,7 +552,12 @@ To add a new migration:
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/internal/saml` | Programmatic SP registration |
+| `POST` | `/api/internal/attendance-iga/run` | Attendance IGA pipeline (scheduler / Airflow; same body as admin `/run`) |
+| `POST` | `/api/internal/risk-scan` | Legacy attendance risk FSM scan — **skipped when Attendance IGA `enabled=1`** (IGA owns suspensions) |
+| `POST` | `/api/internal/ingest/truein` | Legacy Truein ingest into `attendance_events` — prefer Attendance IGA when enabled |
 | Various | `/api/internal/*` | Airflow / automation hooks |
+
+**Attendance ownership:** when Attendance IGA is enabled, use that pipeline for Truein/SFTP fetch + suspensions. Keep Airflow on `/attendance-iga/run`; do not also schedule `/risk-scan` for the same attendance gap policy.
 
 ---
 
@@ -571,15 +599,15 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 |---|---|
 | **Overview** | Dashboard |
 | **Identity** | Users / Identities · Groups · Bulk User Import · Administrators · System / Privileged Users · Identity Profiles |
-| **Authentication** | SSO Configuration · Strong Auth Methods · Adaptive Auth · Password Policies · Login Customization |
+| **Authentication** | SSO Configuration · Strong Auth Methods · Adaptive Auth · Password Policies |
 | **Applications** | Application Catalog · SAML Applications · OIDC / OAuth · App Discovery |
-| **Connections** | Connectors / Sources · Directory Sync |
+| **Connections** | Directory Sync (Connectors redirects here) |
 | **Access Model** | Business Roles · Birthright Rules · Application Access Policy |
 | **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault |
-| **Identity Governance** | Certifications · Segregation of Duties · Risk |
+| **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
 | **Workflows** | Workflow Library · Event Triggers · Notifications |
 | **Reports** | Audit Log · SSO Reports · Compliance Reports |
-| **Settings** | General · Branding · License · Tickets · System Health |
+| **Settings** | General · Branding & Login · License · Tickets · System Health |
 
 **Account** (everyone) — top-right profile dropdown
 - Account settings (Profile / Security / Sessions / Two-factor)
@@ -591,7 +619,9 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 
 - `/login` — login form (no auth)
 - `/` — console (default landing: admins → Dashboard, others → My Apps)
-- `/?v=<view>` — direct deep link to any view
+- `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
+
+**Attendance IGA admin console** (`/?v=attendanceIga`) — tabs: Dashboard · Configuration · Import History · Approvals · Executions. Pipeline: fetch attendance (REST API with exponential-backoff retry, or CSV upload) → staging validation → employee match (employee ID → email → username) → rule evaluation (uses `leave_records`, `holiday_calendar`, exclusions) → optional approval → connector actions (suspend, disable, revoke sessions, remove apps/groups/roles) → audit + notification → rollback restores snapshot.
 
 ---
 
@@ -774,6 +804,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Compliance report creation** — `POST /api/iga/reports` now creates a report record (was 501)
 - ⏳ Risk engine — location / device / velocity heuristics → `login_risk_events`, `risk_scores`
 
+**Workflow engine (live):**
+- ✅ `workflow_definitions` + `event_triggers` admin CRUD at `/api/admin/workflows`
+- ✅ `src/services/workflow-engine.ts` — executes step types `NOTIFY`, `GRANT_BIRTHRIGHT`, `REVOKE_BIRTHRIGHT`, `WEBHOOK` on matching `trigger_event`
+- ✅ `src/services/event-dispatcher.ts` — fires event triggers + starts workflows on platform events (`JOINER`, `LEAVER`, `SUSPEND`, `ACCESS_REQUEST`, …)
+- ✅ Wired into FSM transitions, user lifecycle (suspend/terminate), and access-request submission
+- ✅ `workflow_runs` table + `GET /api/admin/workflows/runs` execution history
+- ✅ Admin **Workflow Library** UI — step builder (no raw JSON), run history tab
+
 ### Phase 3 — Modern AM
 
 - OIDC issuer endpoints (`/.well-known/openid-configuration`, `/oauth/authorize`, `/oauth/token`, `/oauth/userinfo`) — schema staged in `oidc_clients`, `oauth_tokens`
@@ -816,6 +854,80 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-18 — Full-codebase QC pass (security, CRUD, roles, dual pipelines)
+
+**Why** — Cross-module audit found secret leaks, many UI↔API field mismatches, ADMIN nav hitting SUPER_ADMIN-only APIs, and dual attendance paths that could double-suspend.
+
+**What changed:**
+
+- **Security** — redact `google_oidc_client_secret` from general-settings GET; redact Attendance IGA tokens/SFTP secrets on config GET; never echo event-trigger webhook secrets.
+- **Access requests** — accept `APP`→`APP_ACCESS`, default `targetEmpId` to requester; `GET /api/iga/roles` + open entitlements list for end-user catalog.
+- **Tickets / Password policies / SoD / Notifications / PAM / System users / Business roles** — UI payloads and displays aligned to DB/API; SoD PUT is partial (toggle no longer wipes policy).
+- **Role walls** — SAML apps, OIDC clients, adaptive auth, password policies, portal SSL, connectors write, SoD CRUD, birthright run, notification test/dispatch opened to `ADMIN` + `SUPER_ADMIN` (matches sidebar).
+- **Attendance ownership** — when Attendance IGA `enabled=1`, `POST /api/internal/risk-scan` skips (no double-suspend); legacy Truein ingest returns a warning if IGA is on.
+- **Nav / labels** — Login Customization → Branding; Connectors → Directory Sync; License/MFA/Workflow copy honesty; dual `022_*` migrations left as-is (tracked by full filename).
+- **Intentional dual registries** — `saml_service_providers` remains SAML runtime; `applications` is IGA catalog (slug mirror via `syncSamlAppsToCatalog`). Three workflow surfaces remain layered (library / triggers / app-access approvals) with clearer UI labels.
+
+### TBD — 2026-07-18 — Attendance IGA: Truein API integration + empty-import safety guard
+
+**Why** — Lenskart uses Truein for attendance; integration requires Bearer token auth and date-based daily API fetch without suspending users when HR data is missing.
+
+**What changed:**
+
+- **`migrations/031_attendance_iga_truein.sql`** — `api_provider` (`GENERIC`|`TRUIN`), `api_config` JSON.
+- **`src/services/attendance-iga/truein-client.ts`** — Truein fetch with token, date params, lookback, default field mapping.
+- **`GET /api/admin/attendance-iga/api/preview`**, **`POST .../api/test`** — preview request and test connection.
+- **Pipeline guard** — skips rule evaluation when import yields zero valid records (REST/SFTP/file).
+- **Admin UI** — Truein configuration panel, test connection, setup guide.
+
+### TBD — 2026-07-18 — Attendance IGA: dynamic SFTP date templates + enterprise UI
+
+**Why** — HR uploads a new dated CSV daily (e.g. `attendance_2026-07-18.csv`); admins need path preview and a polished governance console.
+
+**What changed:**
+
+- **`src/services/attendance-iga/date-template.ts`** — expands `{YYYY-MM-DD}`, `{YYYYMMDD}`, `{date}`, etc.; lookback if today's file missing.
+- **Updated** `sftp-fetcher.ts`, SFTP config schema (`fileNameTemplate`, `timezone`, `dateOffsetDays`, `lookbackDays`).
+- **`GET /api/admin/attendance-iga/sftp/preview`** — resolved path candidates.
+- **Updated** Attendance IGA admin UI (status bar, panel layout, live path preview, styled tables).
+
+### TBD — 2026-07-18 — Attendance IGA: SFTP auto-fetch for CSV imports
+
+**Why** — HR attendance files are often dropped on SFTP; the scheduler should pull them automatically without manual upload.
+
+**What changed:**
+
+- **`migrations/030_attendance_iga_sftp.sql`** — `sftp_config` JSON + `sftp_last_file`; `source_type` adds `SFTP`; `BOTH` now means REST API + SFTP on schedule.
+- **`src/services/attendance-iga/sftp-fetcher.ts`** — SFTP connect with password or key, fetch exact path or newest file in directory, exponential backoff, optional archive/delete.
+- **Updated** orchestrator, scheduler, admin API, Attendance IGA config UI (`Run SFTP Import` button).
+- **Dependency:** `ssh2-sftp-client` (native `ssh2` module; Docker builder installs `python3 make g++`).
+
+### TBD — 2026-07-18 — Attendance-Based Identity Governance (import, rules, approvals, rollback)
+
+**Why** — HR attendance gaps should automatically suspend or remove application access under configurable business rules, with full audit and reversible rollback.
+
+**What changed:**
+
+- **`migrations/029_attendance_iga.sql`** — config singleton, rules A–H, exclusions, staging, import runs, evaluations, approvals, executions, rollback log.
+- **`src/services/attendance-iga/`** — `fetcher` (REST + CSV), `orchestrator` (import → match → rules → approval/execute), `actions` (SSO mutations + rollback snapshots + notifications), `scheduler` (5m/15m/1h/1d polling; skips user actions when API fetch fails after retries).
+- **`src/api/config-attendance-iga.ts`** — admin API at `/api/admin/attendance-iga/*`.
+- **`src/api/internal.ts`** — `POST /api/internal/attendance-iga/run` for automation hooks.
+- **`src/index.ts`** — mounts router; starts `startAttendanceIgaScheduler()` on boot.
+- **`web/js/`** — `api.js` client, `app.js` route, `views-stubs.js` admin UI (dashboard, config, imports, approvals, executions).
+
+### TBD — 2026-07-16 — Workflow engine: definitions, event triggers, execution + run history
+
+**Why** — Workflow Library and Event Triggers admin pages existed but workflows were never executed; frontend sent field names the API did not accept.
+
+**What changed:**
+
+- **`migrations/028_workflow_runs.sql`** — `workflow_runs` table for execution history.
+- **`src/services/workflow-engine.ts`** — runs active `workflow_definitions` on platform events; step types: `NOTIFY`, `GRANT_BIRTHRIGHT`, `REVOKE_BIRTHRIGHT`, `WEBHOOK`.
+- **`src/services/event-dispatcher.ts`** — `emitPlatformEvent()` fires `event_triggers` then starts matching workflows (fire-and-forget).
+- **`src/api/config-workflows.ts`** — zod validation; accepts UI `steps` / `channel` / `target_url`; `GET /runs` endpoint.
+- **Hooks** — FSM (`employee-state-machine.ts`), lifecycle (`user-lifecycle.ts`), access requests (`access-request-workflow.ts`).
+- **`web/js/views-stubs.js`** — Workflow Library step builder + run history tab (replaces raw JSON textarea).
 
 ### TBD — 2026-06-08 — Google sync: scoped user lookup and outbound limits
 

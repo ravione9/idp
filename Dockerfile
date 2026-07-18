@@ -11,7 +11,8 @@ WORKDIR /app
 
 # Install dependencies first (layer cache friendly)
 COPY package*.json ./
-RUN npm ci --ignore-scripts
+RUN apk add --no-cache python3 make g++ \
+    && npm ci
 
 # Copy source and compile
 COPY tsconfig.json ./

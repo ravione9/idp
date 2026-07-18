@@ -19,7 +19,7 @@ import logger from '../utils/logger.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
 
 // ---------------------------------------------------------------------------
 // GET / — cert metadata + connection flags  (private key is never returned)

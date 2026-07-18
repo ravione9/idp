@@ -54,7 +54,7 @@ const appSchema = z.object({
   slug:        z.string().min(1).max(80).regex(/^[a-z0-9-]+$/),
   name:        z.string().min(1).max(150),
   description: z.string().max(2000).optional(),
-  iconUrl:     z.string().url().optional(),
+  iconUrl:     z.union([z.string().url(), z.literal('')]).optional().transform((v) => (v ? v : undefined)),
   category:    z.string().max(50).optional(),
   ownerEmpId:  z.string().max(20).optional(),
   visibility:  z.enum(['PUBLIC', 'RESTRICTED']).default('PUBLIC'),
@@ -79,7 +79,7 @@ router.get('/applications', asyncHandler(async (req: Request, res: Response) => 
 
 router.post(
   '/applications',
-  requireRole('SUPER_ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = appSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -219,7 +219,7 @@ const connectorSchema = z.object({
 
 router.post(
   '/connectors',
-  requireRole('SUPER_ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = connectorSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -331,7 +331,7 @@ router.get(
 // PUT /connectors/:id — update connector
 router.put(
   '/connectors/:id',
-  requireRole('SUPER_ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const { name, syncMode, syncSchedule, configJson, status } = req.body as {
       name?: string;
@@ -389,7 +389,7 @@ router.put(
 // DELETE /connectors/:id — remove connector
 router.delete(
   '/connectors/:id',
-  requireRole('SUPER_ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     await execute(`DELETE FROM connectors WHERE id = ?`, [req.params['id']]);
     res.json({ success: true });
@@ -618,9 +618,9 @@ router.post(
 // ===========================================================================
 // /entitlements — granular permissions
 // ===========================================================================
+// Any authenticated user may browse entitlements for Request Access catalog.
 router.get(
   '/entitlements',
-  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
     const appId = req.query['appId'] as string | undefined;
@@ -654,6 +654,18 @@ router.get('/entitlements/me', asyncHandler(async (req: Request, res: Response) 
       WHERE ue.emp_id = ? AND ue.revoked_at IS NULL
       ORDER BY ue.granted_at DESC`,
     [empId],
+  );
+  res.json({ data: rows });
+}));
+
+// Requestable business roles (end-user catalog — no admin role required)
+router.get('/roles', asyncHandler(async (_req: Request, res: Response) => {
+  const rows = await safeQuery<Record<string, unknown>>(
+    `SELECT id, name, description, risk_score, active
+       FROM business_roles
+      WHERE active = 1
+      ORDER BY name ASC`,
+    [],
   );
   res.json({ data: rows });
 }));
@@ -704,8 +716,9 @@ router.get('/access-requests', asyncHandler(async (req: Request, res: Response) 
 }));
 
 const accessRequestSchema = z.object({
-  targetEmpId:   z.string().min(1).max(20),
-  itemType:      z.enum(['ENTITLEMENT', 'ROLE', 'APP_ACCESS']),
+  targetEmpId:   z.string().min(1).max(20).optional(),
+  // UI historically sent APP; normalize to APP_ACCESS.
+  itemType:      z.enum(['ENTITLEMENT', 'ROLE', 'APP_ACCESS', 'APP']),
   itemIds:       z.array(z.string()).min(1),
   justification: z.string().min(1).max(2000),
 });
@@ -718,11 +731,14 @@ router.post(
       res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
       return;
     }
+    const requesterEmpId = req.user!.empId;
+    const itemType = parsed.data.itemType === 'APP' ? 'APP_ACCESS' : parsed.data.itemType;
+    const targetEmpId = parsed.data.targetEmpId?.trim() || requesterEmpId;
     try {
       const reqId = await submitAccessRequest({
-        requesterEmpId: req.user!.empId,
-        targetEmpId:    parsed.data.targetEmpId,
-        itemType:       parsed.data.itemType,
+        requesterEmpId,
+        targetEmpId,
+        itemType,
         itemIds:        parsed.data.itemIds,
         justification:  parsed.data.justification,
       });
@@ -1125,35 +1141,58 @@ router.post(
 // ===========================================================================
 
 // POST /sod-policies — create
-router.post('/sod-policies', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
-  const { name, description, severity, enforcement, conflict_groups } = req.body as {
+router.post('/sod-policies', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as {
     name: string; description?: string; severity?: string;
-    enforcement?: string; conflict_groups?: unknown[];
+    enforcement?: string; conflict_groups?: unknown[]; conflictGroups?: unknown[];
   };
+  const conflict_groups = body.conflict_groups ?? body.conflictGroups ?? [];
   const id = uuidv4();
+  const createdBy = req.user?.empId ?? 'system';
   await execute(
-    `INSERT INTO sod_policies (id, name, description, severity, enforcement, conflict_groups, active)
-     VALUES (?, ?, ?, ?, ?, ?, 1)`,
-    [id, name, description ?? null, severity ?? 'MEDIUM', enforcement ?? 'WARN', JSON.stringify(conflict_groups ?? [])],
+    `INSERT INTO sod_policies (id, name, description, severity, enforcement, conflict_groups, active, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+    [id, body.name, body.description ?? null, body.severity ?? 'MEDIUM', body.enforcement ?? 'ALERT', JSON.stringify(conflict_groups), createdBy],
   );
   res.status(201).json({ id });
 }));
 
-// PUT /sod-policies/:id
-router.put('/sod-policies/:id', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
-  const { name, description, severity, enforcement, conflict_groups, active } = req.body as {
+// PUT /sod-policies/:id — partial update (toggle-active must not wipe other columns)
+router.put('/sod-policies/:id', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+  const existing = await queryOne<Record<string, unknown>>(
+    `SELECT * FROM sod_policies WHERE id = ?`,
+    [req.params['id']],
+  );
+  if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
+
+  const body = req.body as {
     name?: string; description?: string; severity?: string;
-    enforcement?: string; conflict_groups?: unknown[]; active?: number;
+    enforcement?: string; conflict_groups?: unknown[]; conflictGroups?: unknown[];
+    active?: number | boolean;
   };
+  const conflictGroups = body.conflict_groups ?? body.conflictGroups;
+  const name = body.name ?? (existing['name'] as string);
+  const description = body.description !== undefined ? body.description : (existing['description'] as string | null);
+  const severity = body.severity ?? (existing['severity'] as string);
+  const enforcement = body.enforcement ?? (existing['enforcement'] as string);
+  const groupsJson = conflictGroups !== undefined
+    ? JSON.stringify(conflictGroups)
+    : (typeof existing['conflict_groups'] === 'string'
+      ? existing['conflict_groups'] as string
+      : JSON.stringify(existing['conflict_groups'] ?? []));
+  const active = body.active !== undefined
+    ? (body.active ? 1 : 0)
+    : Number(existing['active'] ?? 1);
+
   await execute(
     `UPDATE sod_policies SET name=?, description=?, severity=?, enforcement=?, conflict_groups=?, active=? WHERE id=?`,
-    [name, description ?? null, severity, enforcement, JSON.stringify(conflict_groups ?? []), active ? 1 : 0, req.params['id']],
+    [name, description ?? null, severity, enforcement, groupsJson, active, req.params['id']],
   );
   res.json({ success: true });
 }));
 
 // DELETE /sod-policies/:id
-router.delete('/sod-policies/:id', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+router.delete('/sod-policies/:id', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
   await execute('DELETE FROM sod_policies WHERE id = ?', [req.params['id']]);
   res.json({ success: true });
 }));

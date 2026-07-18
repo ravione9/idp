@@ -27,7 +27,7 @@ import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
 
 // GET /
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {

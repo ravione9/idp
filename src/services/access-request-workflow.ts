@@ -17,6 +17,7 @@ import {
   fulfillAppAccessRequest,
   logAppAccessAudit,
 } from './app-access-policy.js';
+import { emitPlatformEvent } from './event-dispatcher.js';
 import logger from '../utils/logger.js';
 
 const PENDING_STATUS = 'PENDING';
@@ -216,6 +217,18 @@ export async function submitAccessRequest(params: AccessRequestParams): Promise<
   }
 
   logger.info({ reqId, requester: params.requesterEmpId, target: params.targetEmpId }, 'Access request submitted');
+
+  emitPlatformEvent('ACCESS_REQUEST', {
+    empId: params.targetEmpId,
+    initiatedBy: params.requesterEmpId,
+    context: {
+      requestId: reqId,
+      itemType: params.itemType,
+      itemIds: params.itemIds,
+      justification: params.justification,
+    },
+  });
+
   return reqId;
 }
 

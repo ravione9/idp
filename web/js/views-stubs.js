@@ -530,11 +530,12 @@ export async function viewSystemUsers(content) {
         <tr>
           <td class="cell-strong">${esc(u.name || u.username || '—')}</td>
           <td><span class="badge badge-info">${esc(u.type || 'SERVICE')}</span></td>
-          <td class="muted">${esc(u.resource_id || '—')}</td>
+          <td class="muted">${esc(u.owner_emp_id || '—')}</td>
+          <td class="muted">${esc(u.description || u.source_system || '—')}</td>
           <td class="muted">${u.created_at ? fmtDate(u.created_at) : '—'}</td>
           <td><button class="btn btn-sm btn-danger del-su" data-id="${esc(String(u.id))}">Delete</button></td>
-        </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No service accounts.</p></div></td></tr>`;
-      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Username</th><th>Type</th><th>Resource</th><th>Created</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No service accounts.</p></div></td></tr>`;
+      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Username</th><th>Type</th><th>Owner</th><th>Notes</th><th>Created</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
       wrap.querySelectorAll('.del-su').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Delete this service user?')) return;
@@ -547,13 +548,21 @@ export async function viewSystemUsers(content) {
   wrap.querySelector('#new-su-btn').addEventListener('click', () => {
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Add Service User</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Username</label><input class="form-input" id="su-user" placeholder="svc-myapp"></div>
-      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="su-type"><option>SERVICE</option><option>BOT</option><option>INTEGRATION</option></select></div>
-      <div class="form-group"><label class="form-label">Resource ID</label><input class="form-input" id="su-res" placeholder="Optional resource ID"></div>
+      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="su-type"><option value="SERVICE_ACCOUNT">SERVICE_ACCOUNT</option><option value="API_CLIENT">API_CLIENT</option><option value="ROBOT">ROBOT</option><option value="SHARED">SHARED</option></select></div>
+      <div class="form-group"><label class="form-label">Owner Employee ID</label><input class="form-input" id="su-owner" placeholder="Optional emp_id of owner"></div>
+      <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="su-desc" placeholder="What this account is for"></div>
+      <div class="form-group"><label class="form-label">Source System</label><input class="form-input" id="su-src" placeholder="e.g. jenkins, aws"></div>
       <div id="su-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="su-save">Create</button><button class="btn btn-secondary" id="su-cancel">Cancel</button></div></div>`);
     bd.querySelector('#su-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#su-save').addEventListener('click', async () => {
-      const data = { name: bd.querySelector('#su-user').value, type: bd.querySelector('#su-type').value, resource_id: bd.querySelector('#su-res').value };
+      const data = {
+        name: bd.querySelector('#su-user').value.trim(),
+        type: bd.querySelector('#su-type').value,
+        owner_emp_id: bd.querySelector('#su-owner').value.trim() || undefined,
+        description: bd.querySelector('#su-desc').value.trim() || undefined,
+        source_system: bd.querySelector('#su-src').value.trim() || undefined,
+      };
       if (!data.name) { bd.querySelector('#su-err').innerHTML = errHtml('Username required'); return; }
       try { await api.createSystemUser(data); bd.remove(); await load(); } catch(e) { bd.querySelector('#su-err').innerHTML = errHtml(e.message); }
     });
@@ -574,14 +583,13 @@ export async function viewIdentityProfiles(content) {
         <tr>
           <td class="cell-strong">${esc(p.name)}</td>
           <td><span class="badge badge-info">${esc(p.population || p.source_type || '—')}</span></td>
-          <td>${p.priority ?? '—'}</td>
           <td>${p.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary edit-ip" data-id="${esc(String(p.id))}" data-name="${esc(p.name)}" data-desc="${esc(p.description||'')}" data-src="${esc(p.population||p.source_type||'')}" data-pri="${esc(String(p.priority||0))}">Edit</button>
+            <button class="btn btn-sm btn-secondary edit-ip" data-id="${esc(String(p.id))}" data-name="${esc(p.name)}" data-desc="${esc(p.description||'')}" data-src="${esc(p.population||p.source_type||'')}">Edit</button>
             <button class="btn btn-sm btn-danger del-ip" data-id="${esc(String(p.id))}">Delete</button>
           </td>
-        </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No identity profiles.</p></div></td></tr>`;
-      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Source Type</th><th>Priority</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        </tr>`).join('') : `<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">◎</div><p>No identity profiles.</p></div></td></tr>`;
+      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Population</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 
       wrap.querySelectorAll('.del-ip').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -590,7 +598,7 @@ export async function viewIdentityProfiles(content) {
         });
       });
       wrap.querySelectorAll('.edit-ip').forEach(btn => {
-        btn.addEventListener('click', () => openIpModal(btn.dataset.id, { name: btn.dataset.name, description: btn.dataset.desc, population: btn.dataset.src, priority: btn.dataset.pri }));
+        btn.addEventListener('click', () => openIpModal(btn.dataset.id, { name: btn.dataset.name, description: btn.dataset.desc, population: btn.dataset.src }));
       });
     } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
   }
@@ -607,12 +615,11 @@ export async function viewIdentityProfiles(content) {
         <option value="CUSTOMER" ${(defaults.population||defaults.source_type)==='CUSTOMER'?'selected':''}>Customer</option>
         <option value="SERVICE" ${(defaults.population||defaults.source_type)==='SERVICE'?'selected':''}>Service Account</option>
       </select></div>
-      <div class="form-group"><label class="form-label">Priority</label><input class="form-input" id="ip-pri" type="number" value="${esc(String(defaults.priority||1))}"></div>
       <div id="ip-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="ip-save">${isEdit ? 'Update' : 'Create'}</button><button class="btn btn-secondary" id="ip-cancel">Cancel</button></div></div>`);
     bd.querySelector('#ip-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#ip-save').addEventListener('click', async () => {
-      const data = { name: bd.querySelector('#ip-name').value, description: bd.querySelector('#ip-desc').value, population: bd.querySelector('#ip-src').value, priority: parseInt(bd.querySelector('#ip-pri').value) || 1 };
+      const data = { name: bd.querySelector('#ip-name').value, description: bd.querySelector('#ip-desc').value, population: bd.querySelector('#ip-src').value };
       if (!data.name) { bd.querySelector('#ip-err').innerHTML = errHtml('Name required'); return; }
       try {
         if (isEdit) await api.updateIdentityProfile(id, data); else await api.createIdentityProfile(data);
@@ -636,7 +643,7 @@ export async function viewMfaMethods(content) {
   const methods = [
     { key: 'totp',         label: 'Authenticator App (TOTP)', badge: 'badge-success', badgeText: '● Live',   desc: 'Time-based one-time passwords via Google Authenticator, Authy, etc.' },
     { key: 'backup_codes', label: 'Backup Codes',             badge: 'badge-success', badgeText: '● Live',   desc: 'Single-use emergency recovery codes.' },
-    { key: 'webauthn',     label: 'WebAuthn / Passkeys',      badge: 'badge-info',    badgeText: '◍ Schema', desc: 'Hardware security keys and biometric passkeys.' },
+    { key: 'webauthn',     label: 'WebAuthn / Passkeys',      badge: 'badge-warning', badgeText: '○ Planned', desc: 'Hardware security keys and biometric passkeys (schema only today).' },
     { key: 'email_otp',    label: 'Email OTP',                badge: 'badge-warning', badgeText: '○ Planned',desc: 'One-time code sent to registered email address.' },
     { key: 'sms_otp',      label: 'SMS OTP',                  badge: 'badge-warning', badgeText: '○ Planned',desc: 'One-time code sent via SMS.' },
   ];
@@ -651,7 +658,7 @@ export async function viewMfaMethods(content) {
       const policy = policyRes?.data || {};
       const groups = norm(groupsRes);
       const enrolled = status?.methods || [];
-      const liveOrSchemaCount = methods.filter(m => ['badge-success','badge-info'].includes(m.badge)).length;
+      const liveOrSchemaCount = methods.filter(m => m.badge === 'badge-success').length;
       const enrolledCount = enrolled.length;
       const globalEnforce = !!policy['global_enforce'];
       const enforceAdmins = policy['enforce_for_admins'] !== false;
@@ -696,7 +703,7 @@ export async function viewMfaMethods(content) {
         <div class="stat-grid" style="margin-bottom:1.5rem">
           ${statCard('shieldCheck', 'Methods Enrolled',   enrolledCount,      status?.enabled ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Not active</span>', 'primary')}
           ${statCard('check',       'Live / Schema',      liveOrSchemaCount,  'available now',            'success')}
-          ${statCard('bolt',        'Planned',            2,                  'arriving in next milestone','warning')}
+          ${statCard('bolt',        'Planned',            3,                  'arriving in next milestone','warning')}
           ${statCard('shield',      'Global Enforce',     globalEnforce ? 'ON' : 'OFF', globalEnforce ? '<span class="badge badge-danger">MFA required for all</span>' : '<span class="badge badge-neutral">Off</span>', globalEnforce ? 'danger' : 'primary')}
         </div>
 
@@ -1163,13 +1170,13 @@ export async function viewPasswordPolicies(content) {
         <tr>
           <td class="cell-strong">${esc(p.name)}</td>
           <td>${p.min_length ?? 8}</td>
-          <td>${[p.require_upper && 'U', p.require_lower && 'l', p.require_digit && '0', p.require_special && '#'].filter(Boolean).join(' ')}</td>
+          <td>${[p.require_uppercase && 'U', p.require_lowercase && 'l', p.require_digits && '0', p.require_special && '#'].filter(Boolean).join(' ')}</td>
           <td>${p.max_age_days ?? '—'}</td>
           <td>${p.history_count ?? '—'}</td>
-          <td>${p.lockout_threshold ?? '—'}</td>
-          <td>${p.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
+          <td>${p.lockout_attempts ?? '—'}</td>
+          <td>${p.is_default ? '<span class="badge badge-success">Default</span>' : '<span class="badge badge-neutral">Policy</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary edit-pp" data-p='${JSON.stringify({id:p.id,name:p.name,min_length:p.min_length,require_upper:p.require_upper,require_lower:p.require_lower,require_digit:p.require_digit,require_special:p.require_special,max_age_days:p.max_age_days,history_count:p.history_count,lockout_threshold:p.lockout_threshold,lockout_duration_minutes:p.lockout_duration_minutes})}'>Edit</button>
+            <button class="btn btn-sm btn-secondary edit-pp" data-p='${JSON.stringify({id:p.id,name:p.name,min_length:p.min_length,require_uppercase:p.require_uppercase,require_lowercase:p.require_lowercase,require_digits:p.require_digits,require_special:p.require_special,max_age_days:p.max_age_days,history_count:p.history_count,lockout_attempts:p.lockout_attempts,lockout_duration_min:p.lockout_duration_min,is_default:p.is_default})}'>Edit</button>
             <button class="btn btn-sm btn-danger del-pp" data-id="${esc(String(p.id))}">Delete</button>
           </td>
         </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">◎</div><p>No password policies.</p></div></td></tr>`;
@@ -1191,32 +1198,34 @@ export async function viewPasswordPolicies(content) {
     const chk = (v) => v ? 'checked' : '';
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${isEdit ? 'Edit' : 'New'} Password Policy</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="pp-name" value="${esc(d.name||'')}"></div>
-      <div class="form-group"><label class="form-label">Min Length</label><input class="form-input" id="pp-minlen" type="number" value="${d.min_length||8}"></div>
+      <div class="form-group"><label class="form-label">Min Length</label><input class="form-input" id="pp-minlen" type="number" value="${d.min_length||10}"></div>
       <div class="form-group" style="display:flex;gap:1rem;flex-wrap:wrap">
-        <label class="form-check"><input type="checkbox" id="pp-upper" ${chk(d.require_upper)}> Uppercase</label>
-        <label class="form-check"><input type="checkbox" id="pp-lower" ${chk(d.require_lower)}> Lowercase</label>
-        <label class="form-check"><input type="checkbox" id="pp-digit" ${chk(d.require_digit)}> Digit</label>
+        <label class="form-check"><input type="checkbox" id="pp-upper" ${chk(d.require_uppercase ?? 1)}> Uppercase</label>
+        <label class="form-check"><input type="checkbox" id="pp-lower" ${chk(d.require_lowercase ?? 1)}> Lowercase</label>
+        <label class="form-check"><input type="checkbox" id="pp-digit" ${chk(d.require_digits ?? 1)}> Digit</label>
         <label class="form-check"><input type="checkbox" id="pp-special" ${chk(d.require_special)}> Special char</label>
+        <label class="form-check"><input type="checkbox" id="pp-default" ${chk(d.is_default)}> Default policy</label>
       </div>
       <div class="form-group"><label class="form-label">Max Age (days)</label><input class="form-input" id="pp-maxage" type="number" value="${d.max_age_days||90}"></div>
       <div class="form-group"><label class="form-label">History Count</label><input class="form-input" id="pp-hist" type="number" value="${d.history_count||5}"></div>
-      <div class="form-group"><label class="form-label">Lockout Threshold</label><input class="form-input" id="pp-lock" type="number" value="${d.lockout_threshold||5}"></div>
-      <div class="form-group"><label class="form-label">Lockout Duration (min)</label><input class="form-input" id="pp-lockdur" type="number" value="${d.lockout_duration_minutes||15}"></div>
+      <div class="form-group"><label class="form-label">Lockout Attempts</label><input class="form-input" id="pp-lock" type="number" value="${d.lockout_attempts||10}"></div>
+      <div class="form-group"><label class="form-label">Lockout Duration (min)</label><input class="form-input" id="pp-lockdur" type="number" value="${d.lockout_duration_min||30}"></div>
       <div id="pp-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="pp-save">${isEdit ? 'Update' : 'Create'}</button><button class="btn btn-secondary" id="pp-cancel">Cancel</button></div></div>`);
     bd.querySelector('#pp-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#pp-save').addEventListener('click', async () => {
       const data = {
         name: bd.querySelector('#pp-name').value,
-        min_length: parseInt(bd.querySelector('#pp-minlen').value)||8,
-        require_upper: bd.querySelector('#pp-upper').checked,
-        require_lower: bd.querySelector('#pp-lower').checked,
-        require_digit: bd.querySelector('#pp-digit').checked,
-        require_special: bd.querySelector('#pp-special').checked,
+        min_length: parseInt(bd.querySelector('#pp-minlen').value)||10,
+        require_uppercase: bd.querySelector('#pp-upper').checked ? 1 : 0,
+        require_lowercase: bd.querySelector('#pp-lower').checked ? 1 : 0,
+        require_digits: bd.querySelector('#pp-digit').checked ? 1 : 0,
+        require_special: bd.querySelector('#pp-special').checked ? 1 : 0,
         max_age_days: parseInt(bd.querySelector('#pp-maxage').value)||90,
         history_count: parseInt(bd.querySelector('#pp-hist').value)||5,
-        lockout_threshold: parseInt(bd.querySelector('#pp-lock').value)||5,
-        lockout_duration_minutes: parseInt(bd.querySelector('#pp-lockdur').value)||15,
+        lockout_attempts: parseInt(bd.querySelector('#pp-lock').value)||10,
+        lockout_duration_min: parseInt(bd.querySelector('#pp-lockdur').value)||30,
+        is_default: bd.querySelector('#pp-default').checked ? 1 : 0,
       };
       if (!data.name) { bd.querySelector('#pp-err').innerHTML = errHtml('Name required'); return; }
       try {
@@ -1230,73 +1239,10 @@ export async function viewPasswordPolicies(content) {
   await load();
 }
 
-// ─── 7. Login Customization ───────────────────────────────────────────────────
+// ─── 7. Login Customization (alias of Branding — single source of truth) ───────
 export async function viewLoginCustomization(content) {
-  content.replaceChildren(el(`<div>${header('Login Customization', 'Customize the login page appearance')}<div id="lc-area">${loading()}</div></div>`));
-  const wrap = content.firstChild;
-  try {
-    const b = await api.getBranding();
-    wrap.querySelector('#lc-area').innerHTML = `
-      <div class="grid-3">
-        <div class="card" style="grid-column:span 2">
-          <h2>Login Page Settings</h2>
-          <div class="form-group"><label class="form-label">App Name</label><input class="form-input" id="lc-appname" value="${esc(b.app_name||'Lenskart IdP')}"></div>
-          <div class="form-group"><label class="form-label">Logo URL</label><input class="form-input" id="lc-logo" value="${esc(b.logo_url||'')}"></div>
-          <div class="form-group"><label class="form-label">Favicon URL</label><input class="form-input" id="lc-fav" value="${esc(b.favicon_url||'')}"></div>
-          <div class="form-group"><label class="form-label">Accent Color</label><input type="color" class="form-input" id="lc-color" value="${esc(b.accent_color||'#4f46e5')}" style="height:2.5rem;padding:0.25rem"></div>
-          <div class="form-group"><label class="form-label">Support Email</label><input class="form-input" id="lc-email" value="${esc(b.support_email||'')}"></div>
-          <div class="form-group"><label class="form-label">Footer Text</label><input class="form-input" id="lc-footer" value="${esc(b.footer_text||'')}"></div>
-          <div class="form-group"><label class="form-label">Hero Heading</label><input class="form-input" id="lc-hero" value="${esc(b.login_hero_heading||'')}"></div>
-          <div class="form-group"><label class="form-label">Hero Subtext</label><input class="form-input" id="lc-sub" value="${esc(b.login_hero_subtext||'')}"></div>
-          <div id="lc-msg"></div>
-          <button class="btn btn-primary" id="lc-save">Save Changes</button>
-        </div>
-        <div class="card">
-          <h2>Preview</h2>
-          <div id="lc-preview" style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:0.5rem">
-            <div id="lc-prev-header" style="background:${esc(b.accent_color||'#4f46e5')};padding:1.5rem;text-align:center">
-              <div style="font-size:1.25rem;font-weight:700;color:#fff" id="lc-prev-title">${esc(b.app_name||'Lenskart IdP')}</div>
-            </div>
-            <div style="padding:1rem;background:#f9f9f9">
-              <div style="font-size:0.75rem;color:#666;text-align:center" id="lc-prev-hero">${esc(b.login_hero_heading||'Sign in to continue')}</div>
-              <div style="margin-top:0.5rem;font-size:0.7rem;color:#999;text-align:center" id="lc-prev-sub">${esc(b.login_hero_subtext||'')}</div>
-            </div>
-          </div>
-        </div>
-      </div>`;
-
-    const colorInput = wrap.querySelector('#lc-color');
-    colorInput.addEventListener('input', () => {
-      wrap.querySelector('#lc-prev-header').style.background = colorInput.value;
-    });
-    wrap.querySelector('#lc-appname').addEventListener('input', (e) => {
-      wrap.querySelector('#lc-prev-title').textContent = e.target.value || 'Lenskart IdP';
-    });
-    wrap.querySelector('#lc-hero').addEventListener('input', (e) => {
-      wrap.querySelector('#lc-prev-hero').textContent = e.target.value;
-    });
-    wrap.querySelector('#lc-sub').addEventListener('input', (e) => {
-      wrap.querySelector('#lc-prev-sub').textContent = e.target.value;
-    });
-
-    wrap.querySelector('#lc-save').addEventListener('click', async () => {
-      const data = {
-        app_name: wrap.querySelector('#lc-appname').value,
-        logo_url: wrap.querySelector('#lc-logo').value,
-        favicon_url: wrap.querySelector('#lc-fav').value,
-        accent_color: wrap.querySelector('#lc-color').value,
-        support_email: wrap.querySelector('#lc-email').value,
-        footer_text: wrap.querySelector('#lc-footer').value,
-        login_hero_heading: wrap.querySelector('#lc-hero').value,
-        login_hero_subtext: wrap.querySelector('#lc-sub').value,
-      };
-      try {
-        await api.saveBranding(data);
-        wrap.querySelector('#lc-msg').innerHTML = `<div class="alert alert-success">Saved successfully.</div>`;
-        setTimeout(() => { if (wrap.querySelector('#lc-msg')) wrap.querySelector('#lc-msg').innerHTML = ''; }, 3000);
-      } catch(e) { wrap.querySelector('#lc-msg').innerHTML = errHtml(e.message); }
-    });
-  } catch(e) { wrap.querySelector('#lc-area').innerHTML = errHtml(e.message); }
+  // Merged into Branding to avoid duplicate save surfaces with mismatched fields.
+  return viewBranding(content);
 }
 
 // ─── 8. OIDC Apps ─────────────────────────────────────────────────────────────
@@ -4265,7 +4211,7 @@ export async function viewRoles(content) {
             <button class="btn btn-primary" id="ent-add-btn">Add</button>
           </div>
           ${ents.length ? `<div class="table-wrap"><table><thead><tr><th>Entitlement</th><th></th></tr></thead><tbody>
-            ${ents.map(e => `<tr><td>${esc(e.name||e.id||JSON.stringify(e))}</td><td><button class="btn btn-sm btn-danger rem-ent" data-id="${esc(String(e.id||e))}">Remove</button></td></tr>`).join('')}
+            ${ents.map(e => `<tr><td>${esc(e.entitlement_name||e.name||e.entitlement_id||'—')}</td><td><button class="btn btn-sm btn-danger rem-ent" data-id="${esc(String(e.entitlement_id||e.id||''))}">Remove</button></td></tr>`).join('')}
           </tbody></table></div>` : '<p class="muted">No entitlements assigned.</p>'}
           <div id="ent-err"></div>`;
         bd.querySelector('#ent-add-btn').addEventListener('click', async () => {
@@ -4315,7 +4261,8 @@ export async function viewBirthright(content) {
       btn.disabled = true; btn.textContent = 'Running…';
       try {
         const result = await api.birthrightDryRun();
-        wrap.querySelector('#br-msg').innerHTML = `<div class="alert alert-success">Dry run complete: <strong>${result.affected_count ?? result.count ?? JSON.stringify(result)}</strong> users would be affected.</div>`;
+        const n = Array.isArray(result?.data) ? result.data.length : (result.affected_count ?? result.count ?? 0);
+        wrap.querySelector('#br-msg').innerHTML = `<div class="alert alert-success">Dry run complete: <strong>${n}</strong> users would receive birthright entitlements (sample up to 50).</div>`;
       } catch(e) { wrap.querySelector('#br-msg').innerHTML = errHtml(e.message); }
       btn.disabled = false; btn.textContent = 'Dry Run';
     });
@@ -4335,7 +4282,7 @@ export async function viewBirthright(content) {
 // ─── Application Access Policy ────────────────────────────────────────────────
 export async function viewAppAccessPolicy(content) {
   content.replaceChildren(el(`<div class="aap-page">
-    ${header('Application Access Policy', 'Assign application access by user or tag group; configure approval workflows and audit trail')}
+    ${header('Application Access Policy', 'Who can launch apps + approval chains for access requests (not the same as Workflow Library / Event Triggers)')}
     <div id="aap-stats" class="stat-grid aap-stats">${loading()}</div>
     <div class="cfg-tab-bar inline-tabs aap-tabs">
       <button type="button" class="cfg-tab inline-tab active" data-tab="assign">Application Assignment</button>
@@ -4844,17 +4791,17 @@ export async function viewPamVault(content) {
       const entries = norm(await api.listVaultEntries());
       const rows = entries.length ? entries.map(e => `
         <tr>
-          <td class="cell-strong">${esc(e.label)}</td>
-          <td class="muted">${esc(e.system||'—')}</td>
+          <td class="cell-strong">${esc(e.name || e.label || '—')}</td>
+          <td><span class="badge badge-info">${esc(e.type || 'PASSWORD')}</span></td>
           <td class="muted">${esc(e.username||'—')}</td>
           <td class="muted">${e.last_rotated_at ? fmtDate(e.last_rotated_at) : '—'}</td>
-          <td class="muted">${e.last_accessed_at ? fmtDate(e.last_accessed_at) : '—'}</td>
+          <td class="muted">${e.next_rotation_at ? fmtDate(e.next_rotation_at) : '—'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary checkout-vault" data-id="${esc(String(e.id))}" data-label="${esc(e.label)}">Checkout</button>
+            <button class="btn btn-sm btn-secondary checkout-vault" data-id="${esc(String(e.id))}" data-label="${esc(e.name || e.label || '')}">Checkout</button>
             <button class="btn btn-sm btn-danger del-vault" data-id="${esc(String(e.id))}">Delete</button>
           </td>
         </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No vault entries.</p></div></td></tr>`;
-      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Label</th><th>System</th><th>Username</th><th>Last Rotated</th><th>Last Accessed</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Username</th><th>Last Rotated</th><th>Next Rotation</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
       wrap.querySelectorAll('.del-vault').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Delete this vault entry?')) return;
@@ -4878,17 +4825,24 @@ export async function viewPamVault(content) {
 
   wrap.querySelector('#new-vault-btn').addEventListener('click', () => {
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Add Vault Entry</h2></div><div class="modal-body">
-      <div class="form-group"><label class="form-label">Label</label><input class="form-input" id="v-label" placeholder="prod-db-admin"></div>
-      <div class="form-group"><label class="form-label">System</label><input class="form-input" id="v-system" placeholder="db.prod.example.com"></div>
+      <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="v-label" placeholder="prod-db-admin"></div>
       <div class="form-group"><label class="form-label">Username</label><input class="form-input" id="v-user" placeholder="admin"></div>
-      <div class="form-group"><label class="form-label">Secret Type</label><select class="form-select" id="v-stype"><option>PASSWORD</option><option>SSH_KEY</option><option>TOKEN</option><option>CERT</option></select></div>
-      <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="v-notes" rows="2"></textarea></div>
+      <div class="form-group"><label class="form-label">Secret</label><input class="form-input" id="v-secret" type="password" autocomplete="new-password" placeholder="Password, token, or key material"></div>
+      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="v-stype"><option value="PASSWORD">PASSWORD</option><option value="SSH_KEY">SSH_KEY</option><option value="API_KEY">API_KEY</option><option value="TOKEN">TOKEN</option></select></div>
+      <div class="form-group"><label class="form-label">Rotation Days</label><input class="form-input" id="v-rot" type="number" value="90" min="1"></div>
       <div id="v-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="v-save">Add</button><button class="btn btn-secondary" id="v-cancel">Cancel</button></div></div>`);
     bd.querySelector('#v-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#v-save').addEventListener('click', async () => {
-      const data = { label: bd.querySelector('#v-label').value, system: bd.querySelector('#v-system').value, username: bd.querySelector('#v-user').value, secret_type: bd.querySelector('#v-stype').value, notes: bd.querySelector('#v-notes').value };
-      if (!data.label) { bd.querySelector('#v-err').innerHTML = errHtml('Label required'); return; }
+      const data = {
+        name: bd.querySelector('#v-label').value.trim(),
+        username: bd.querySelector('#v-user').value.trim() || undefined,
+        secret: bd.querySelector('#v-secret').value,
+        type: bd.querySelector('#v-stype').value,
+        rotation_days: parseInt(bd.querySelector('#v-rot').value, 10) || 90,
+      };
+      if (!data.name) { bd.querySelector('#v-err').innerHTML = errHtml('Name required'); return; }
+      if (!data.secret) { bd.querySelector('#v-err').innerHTML = errHtml('Secret required'); return; }
       try { await api.createVaultEntry(data); bd.remove(); await load(); } catch(e) { bd.querySelector('#v-err').innerHTML = errHtml(e.message); }
     });
   });
@@ -4897,66 +4851,193 @@ export async function viewPamVault(content) {
 }
 
 // ─── 16. Workflow Library ─────────────────────────────────────────────────────
+const WF_EVENTS = ['JOINER', 'LEAVER', 'MOVER', 'SUSPEND', 'UNSUSPEND', 'MFA_ENROLLED', 'SUSPICIOUS_LOGIN', 'ROLE_CHANGE', 'ACCESS_REQUEST'];
+const WF_STEP_TYPES = [
+  { value: 'GRANT_BIRTHRIGHT', label: 'Grant Birthright Entitlements' },
+  { value: 'REVOKE_BIRTHRIGHT', label: 'Revoke Birthright Entitlements' },
+  { value: 'NOTIFY', label: 'Send Notification' },
+  { value: 'WEBHOOK', label: 'HTTP Webhook' },
+];
+
+function wfStepRow(step, idx) {
+  const cfg = step.config || {};
+  const extra = step.type === 'NOTIFY'
+    ? `<div class="form-group"><label class="form-label">Channel</label><select class="form-select wf-step-channel" data-idx="${idx}"><option value="IN_APP" ${cfg.channel==='IN_APP'?'selected':''}>In-App</option><option value="EMAIL" ${cfg.channel==='EMAIL'?'selected':''}>Email</option><option value="SLACK" ${cfg.channel==='SLACK'?'selected':''}>Slack</option></select></div>
+       <div class="form-group"><label class="form-label">Subject</label><input class="form-input wf-step-subject" data-idx="${idx}" value="${esc(cfg.subject||'')}"></div>
+       <div class="form-group"><label class="form-label">Body</label><textarea class="form-textarea wf-step-body" data-idx="${idx}" rows="2">${esc(cfg.body||'')}</textarea></div>`
+    : step.type === 'WEBHOOK'
+      ? `<div class="form-group"><label class="form-label">Webhook URL</label><input class="form-input wf-step-url" data-idx="${idx}" value="${esc(cfg.url||'')}"></div>
+         <div class="form-group"><label class="form-label">Secret (optional)</label><input class="form-input wf-step-secret" data-idx="${idx}" value="${esc(cfg.secret||'')}"></div>`
+      : '';
+  return `<div class="wf-step-card" data-idx="${idx}">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+      <strong>Step ${idx + 1}</strong>
+      <button type="button" class="btn btn-sm btn-danger wf-rm-step" data-idx="${idx}">Remove</button>
+    </div>
+    <div class="form-group"><label class="form-label">Action</label>
+      <select class="form-select wf-step-type" data-idx="${idx}">
+        ${WF_STEP_TYPES.map(t => `<option value="${t.value}" ${step.type===t.value?'selected':''}>${t.label}</option>`).join('')}
+      </select>
+    </div>
+    ${extra}
+  </div>`;
+}
+
 export async function viewWorkflowLibrary(content) {
-  content.replaceChildren(el(`<div>${header('Workflow Library', 'Automated provisioning and access workflows', `<button class="btn btn-primary" id="new-wf-btn">+ New Workflow</button>`)}<div id="list-area">${loading()}</div></div>`));
+  content.replaceChildren(el(`<div>
+    ${header('Workflow Library', 'Multi-step automations (NOTIFY, birthright, webhook) on platform events — distinct from Event Triggers (single actions) and Application Access Policy (approval chains)', `<button class="btn btn-primary" id="new-wf-btn">+ New Workflow</button>`)}
+    <div id="wf-stats" class="stat-grid" style="margin-bottom:1rem"></div>
+    <div class="cfg-tab-bar inline-tabs" style="margin-bottom:1rem">
+      <button type="button" class="cfg-tab inline-tab active" data-tab="defs">Definitions</button>
+      <button type="button" class="cfg-tab inline-tab" data-tab="runs">Run History</button>
+    </div>
+    <div id="tab-defs"><div id="list-area">${loading()}</div></div>
+    <div id="tab-runs" style="display:none"><div id="runs-area">${loading()}</div></div>
+  </div>`));
   const wrap = content.firstChild;
 
-  async function load() {
+  async function loadDefs() {
     try {
       const workflows = norm(await api.listWorkflows());
+      wrap.querySelector('#wf-stats').innerHTML = [
+        statCard('flow', 'Active Workflows', workflows.filter(w => w.active).length, 'triggered on events', 'success'),
+        statCard('list', 'Total Defined', workflows.length, 'in library', 'primary'),
+      ].join('');
       const rows = workflows.length ? workflows.map(w => `
         <tr>
           <td class="cell-strong">${esc(w.name)}</td>
           <td><span class="badge badge-info">${esc(w.trigger_event||'—')}</span></td>
-          <td>${w.steps_count ?? (Array.isArray(w.steps) ? w.steps.length : '—')}</td>
+          <td>${w.steps_count ?? (Array.isArray(w.steps) ? w.steps.length : 0)}</td>
           <td>${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary edit-wf" data-id="${esc(String(w.id))}" data-name="${esc(w.name)}" data-desc="${esc(w.description||'')}" data-event="${esc(w.trigger_event||'')}" data-steps="${esc(JSON.stringify(w.steps||[]))}">Edit</button>
+            <button class="btn btn-sm btn-secondary edit-wf" data-id="${esc(String(w.id))}" data-p='${JSON.stringify({name:w.name,description:w.description||'',trigger_event:w.trigger_event||'',steps:w.steps||[]})}'>Edit</button>
             <button class="btn btn-sm btn-danger del-wf" data-id="${esc(String(w.id))}">Delete</button>
           </td>
-        </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No workflows defined.</p></div></td></tr>`;
+        </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No workflows defined. Create one to automate JOINER, LEAVER, or ACCESS_REQUEST events.</p></div></td></tr>`;
       wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Trigger</th><th>Steps</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
       wrap.querySelectorAll('.del-wf').forEach(btn => {
         btn.addEventListener('click', async () => {
-          if (!confirm('Delete this workflow?')) return;
-          try { await api.deleteWorkflow(btn.dataset.id); await load(); } catch(e) { alert(e.message); }
+          if (!confirm('Deactivate this workflow?')) return;
+          try { await api.deleteWorkflow(btn.dataset.id); await loadDefs(); } catch(e) { alert(e.message); }
         });
       });
       wrap.querySelectorAll('.edit-wf').forEach(btn => {
-        btn.addEventListener('click', () => openWfModal(btn.dataset.id, { name: btn.dataset.name, description: btn.dataset.desc, trigger_event: btn.dataset.event, steps_json: btn.dataset.steps }));
+        btn.addEventListener('click', () => { let p; try { p = JSON.parse(btn.dataset.p); } catch { p = {}; } openWfModal(btn.dataset.id, p); });
       });
     } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
   }
 
+  async function loadRuns() {
+    try {
+      const runs = norm(await api.listWorkflowRuns());
+      const statusBadge = s => ({ COMPLETED: 'badge-success', RUNNING: 'badge-info', FAILED: 'badge-danger', HALTED: 'badge-warning' }[s] || 'badge-neutral');
+      const rows = runs.length ? runs.map(r => `
+        <tr>
+          <td class="muted" style="font-size:0.8rem">${fmtDate(r.started_at)}</td>
+          <td class="cell-strong">${esc(r.workflow_name||'—')}</td>
+          <td>${esc(r.emp_name||r.emp_id)}</td>
+          <td><span class="badge badge-info">${esc(r.trigger_event)}</span></td>
+          <td>${r.current_step}/${r.steps_total}</td>
+          <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td>
+          <td class="muted" style="font-size:0.75rem">${esc(r.error_message||'')}</td>
+        </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><p>No workflow runs yet.</p></div></td></tr>`;
+      wrap.querySelector('#runs-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Started</th><th>Workflow</th><th>Employee</th><th>Event</th><th>Progress</th><th>Status</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    } catch(e) { wrap.querySelector('#runs-area').innerHTML = errHtml(e.message); }
+  }
+
+  function collectSteps(bd) {
+    const cards = [...bd.querySelectorAll('.wf-step-card')];
+    return cards.map((card) => {
+      const type = card.querySelector('.wf-step-type')?.value;
+      const config = {};
+      if (type === 'NOTIFY') {
+        config.channel = card.querySelector('.wf-step-channel')?.value || 'IN_APP';
+        config.subject = card.querySelector('.wf-step-subject')?.value || '';
+        config.body = card.querySelector('.wf-step-body')?.value || '';
+      } else if (type === 'WEBHOOK') {
+        config.url = card.querySelector('.wf-step-url')?.value || '';
+        config.secret = card.querySelector('.wf-step-secret')?.value || '';
+      }
+      return { type, config };
+    });
+  }
+
+  function wireStepBuilder(bd, steps = []) {
+    const area = bd.querySelector('#wf-steps-area');
+    const render = () => {
+      area.innerHTML = steps.map((s, i) => wfStepRow(s, i)).join('') || '<p class="muted">No steps yet — add at least one action.</p>';
+      area.querySelectorAll('.wf-rm-step').forEach(btn => {
+        btn.addEventListener('click', () => { steps = collectSteps(bd); steps.splice(Number(btn.dataset.idx), 1); render(); });
+      });
+      area.querySelectorAll('.wf-step-type').forEach(sel => {
+        sel.addEventListener('change', () => { steps = collectSteps(bd); steps[Number(sel.dataset.idx)].type = sel.value; render(); });
+      });
+    };
+    bd.querySelector('#wf-add-step').addEventListener('click', () => {
+      steps = collectSteps(bd);
+      steps.push({ type: 'GRANT_BIRTHRIGHT', config: {} });
+      render();
+    });
+    render();
+  }
+
   function openWfModal(id, d = {}) {
     const isEdit = !!id;
-    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${isEdit ? 'Edit' : 'New'} Workflow</h2></div><div class="modal-body">
+    const steps = Array.isArray(d.steps) ? d.steps : [];
+    const bd = openModal(`<div class="modal" style="max-width:640px"><div class="modal-header"><h2>${isEdit ? 'Edit' : 'New'} Workflow</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="wf-name" value="${esc(d.name||'')}"></div>
       <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="wf-desc" value="${esc(d.description||'')}"></div>
-      <div class="form-group"><label class="form-label">Trigger Event</label><input class="form-input" id="wf-event" value="${esc(d.trigger_event||'')}" placeholder="JOINER / LEAVER / ROLE_CHANGE"></div>
-      <div class="form-group"><label class="form-label">Steps JSON</label><textarea class="form-textarea" id="wf-steps" rows="5">${esc(d.steps_json||'[]')}</textarea></div>
+      <div class="form-group"><label class="form-label">Trigger Event</label>
+        <select class="form-select" id="wf-event">
+          <option value="">— Select event —</option>
+          ${WF_EVENTS.map(e => `<option value="${e}" ${d.trigger_event===e?'selected':''}>${e}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:1rem 0 0.5rem">
+        <label class="form-label" style="margin:0">Steps</label>
+        <button type="button" class="btn btn-sm btn-secondary" id="wf-add-step">+ Add Step</button>
+      </div>
+      <div id="wf-steps-area"></div>
       <div id="wf-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="wf-save">${isEdit ? 'Update' : 'Create'}</button><button class="btn btn-secondary" id="wf-cancel">Cancel</button></div></div>`);
+    wireStepBuilder(bd, steps.length ? steps : [{ type: 'GRANT_BIRTHRIGHT', config: {} }]);
     bd.querySelector('#wf-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#wf-save').addEventListener('click', async () => {
-      let steps;
-      try { steps = JSON.parse(bd.querySelector('#wf-steps').value || '[]'); } catch { bd.querySelector('#wf-err').innerHTML = errHtml('Steps JSON is invalid'); return; }
-      const data = { name: bd.querySelector('#wf-name').value, description: bd.querySelector('#wf-desc').value, trigger_event: bd.querySelector('#wf-event').value, steps };
+      const stepsOut = collectSteps(bd);
+      const data = {
+        name: bd.querySelector('#wf-name').value.trim(),
+        description: bd.querySelector('#wf-desc').value.trim(),
+        trigger_event: bd.querySelector('#wf-event').value,
+        steps: stepsOut,
+      };
       if (!data.name) { bd.querySelector('#wf-err').innerHTML = errHtml('Name required'); return; }
+      if (!data.trigger_event) { bd.querySelector('#wf-err').innerHTML = errHtml('Trigger event required'); return; }
+      if (!stepsOut.length) { bd.querySelector('#wf-err').innerHTML = errHtml('Add at least one step'); return; }
       try {
         if (isEdit) await api.updateWorkflow(id, data); else await api.createWorkflow(data);
-        bd.remove(); await load();
+        bd.remove(); await loadDefs();
       } catch(e) { bd.querySelector('#wf-err').innerHTML = errHtml(e.message); }
     });
   }
 
   wrap.querySelector('#new-wf-btn').addEventListener('click', () => openWfModal(null));
-  await load();
+  wrap.querySelectorAll('.cfg-tab').forEach(tab => {
+    tab.addEventListener('click', async () => {
+      wrap.querySelectorAll('.cfg-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const name = tab.dataset.tab;
+      wrap.querySelector('#tab-defs').style.display = name === 'defs' ? '' : 'none';
+      wrap.querySelector('#tab-runs').style.display = name === 'runs' ? '' : 'none';
+      if (name === 'runs') await loadRuns();
+    });
+  });
+
+  await loadDefs();
 }
 
 // ─── 17. Event Triggers ───────────────────────────────────────────────────────
 export async function viewEventTriggers(content) {
-  content.replaceChildren(el(`<div>${header('Event Triggers', 'Webhooks and notifications fired on system events', `<button class="btn btn-primary" id="new-et-btn">+ New Trigger</button>`)}<div id="list-area">${loading()}</div></div>`));
+  content.replaceChildren(el(`<div>${header('Event Triggers', 'Single-action hooks (webhook / Slack / email) on system events — use Workflow Library for multi-step flows', `<button class="btn btn-primary" id="new-et-btn">+ New Trigger</button>`)}<div id="list-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
 
   async function load() {
@@ -4990,7 +5071,7 @@ export async function viewEventTriggers(content) {
 
   function openEtModal(id, d = {}) {
     const isEdit = !!id;
-    const events = ['JOINER','LEAVER','MFA_ENROLLED','SUSPICIOUS_LOGIN','ROLE_CHANGE','ACCESS_REQUEST'];
+    const events = ['JOINER','LEAVER','MOVER','SUSPEND','UNSUSPEND','MFA_ENROLLED','SUSPICIOUS_LOGIN','ROLE_CHANGE','ACCESS_REQUEST'];
     const channels = ['WEBHOOK','SLACK','TEAMS','EMAIL'];
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${isEdit ? 'Edit' : 'New'} Event Trigger</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="et-name" value="${esc(d.name||'')}"></div>
@@ -5024,21 +5105,23 @@ export async function viewNotifications(content) {
     try {
       const [stats, _rawNotifs] = await Promise.all([api.notificationStats(), api.listNotifications()]);
       const notifs = norm(_rawNotifs);
+      const byStatus = Object.fromEntries((stats?.byStatus || []).map(r => [r.status, Number(r.count) || 0]));
+      const total = Object.values(byStatus).reduce((a, b) => a + b, 0);
       const statusBadge = s => ({ SENT: 'badge-success', FAILED: 'badge-danger', PENDING: 'badge-warning', PROCESSING: 'badge-info' }[s] || 'badge-neutral');
       const rows = notifs.length ? notifs.map(n => `
         <tr>
           <td class="cell-strong">${esc(n.subject||'—')}</td>
           <td><span class="badge badge-info">${esc(n.channel||'—')}</span></td>
-          <td class="muted">${esc(n.recipient||'—')}</td>
+          <td class="muted">${esc(n.recipient_name||n.recipient_emp_id||n.recipient||'—')}</td>
           <td><span class="badge ${statusBadge(n.status)}">${esc(n.status||'—')}</span></td>
           <td class="muted">${n.created_at ? fmtDate(n.created_at) : '—'}</td>
         </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No notifications found.</p></div></td></tr>`;
       wrap.querySelector('#notif-area').innerHTML = `
         <div class="stat-grid" style="margin-bottom:1.5rem">
-          <div class="stat-card"><div class="stat-value">${stats?.total ?? '—'}</div><div class="stat-label">Total</div></div>
-          <div class="stat-card"><div class="stat-value">${stats?.sent ?? '—'}</div><div class="stat-label">Sent</div></div>
-          <div class="stat-card"><div class="stat-value">${stats?.failed ?? '—'}</div><div class="stat-label">Failed</div></div>
-          <div class="stat-card"><div class="stat-value">${stats?.pending ?? '—'}</div><div class="stat-label">Pending</div></div>
+          <div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">Total</div></div>
+          <div class="stat-card"><div class="stat-value">${byStatus.SENT ?? 0}</div><div class="stat-label">Sent</div></div>
+          <div class="stat-card"><div class="stat-value">${byStatus.FAILED ?? 0}</div><div class="stat-label">Failed</div></div>
+          <div class="stat-card"><div class="stat-value">${byStatus.PENDING ?? 0}</div><div class="stat-label">Pending</div></div>
         </div>
         <div style="display:flex;gap:0.75rem;margin-bottom:1rem">
           <button class="btn btn-primary" id="dispatch-btn">Dispatch Pending</button>
@@ -5059,7 +5142,7 @@ export async function viewNotifications(content) {
       wrap.querySelector('#send-test-btn').addEventListener('click', () => {
         const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Send Test Notification</h2></div><div class="modal-body">
           <div class="form-group"><label class="form-label">Channel</label><select class="form-select" id="tn-ch"><option>EMAIL</option><option>SLACK</option><option>WEBHOOK</option></select></div>
-          <div class="form-group"><label class="form-label">Recipient</label><input class="form-input" id="tn-to" placeholder="user@example.com"></div>
+          <div class="form-group"><label class="form-label">Recipient (emp ID or email)</label><input class="form-input" id="tn-to" placeholder="E12345 or user@example.com"></div>
           <div class="form-group"><label class="form-label">Subject</label><input class="form-input" id="tn-subj" value="Test notification from Lenskart IdP"></div>
           <div class="form-group"><label class="form-label">Body</label><textarea class="form-textarea" id="tn-body" rows="3">This is a test notification.</textarea></div>
           <div id="tn-err"></div>
@@ -5160,25 +5243,28 @@ export async function viewGeneralSettings(content) {
     wrap.querySelector('#gs-area').innerHTML = `
       <div style="display:flex;flex-direction:column;gap:1.5rem;max-width:700px">
 
-        <!-- ── General ──────────────────────────────────────────────────── -->
+        <!-- ── General (fields match general_settings / PUT API) ─────────── -->
         <div class="card">
           <h2>Organisation</h2>
-          <div class="form-group"><label class="form-label">Org Name</label><input class="form-input" id="gs-org" value="${esc(s.org_name||'')}"></div>
+          <div class="form-group"><label class="form-label">Display Name</label><input class="form-input" id="gs-org" value="${esc(s.display_name||'')}"></div>
           <div class="form-group"><label class="form-label">Support Email</label><input class="form-input" id="gs-email" value="${esc(s.support_email||'')}"></div>
           <h2 style="margin-top:1.5rem">Session</h2>
-          <div class="form-group"><label class="form-label">Session TTL (hours)</label><input class="form-input" id="gs-ttl" type="number" value="${s.session_ttl_hours??8}"></div>
-          <div class="form-group"><label class="form-label">Cookie Domain</label><input class="form-input" id="gs-domain" value="${esc(s.cookie_domain||'')}"></div>
+          <div class="form-group"><label class="form-label">Default Session (hours)</label><input class="form-input" id="gs-ttl" type="number" value="${s.default_session_hours??8}"></div>
+          <div class="form-group"><label class="form-label">Absolute Session Cap (hours)</label><input class="form-input" id="gs-abs" type="number" value="${s.session_absolute_hours??24}"></div>
           <h2 style="margin-top:1.5rem">Authentication</h2>
           <div class="form-group">
-            <label class="form-check"><input type="checkbox" id="gs-mfa" ${chk(s.mfa_required)}> MFA Required</label>
             <label class="form-check"><input type="checkbox" id="gs-local" ${chk(s.allow_local_login)}> Allow Local Login</label>
+            <label class="form-check"><input type="checkbox" id="gs-google" ${chk(s.allow_google_login !== 0 && s.allow_google_login !== false)}> Allow Google Login</label>
           </div>
-          <div class="form-group"><label class="form-label">Max Failed Attempts</label><input class="form-input" id="gs-maxfail" type="number" value="${s.max_failed_attempts??5}"></div>
-          <div class="form-group"><label class="form-label">Lockout Duration (min)</label><input class="form-input" id="gs-lockdur" type="number" value="${s.lockout_duration_minutes??15}"></div>
-          <h2 style="margin-top:1.5rem">SMTP</h2>
-          <div class="form-group"><label class="form-label">SMTP Host</label><input class="form-input" id="gs-shost" value="${esc(s.smtp_host||'')}"></div>
-          <div class="form-group"><label class="form-label">SMTP Port</label><input class="form-input" id="gs-sport" type="number" value="${s.smtp_port||587}"></div>
-          <div class="form-group"><label class="form-label">SMTP User</label><input class="form-input" id="gs-suser" value="${esc(s.smtp_user||'')}"></div>
+          <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">MFA policy, lockout, and SMTP are configured via Strong Auth / env — not this form.</p>
+          <div class="form-group"><label class="form-label">Password Min Length</label><input class="form-input" id="gs-pwmin" type="number" value="${s.password_min_length??10}"></div>
+          <div class="form-group"><label class="form-label">MFA Grace Period (days)</label><input class="form-input" id="gs-mfagrace" type="number" value="${s.mfa_grace_period_days??14}"></div>
+          <div class="form-group"><label class="form-label">Audit Retention (days)</label><input class="form-input" id="gs-audit" type="number" value="${s.audit_retention_days??365}"></div>
+          <h2 style="margin-top:1.5rem">Maintenance</h2>
+          <div class="form-group">
+            <label class="form-check"><input type="checkbox" id="gs-maint" ${chk(s.maintenance_mode)}> Maintenance Mode</label>
+          </div>
+          <div class="form-group"><label class="form-label">Maintenance Message</label><input class="form-input" id="gs-maintmsg" value="${esc(s.maintenance_msg||'')}"></div>
           <div id="gs-msg" style="margin-top:1rem"></div>
           <button class="btn btn-primary" id="gs-save" style="margin-top:0.5rem">Save Settings</button>
         </div>
@@ -5261,17 +5347,17 @@ export async function viewGeneralSettings(content) {
     // ── General Settings save ─────────────────────────────────────────────────
     wrap.querySelector('#gs-save').addEventListener('click', async () => {
       const data = {
-        org_name: wrap.querySelector('#gs-org').value,
-        support_email: wrap.querySelector('#gs-email').value,
-        session_ttl_hours: parseInt(wrap.querySelector('#gs-ttl').value)||8,
-        cookie_domain: wrap.querySelector('#gs-domain').value,
-        mfa_required: wrap.querySelector('#gs-mfa').checked,
+        display_name: wrap.querySelector('#gs-org').value,
+        support_email: wrap.querySelector('#gs-email').value || null,
+        default_session_hours: parseInt(wrap.querySelector('#gs-ttl').value, 10) || 8,
+        session_absolute_hours: parseInt(wrap.querySelector('#gs-abs').value, 10) || 24,
         allow_local_login: wrap.querySelector('#gs-local').checked,
-        max_failed_attempts: parseInt(wrap.querySelector('#gs-maxfail').value)||5,
-        lockout_duration_minutes: parseInt(wrap.querySelector('#gs-lockdur').value)||15,
-        smtp_host: wrap.querySelector('#gs-shost').value,
-        smtp_port: parseInt(wrap.querySelector('#gs-sport').value)||587,
-        smtp_user: wrap.querySelector('#gs-suser').value,
+        allow_google_login: wrap.querySelector('#gs-google').checked,
+        password_min_length: parseInt(wrap.querySelector('#gs-pwmin').value, 10) || 10,
+        mfa_grace_period_days: parseInt(wrap.querySelector('#gs-mfagrace').value, 10) || 14,
+        audit_retention_days: parseInt(wrap.querySelector('#gs-audit').value, 10) || 365,
+        maintenance_mode: wrap.querySelector('#gs-maint').checked,
+        maintenance_msg: wrap.querySelector('#gs-maintmsg').value || null,
       };
       try {
         await api.saveGeneralSettings(data);
@@ -5366,22 +5452,26 @@ export async function viewGeneralSettings(content) {
 
 // ─── 21. Branding ─────────────────────────────────────────────────────────────
 export async function viewBranding(content) {
-  content.replaceChildren(el(`<div>${header('Branding', 'Portal look and feel — colors, logos, and custom CSS')}<div id="br-area">${loading()}</div></div>`));
+  content.replaceChildren(el(`<div>${header('Branding & Login', 'Portal look and feel — login page, logos, colors, and custom CSS')}<div id="br-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
   try {
     const b = await api.getBranding();
+    const orgName = b.org_name || 'Lenskart IdP';
+    const heroTitle = b.login_hero_title || 'Welcome back';
+    const heroSub = b.login_hero_sub || 'Sign in to your Lenskart account';
     wrap.querySelector('#br-area').innerHTML = `
       <div class="grid-3">
         <div class="card" style="grid-column:span 2">
           <h2>Branding Settings</h2>
-          <div class="form-group"><label class="form-label">App Name</label><input class="form-input" id="br-appname" value="${esc(b.app_name||'Lenskart IdP')}"></div>
+          <p class="muted" style="margin:0 0 1rem;font-size:0.82rem">This page is the single editor for login appearance (Login Customization redirects here).</p>
+          <div class="form-group"><label class="form-label">Organisation / App Name</label><input class="form-input" id="br-appname" value="${esc(orgName)}"></div>
           <div class="form-group"><label class="form-label">Logo URL</label><input class="form-input" id="br-logo" value="${esc(b.logo_url||'')}"></div>
           <div class="form-group"><label class="form-label">Favicon URL</label><input class="form-input" id="br-fav" value="${esc(b.favicon_url||'')}"></div>
-          <div class="form-group"><label class="form-label">Accent Color</label><input type="color" class="form-input" id="br-color" value="${esc(b.accent_color||'#4f46e5')}" style="height:2.5rem;padding:0.25rem"></div>
+          <div class="form-group"><label class="form-label">Accent Color</label><input type="color" class="form-input" id="br-color" value="${esc(b.accent_color||'#2563eb')}" style="height:2.5rem;padding:0.25rem"></div>
           <div class="form-group"><label class="form-label">Support Email</label><input class="form-input" id="br-email" value="${esc(b.support_email||'')}"></div>
-          <div class="form-group"><label class="form-label">Footer Text</label><input class="form-input" id="br-footer" value="${esc(b.footer_text||'')}"></div>
-          <div class="form-group"><label class="form-label">Login Hero Heading</label><input class="form-input" id="br-hero" value="${esc(b.login_hero_heading||'')}"></div>
-          <div class="form-group"><label class="form-label">Login Hero Subtext</label><input class="form-input" id="br-sub" value="${esc(b.login_hero_subtext||'')}"></div>
+          <div class="form-group"><label class="form-label">Login Hero Title</label><input class="form-input" id="br-hero" value="${esc(heroTitle)}"></div>
+          <div class="form-group"><label class="form-label">Login Hero Subtext</label><input class="form-input" id="br-sub" value="${esc(heroSub)}"></div>
+          <div class="form-group"><label class="form-label">Login Background URL</label><input class="form-input" id="br-bg" value="${esc(b.login_bg_url||'')}"></div>
           <div class="form-group"><label class="form-label">Custom CSS</label><textarea class="form-textarea" id="br-css" rows="5" placeholder="/* Custom CSS overrides */">${esc(b.custom_css||'')}</textarea></div>
           <div id="br-msg"></div>
           <button class="btn btn-primary" id="br-save">Save Branding</button>
@@ -5389,16 +5479,16 @@ export async function viewBranding(content) {
         <div class="card">
           <h2>Preview</h2>
           <div id="br-preview" style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:0.5rem">
-            <div id="br-prev-header" style="background:${esc(b.accent_color||'#4f46e5')};padding:2rem 1.5rem;text-align:center">
-              <div style="font-size:1.25rem;font-weight:700;color:#fff" id="br-prev-title">${esc(b.app_name||'Lenskart IdP')}</div>
+            <div id="br-prev-header" style="background:${esc(b.accent_color||'#2563eb')};padding:2rem 1.5rem;text-align:center">
+              <div style="font-size:1.25rem;font-weight:700;color:#fff" id="br-prev-title">${esc(orgName)}</div>
             </div>
             <div style="padding:1rem;background:#f9f9f9">
-              <div style="font-size:0.8rem;font-weight:600;color:#333;text-align:center" id="br-prev-hero">${esc(b.login_hero_heading||'Sign in to continue')}</div>
-              <div style="margin-top:0.4rem;font-size:0.7rem;color:#888;text-align:center" id="br-prev-sub">${esc(b.login_hero_subtext||'')}</div>
+              <div style="font-size:0.8rem;font-weight:600;color:#333;text-align:center" id="br-prev-hero">${esc(heroTitle)}</div>
+              <div style="margin-top:0.4rem;font-size:0.7rem;color:#888;text-align:center" id="br-prev-sub">${esc(heroSub)}</div>
               <div style="margin-top:1rem;background:#fff;border-radius:4px;padding:0.75rem;border:1px solid #e2e8f0">
                 <div style="height:0.5rem;background:#e2e8f0;border-radius:2px;margin-bottom:0.5rem"></div>
                 <div style="height:0.5rem;background:#e2e8f0;border-radius:2px;width:70%"></div>
-                <div id="br-prev-btn" style="margin-top:0.75rem;height:1.5rem;border-radius:4px;background:${esc(b.accent_color||'#4f46e5')}"></div>
+                <div id="br-prev-btn" style="margin-top:0.75rem;height:1.5rem;border-radius:4px;background:${esc(b.accent_color||'#2563eb')}"></div>
               </div>
             </div>
           </div>
@@ -5417,15 +5507,15 @@ export async function viewBranding(content) {
 
     wrap.querySelector('#br-save').addEventListener('click', async () => {
       const data = {
-        app_name: wrap.querySelector('#br-appname').value,
-        logo_url: wrap.querySelector('#br-logo').value,
-        favicon_url: wrap.querySelector('#br-fav').value,
+        org_name: wrap.querySelector('#br-appname').value,
+        logo_url: wrap.querySelector('#br-logo').value || null,
+        favicon_url: wrap.querySelector('#br-fav').value || null,
         accent_color: wrap.querySelector('#br-color').value,
-        support_email: wrap.querySelector('#br-email').value,
-        footer_text: wrap.querySelector('#br-footer').value,
-        login_hero_heading: wrap.querySelector('#br-hero').value,
-        login_hero_subtext: wrap.querySelector('#br-sub').value,
-        custom_css: wrap.querySelector('#br-css').value,
+        support_email: wrap.querySelector('#br-email').value || null,
+        login_hero_title: wrap.querySelector('#br-hero').value,
+        login_hero_sub: wrap.querySelector('#br-sub').value,
+        login_bg_url: wrap.querySelector('#br-bg').value || null,
+        custom_css: wrap.querySelector('#br-css').value || null,
       };
       try {
         await api.saveBranding(data);
@@ -5444,16 +5534,16 @@ export async function viewLicense(content) {
     const s = await api.getGeneralSettings();
     const features = [
       { name: 'SSO / SAML 2.0', status: 'live' },
-      { name: 'Multi-Factor Auth', status: 'live' },
+      { name: 'Multi-Factor Auth (TOTP)', status: 'live' },
       { name: 'IGA / Access Reviews', status: 'live' },
-      { name: 'OIDC / OAuth 2.0', status: 'live' },
-      { name: 'User Provisioning', status: 'live' },
+      { name: 'OIDC Client Registry', status: 'progress' },
+      { name: 'OIDC / OAuth Issuer', status: 'planned' },
       { name: 'Directory Sync', status: 'live' },
-      { name: 'PAM / Vault', status: 'progress' },
+      { name: 'Connector Provisioning', status: 'progress' },
+      { name: 'Attendance IGA', status: 'live' },
+      { name: 'PAM / Vault (base64)', status: 'progress' },
       { name: 'Birthright Rules', status: 'progress' },
-      { name: 'Risk Engine', status: 'planned' },
-      { name: 'UEBA Analytics', status: 'planned' },
-      { name: 'Behavioral Biometrics', status: 'planned' },
+      { name: 'WebAuthn / Passkeys', status: 'planned' },
       { name: 'App Discovery', status: 'planned' },
     ];
     const featureHtml = features.map(f => {
@@ -5466,7 +5556,7 @@ export async function viewLicense(content) {
         <div class="card" style="grid-column:span 2">
           <h2>Edition Details</h2>
           <div class="kv" style="margin-top:1rem">
-            <div class="kv"><span class="k">Organisation</span><span class="v">${esc(s.org_name||'—')}</span></div>
+            <div class="kv"><span class="k">Organisation</span><span class="v">${esc(s.display_name||s.org_name||'—')}</span></div>
             <div class="kv"><span class="k">Edition</span><span class="v"><span class="badge badge-success">Enterprise Self-Hosted</span></span></div>
             <div class="kv"><span class="k">Version</span><span class="v">1.0.0</span></div>
             <div class="kv"><span class="k">Build</span><span class="v">lilg-idp-2026</span></div>
@@ -5501,7 +5591,7 @@ export async function viewTickets(content) {
     <label class="form-label" style="margin:0">Status:</label>
     <select class="form-select" id="tk-status" style="width:auto"><option value="">ALL</option><option>OPEN</option><option>IN_PROGRESS</option><option>RESOLVED</option><option>CLOSED</option></select>
     <label class="form-label" style="margin:0;margin-left:1rem">Category:</label>
-    <select class="form-select" id="tk-cat" style="width:auto"><option value="">ALL</option><option>ACCESS</option><option>PASSWORD</option><option>MFA</option><option>ACCOUNT</option><option>OTHER</option></select>
+    <select class="form-select" id="tk-cat" style="width:auto"><option value="">ALL</option><option value="ACCESS_REQUEST">ACCESS_REQUEST</option><option value="PASSWORD_RESET">PASSWORD_RESET</option><option value="MFA_RESET">MFA_RESET</option><option value="ACCOUNT_ISSUE">ACCOUNT_ISSUE</option><option value="OTHER">OTHER</option></select>
   </div><div id="list-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
 
@@ -5513,15 +5603,15 @@ export async function viewTickets(content) {
       const priColor = p => ({ HIGH: 'badge-danger', MEDIUM: 'badge-warning', LOW: 'badge-neutral', CRITICAL: 'badge-danger' }[p] || 'badge-neutral');
       const stColor = s => ({ OPEN: 'badge-info', IN_PROGRESS: 'badge-warning', RESOLVED: 'badge-success', CLOSED: 'badge-neutral' }[s] || 'badge-neutral');
       const rows = tickets.length ? tickets.map(t => `
-        <tr class="tk-row" data-p='${JSON.stringify({id:t.id,title:t.title,category:t.category,status:t.status,priority:t.priority,description:t.description||"",created_by:t.created_by||"",created_at:t.created_at||""})}' style="cursor:pointer">
-          <td class="cell-strong">${esc(t.title)}</td>
+        <tr class="tk-row" data-p='${JSON.stringify({id:t.id,subject:t.subject||t.title,category:t.category,status:t.status,priority:t.priority,description:t.description||"",requester_name:t.requester_name||t.requester_id||"",created_at:t.created_at||""})}' style="cursor:pointer">
+          <td class="cell-strong">${esc(t.subject||t.title||'—')}</td>
           <td><span class="badge badge-info">${esc(t.category||'—')}</span></td>
           <td><span class="badge ${stColor(t.status)}">${esc(t.status||'—')}</span></td>
           <td><span class="badge ${priColor(t.priority)}">${esc(t.priority||'—')}</span></td>
-          <td class="muted">${esc(t.created_by||'—')}</td>
+          <td class="muted">${esc(t.requester_name||t.requester_id||'—')}</td>
           <td class="muted">${t.created_at ? fmtDate(t.created_at) : '—'}</td>
         </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No tickets found.</p></div></td></tr>`;
-      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Priority</th><th>Created By</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Subject</th><th>Category</th><th>Status</th><th>Priority</th><th>Requester</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table></div>`;
       wrap.querySelectorAll('.tk-row').forEach(row => {
         row.addEventListener('click', () => { let p; try { p = JSON.parse(row.dataset.p); } catch { p = {}; } openTkDetail(p); });
       });
@@ -5530,11 +5620,11 @@ export async function viewTickets(content) {
 
   function openTkDetail(t) {
     const statuses = ['OPEN','IN_PROGRESS','RESOLVED','CLOSED'];
-    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${esc(t.title)}</h2></div><div class="modal-body">
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${esc(t.subject||t.title||'Ticket')}</h2></div><div class="modal-body">
       <div class="kv">
         <div><span class="k">Category</span><span class="v">${esc(t.category||'—')}</span></div>
         <div><span class="k">Priority</span><span class="v">${esc(t.priority||'—')}</span></div>
-        <div><span class="k">Created By</span><span class="v">${esc(t.created_by||'—')}</span></div>
+        <div><span class="k">Requester</span><span class="v">${esc(t.requester_name||t.created_by||'—')}</span></div>
         <div><span class="k">Created</span><span class="v">${t.created_at ? fmtDate(t.created_at) : '—'}</span></div>
       </div>
       ${t.description ? `<p style="margin-top:1rem">${esc(t.description)}</p>` : ''}
@@ -5558,16 +5648,16 @@ export async function viewTickets(content) {
   wrap.querySelector('#tk-cat').addEventListener('change', load);
   wrap.querySelector('#new-tk-btn').addEventListener('click', () => {
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>New Ticket</h2></div><div class="modal-body">
-      <div class="form-group"><label class="form-label">Title</label><input class="form-input" id="tk-title"></div>
-      <div class="form-group"><label class="form-label">Category</label><select class="form-select" id="tk-cat-new"><option>ACCESS</option><option>PASSWORD</option><option>MFA</option><option>ACCOUNT</option><option>OTHER</option></select></div>
+      <div class="form-group"><label class="form-label">Subject</label><input class="form-input" id="tk-title"></div>
+      <div class="form-group"><label class="form-label">Category</label><select class="form-select" id="tk-cat-new"><option value="ACCESS_REQUEST">ACCESS_REQUEST</option><option value="PASSWORD_RESET">PASSWORD_RESET</option><option value="MFA_RESET">MFA_RESET</option><option value="ACCOUNT_ISSUE">ACCOUNT_ISSUE</option><option value="OTHER">OTHER</option></select></div>
       <div class="form-group"><label class="form-label">Priority</label><select class="form-select" id="tk-pri"><option>LOW</option><option selected>MEDIUM</option><option>HIGH</option><option>CRITICAL</option></select></div>
       <div class="form-group"><label class="form-label">Description</label><textarea class="form-textarea" id="tk-desc" rows="4"></textarea></div>
       <div id="tk-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="tk-save">Submit</button><button class="btn btn-secondary" id="tk-cancel">Cancel</button></div></div>`);
     bd.querySelector('#tk-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#tk-save').addEventListener('click', async () => {
-      const data = { title: bd.querySelector('#tk-title').value, category: bd.querySelector('#tk-cat-new').value, priority: bd.querySelector('#tk-pri').value, description: bd.querySelector('#tk-desc').value };
-      if (!data.title) { bd.querySelector('#tk-err').innerHTML = errHtml('Title required'); return; }
+      const data = { subject: bd.querySelector('#tk-title').value.trim(), category: bd.querySelector('#tk-cat-new').value, priority: bd.querySelector('#tk-pri').value, description: bd.querySelector('#tk-desc').value };
+      if (!data.subject) { bd.querySelector('#tk-err').innerHTML = errHtml('Subject required'); return; }
       try { await api.createTicket(data); bd.remove(); await load(); } catch(e) { bd.querySelector('#tk-err').innerHTML = errHtml(e.message); }
     });
   });
@@ -5653,4 +5743,564 @@ export async function viewSystemHealth(content) {
 
   wrap.querySelector('#health-refresh').addEventListener('click', () => load());
   await load();
+}
+
+// ─── Attendance IGA ───────────────────────────────────────────────────────────
+function aigDateParts(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+  const pick = (t) => parts.find(p => p.type === t)?.value ?? '00';
+  return { yyyy: pick('year'), mm: pick('month'), dd: pick('day') };
+}
+function aigExpandTemplate(template, offsetDays = 0, timeZone = 'Asia/Kolkata') {
+  if (!template) return '';
+  const shifted = new Date(Date.now() + offsetDays * 86400000);
+  const { yyyy, mm, dd } = aigDateParts(shifted, timeZone);
+  return template
+    .replace(/\{YYYY-MM-DD\}/gi, `${yyyy}-${mm}-${dd}`)
+    .replace(/\{YYYYMMDD\}/gi, `${yyyy}${mm}${dd}`)
+    .replace(/\{DD-MM-YYYY\}/gi, `${dd}-${mm}-${yyyy}`)
+    .replace(/\{DD\/MM\/YYYY\}/gi, `${dd}/${mm}/${yyyy}`)
+    .replace(/\{YYYY\}/g, yyyy)
+    .replace(/\{MM\}/g, mm)
+    .replace(/\{DD\}/g, dd)
+    .replace(/\{date\}/gi, `${yyyy}-${mm}-${dd}`);
+}
+function aigPreviewPath(s) {
+  const tz = s.timezone || 'Asia/Kolkata';
+  const dir = (s.remoteDir || '').trim().replace(/\/$/, '');
+  const lookback = Number(s.lookbackDays ?? 1);
+  const base = Number(s.dateOffsetDays ?? 0);
+  const paths = [];
+  if (s.fileNameTemplate?.trim()) {
+    for (let i = 0; i <= lookback; i++) {
+      const name = aigExpandTemplate(s.fileNameTemplate.trim(), base - i, tz);
+      paths.push(dir ? `${dir}/${name}` : (name.startsWith('/') ? name : name));
+    }
+    return paths;
+  }
+  if (s.remotePath?.trim()) {
+    paths.push(aigExpandTemplate(s.remotePath.trim(), base, tz));
+    return paths;
+  }
+  return paths;
+}
+function aigStatusBadge(enabled, status) {
+  if (!enabled) return '<span class="badge badge-neutral">Disabled</span>';
+  if (status === 'OK') return '<span class="badge badge-success">Healthy</span>';
+  if (status === 'PARTIAL') return '<span class="badge badge-warning">Partial</span>';
+  if (status === 'FAILED') return '<span class="badge badge-danger">Failed</span>';
+  return '<span class="badge badge-info">Idle</span>';
+}
+
+export async function viewAttendanceIga(content) {
+  content.replaceChildren(el(`<div class="aig-page">
+    ${header('Attendance IGA', 'Automated access governance driven by daily punch-in compliance', `
+      <div class="aig-actions">
+        <button class="btn btn-secondary" id="aig-run-sftp">Run SFTP Import</button>
+        <button class="btn btn-secondary" id="aig-run-api">Run API Import</button>
+        <button class="btn btn-primary" id="aig-run-manual">Evaluate Rules</button>
+      </div>
+    `)}
+    <div id="aig-status-bar" class="aig-status-bar">${loading()}</div>
+    <div id="aig-stats" class="stat-grid aap-stats">${loading()}</div>
+    <div class="cfg-tab-bar inline-tabs aig-tabs">
+      <button type="button" class="cfg-tab inline-tab active" data-tab="dash">Overview</button>
+      <button type="button" class="cfg-tab inline-tab" data-tab="config">Configuration</button>
+      <button type="button" class="cfg-tab inline-tab" data-tab="imports">Import History</button>
+      <button type="button" class="cfg-tab inline-tab" data-tab="approvals">Approvals</button>
+      <button type="button" class="cfg-tab inline-tab" data-tab="executions">Executions</button>
+    </div>
+    <div id="tab-dash"></div>
+    <div id="tab-config" style="display:none"></div>
+    <div id="tab-imports" style="display:none"></div>
+    <div id="tab-approvals" style="display:none"></div>
+    <div id="tab-executions" style="display:none"></div>
+  </div>`));
+  const wrap = content.firstChild;
+  let configCache = null;
+
+  async function loadStatusBar() {
+    try {
+      const c = configCache || await api.attendanceIgaConfig();
+      configCache = c;
+      wrap.querySelector('#aig-status-bar').innerHTML = `
+        <div class="aig-status-left">
+          ${aigStatusBadge(c.enabled, c.last_sync_status)}
+          <div class="aig-status-meta">
+            Source <strong>${esc(c.source_type || '—')}</strong>
+            · Polling <strong>${esc(c.polling_interval || 'manual')}</strong>
+            ${c.last_sync_at ? ` · Last sync <strong>${fmtDate(c.last_sync_at)}</strong>` : ' · <span class="text-dim">Never synced</span>'}
+            ${c.sftp_last_file ? ` · File <strong>${esc(c.sftp_last_file)}</strong>` : ''}
+          </div>
+        </div>
+        <div class="aig-status-meta">${c.emergency_mode ? '<span class="badge badge-danger">Emergency mode</span>' : ''}${c.approval_enabled ? ' <span class="badge badge-warning">Approval required</span>' : ''}</div>`;
+    } catch (e) {
+      wrap.querySelector('#aig-status-bar').innerHTML = errHtml(e.message);
+    }
+  }
+
+  async function loadStats() {
+    try {
+      const d = await api.attendanceIgaDashboard();
+      wrap.querySelector('#aig-stats').innerHTML = [
+        statCard('refresh', 'Today\'s Imports', d.todayImports ?? 0, d.lastSyncAt ? `Synced ${fmtDate(d.lastSyncAt)}` : 'No sync yet', 'primary'),
+        statCard('users', 'Users Suspended', d.latestRun?.users_suspended ?? 0, 'latest run', 'warning'),
+        statCard('alert', 'Pending Approvals', d.pendingApprovals ?? 0, 'awaiting decision', 'warning'),
+        statCard('shield', 'Failed Executions', d.failedExecutions ?? 0, 'today', 'danger'),
+        statCard('activity', 'Sync Status', d.lastSyncStatus ?? '—', d.connectorHealth ?? 'unknown', d.lastSyncStatus === 'OK' ? 'success' : 'neutral'),
+        statCard('list', 'Rollbacks Today', d.rollbackCount ?? 0, 'restored access', 'neutral'),
+      ].join('');
+    } catch (e) {
+      wrap.querySelector('#aig-stats').innerHTML = errHtml(e.message);
+    }
+  }
+
+  async function loadDash() {
+    const area = wrap.querySelector('#tab-dash');
+    area.innerHTML = loading();
+    try {
+      const d = await api.attendanceIgaDashboard();
+      const run = d.latestRun || {};
+      const statusBadge = s => ({ COMPLETED: 'badge-success', PARTIAL: 'badge-warning', FAILED: 'badge-danger', RUNNING: 'badge-info' }[s] || 'badge-neutral');
+      area.innerHTML = `<div class="aig-dash-grid">
+        <div class="card aig-run-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <h2 style="margin:0">Latest Pipeline Run</h2>
+            <span class="badge ${statusBadge(run.status)}">${esc(run.status || '—')}</span>
+          </div>
+          <div class="kv-list">
+            <div class="kv"><span class="k">Source</span><span class="v">${esc(run.source || '—')}</span></div>
+            <div class="kv"><span class="k">Records</span><span class="v">${esc(String(run.total_records ?? 0))} total · ${esc(String(run.successful ?? 0))} ok · ${esc(String(run.failed ?? 0))} failed</span></div>
+            <div class="kv"><span class="k">Users processed</span><span class="v">${esc(String(run.users_processed ?? 0))}</span></div>
+            <div class="kv"><span class="k">Suspended</span><span class="v">${esc(String(run.users_suspended ?? 0))}</span></div>
+            <div class="kv"><span class="k">Disabled</span><span class="v">${esc(String(run.users_disabled ?? 0))}</span></div>
+            <div class="kv"><span class="k">Apps removed</span><span class="v">${esc(String(run.apps_removed ?? 0))}</span></div>
+            <div class="kv"><span class="k">Started</span><span class="v">${run.started_at ? fmtDate(run.started_at) : '—'}</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2 style="margin:0 0 1rem">Operational Summary</h2>
+          <div class="kv-list">
+            <div class="kv"><span class="k">Pending approvals</span><span class="v">${d.pendingApprovals ?? 0}</span></div>
+            <div class="kv"><span class="k">Failed executions (today)</span><span class="v">${d.failedExecutions ?? 0}</span></div>
+            <div class="kv"><span class="k">Rollbacks (today)</span><span class="v">${d.rollbackCount ?? 0}</span></div>
+            <div class="kv"><span class="k">Connector health</span><span class="v">${esc(d.connectorHealth ?? '—')}</span></div>
+            <div class="kv"><span class="k">Last sync</span><span class="v">${d.lastSyncAt ? fmtDate(d.lastSyncAt) : 'Never'}</span></div>
+          </div>
+        </div>
+      </div>`;
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  function wireSftpPreview(area) {
+    const previewEl = area.querySelector('#aig-sftp-preview');
+    if (!previewEl) return;
+    const update = () => {
+      const shared = aigSharedDateOpts(area);
+      const cfg = {
+        remoteDir: area.querySelector('#aig-sftp-dir')?.value.trim(),
+        fileNameTemplate: area.querySelector('#aig-sftp-template')?.value.trim(),
+        timezone: shared.timezone,
+        dateOffsetDays: shared.dateOffsetDays,
+        lookbackDays: shared.lookbackDays,
+      };
+      const paths = aigPreviewPath(cfg);
+      previewEl.innerHTML = paths.length
+        ? paths.map((p, i) => `<div>${i === 0 ? 'Primary' : `Fallback -${i}`}: ${esc(p)}</div>`).join('')
+        : '<span class="muted">Set directory + file name template to preview</span>';
+    };
+    ['#aig-sftp-dir', '#aig-sftp-template', '#aig-timezone', '#aig-date-offset', '#aig-lookback'].forEach(sel => {
+      area.querySelector(sel)?.addEventListener('input', update);
+      area.querySelector(sel)?.addEventListener('change', update);
+    });
+    update();
+  }
+
+  function aigSharedDateOpts(area) {
+    return {
+      timezone: area.querySelector('#aig-timezone')?.value.trim() || 'Asia/Kolkata',
+      dateOffsetDays: Number(area.querySelector('#aig-date-offset')?.value || 0),
+      lookbackDays: Number(area.querySelector('#aig-lookback')?.value || 1),
+    };
+  }
+
+  function buildApiPayload(area, c) {
+    const tokenInput = area.querySelector('#aig-api-token')?.value.trim() || '';
+    const shared = aigSharedDateOpts(area);
+    const method = area.querySelector('#aig-api-method')?.value || 'GET';
+    return {
+      api_provider: 'TRUIN',
+      api_url: area.querySelector('#aig-api-url')?.value.trim() || '',
+      api_method: method,
+      api_auth_type: 'BEARER',
+      api_auth_config: tokenInput ? { token: tokenInput } : {},
+      api_config: {
+        endpoint: area.querySelector('#aig-api-endpoint')?.value.trim() || '/api/attendance/daily',
+        dateParam: area.querySelector('#aig-api-date-param')?.value.trim() || 'date',
+        method,
+        timezone: shared.timezone,
+        dateOffsetDays: shared.dateOffsetDays,
+        lookbackDays: shared.lookbackDays,
+        ...(area.querySelector('#aig-api-site')?.value.trim()
+          ? { siteId: area.querySelector('#aig-api-site').value.trim() } : {}),
+        ...(area.querySelector('#aig-api-records-path')?.value.trim()
+          ? { recordsPath: area.querySelector('#aig-api-records-path').value.trim() } : {}),
+      },
+    };
+  }
+
+  function wireApiPreview(area) {
+    const previewEl = area.querySelector('#aig-api-preview');
+    if (!previewEl) return;
+    const update = () => {
+      const base = area.querySelector('#aig-api-url')?.value.trim();
+      const endpoint = area.querySelector('#aig-api-endpoint')?.value.trim() || '/api/attendance/daily';
+      const dateParam = area.querySelector('#aig-api-date-param')?.value.trim() || 'date';
+      const method = area.querySelector('#aig-api-method')?.value || 'GET';
+      const shared = aigSharedDateOpts(area);
+      if (!base) {
+        previewEl.innerHTML = '<span class="muted">Enter base URL to preview</span>';
+        return;
+      }
+      const today = aigExpandTemplate('{YYYY-MM-DD}', shared.dateOffsetDays, shared.timezone);
+      const url = `${base.replace(/\/$/, '')}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}?${encodeURIComponent(dateParam)}=${today}`;
+      previewEl.innerHTML = `<div><strong>${esc(method)}</strong> ${esc(url)}</div><div class="muted" style="margin-top:0.35rem">Authorization: Bearer &lt;token&gt;</div>`;
+    };
+    ['#aig-api-url', '#aig-api-endpoint', '#aig-api-date-param', '#aig-api-method', '#aig-timezone', '#aig-date-offset'].forEach(sel => {
+      area.querySelector(sel)?.addEventListener('input', update);
+      area.querySelector(sel)?.addEventListener('change', update);
+    });
+    update();
+  }
+
+  function buildSftpPayload(area, s) {
+    const host = area.querySelector('#aig-sftp-host')?.value.trim() || '';
+    const username = area.querySelector('#aig-sftp-user')?.value.trim() || '';
+    if (!host && !username) return null; // clear saved SFTP
+    if (!host || !username) return undefined; // incomplete — leave unchanged
+    const shared = aigSharedDateOpts(area);
+    const after = area.querySelector('#aig-sftp-after')?.value || 'keep';
+    return {
+      host,
+      port: Number(area.querySelector('#aig-sftp-port')?.value) || 22,
+      username,
+      ...(area.querySelector('#aig-sftp-pass')?.value
+        ? { password: area.querySelector('#aig-sftp-pass').value }
+        : (s.password ? { password: s.password } : {})),
+      ...(area.querySelector('#aig-sftp-key')?.value.trim()
+        ? { privateKey: area.querySelector('#aig-sftp-key').value.trim() }
+        : (s.privateKey ? { privateKey: s.privateKey } : {})),
+      ...(area.querySelector('#aig-sftp-dir')?.value.trim()
+        ? { remoteDir: area.querySelector('#aig-sftp-dir').value.trim() } : {}),
+      fileNameTemplate: area.querySelector('#aig-sftp-template')?.value.trim() || 'attendance_{YYYY-MM-DD}.csv',
+      timezone: shared.timezone,
+      dateOffsetDays: shared.dateOffsetDays,
+      lookbackDays: shared.lookbackDays,
+      ...(after === 'archive' && area.querySelector('#aig-sftp-archive')?.value.trim()
+        ? { archiveDir: area.querySelector('#aig-sftp-archive').value.trim() } : {}),
+      deleteAfterFetch: after === 'delete',
+    };
+  }
+
+  function wireSftpAfter(area) {
+    const sel = area.querySelector('#aig-sftp-after');
+    const archiveWrap = area.querySelector('#aig-sftp-archive-wrap');
+    if (!sel || !archiveWrap) return;
+    const sync = () => { archiveWrap.style.display = sel.value === 'archive' ? '' : 'none'; };
+    sel.addEventListener('change', sync);
+    sync();
+  }
+
+  function aigField(id, label, controlHtml, hint = '', extraClass = '') {
+    return `<div class="form-group aig-field ${extraClass}"><label class="form-label" for="${id}">${label}</label>${controlHtml}${hint ? `<span class="form-hint">${hint}</span>` : ''}</div>`;
+  }
+
+  async function loadConfig() {
+    const area = wrap.querySelector('#tab-config');
+    area.innerHTML = loading();
+    try {
+      const c = await api.attendanceIgaConfig();
+      configCache = c;
+      const s = c.sftp_config || {};
+      const ac = c.api_config || {};
+      const hasToken = Boolean(c.api_auth_config?.token);
+      const hasKey = Boolean(s.privateKey);
+      const src = c.source_type || 'REST_API';
+      const tz = ac.timezone || s.timezone || 'Asia/Kolkata';
+      const offset = ac.dateOffsetDays ?? s.dateOffsetDays ?? 0;
+      const lookback = ac.lookbackDays ?? s.lookbackDays ?? 1;
+      const idField = c.identifier_field === 'EMPLOYEE_CODE' ? 'EMPLOYEE_ID' : (c.identifier_field || 'EMPLOYEE_ID');
+      const actionMode = c.emergency_mode ? 'emergency' : (c.approval_enabled ? 'approval' : 'auto');
+      const sftpAfter = s.archiveDir ? 'archive' : (s.deleteAfterFetch ? 'delete' : 'keep');
+
+      area.innerHTML = `
+        <div class="aig-settings">
+          <aside class="aig-settings-nav">
+            <div class="aig-settings-nav-label">Settings</div>
+            <button type="button" class="aig-nav-item active" data-section="general"><span class="aig-nav-title">General</span><span class="aig-nav-desc">Source, schedule, rules</span></button>
+            <button type="button" class="aig-nav-item" data-section="api"><span class="aig-nav-title">Truein API</span><span class="aig-nav-desc">Token &amp; endpoint</span></button>
+            <button type="button" class="aig-nav-item" data-section="sftp"><span class="aig-nav-title">SFTP</span><span class="aig-nav-desc">Daily CSV file</span></button>
+            <button type="button" class="aig-nav-item" data-section="manual"><span class="aig-nav-title">Manual Import</span><span class="aig-nav-desc">One-off CSV</span></button>
+          </aside>
+          <div class="aig-settings-main">
+            <div class="aig-settings-scroll">
+              <section class="aig-section active" data-section="general">
+                <div class="aig-section-head">
+                  <h3>General</h3>
+                  <p>Choose how attendance is imported, when the job runs, and how access actions are approved.</p>
+                </div>
+                <div class="aig-source-cards">
+                  <label class="aig-source-card ${src==='REST_API'?'active':''}"><input type="radio" name="aig-source" value="REST_API" ${src==='REST_API'?'checked':''}><strong>Truein API</strong><span>Fetch daily attendance with Bearer token + date</span></label>
+                  <label class="aig-source-card ${src==='SFTP'?'active':''}"><input type="radio" name="aig-source" value="SFTP" ${src==='SFTP'?'checked':''}><strong>SFTP file</strong><span>Download dated CSV from drop folder</span></label>
+                  <label class="aig-source-card ${src==='BOTH'?'active':''}"><input type="radio" name="aig-source" value="BOTH" ${src==='BOTH'?'checked':''}><strong>API + SFTP</strong><span>Merge both sources each run</span></label>
+                  <label class="aig-source-card ${src==='FILE_UPLOAD'?'active':''}"><input type="radio" name="aig-source" value="FILE_UPLOAD" ${src==='FILE_UPLOAD'?'checked':''}><strong>Manual only</strong><span>Scheduler off — CSV upload when needed</span></label>
+                </div>
+                <input type="hidden" id="aig-source" value="${esc(src)}">
+                <div class="aig-field-grid">
+                  ${aigField('aig-enabled', 'Module', `<select class="form-select" id="aig-enabled"><option value="1" ${c.enabled?'selected':''}>Enabled</option><option value="0" ${!c.enabled?'selected':''}>Disabled</option></select>`)}
+                  ${aigField('aig-poll', 'Schedule', `<select class="form-select" id="aig-poll"><option value="15m" ${c.polling_interval==='15m'?'selected':''}>Every 15 minutes</option><option value="5m" ${c.polling_interval==='5m'?'selected':''}>Every 5 minutes</option><option value="1h" ${c.polling_interval==='1h'?'selected':''}>Hourly</option><option value="1d" ${c.polling_interval==='1d'?'selected':''}>Daily</option><option value="manual" ${c.polling_interval==='manual'?'selected':''}>Manual only</option></select>`, 'Prefer a run after punch cutoff.')}
+                  ${aigField('aig-timezone', 'Timezone', `<input class="form-input" id="aig-timezone" value="${esc(tz)}">`, 'Shared by API date, SFTP filename, weekend & cutoff checks.')}
+                  ${aigField('aig-date-offset', 'Attendance date', `<select class="form-select" id="aig-date-offset"><option value="0" ${Number(offset)===0?'selected':''}>Today</option><option value="-1" ${Number(offset)===-1?'selected':''}>Yesterday</option></select>`, 'Which calendar day to fetch.')}
+                  ${aigField('aig-lookback', 'Retry previous days', `<input class="form-input" id="aig-lookback" type="number" min="0" max="7" value="${esc(String(lookback))}">`, 'If today\'s feed is empty, try N prior days.')}
+                  ${aigField('aig-id-field', 'Match employees by', `<select class="form-select" id="aig-id-field"><option value="EMPLOYEE_ID" ${idField==='EMPLOYEE_ID'?'selected':''}>Employee ID</option><option value="EMAIL" ${idField==='EMAIL'?'selected':''}>Email</option><option value="USERNAME" ${idField==='USERNAME'?'selected':''}>Username</option></select>`)}
+                  ${aigField('aig-cutoff', 'Punch cutoff', `<input class="form-input" id="aig-cutoff" type="time" value="${esc(String(c.cutoff_time||'10:00:00').slice(0,5))}">`, 'No punch after this time may trigger suspend.')}
+                  ${aigField('aig-days', 'Consecutive absences', `<input class="form-input" id="aig-days" type="number" min="1" max="30" value="${esc(String(c.consecutive_days??3))}">`, 'Working days without punch before disable.')}
+                  <div class="span-2">${aigField('aig-action-mode', 'Action mode', `<select class="form-select" id="aig-action-mode"><option value="auto" ${actionMode==='auto'?'selected':''}>Auto-execute actions</option><option value="approval" ${actionMode==='approval'?'selected':''}>Require approval first</option><option value="emergency" ${actionMode==='emergency'?'selected':''}>Emergency — bypass approval</option></select>`, 'Replaces separate approval + emergency toggles.')}</div>
+                </div>
+              </section>
+
+              <section class="aig-section" data-section="api">
+                <div class="aig-section-head">
+                  <h3>Truein API</h3>
+                  <p>Bearer token authentication. Date is applied automatically from General settings.</p>
+                </div>
+                <div class="aig-field-grid">
+                  ${aigField('aig-api-url', 'Base URL', `<input class="form-input" id="aig-api-url" value="${esc(c.api_url||ac.baseUrl||'')}" placeholder="https://api.truein.com">`, 'From Truein support.')}
+                  ${aigField('aig-api-endpoint', 'Endpoint', `<input class="form-input" id="aig-api-endpoint" value="${esc(ac.endpoint||'/api/attendance/daily')}" placeholder="/api/v1/getDailyAttendance">`)}
+                  ${aigField('aig-api-token', 'API token', `<input class="form-input" id="aig-api-token" type="password" autocomplete="new-password" placeholder="${hasToken ? 'Saved — leave blank to keep' : 'Bearer token'}">`, hasToken ? 'Token is stored. Enter a new value only to replace it.' : 'Required for Truein.')}
+                  ${aigField('aig-api-method', 'Method', `<select class="form-select" id="aig-api-method"><option value="GET" ${(ac.method||c.api_method||'GET')==='GET'?'selected':''}>GET</option><option value="POST" ${(ac.method||c.api_method)==='POST'?'selected':''}>POST</option></select>`)}
+                  ${aigField('aig-api-date-param', 'Date parameter', `<input class="form-input" id="aig-api-date-param" value="${esc(ac.dateParam||'date')}">`, 'Query/body field name for the attendance date.')}
+                  ${aigField('aig-api-site', 'Site ID', `<input class="form-input" id="aig-api-site" value="${esc(ac.siteId||'')}" placeholder="Optional">`)}
+                  <div class="span-2">${aigField('aig-api-records-path', 'JSON array path', `<input class="form-input" id="aig-api-records-path" value="${esc(ac.recordsPath||'')}" placeholder="data.attendance">`, 'Optional. Leave blank to auto-detect common keys.')}</div>
+                </div>
+                <div class="aig-preview"><div class="aig-preview-label">Request preview</div><div id="aig-api-preview" class="muted">Enter base URL</div></div>
+                <div class="aig-inline-actions">
+                  <button type="button" class="btn btn-secondary" id="aig-api-test">Test connection</button>
+                  <span class="muted" style="font-size:0.78rem">Uses current form values (save not required).</span>
+                </div>
+                <div id="aig-api-test-result" style="margin-top:0.75rem"></div>
+              </section>
+
+              <section class="aig-section" data-section="sftp">
+                <div class="aig-section-head">
+                  <h3>SFTP</h3>
+                  <p>Download a dated CSV. Filename tokens use the timezone and date from General.</p>
+                </div>
+                <div class="aig-field-grid">
+                  ${aigField('aig-sftp-host', 'Host', `<input class="form-input" id="aig-sftp-host" value="${esc(s.host||'')}" placeholder="sftp.company.com">`)}
+                  ${aigField('aig-sftp-port', 'Port', `<input class="form-input" id="aig-sftp-port" type="number" value="${esc(String(s.port||22))}">`)}
+                  ${aigField('aig-sftp-user', 'Username', `<input class="form-input" id="aig-sftp-user" value="${esc(s.username||'')}">`)}
+                  ${aigField('aig-sftp-pass', 'Password', `<input class="form-input" id="aig-sftp-pass" type="password" autocomplete="new-password" placeholder="${s.password ? 'Saved — leave blank to keep' : 'Password'}">`)}
+                  ${aigField('aig-sftp-dir', 'Remote directory', `<input class="form-input" id="aig-sftp-dir" value="${esc(s.remoteDir||'')}" placeholder="/hr/attendance/incoming">`)}
+                  ${aigField('aig-sftp-template', 'File name template', `<input class="form-input" id="aig-sftp-template" value="${esc(s.fileNameTemplate||'attendance_{YYYY-MM-DD}.csv')}">`, 'Tokens: {YYYY-MM-DD} · {YYYYMMDD} · {date}')}
+                  ${aigField('aig-sftp-after', 'After successful fetch', `<select class="form-select" id="aig-sftp-after"><option value="keep" ${sftpAfter==='keep'?'selected':''}>Keep file</option><option value="archive" ${sftpAfter==='archive'?'selected':''}>Move to archive</option><option value="delete" ${sftpAfter==='delete'?'selected':''}>Delete file</option></select>`)}
+                  <div id="aig-sftp-archive-wrap">${aigField('aig-sftp-archive', 'Archive directory', `<input class="form-input" id="aig-sftp-archive" value="${esc(s.archiveDir||'')}" placeholder="/hr/attendance/processed">`)}</div>
+                  <div class="span-2">${aigField('aig-sftp-key', 'Private key (optional)', `<textarea class="form-textarea" id="aig-sftp-key" rows="3" placeholder="${hasKey ? 'Key saved — paste a new PEM only to replace' : 'Paste PEM if not using password'}"></textarea>`, hasKey ? 'A private key is stored. Leave blank to keep it.' : '')}</div>
+                </div>
+                <div class="aig-token-hints"><span class="muted" style="font-size:0.74rem">Tokens</span><code>{YYYY-MM-DD}</code><code>{YYYYMMDD}</code><code>{DD-MM-YYYY}</code><code>{date}</code></div>
+                <div class="aig-preview"><div class="aig-preview-label">Resolved path</div><div id="aig-sftp-preview"></div></div>
+                ${c.sftp_last_file ? `<p class="muted" style="margin-top:0.75rem;font-size:0.8rem">Last fetch: <strong>${esc(c.sftp_last_file)}</strong></p>` : ''}
+              </section>
+
+              <section class="aig-section" data-section="manual">
+                <div class="aig-section-head">
+                  <h3>Manual CSV import</h3>
+                  <p>One-off import when HR sends a file outside the scheduled feed.</p>
+                </div>
+                <div class="aig-csv-box">
+                  <label class="form-label" for="aig-csv">Attendance CSV</label>
+                  <textarea class="form-textarea" id="aig-csv" rows="8" placeholder="employee_id,email,date,in_time&#10;E001,user@company.com,2026-07-18,09:15"></textarea>
+                  <span class="form-hint">Header row required. Columns must match the employee match field in General.</span>
+                  <div class="aig-inline-actions">
+                    <button class="btn btn-secondary" id="aig-upload-run">Import CSV &amp; run pipeline</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <div class="aig-settings-footer">
+              <div id="aig-cfg-err"></div>
+              <button class="btn btn-primary" id="aig-save-config">Save configuration</button>
+            </div>
+          </div>
+        </div>`;
+
+      area.querySelectorAll('.aig-nav-item').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const name = btn.dataset.section;
+          area.querySelectorAll('.aig-nav-item').forEach(b => b.classList.toggle('active', b === btn));
+          area.querySelectorAll('.aig-section').forEach(sec => sec.classList.toggle('active', sec.dataset.section === name));
+        });
+      });
+
+      const sourceHidden = area.querySelector('#aig-source');
+      area.querySelectorAll('input[name="aig-source"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+          sourceHidden.value = radio.value;
+          area.querySelectorAll('.aig-source-card').forEach(card => {
+            card.classList.toggle('active', card.querySelector('input')?.value === radio.value);
+          });
+        });
+      });
+
+      wireSftpPreview(area);
+      wireApiPreview(area);
+      wireSftpAfter(area);
+
+      area.querySelector('#aig-api-test')?.addEventListener('click', async () => {
+        const box = area.querySelector('#aig-api-test-result');
+        box.innerHTML = loading();
+        try {
+          const draft = buildApiPayload(area, c);
+          const r = await api.attendanceIgaApiTest(draft);
+          box.innerHTML = `<div class="alert alert-success">${esc(r.message || 'OK')}${r.requestUrl ? ` · ${esc(r.requestUrl)}` : ''}</div>`;
+        } catch (e) {
+          box.innerHTML = errHtml(e.message);
+        }
+      });
+
+      area.querySelector('#aig-save-config').addEventListener('click', async () => {
+        const errBox = area.querySelector('#aig-cfg-err');
+        try {
+          const mode = area.querySelector('#aig-action-mode').value;
+          const sftpPayload = buildSftpPayload(area, s);
+          const apiPayload = buildApiPayload(area, c);
+          const cutoff = area.querySelector('#aig-cutoff').value;
+          await api.updateAttendanceIgaConfig({
+            enabled: Number(area.querySelector('#aig-enabled').value),
+            source_type: area.querySelector('#aig-source').value,
+            polling_interval: area.querySelector('#aig-poll').value,
+            cutoff_time: cutoff.length === 5 ? cutoff + ':00' : cutoff,
+            consecutive_days: Number(area.querySelector('#aig-days').value),
+            approval_enabled: mode === 'approval' ? 1 : 0,
+            emergency_mode: mode === 'emergency' ? 1 : 0,
+            identifier_field: area.querySelector('#aig-id-field').value,
+            ...apiPayload,
+            ...(sftpPayload === null ? { sftp_config: null } : (sftpPayload ? { sftp_config: sftpPayload } : {})),
+          });
+          configCache = null;
+          errBox.innerHTML = '<div class="alert alert-success">Configuration saved.</div>';
+          await loadStats(); await loadStatusBar();
+        } catch (e) { errBox.innerHTML = errHtml(e.message); }
+      });
+      area.querySelector('#aig-upload-run').addEventListener('click', async () => {
+        const errBox = area.querySelector('#aig-cfg-err');
+        try {
+          const r = await api.runAttendanceIga({ source: 'FILE_UPLOAD', csvText: area.querySelector('#aig-csv').value });
+          errBox.innerHTML = `<div class="alert alert-success">Import ${esc(r.status)} — ${esc(String(r.report?.successful??0))} ok, ${esc(String(r.report?.failed??0))} failed</div>`;
+          await loadStats(); await loadImports(); await loadDash();
+        } catch (e) { errBox.innerHTML = errHtml(e.message); }
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  async function loadImports() {
+    const area = wrap.querySelector('#tab-imports');
+    area.innerHTML = loading();
+    try {
+      const rows = norm(await api.attendanceIgaImports());
+      const statusBadge = s => ({ COMPLETED: 'badge-success', PARTIAL: 'badge-warning', FAILED: 'badge-danger', RUNNING: 'badge-info' }[s] || 'badge-neutral');
+      area.innerHTML = `
+        <div class="aap-actions"><div><h3 class="section-title">Import History</h3><p class="subtitle">Staging validation results for each pipeline run.</p></div></div>
+        <div class="table-wrap aap-table"><table><thead><tr><th>Started</th><th>Source</th><th>Status</th><th>Total</th><th>OK</th><th>Failed</th><th>Dupes</th><th>Unmatched</th></tr></thead><tbody>
+        ${rows.length ? rows.map(r => `<tr><td>${fmtDate(r.started_at)}</td><td><span class="badge badge-info">${esc(r.source)}</span></td><td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td><td>${r.total_records}</td><td>${r.successful}</td><td>${r.failed}</td><td>${r.duplicates}</td><td>${r.unmatched}</td></tr>`).join('') : '<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">◎</div><p>No imports yet.</p></div></td></tr>'}
+      </tbody></table></div>`;
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  async function loadApprovals() {
+    const area = wrap.querySelector('#tab-approvals');
+    area.innerHTML = loading();
+    try {
+      const rows = norm(await api.attendanceIgaApprovals('PENDING'));
+      area.innerHTML = `
+        <div class="aap-actions"><div><h3 class="section-title">Pending Approvals</h3><p class="subtitle">Review recommended access actions before execution.</p></div></div>
+        <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Rule</th><th>Created</th><th>Decision</th></tr></thead><tbody>
+        ${rows.length ? rows.map(r => `<tr><td class="cell-strong">${esc(r.full_name||r.emp_id)}</td><td><span class="badge badge-warning">${esc(r.rule_key)}</span></td><td class="muted">${fmtDate(r.created_at)}</td><td>
+          <button class="btn btn-sm btn-primary aig-appr" data-id="${esc(r.id)}" data-dec="APPROVE">Approve</button>
+          <button class="btn btn-sm btn-secondary aig-appr" data-id="${esc(r.id)}" data-dec="REJECT">Reject</button>
+          <button class="btn btn-sm btn-danger aig-appr" data-id="${esc(r.id)}" data-dec="SKIP">Skip</button>
+        </td></tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><p>No pending approvals.</p></div></td></tr>'}
+      </tbody></table></div>`;
+      area.querySelectorAll('.aig-appr').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          try { await api.attendanceIgaApprovalDecision(btn.dataset.id, { decision: btn.dataset.dec }); await loadApprovals(); await loadStats(); }
+          catch (e) { alert(e.message); }
+        });
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  async function loadExecutions() {
+    const area = wrap.querySelector('#tab-executions');
+    area.innerHTML = loading();
+    try {
+      const rows = norm(await api.attendanceIgaExecutions());
+      const statusBadge = s => ({ SUCCESS: 'badge-success', PARTIAL: 'badge-warning', FAILED: 'badge-danger' }[s] || 'badge-neutral');
+      area.innerHTML = `
+        <div class="aap-actions"><div><h3 class="section-title">Action Executions</h3><p class="subtitle">Audit trail of suspend, disable, and access removal actions.</p></div></div>
+        <div class="table-wrap"><table><thead><tr><th>Time</th><th>Employee</th><th>Rule</th><th>Status</th><th>Actions</th><th></th></tr></thead><tbody>
+        ${rows.length ? rows.map(r => `<tr>
+          <td class="muted">${fmtDate(r.executed_at)}</td><td class="cell-strong">${esc(r.full_name||r.emp_id)}</td><td>${esc(r.rule_key)}</td>
+          <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td>
+          <td class="muted" style="font-size:0.78rem;max-width:220px">${esc(String(r.actions_taken||''))}</td>
+          <td>${r.rolled_back ? '<span class="badge badge-neutral">Rolled back</span>' : `<button class="btn btn-sm btn-secondary aig-rb" data-id="${esc(r.id)}">Rollback</button>`}</td>
+        </tr>`).join('') : '<tr><td colspan="6"><div class="empty-state"><p>No executions yet.</p></div></td></tr>'}
+      </tbody></table></div>`;
+      area.querySelectorAll('.aig-rb').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Restore access from rollback snapshot?')) return;
+          try { await api.rollbackAttendanceIgaExecution(btn.dataset.id); await loadExecutions(); await loadStats(); }
+          catch (e) { alert(e.message); }
+        });
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach(tab => {
+    tab.addEventListener('click', async () => {
+      wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const name = tab.dataset.tab;
+      ['dash','config','imports','approvals','executions'].forEach(id => {
+        wrap.querySelector(`#tab-${id}`).style.display = id === name ? '' : 'none';
+      });
+      if (name === 'dash') await loadDash();
+      if (name === 'config') await loadConfig();
+      if (name === 'imports') await loadImports();
+      if (name === 'approvals') await loadApprovals();
+      if (name === 'executions') await loadExecutions();
+    });
+  });
+
+  async function runPipeline(source, label) {
+    try {
+      const r = await api.runAttendanceIga({ source });
+      alert(`${label}: ${r.status}\n${r.report?.successful ?? 0} records imported · ${r.executions ?? 0} actions · ${r.approvalsCreated ?? 0} approvals`);
+      await loadStats(); await loadStatusBar(); await loadDash(); await loadImports();
+    } catch (e) { alert(e.message); }
+  }
+
+  wrap.querySelector('#aig-run-api').addEventListener('click', () => runPipeline('REST_API', 'API import'));
+  wrap.querySelector('#aig-run-sftp').addEventListener('click', () => runPipeline('SFTP', 'SFTP import'));
+  wrap.querySelector('#aig-run-manual').addEventListener('click', async () => {
+    try {
+      const r = await api.runAttendanceIga({ source: 'MANUAL', emergencyMode: false });
+      alert(`Rule evaluation ${r.status}: ${r.evaluations} employees evaluated`);
+      await loadStats(); await loadDash();
+    } catch (e) { alert(e.message); }
+  });
+
+  await loadStatusBar();
+  await loadStats();
+  await loadDash();
 }

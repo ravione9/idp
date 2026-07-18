@@ -13,6 +13,7 @@ import { enqueueOutboxOps, getIdentityLinksForEmp } from '../utils/outbox.js';
 import { redis } from '../auth/session-store.js';
 import { appendAuditLog } from '../utils/audit-log.js';
 import { ILGState } from '../fsm/states.js';
+import { emitPlatformEvent } from './event-dispatcher.js';
 import logger from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -102,6 +103,8 @@ export async function suspendUser(empId: string, reason: string, initiatedBy: st
     { empId, reason, oldState, newState: ILGState.SUSPENDED_HR },
   ).catch((err) => logger.warn({ err }, 'Failed to write audit log for USER_SUSPEND'));
 
+  emitPlatformEvent('SUSPEND', { empId, initiatedBy, context: { reason, oldState } });
+
   logger.info({ empId, oldState, initiatedBy }, 'Employee suspended');
 }
 
@@ -161,6 +164,8 @@ export async function unsuspendUser(empId: string, reason: string, initiatedBy: 
     `employee:${empId}`,
     { empId, reason, oldState, newState: ILGState.ACTIVE },
   ).catch((err) => logger.warn({ err }, 'Failed to write audit log for USER_UNSUSPEND'));
+
+  emitPlatformEvent('UNSUSPEND', { empId, initiatedBy, context: { reason, oldState } });
 
   logger.info({ empId, initiatedBy }, 'Employee unsuspended');
 }
@@ -222,6 +227,8 @@ export async function terminateUser(empId: string, reason: string, initiatedBy: 
     `employee:${empId}`,
     { empId, reason, oldState, newState: ILGState.DEPARTED },
   ).catch((err) => logger.warn({ err }, 'Failed to write audit log for USER_TERMINATE'));
+
+  emitPlatformEvent('LEAVER', { empId, initiatedBy, context: { reason, oldState } });
 
   logger.info({ empId, oldState, initiatedBy }, 'Employee terminated');
 }

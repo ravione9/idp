@@ -23,6 +23,8 @@ import { ILGState, TransitionActor, TransitionOrigin } from '../fsm/states.js';
 import { RiskEngine } from '../services/risk-engine.js';
 import { getOutboxQueueDepth } from '../utils/outbox.js';
 import logger from '../utils/logger.js';
+import { runAttendanceIgaPipeline } from '../services/attendance-iga/orchestrator.js';
+import { loadAttendanceIgaConfig } from '../services/attendance-iga/config.js';
 
 const router  = Router();
 const fsm     = new EmployeeStateMachine();
@@ -225,8 +227,20 @@ router.post('/ingest/truein', async (req: Request, res: Response): Promise<void>
       if (records.length < 500) hasMore = false;
     }
 
-    log.info({ totalIngested, deltaOnly, durationMs: Date.now() - started }, 'True-in ingest complete');
-    res.json({ success: true, totalIngested, deltaOnly, durationMs: Date.now() - started });
+    let attendanceIgaEnabled = false;
+    try {
+      attendanceIgaEnabled = Boolean((await loadAttendanceIgaConfig()).enabled);
+    } catch { /* ignore */ }
+    log.info({ totalIngested, deltaOnly, durationMs: Date.now() - started, attendanceIgaEnabled }, 'True-in ingest complete');
+    res.json({
+      success: true,
+      totalIngested,
+      deltaOnly,
+      durationMs: Date.now() - started,
+      warning: attendanceIgaEnabled
+        ? 'Attendance IGA is also enabled — prefer that pipeline for Truein fetch + suspensions to avoid dual ingest races'
+        : undefined,
+    });
   } catch (err) {
     log.error({ err }, 'True-in ingest failed');
     res.status(500).json({ error: 'True-in ingest failed', detail: err instanceof Error ? err.message : String(err) });
@@ -326,6 +340,21 @@ router.post('/aggregate', async (req: Request, res: Response): Promise<void> => 
 router.post('/risk-scan', async (_req: Request, res: Response): Promise<void> => {
   const started = Date.now();
   try {
+    // Attendance IGA owns attendance-based suspensions when enabled — avoid double-suspend.
+    try {
+      const iga = await loadAttendanceIgaConfig();
+      if (iga.enabled) {
+        res.json({
+          success: true,
+          skipped: true,
+          reason: 'Attendance IGA is enabled; attendance suspensions run via /api/internal/attendance-iga/run',
+          durationMs: Date.now() - started,
+        });
+        return;
+      }
+    } catch {
+      // config table missing → fall through to legacy risk scan
+    }
     const result = await riskEngine.scanAll();
     res.json({ success: true, ...result, durationMs: Date.now() - started });
   } catch (err) {
@@ -440,7 +469,7 @@ router.post('/digests/manager', async (_req: Request, res: Response): Promise<vo
 // ---------------------------------------------------------------------------
 // GET /admin/health/queue — outbox queue metrics (used by Airflow backpressure)
 // ---------------------------------------------------------------------------
-router.get('/admin/health/queue', async (_req: Request, res: Response): Promise<void> => {
+router.get('/admin/health/queue', async (_req: Request, res: Response) => {
   try {
     const depth = await getOutboxQueueDepth();
     const pending = depth['PENDING'] ?? 0;
@@ -454,6 +483,25 @@ router.get('/admin/health/queue', async (_req: Request, res: Response): Promise<
   } catch (err) {
     logger.error({ err }, 'Queue health check failed');
     res.status(500).json({ error: 'Queue health check failed' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /attendance-iga/run — scheduler / Airflow hook
+// ---------------------------------------------------------------------------
+router.post('/attendance-iga/run', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const source = (req.body?.source as 'REST_API' | 'FILE_UPLOAD' | 'SFTP' | 'BOTH' | 'MANUAL') ?? 'REST_API';
+    const result = await runAttendanceIgaPipeline({
+      source,
+      initiatedBy: 'internal-scheduler',
+      ...(req.body?.csvText !== undefined ? { csvText: req.body.csvText as string } : {}),
+      emergencyMode: Boolean(req.body?.emergencyMode),
+    });
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, 'Internal attendance IGA run failed');
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 

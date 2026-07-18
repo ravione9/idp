@@ -11,12 +11,12 @@ import {
   renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
 } from './views-end-user.js';
 import {
-  viewDashboard, viewSamlApps, viewIgaApps, viewConnectors, viewUsers, viewAdmins,
+  viewDashboard, viewSamlApps, viewIgaApps, viewUsers, viewAdmins,
   viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
 } from './views-admin.js';
 import {
   viewGroups, viewBulkUsers, viewSystemUsers, viewIdentityProfiles,
-  viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies, viewLoginCustomization,
+  viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies,
   viewAppDiscovery,
   viewDirectorySync,
   viewRoles, viewBirthright, viewAppAccessPolicy,
@@ -24,6 +24,7 @@ import {
   viewWorkflowLibrary, viewEventTriggers, viewNotifications,
   viewSsoReports,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
+  viewAttendanceIga,
 } from './views-stubs.js';
 
 /* ----------------------------------------------------------------
@@ -58,14 +59,13 @@ const ROUTES = {
   mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', icon: 'fingerprint', admin: true, view: viewMfaMethods },
   adaptiveAuth:       { primary: 'admin', group: 'Authentication', label: 'Adaptive Auth',       icon: 'adaptive',    admin: true, view: viewAdaptiveAuth },
   passwordPolicies:   { primary: 'admin', group: 'Authentication', label: 'Password Policies',   icon: 'lock',        admin: true, view: viewPasswordPolicies },
-  loginCustomization: { primary: 'admin', group: 'Authentication', label: 'Login Customization', icon: 'paint',       admin: true, view: viewLoginCustomization },
+  /* loginCustomization → branding (ROUTE_REDIRECTS). connectors → directorySync. */
 
   /* ── Admin > Applications ── */
   applications: { primary: 'admin', group: 'Applications', label: 'Applications', icon: 'catalog', admin: true, view: viewApplications },
   appDiscovery: { primary: 'admin', group: 'Applications', label: 'App Discovery',       icon: 'search',  admin: true, view: viewAppDiscovery },
 
   /* ── Admin > Connections ── */
-  connectors:    { primary: 'admin', group: 'Connections', label: 'Connectors / Sources', icon: 'link',    admin: true, view: viewConnectors },
   directorySync: { primary: 'admin', group: 'Connections', label: 'Directory Sync',       icon: 'refresh', admin: true, view: viewDirectorySync },
 
   /* ── Admin > Access Model ── */
@@ -82,6 +82,7 @@ const ROUTES = {
   reviews: { primary: 'admin', group: 'Identity Governance', label: 'Certifications',        icon: 'certificate', admin: true, view: viewReviews },
   sod:     { primary: 'admin', group: 'Identity Governance', label: 'Segregation of Duties', icon: 'split',       admin: true, view: viewSod },
   risk:    { primary: 'admin', group: 'Identity Governance', label: 'Risk',                  icon: 'alert',       admin: true, view: viewRisk },
+  attendanceIga: { primary: 'admin', group: 'Identity Governance', label: 'Attendance IGA', icon: 'activity', admin: true, view: viewAttendanceIga },
 
   /* ── Admin > Workflows & Automation ── */
   workflowLibrary: { primary: 'admin', group: 'Workflows', label: 'Workflow Library', icon: 'flow', admin: true, view: viewWorkflowLibrary },
@@ -95,7 +96,7 @@ const ROUTES = {
 
   /* ── Admin > Settings ── */
   generalSettings:  { primary: 'admin', group: 'Settings', label: 'General',         icon: 'cog',         admin: true, view: viewGeneralSettings },
-  branding:         { primary: 'admin', group: 'Settings', label: 'Branding',        icon: 'paint',       admin: true, view: viewBranding },
+  branding:         { primary: 'admin', group: 'Settings', label: 'Branding & Login', icon: 'paint',       admin: true, view: viewBranding },
   license:          { primary: 'admin', group: 'Settings', label: 'License',         icon: 'certificate', super: true, view: viewLicense },
   tickets:          { primary: 'admin', group: 'Settings', label: 'Tickets',         icon: 'ticket',      admin: true, view: viewTickets },
   systemHealth:     { primary: 'admin', group: 'Settings', label: 'System Health',   icon: 'pulse',       admin: true, view: viewSystemHealth },
@@ -390,10 +391,18 @@ const ROUTE_DEFAULT_TABS = {
   directorySync: 'sources',
 };
 
+/** Old nav keys that now point at a single live page (bookmarks / deep links). */
+const ROUTE_REDIRECTS = {
+  loginCustomization: 'branding',
+  connectors: 'directorySync',
+};
+
 async function navigate(key, opts = {}) {
   const me = state.me;
   const explicitTab = 'tab' in opts;
   let tab = explicitTab ? (opts.tab || null) : null;
+
+  if (ROUTE_REDIRECTS[key]) key = ROUTE_REDIRECTS[key];
 
   if (APP_ROUTE_ALIASES[key]) {
     tab = tab || APP_ROUTE_ALIASES[key];

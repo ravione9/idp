@@ -10,7 +10,7 @@ import { queryOne, execute } from '../db/connection.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
 
 const DEFAULTS = {
   id: 1,

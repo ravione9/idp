@@ -48,10 +48,11 @@ export async function getMfaStatus(empId: string): Promise<MfaStatus> {
       if (Array.isArray(raw)) codes = raw as string[];
     } catch { /* ignore */ }
   }
+  const active = row.enabled === 1;
   return {
-    enrolled: true,
-    enabled:  row.enabled === 1,
-    remainingBackupCodes: codes.length,
+    enrolled: active,
+    enabled:  active,
+    remainingBackupCodes: active ? codes.length : 0,
     lastUsedAt: row.last_used_at,
   };
 }

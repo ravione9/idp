@@ -633,8 +633,9 @@ export async function viewRequestAccess(content) {
       wrap.querySelector('#ra-req-msg').innerHTML = '';
       wrap.querySelector('#ra-sod-check').innerHTML = '';
       try {
+        const itemType = type === 'APP' ? 'APP_ACCESS' : type;
         await api.igaSubmitRequest({
-          itemType: type,
+          itemType,
           itemIds: [id],
           justification: just,
           ...(targetInput ? { targetEmpId: targetInput } : {}),
@@ -661,7 +662,7 @@ export async function viewRequestAccess(content) {
     const [appsR, entsR, rolesR, myAccessR] = await Promise.all([
       api.igaApps().catch(() => ({ data: [] })),
       api.igaEntitlements().catch(() => ({ data: [] })),
-      api.listBusinessRoles().catch(() => ({ data: [] })),
+      api.listRequestableRoles().catch(() => ({ data: [] })),
       api.igaMyAccess().catch(() => ({ data: [] })),
     ]);
     const myAccess = myAccessR.data || [];

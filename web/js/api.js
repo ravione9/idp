@@ -164,10 +164,31 @@ Object.assign(api, {
   createWorkflow:      (data) => f('/api/admin/workflows/definitions', { method: 'POST', body: JSON.stringify(data) }),
   updateWorkflow:      (id, data) => f(`/api/admin/workflows/definitions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteWorkflow:      (id) => f(`/api/admin/workflows/definitions/${id}`, { method: 'DELETE' }),
+  listWorkflowRuns:    (limit = 50) => f(`/api/admin/workflows/runs?limit=${limit}`),
   listEventTriggers:   () => f('/api/admin/workflows/triggers'),
   createEventTrigger:  (data) => f('/api/admin/workflows/triggers', { method: 'POST', body: JSON.stringify(data) }),
   updateEventTrigger:  (id, data) => f(`/api/admin/workflows/triggers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteEventTrigger:  (id) => f(`/api/admin/workflows/triggers/${id}`, { method: 'DELETE' }),
+
+  // Attendance IGA
+  attendanceIgaDashboard: () => f('/api/admin/attendance-iga/dashboard'),
+  attendanceIgaConfig:    () => f('/api/admin/attendance-iga/config'),
+  attendanceIgaSftpPreview: () => f('/api/admin/attendance-iga/sftp/preview'),
+  attendanceIgaApiPreview: (offset = 0) => f(`/api/admin/attendance-iga/api/preview?offset=${offset}`),
+  attendanceIgaApiTest:       (data = {}) => f('/api/admin/attendance-iga/api/test', { method: 'POST', body: JSON.stringify(data) }),
+  updateAttendanceIgaConfig: (data) => f('/api/admin/attendance-iga/config', { method: 'PUT', body: JSON.stringify(data) }),
+  attendanceIgaRules:     () => f('/api/admin/attendance-iga/rules'),
+  updateAttendanceIgaRule: (id, data) => f(`/api/admin/attendance-iga/rules/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  attendanceIgaExclusions: () => f('/api/admin/attendance-iga/exclusions'),
+  createAttendanceIgaExclusion: (data) => f('/api/admin/attendance-iga/exclusions', { method: 'POST', body: JSON.stringify(data) }),
+  deleteAttendanceIgaExclusion: (id) => f(`/api/admin/attendance-iga/exclusions/${id}`, { method: 'DELETE' }),
+  attendanceIgaImports:   (limit = 20) => f(`/api/admin/attendance-iga/imports?limit=${limit}`),
+  runAttendanceIga:       (data) => f('/api/admin/attendance-iga/run', { method: 'POST', body: JSON.stringify(data) }),
+  attendanceIgaApprovals: (status = 'PENDING') => f(`/api/admin/attendance-iga/approvals?status=${encodeURIComponent(status)}`),
+  attendanceIgaApprovalDecision: (id, data) => f(`/api/admin/attendance-iga/approvals/${id}/decision`, { method: 'POST', body: JSON.stringify(data) }),
+  attendanceIgaExecutions: (limit = 50) => f(`/api/admin/attendance-iga/executions?limit=${limit}`),
+  rollbackAttendanceIgaExecution: (id) => f(`/api/admin/attendance-iga/executions/${id}/rollback`, { method: 'POST' }),
+  attendanceIgaRollbacks: () => f('/api/admin/attendance-iga/rollbacks'),
 
   // Tickets
   listTickets:    (status = '', cat = '') => f(`/api/admin/tickets?status=${encodeURIComponent(status)}&category=${encodeURIComponent(cat)}`),
@@ -185,6 +206,7 @@ Object.assign(api, {
 
   // Business Roles
   listBusinessRoles:     () => f('/api/admin/business-roles'),
+  listRequestableRoles:  () => f('/api/iga/roles'),
   createBusinessRole:    (data) => f('/api/admin/business-roles', { method: 'POST', body: JSON.stringify(data) }),
   updateBusinessRole:    (id, data) => f(`/api/admin/business-roles/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteBusinessRole:    (id) => f(`/api/admin/business-roles/${id}`, { method: 'DELETE' }),

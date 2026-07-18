@@ -8,6 +8,7 @@ import {
 } from './states.js';
 import { enqueueOutboxOps, getIdentityLinksForEmp } from '../utils/outbox.js';
 import { appendAuditLog } from '../utils/audit-log.js';
+import { emitPlatformEvent } from '../services/event-dispatcher.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../utils/logger.js';
 
@@ -63,6 +64,8 @@ export class EmployeeStateMachine {
     } = params;
 
     const log = logger.child({ empId, toState, actor, actorId, workflowRunId });
+
+    let committedFromState: ILGState | null = null;
 
     await transaction(async (conn) => {
       // -----------------------------------------------------------------------
@@ -198,7 +201,19 @@ export class EmployeeStateMachine {
       );
 
       log.info({ fromState, toState, version: currentVersion + 1 }, 'FSM transition committed');
+      committedFromState = fromState;
     });
+
+    if (committedFromState) {
+      const platformEvent = mapFsmToPlatformEvent(committedFromState, toState);
+      if (platformEvent) {
+        emitPlatformEvent(platformEvent, {
+          empId,
+          initiatedBy: actorId,
+          context: { fromState: committedFromState, toState, reasonCode, origin },
+        });
+      }
+    }
   }
 
   /**
@@ -251,4 +266,21 @@ export class EmployeeStateMachine {
     );
     return row?.ilg_state ?? null;
   }
+}
+
+function mapFsmToPlatformEvent(fromState: ILGState, toState: ILGState): string | null {
+  if (toState === ILGState.DEPARTED || toState === ILGState.DEPROVISIONED) return 'LEAVER';
+  if (toState === ILGState.SUSPENDED_HR || toState === ILGState.SUSPENDED_AUTO) return 'SUSPEND';
+  if (
+    (toState === ILGState.ACTIVE || toState === ILGState.REACTIVATED) &&
+    (fromState === ILGState.SUSPENDED_HR ||
+      fromState === ILGState.SUSPENDED_AUTO ||
+      fromState === ILGState.PENDING_MGR ||
+      fromState === ILGState.ESCALATED_HRBP ||
+      fromState === ILGState.DEPARTED ||
+      fromState === ILGState.DEPROVISIONED)
+  ) {
+    return 'JOINER';
+  }
+  return null;
 }

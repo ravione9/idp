@@ -46,15 +46,20 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
 // POST /
 router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { category, subject, description } = req.body as {
-    category: string; subject: string; description?: string;
+  const body = req.body as {
+    category: string; subject?: string; title?: string; description?: string; priority?: string;
   };
+  const subject = (body.subject ?? body.title ?? '').trim();
+  const category = body.category;
   if (!category || !subject) { res.status(400).json({ error: 'category and subject required' }); return; }
+  const priority = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(body.priority ?? '')
+    ? body.priority!
+    : 'MEDIUM';
   const id = uuidv4();
   await execute(
     `INSERT INTO tickets (id, category, subject, description, requester_id, status, priority)
-     VALUES (?, ?, ?, ?, ?, 'OPEN', 'MEDIUM')`,
-    [id, category, subject, description ?? null, req.user?.empId],
+     VALUES (?, ?, ?, ?, ?, 'OPEN', ?)`,
+    [id, category, subject, body.description ?? null, req.user?.empId, priority],
   );
   res.status(201).json({ id });
 }));

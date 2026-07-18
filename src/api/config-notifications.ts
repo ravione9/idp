@@ -52,13 +52,26 @@ router.get('/stats', asyncHandler(async (_req: Request, res: Response) => {
   res.json({ byStatus, byChannel });
 }));
 
-// POST /test — send test notification (SUPER_ADMIN)
-router.post('/test', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
-  const { recipientEmpId, channel = 'EMAIL', subject, body } = req.body as {
-    recipientEmpId: string; channel?: string; subject: string; body: string;
+// POST /test — send test notification
+router.post('/test', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+  const bodyIn = req.body as {
+    recipientEmpId?: string; recipient?: string; channel?: string; subject: string; body: string;
   };
-  if (!recipientEmpId || !subject || !body) {
-    res.status(400).json({ error: 'recipientEmpId, subject, body required' }); return;
+  let recipientEmpId = bodyIn.recipientEmpId?.trim();
+  // Accept email/emp_id in legacy `recipient` field from UI.
+  if (!recipientEmpId && bodyIn.recipient) {
+    const r = bodyIn.recipient.trim();
+    const byId = await queryOne<{ emp_id: string }>(`SELECT emp_id FROM employees WHERE emp_id = ?`, [r]);
+    if (byId) recipientEmpId = byId.emp_id;
+    else {
+      const byEmail = await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM employees WHERE email = ? LIMIT 1`, [r],
+      );
+      recipientEmpId = byEmail?.emp_id;
+    }
+  }
+  if (!recipientEmpId || !bodyIn.subject || !bodyIn.body) {
+    res.status(400).json({ error: 'recipientEmpId (or recipient), subject, body required' }); return;
   }
   const emp = await queryOne<{ emp_id: string }>(
     `SELECT emp_id FROM employees WHERE emp_id = ?`, [recipientEmpId],
@@ -67,15 +80,15 @@ router.post('/test', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Reques
 
   await sendNotification({
     recipientEmpId,
-    channel: channel as 'EMAIL' | 'SLACK' | 'TEAMS' | 'IN_APP',
-    subject,
-    body,
+    channel: (bodyIn.channel ?? 'EMAIL') as 'EMAIL' | 'SLACK' | 'TEAMS' | 'IN_APP',
+    subject: bodyIn.subject,
+    body: bodyIn.body,
   });
   res.json({ success: true });
 }));
 
-// POST /dispatch-pending — trigger dispatch (SUPER_ADMIN)
-router.post('/dispatch-pending', requireRole('SUPER_ADMIN'), asyncHandler(async (_req: Request, res: Response) => {
+// POST /dispatch-pending — trigger dispatch
+router.post('/dispatch-pending', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (_req: Request, res: Response) => {
   const count = await dispatchPendingNotifications();
   res.json({ success: true, dispatched: count });
 }));

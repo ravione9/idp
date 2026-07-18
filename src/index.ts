@@ -52,6 +52,7 @@ import configBirthrightRouter from './api/config-birthright.js';
 import configAppAccessPolicyRouter from './api/config-app-access-policy.js';
 import configNotificationsRouter from './api/config-notifications.js';
 import configPortalSslRouter from './api/config-portal-ssl.js';
+import configAttendanceIgaRouter from './api/config-attendance-iga.js';
 
 // Auth
 import {
@@ -61,6 +62,7 @@ import {
 } from './auth/middleware.js';
 import { googleLoginHandler } from './auth/login-routes.js';
 import { localLoginHandler, localLoginMfaEnrollConfirmHandler, localLoginMfaEnrollDeferHandler, localLoginMfaEnrollHandler, localLoginMfaVerifyHandler } from './auth/local-auth.js';
+import { startAttendanceIgaScheduler } from './services/attendance-iga/scheduler.js';
 import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
 const WEB_ROOT = path.join(process.cwd(), 'web');
@@ -194,6 +196,7 @@ app.use('/api/admin/birthright', configBirthrightRouter);
 app.use('/api/admin/app-access-policy', configAppAccessPolicyRouter);
 app.use('/api/admin/notifications', configNotificationsRouter);
 app.use('/api/admin/portal-ssl',   configPortalSslRouter);
+app.use('/api/admin/attendance-iga', configAttendanceIgaRouter);
 
 // ---------------------------------------------------------------------------
 // Internal routes (internal token gated — no session cookie required)
@@ -281,6 +284,8 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.error({ err }, 'Master admin provisioning failed — local login may not work');
   }
+
+  startAttendanceIgaScheduler();
 
   const server = app.listen(config.app.port, () => {
     logger.info({ port: config.app.port, env: config.app.nodeEnv }, 'IDP API server started');

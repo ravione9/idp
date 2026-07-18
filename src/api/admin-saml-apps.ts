@@ -14,7 +14,7 @@ import { parseSpMetadataXml } from '../saml/parse-sp-metadata.js';
 
 const router = Router();
 
-router.use(requireAuth, requireRole('SUPER_ADMIN'));
+router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
 
 const registerSpSchema = z.object({
   name:            z.string().min(1).max(100),

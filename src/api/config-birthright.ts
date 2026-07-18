@@ -81,7 +81,7 @@ router.get('/dry-run', asyncHandler(async (_req: Request, res: Response) => {
 }));
 
 // POST /run — actually run birthright assignment for all active employees (SUPER_ADMIN only)
-router.post('/run', requireRole('SUPER_ADMIN'), asyncHandler(async (_req: Request, res: Response) => {
+router.post('/run', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (_req: Request, res: Response) => {
   // Fetch all active employees and run birthright for each
   const employees = await query<{ emp_id: string; dept_id: string; employment_type: string }>(
     `SELECT emp_id, COALESCE(dept_id, '') AS dept_id, COALESCE(employment_type, '') AS employment_type

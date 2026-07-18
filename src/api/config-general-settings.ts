@@ -106,12 +106,20 @@ router.put('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(asy
   });
 }));
 
-router.use(requireRole('SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
 
-// GET /
+// GET / — never return OAuth client secret (use /google-oidc for credential status)
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {
-  const row = await queryOne(`SELECT * FROM general_settings WHERE id = 1`, []);
-  res.json(row ?? { id: 1 });
+  const row = await queryOne<Record<string, unknown>>(`SELECT * FROM general_settings WHERE id = 1`, []);
+  if (!row) {
+    res.json({ id: 1 });
+    return;
+  }
+  const { google_oidc_client_secret: _secret, ...safe } = row;
+  res.json({
+    ...safe,
+    has_google_oidc_client_secret: Boolean(_secret),
+  });
 }));
 
 // PUT /
