@@ -855,7 +855,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-18 — Full-codebase QC pass (security, CRUD, roles, dual pipelines)
+### `eb6eec8` — 2026-07-18 — Full-codebase QC pass (security, CRUD, roles, dual pipelines)
 
 **Why** — Cross-module audit found secret leaks, many UI↔API field mismatches, ADMIN nav hitting SUPER_ADMIN-only APIs, and dual attendance paths that could double-suspend.
 
@@ -869,7 +869,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **Nav / labels** — Login Customization → Branding; Connectors → Directory Sync; License/MFA/Workflow copy honesty; dual `022_*` migrations left as-is (tracked by full filename).
 - **Intentional dual registries** — `saml_service_providers` remains SAML runtime; `applications` is IGA catalog (slug mirror via `syncSamlAppsToCatalog`). Three workflow surfaces remain layered (library / triggers / app-access approvals) with clearer UI labels.
 
-### TBD — 2026-07-18 — Attendance IGA: Truein API integration + empty-import safety guard
+### `eb6eec8` — 2026-07-18 — Attendance IGA: Truein API integration + empty-import safety guard
 
 **Why** — Lenskart uses Truein for attendance; integration requires Bearer token auth and date-based daily API fetch without suspending users when HR data is missing.
 
@@ -881,7 +881,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **Pipeline guard** — skips rule evaluation when import yields zero valid records (REST/SFTP/file).
 - **Admin UI** — Truein configuration panel, test connection, setup guide.
 
-### TBD — 2026-07-18 — Attendance IGA: dynamic SFTP date templates + enterprise UI
+### `eb6eec8` — 2026-07-18 — Attendance IGA: dynamic SFTP date templates + enterprise UI
 
 **Why** — HR uploads a new dated CSV daily (e.g. `attendance_2026-07-18.csv`); admins need path preview and a polished governance console.
 
@@ -892,7 +892,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`GET /api/admin/attendance-iga/sftp/preview`** — resolved path candidates.
 - **Updated** Attendance IGA admin UI (status bar, panel layout, live path preview, styled tables).
 
-### TBD — 2026-07-18 — Attendance IGA: SFTP auto-fetch for CSV imports
+### `eb6eec8` — 2026-07-18 — Attendance IGA: SFTP auto-fetch for CSV imports
 
 **Why** — HR attendance files are often dropped on SFTP; the scheduler should pull them automatically without manual upload.
 
@@ -903,7 +903,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **Updated** orchestrator, scheduler, admin API, Attendance IGA config UI (`Run SFTP Import` button).
 - **Dependency:** `ssh2-sftp-client` (native `ssh2` module; Docker builder installs `python3 make g++`).
 
-### TBD — 2026-07-18 — Attendance-Based Identity Governance (import, rules, approvals, rollback)
+### `eb6eec8` — 2026-07-18 — Attendance-Based Identity Governance (import, rules, approvals, rollback)
 
 **Why** — HR attendance gaps should automatically suspend or remove application access under configurable business rules, with full audit and reversible rollback.
 
