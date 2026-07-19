@@ -1,6 +1,8 @@
 /* Shared UI helpers: DOM, escape, formatters, badges, charts. */
 
-const PORTAL_ADMIN_ROLES = new Set(['ADMIN', 'SUPER_ADMIN']);
+const PORTAL_ADMIN_ROLES = new Set([
+  'ADMIN', 'SUPER_ADMIN', 'APP_CONTRIBUTOR', 'USER_GROUP_MANAGER', 'CUSTOM',
+]);
 
 /** Portal console access role (separate from employees.role job designation). */
 export function portalRoleOf(me) {
@@ -8,11 +10,27 @@ export function portalRoleOf(me) {
 }
 
 export function isPortalAdmin(me) {
+  if (me?.capabilities?.canAdmin) return true;
   return PORTAL_ADMIN_ROLES.has(portalRoleOf(me));
 }
 
 export function isPortalSuperAdmin(me) {
   return portalRoleOf(me) === 'SUPER_ADMIN';
+}
+
+/** Module permission from /api/me portalModules. */
+export function hasPortalModule(me, moduleKey, level = 'read') {
+  if (!moduleKey) return isPortalAdmin(me);
+  const role = portalRoleOf(me);
+  if (role === 'SUPER_ADMIN') return true;
+  const perm = me?.portalModules?.[moduleKey];
+  if (perm) return level === 'write' ? !!perm.write : !!(perm.read || perm.write);
+  // Legacy ADMIN without modules payload: full console except Administrators/License
+  if (role === 'ADMIN') {
+    if (moduleKey === 'administrators' || moduleKey === 'pam') return false;
+    return true;
+  }
+  return false;
 }
 
 export function el(html) {
@@ -26,7 +44,13 @@ export function esc(v) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Safe embedding of a JSON object into a single-quoted HTML attribute. */
+export function escAttrJson(obj) {
+  return esc(JSON.stringify(obj ?? null));
 }
 
 export function fmtDate(s) {

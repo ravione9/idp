@@ -8,13 +8,13 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { processBulkUserBatch } from '../services/bulk-user-import.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
-router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('identity_users'));
 
 export const BULK_BATCH_MAX = 500;
 export const BULK_TOTAL_MAX = 100_000;

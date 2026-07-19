@@ -6,7 +6,7 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { safeQuery } from '../db/safe-query.js';
@@ -15,7 +15,7 @@ import logger from '../utils/logger.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('identity_groups'));
 
 const LEGACY_GROUP_LIST_SQL = `
   SELECT g.id, g.name, g.description, g.type, g.active, g.created_at,

@@ -231,7 +231,8 @@ export async function authenticateAdCorporateUser(
 
   const portalAccount = await queryOne<{ role: string }>(
     `SELECT role FROM local_accounts
-      WHERE emp_id = ? AND active = 1 AND role IN ('ADMIN', 'SUPER_ADMIN')`,
+      WHERE emp_id = ? AND active = 1
+        AND role IN ('ADMIN','SUPER_ADMIN','APP_CONTRIBUTOR','USER_GROUP_MANAGER','CUSTOM')`,
     [effectiveEmpId],
   );
   const role = portalAccount?.role

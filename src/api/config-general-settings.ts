@@ -4,7 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { queryOne, execute } from '../db/connection.js';
 import { getGoogleOidcConfig, isGoogleOidcConfigured } from '../auth/google-oidc-config.js';
@@ -47,7 +47,7 @@ function parseGoogleOauthClientJson(rawJson: string): { clientId: string; client
   return { clientId, clientSecret };
 }
 
-router.get('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (_req: Request, res: Response) => {
+router.get('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('settings'), asyncHandler(async (_req: Request, res: Response) => {
   const cfg = await getGoogleOidcConfig();
   res.json({
     clientId: cfg.clientId,
@@ -59,7 +59,8 @@ router.get('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(asy
   });
 }));
 
-router.put('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+// Google OIDC credentials control portal SSO — Super Admin only
+router.put('/google-oidc', requireRole('SUPER_ADMIN'), requirePortalModule('settings'), asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const oauthJson = readString(body, 'oauthClientJson');
   let jsonCreds: { clientId: string; clientSecret: string } | null = null;
@@ -106,7 +107,7 @@ router.put('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(asy
   });
 }));
 
-router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('settings'));
 
 // GET / — never return OAuth client secret (use /google-oidc for credential status)
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {

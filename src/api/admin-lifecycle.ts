@@ -9,7 +9,7 @@
 
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query } from '../db/connection.js';
 import {
@@ -22,7 +22,7 @@ const router = Router();
 
 // All lifecycle routes require authentication + admin role
 router.use(requireAuth);
-router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('identity_users'));
 
 // ---------------------------------------------------------------------------
 // POST /:empId/suspend

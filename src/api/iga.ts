@@ -13,7 +13,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { execute, queryOne } from '../db/connection.js';
 import { safeQuery } from '../db/safe-query.js';
 import logger from '../utils/logger.js';
@@ -80,6 +80,7 @@ router.get('/applications', asyncHandler(async (req: Request, res: Response) => 
 router.post(
   '/applications',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('applications'),
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = appSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -139,6 +140,7 @@ router.get('/applications/:id', asyncHandler(async (req: Request, res: Response)
 router.put(
   '/applications/:id',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('applications'),
   asyncHandler(async (req: Request, res: Response) => {
     const { id } = req.params;
     const app = await queryOne<{ id: string }>(
@@ -193,6 +195,7 @@ router.delete(
 router.get(
   '/connectors',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
   asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
     const rows = await safeQuery<Record<string, unknown>>(
@@ -220,6 +223,7 @@ const connectorSchema = z.object({
 router.post(
   '/connectors',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = connectorSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -260,6 +264,7 @@ router.post(
 router.get(
   '/connectors/:id/runs',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
   asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
     const rows = await safeQuery<Record<string, unknown>>(
@@ -278,6 +283,7 @@ router.get(
 router.post(
   '/connectors/:id/sync',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
   asyncHandler(async (req: Request, res: Response) => {
     const connectorId = req.params['id']!;
     const triggeredBy = req.user!.empId;
@@ -303,6 +309,7 @@ router.post(
 router.get(
   '/connectors/:id',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
   asyncHandler(async (req: Request, res: Response) => {
     const row = await queryOne<Record<string, unknown>>(
       `SELECT id, name, slug, connector_type, direction, sync_mode, sync_schedule,
@@ -332,6 +339,7 @@ router.get(
 router.put(
   '/connectors/:id',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
   asyncHandler(async (req: Request, res: Response) => {
     const { name, syncMode, syncSchedule, configJson, status } = req.body as {
       name?: string;
@@ -390,6 +398,7 @@ router.put(
 router.delete(
   '/connectors/:id',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
   asyncHandler(async (req: Request, res: Response) => {
     await execute(`DELETE FROM connectors WHERE id = ?`, [req.params['id']]);
     res.json({ success: true });
@@ -400,6 +409,7 @@ router.delete(
 router.post(
   '/connectors/:id/test',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
   asyncHandler(async (req: Request, res: Response) => {
     const row = await queryOne<{ connector_type: string; config_json: string }>(
       `SELECT connector_type, config_json FROM connectors WHERE id = ?`,
@@ -796,6 +806,7 @@ router.post(
 router.get(
   '/access-reviews',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
   asyncHandler(async (req: Request, res: Response) => {
     const { limit, offset } = paginate(req);
     const rows = await safeQuery<Record<string, unknown>>(
@@ -816,6 +827,7 @@ router.get(
 router.get(
   '/access-reviews/:id/items',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
   asyncHandler(async (req: Request, res: Response) => {
     const campaignId = req.params['id']!;
     const rows = await safeQuery<Record<string, unknown>>(
@@ -872,6 +884,7 @@ const campaignSchema = z.object({
 router.post(
   '/access-reviews',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = campaignSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -932,6 +945,7 @@ router.post(
 router.get(
   '/sod-policies',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
   asyncHandler(async (_req: Request, res: Response) => {
     const rows = await safeQuery<Record<string, unknown>>(
       `SELECT id, name, description, severity, enforcement, conflict_groups, active, created_at
@@ -946,6 +960,7 @@ router.get(
 router.get(
   '/sod-violations',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
   asyncHandler(async (req: Request, res: Response) => {
     const status = (req.query['status'] as string) ?? 'OPEN';
     const rows = await safeQuery<Record<string, unknown>>(
@@ -967,6 +982,7 @@ router.get(
 router.post(
   '/sod-violations/:id/remediate',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
   asyncHandler(async (req: Request, res: Response) => {
     const id = req.params['id']!;
     const result = await execute(
@@ -987,6 +1003,7 @@ router.post(
 router.get(
   '/risk/dashboard',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
   asyncHandler(async (_req: Request, res: Response) => {
     const [topRisk, denied24h, mfa24h] = await Promise.all([
       safeQuery<Record<string, unknown>>(
@@ -1027,6 +1044,7 @@ router.get(
 router.get(
   '/reports',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('reports'),
   asyncHandler(async (_req: Request, res: Response) => {
     const rows = await safeQuery<Record<string, unknown>>(
       `SELECT id, name, framework, generated_by, generated_at, period_start, period_end, artifact_url
@@ -1049,6 +1067,7 @@ const reportSchema = z.object({
 router.post(
   '/reports',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('reports'),
   asyncHandler(async (req: Request, res: Response) => {
     const parsed = reportSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1088,6 +1107,7 @@ const grantSchema = z.object({
 router.post(
   '/entitlements/:entId/grant',
   requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('access_model'),
   asyncHandler(async (req: Request, res: Response) => {
     const { entId } = req.params as { entId: string };
     const parsed = grantSchema.safeParse(req.body);
@@ -1141,7 +1161,7 @@ router.post(
 // ===========================================================================
 
 // POST /sod-policies — create
-router.post('/sod-policies', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/sod-policies', requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('governance'), asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as {
     name: string; description?: string; severity?: string;
     enforcement?: string; conflict_groups?: unknown[]; conflictGroups?: unknown[];
@@ -1158,7 +1178,7 @@ router.post('/sod-policies', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(a
 }));
 
 // PUT /sod-policies/:id — partial update (toggle-active must not wipe other columns)
-router.put('/sod-policies/:id', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+router.put('/sod-policies/:id', requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('governance'), asyncHandler(async (req: Request, res: Response) => {
   const existing = await queryOne<Record<string, unknown>>(
     `SELECT * FROM sod_policies WHERE id = ?`,
     [req.params['id']],
@@ -1192,7 +1212,7 @@ router.put('/sod-policies/:id', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandle
 }));
 
 // DELETE /sod-policies/:id
-router.delete('/sod-policies/:id', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+router.delete('/sod-policies/:id', requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('governance'), asyncHandler(async (req: Request, res: Response) => {
   await execute('DELETE FROM sod_policies WHERE id = ?', [req.params['id']]);
   res.json({ success: true });
 }));

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -7,23 +7,23 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="/favicon.ico" sizes="any" />
   <link rel="apple-touch-icon" href="/favicon.svg" />
-  <meta name="theme-color" content="#0f172a" />
+  <meta name="theme-color" content="#0a1628" />
   <script>
     (function () {
       var k = 'idp_theme', t = localStorage.getItem(k) || 'light';
-      var ok = ['light', 'dark', 'ocean', 'slate', 'violet'].indexOf(t) >= 0;
+      var ok = ['light', 'dark', 'midnight', 'ocean', 'slate', 'sand', 'violet'].indexOf(t) >= 0;
       document.documentElement.setAttribute('data-theme', ok ? t : 'light');
     })();
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/styles.css?v=2026-07-18-aig-qc1" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/styles.css?v=2026-07-19-portal-roles1" />
 </head>
 <body>
   <div id="app">
-    <div class="loading-row" style="padding:3rem;text-align:center;color:#5f6b80">
-      <span class="spinner" style="margin:0 auto 0.75rem"></span>
+    <div class="loading-row">
+      <span class="spinner" style="margin:0 auto 0.75rem;display:block"></span>
       Loading…
     </div>
   </div>
@@ -50,7 +50,7 @@
   <script type="importmap" id="idp-importmap"></script>
   <script>
     (function () {
-      var v = '2026-07-18-full-qc2';
+      var v = '2026-07-19-portal-roles1';
       var mods = ['api', 'ui', 'icons', 'theme', 'views-end-user', 'views-admin', 'views-stubs'];
       var scope = {};
       for (var i = 0; i < mods.length; i++) {

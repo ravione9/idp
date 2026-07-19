@@ -5,14 +5,14 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, execute } from '../db/connection.js';
 import { assignBirthrightEntitlements } from '../services/birthright.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('access_model'));
 
 // GET / — list is_birthright entitlements with app name
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {

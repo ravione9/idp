@@ -9,12 +9,14 @@ import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config.js';
 import { execute, query } from '../db/connection.js';
 import logger from '../utils/logger.js';
+import { timingSafeEqualString } from '../utils/timing-safe.js';
 
 const router = Router();
 
 function requireInternalToken(req: Request, res: Response, next: NextFunction): void {
-  const token = req.headers['x-internal-token'];
-  if (!token || token !== config.app.internalToken) {
+  const header = req.headers['x-internal-token'];
+  const token = typeof header === 'string' ? header : '';
+  if (!token || !timingSafeEqualString(token, config.app.internalToken)) {
     res.status(403).json({ error: 'Invalid or missing X-Internal-Token' });
     return;
   }

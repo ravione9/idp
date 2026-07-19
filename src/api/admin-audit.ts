@@ -3,12 +3,12 @@
  */
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { query } from '../db/connection.js';
 
 const router = Router();
 
-router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('reports'));
 
 router.get('/saml', async (req: Request, res: Response): Promise<void> => {
   const limit = Math.min(parseInt((req.query['limit'] as string) ?? '100', 10), 500);

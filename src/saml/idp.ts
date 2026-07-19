@@ -221,7 +221,14 @@ export function extractIssuerFromAuthnRequest(samlRequestEncoded: string): strin
   try {
     const xml = decodeAuthnRequestXml(samlRequestEncoded);
     if (!xml) return null;
-    const match = xml.match(/<(?:saml2?:)?Issuer[^>]*>([^<]+)<\/(?:saml2?:)?Issuer>/i);
+    // Strip comments so a forged <!-- <Issuer>evil</Issuer> --> cannot win first-match
+    const cleaned = xml.replace(/<!--[\s\S]*?-->/g, '');
+    // Prefer Issuer that appears inside AuthnRequest (not Response wrappers)
+    const inRequest = cleaned.match(
+      /<AuthnRequest\b[\s\S]*?<(?:saml2?:)?Issuer\b[^>]*>([^<]+)<\/(?:saml2?:)?Issuer>/i,
+    );
+    if (inRequest?.[1]) return inRequest[1].trim();
+    const match = cleaned.match(/<(?:saml2?:)?Issuer\b[^>]*>([^<]+)<\/(?:saml2?:)?Issuer>/i);
     return match?.[1]?.trim() ?? null;
   } catch (err) {
     logger.warn({ err }, 'Failed to parse SAML AuthnRequest for Issuer');

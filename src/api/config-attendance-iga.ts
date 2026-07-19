@@ -6,7 +6,7 @@ import { Router, Request } from 'express';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, execute } from '../db/connection.js';
 import { loadAttendanceIgaConfig } from '../services/attendance-iga/config.js';
@@ -21,7 +21,7 @@ import { previewTrueinRequest, testTrueinConnection } from '../services/attendan
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('governance'));
 
 function actor(req: Request): string {
   return (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'SYSTEM';
@@ -177,6 +177,16 @@ router.post('/api/test', asyncHandler(async (req, res) => {
   }
   if (!config.api_url) {
     res.status(400).json({ ok: false, message: 'API URL is not configured' });
+    return;
+  }
+  try {
+    const { assertSafeOutboundUrl } = await import('../utils/safe-url.js');
+    await assertSafeOutboundUrl(config.api_url);
+  } catch (err) {
+    res.status(400).json({
+      ok: false,
+      message: err instanceof Error ? err.message : 'API URL is not allowed',
+    });
     return;
   }
   const { fetchAttendanceFromApi } = await import('../services/attendance-iga/fetcher.js');

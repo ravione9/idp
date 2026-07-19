@@ -8,26 +8,30 @@ import { config } from '../config.js';
 import { query, queryOne, transaction } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import type { Role } from '../auth/rbac.js';
+import {
+  PORTAL_OPERATOR_ROLES,
+  SYSTEM_KEY_TO_ID,
+  sessionRoleForPortalRole,
+} from './portal-roles.js';
 
 const BCRYPT_ROUNDS = 12;
-const ADMIN_ROLES: Role[] = ['ADMIN', 'SUPER_ADMIN'];
-const PORTAL_ADMIN_ROLES = new Set(['ADMIN', 'SUPER_ADMIN']);
 
 /** Portal console role stored in local_accounts — separate from employees.role (job designation). */
 export async function getPortalRole(empId: string): Promise<Role | null> {
   const row = await queryOne<{ role: string }>(
     `SELECT role FROM local_accounts
-      WHERE emp_id = ? AND active = 1 AND role IN ('ADMIN', 'SUPER_ADMIN')`,
+      WHERE emp_id = ? AND active = 1`,
     [empId],
   );
-  return row && PORTAL_ADMIN_ROLES.has(row.role) ? (row.role as Role) : null;
+  return row && PORTAL_OPERATOR_ROLES.has(row.role) ? (row.role as Role) : null;
 }
 
+/** Assign a built-in or custom portal role by portal_roles.id or system role_key. */
 export async function assignPortalRole(
   empId: string,
-  role: 'ADMIN' | 'SUPER_ADMIN',
+  roleOrId: string,
   createdBy: string,
-): Promise<void> {
+): Promise<{ roleKey: string; roleId: string }> {
   const emp = await queryOne<{ email_corp: string | null }>(
     'SELECT email_corp FROM employees WHERE emp_id = ?',
     [empId],
@@ -36,6 +40,19 @@ export async function assignPortalRole(
     throw new Error('Employee not found or has no corporate email');
   }
 
+  const roleRow = await queryOne<{ id: string; role_key: string; active: number }>(
+    `SELECT id, role_key, active FROM portal_roles
+      WHERE (id = ? OR role_key = ?) AND active = 1`,
+    [roleOrId, roleOrId],
+  );
+  if (!roleRow) {
+    // Legacy shortcut: ADMIN / SUPER_ADMIN before migration seed
+    const legacyId = SYSTEM_KEY_TO_ID[roleOrId];
+    if (!legacyId) throw new Error('Unknown portal role');
+    return assignPortalRole(empId, legacyId, createdBy);
+  }
+
+  const sessionRole = sessionRoleForPortalRole(roleRow.role_key);
   const email = emp.email_corp.toLowerCase().trim();
   const existing = await queryOne<{ id: number }>(
     'SELECT id FROM local_accounts WHERE emp_id = ?',
@@ -44,24 +61,24 @@ export async function assignPortalRole(
 
   if (existing) {
     await query(
-      'UPDATE local_accounts SET role = ?, active = 1 WHERE emp_id = ?',
-      [role, empId],
+      `UPDATE local_accounts SET role = ?, portal_role_id = ?, active = 1 WHERE emp_id = ?`,
+      [sessionRole, roleRow.id, empId],
     );
-    return;
+  } else {
+    const passwordHash = await hashPassword(`${uuidv4()}${uuidv4()}`);
+    await query(
+      `INSERT INTO local_accounts (emp_id, email, password_hash, role, portal_role_id, created_by, active)
+       VALUES (?, ?, ?, ?, ?, ?, 1)`,
+      [empId, email, passwordHash, sessionRole, roleRow.id, createdBy],
+    );
   }
-
-  const passwordHash = await hashPassword(`${uuidv4()}${uuidv4()}`);
-  await query(
-    `INSERT INTO local_accounts (emp_id, email, password_hash, role, created_by, active)
-     VALUES (?, ?, ?, ?, ?, 1)`,
-    [empId, email, passwordHash, role, createdBy],
-  );
+  return { roleKey: roleRow.role_key, roleId: roleRow.id };
 }
 
 export async function revokePortalRole(empId: string): Promise<void> {
   await query(
-    `UPDATE local_accounts SET role = 'USER'
-      WHERE emp_id = ? AND active = 1 AND role IN ('ADMIN', 'SUPER_ADMIN')`,
+    `UPDATE local_accounts SET role = 'USER', portal_role_id = NULL
+      WHERE emp_id = ? AND active = 1`,
     [empId],
   );
 }
@@ -72,6 +89,8 @@ export interface LocalAccountRow {
   email:        string;
   full_name:    string;
   role:         string;
+  portal_role_id: string | null;
+  role_name:    string | null;
   active:       number;
   created_at:   string;
   last_login_at: string | null;
@@ -123,12 +142,16 @@ export async function touchLocalLogin(accountId: number): Promise<void> {
 
 export async function listLocalAdmins(): Promise<LocalAccountRow[]> {
   return query<LocalAccountRow>(
-    `SELECT la.id, la.emp_id, e.full_name, la.email, la.role, la.active,
-            la.created_at, la.last_login_at,
+    `SELECT la.id, la.emp_id, e.full_name, la.email, la.role, la.portal_role_id,
+            COALESCE(pr.name, la.role) AS role_name,
+            la.active, la.created_at, la.last_login_at,
             IF(e.emp_id LIKE 'LOC%', 1, 0) AS has_local_account
        FROM local_accounts la
        JOIN employees e ON e.emp_id = la.emp_id
-      WHERE la.role IN ('ADMIN', 'SUPER_ADMIN') AND la.active = 1
+       LEFT JOIN portal_roles pr ON pr.id = la.portal_role_id
+      WHERE la.active = 1
+        AND (la.role IN ('ADMIN','SUPER_ADMIN','APP_CONTRIBUTOR','USER_GROUP_MANAGER','CUSTOM')
+             OR la.portal_role_id IS NOT NULL)
       ORDER BY la.created_at DESC`,
     [],
   );
@@ -142,12 +165,17 @@ export async function createLocalAdministrator(params: {
   fullName:   string;
   email:      string;
   password:   string;
-  role:       Role;
+  role:       string; // portal role id or system key
   createdBy:  string;
-}): Promise<{ empId: string; email: string; role: string }> {
-  if (!ADMIN_ROLES.includes(params.role)) {
-    throw new Error('Role must be ADMIN or SUPER_ADMIN');
+}): Promise<{ empId: string; email: string; role: string; roleId: string }> {
+  const roleRow = await queryOne<{ id: string; role_key: string }>(
+    `SELECT id, role_key FROM portal_roles WHERE (id = ? OR role_key = ?) AND active = 1`,
+    [params.role, params.role],
+  );
+  if (!roleRow) {
+    throw new Error('Unknown portal role');
   }
+  const sessionRole = sessionRoleForPortalRole(roleRow.role_key);
 
   const email = params.email.toLowerCase().trim();
   const existing = await queryOne<{ id: number }>(
@@ -170,13 +198,13 @@ export async function createLocalAdministrator(params: {
     );
 
     await conn.execute(
-      `INSERT INTO local_accounts (emp_id, email, password_hash, role, created_by, active)
-       VALUES (?, ?, ?, ?, ?, 1)`,
-      [empId, email, passwordHash, params.role, params.createdBy],
+      `INSERT INTO local_accounts (emp_id, email, password_hash, role, portal_role_id, created_by, active)
+       VALUES (?, ?, ?, ?, ?, ?, 1)`,
+      [empId, email, passwordHash, sessionRole, roleRow.id, params.createdBy],
     );
   });
 
-  return { empId, email, role: params.role };
+  return { empId, email, role: sessionRole, roleId: roleRow.id };
 }
 
 export function isMasterAdminCredentials(email: string, password: string): boolean {
@@ -212,11 +240,16 @@ export async function ensureMasterAdminFromEnv(): Promise<void> {
     const passwordHash = await hashPassword(master.password);
     await query(
       `UPDATE local_accounts
-          SET password_hash = ?, role = 'SUPER_ADMIN', active = 1
+          SET password_hash = ?, role = 'SUPER_ADMIN', portal_role_id = 'pr-super-admin', active = 1
         WHERE id = ?`,
       [passwordHash, existing.id],
     );
     logger.info({ email: master.email }, 'Master admin password synced from env');
+  } else {
+    await query(
+      `UPDATE local_accounts SET role = 'SUPER_ADMIN', portal_role_id = 'pr-super-admin', active = 1 WHERE id = ?`,
+      [existing.id],
+    );
   }
 
   await query(

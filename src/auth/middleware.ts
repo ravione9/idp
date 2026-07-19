@@ -26,6 +26,18 @@ import {
   setSessionCookie,
   cacheSessionUser,
 } from './session.js';
+import {
+  MFA_CHALLENGE_PREFIX,
+  MFA_CHALLENGE_TTL_S,
+  MFA_ENROLL_CHALLENGE_PREFIX,
+  getMfaRequirementContext,
+  type MfaChallenge,
+  type MfaEnrollChallenge,
+} from './local-auth.js';
+import { getMfaStatus } from './mfa.js';
+import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
+import { PORTAL_OPERATOR_ROLES } from '../services/portal-roles.js';
+import crypto from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -59,8 +71,26 @@ const googleJwks = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2
 async function getSessionFromRedis(sessionId: string): Promise<LilgUser | null> {
   const raw = await redis.get(`${SESSION_REDIS_PREFIX}${sessionId}`);
   if (!raw) return null;
+
+  // Always re-check DB revocation / expiry — Redis alone can outlive an admin revoke
+  // or a failed Redis DEL on logout.
+  const live = await queryOne<{
+    role: string;
+    expires_at: Date;
+    revoked_at: Date | null;
+  }>(
+    `SELECT role, expires_at, revoked_at FROM idp_sessions WHERE session_id = ?`,
+    [sessionId],
+  );
+  if (!live || live.revoked_at !== null || new Date(live.expires_at) < new Date()) {
+    await redis.del(`${SESSION_REDIS_PREFIX}${sessionId}`).catch(() => {/* non-fatal */});
+    return null;
+  }
+
   const u = JSON.parse(raw) as LilgUser;
-  u.expiresAt = new Date(u.expiresAt);
+  u.expiresAt = new Date(live.expires_at);
+  // Prefer live role so demotions take effect without waiting for Redis TTL
+  u.role = live.role;
   return u;
 }
 
@@ -229,12 +259,103 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       return;
     }
 
-    const portalAccount = await queryOne<{ role: string }>(
-      `SELECT role FROM local_accounts
-        WHERE emp_id = ? AND active = 1 AND role IN ('ADMIN', 'SUPER_ADMIN')`,
+    const portalAccount = await queryOne<{ id: number; role: string }>(
+      `SELECT id, role FROM local_accounts
+        WHERE emp_id = ? AND active = 1
+          AND role IN ('ADMIN','SUPER_ADMIN','APP_CONTRIBUTOR','USER_GROUP_MANAGER','CUSTOM')`,
       [emp.emp_id],
     );
     const sessionRole = portalAccount?.role ?? 'EMPLOYEE';
+    const ip = getClientIp(req);
+    const userAgent = req.get('user-agent') ?? '';
+
+    // Same MFA + adaptive gates as local password login
+    const [mfa, adaptive, mfaRequirements] = await Promise.all([
+      getMfaStatus(emp.emp_id),
+      evaluateAdaptiveAuth({
+        ip,
+        email,
+        userAgent,
+        role: sessionRole,
+        empId: emp.emp_id,
+      }),
+      getMfaRequirementContext(emp.emp_id),
+    ]);
+
+    if (adaptive.action === 'BLOCK') {
+      logger.warn({ empId: emp.emp_id, ip, signals: adaptive.signals }, 'Google login blocked by adaptive auth');
+      redirectLoginAuthError(res, 'adaptive_blocked', returnTo);
+      return;
+    }
+
+    const policyRequiresMfa = mfaRequirements.userEnforced
+      || (
+        !mfaRequirements.userInExcludedGroup
+        && (
+          mfaRequirements.globalEnforce
+          || (mfaRequirements.enforceForAdmins && PORTAL_OPERATOR_ROLES.has(sessionRole))
+        )
+      );
+
+    const mfaRequired = adaptive.action === 'MFA'
+      || adaptive.action === 'STEP_UP'
+      || mfa.enabled
+      || policyRequiresMfa;
+
+    if (mfaRequired) {
+      if (!mfa.enabled) {
+        const enrollChallengeId = crypto.randomUUID();
+        const enrollChallenge: MfaEnrollChallenge = {
+          empId:     emp.emp_id,
+          email,
+          role:      sessionRole,
+          accountId: portalAccount?.id ?? 0,
+          createdAt: Date.now(),
+          iss:       'google',
+          sub,
+          returnTo,
+        };
+        await redis.set(
+          `${MFA_ENROLL_CHALLENGE_PREFIX}${enrollChallengeId}`,
+          JSON.stringify(enrollChallenge),
+          'EX',
+          MFA_CHALLENGE_TTL_S,
+        );
+        const params = new URLSearchParams({
+          enroll_challenge: enrollChallengeId,
+          email,
+          return_to: returnTo,
+        });
+        res.redirect(`/login?${params.toString()}`);
+        return;
+      }
+
+      const challengeId = crypto.randomUUID();
+      const challenge: MfaChallenge = {
+        empId:     emp.emp_id,
+        email,
+        role:      sessionRole,
+        accountId: portalAccount?.id ?? 0,
+        createdAt: Date.now(),
+        stepUp:    adaptive.action === 'STEP_UP',
+        iss:       'google',
+        sub,
+        returnTo,
+      };
+      await redis.set(
+        `${MFA_CHALLENGE_PREFIX}${challengeId}`,
+        JSON.stringify(challenge),
+        'EX',
+        MFA_CHALLENGE_TTL_S,
+      );
+      const params = new URLSearchParams({
+        mfa_challenge: challengeId,
+        email,
+        return_to: returnTo,
+      });
+      res.redirect(`/login?${params.toString()}`);
+      return;
+    }
 
     const sessionId = await createSession({
       empId:     emp.emp_id,
@@ -243,8 +364,8 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       iss:       'google',
       sub,
       ttlHours:  config.session.ttlCorporateHours,
-      ip:        getClientIp(req),
-      userAgent: req.get('user-agent') ?? '',
+      ip,
+      userAgent,
     });
 
     setSessionCookie(res, sessionId, config.session.ttlCorporateHours);

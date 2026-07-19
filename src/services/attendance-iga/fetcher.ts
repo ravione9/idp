@@ -1,5 +1,6 @@
 import axios from 'axios';
 import logger from '../../utils/logger.js';
+import { assertSafeOutboundUrl } from '../../utils/safe-url.js';
 import { expandDateTemplate } from './date-template.js';
 import type { StagingRow } from './types.js';
 
@@ -81,6 +82,7 @@ export async function fetchAttendanceFromApi(params: {
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       const url = expandUrlDates(params.apiUrl, dateOpts);
+      await assertSafeOutboundUrl(url);
       let body = params.apiMethod === 'POST' ? { ...(params.apiBodyTemplate ?? {}) } : undefined;
       if (body && typeof body === 'object') {
         body = JSON.parse(expandDateTemplate(JSON.stringify(body), dateOpts)) as Record<string, unknown>;
@@ -92,6 +94,7 @@ export async function fetchAttendanceFromApi(params: {
         headers,
         data: body,
         timeout: 60_000,
+        maxRedirects: 0,
       });
 
       const mapping = params.fileMapping ?? {

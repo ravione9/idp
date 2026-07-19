@@ -74,8 +74,9 @@ async function postWebhook(
   body: Record<string, unknown>,
   secret?: string,
 ): Promise<void> {
+  const { assertSafeOutboundUrl } = await import('../utils/safe-url.js');
+  const parsed = await assertSafeOutboundUrl(url);
   const payload = JSON.stringify(body);
-  const parsed = new URL(url);
   const lib = parsed.protocol === 'https:' ? https : http;
 
   const headers: Record<string, string> = {

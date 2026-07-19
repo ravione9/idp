@@ -1,9 +1,22 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { pool, query } from '../db/connection.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
+import { config } from '../config.js';
+import { timingSafeEqualString } from '../utils/timing-safe.js';
 
 const router = Router();
+
+/** /diagz and /metrics are sensitive — require internal token (Prometheus scrape header). */
+function requireDiagToken(req: Request, res: Response, next: NextFunction): void {
+  const header = req.headers['x-internal-token'];
+  const token = typeof header === 'string' ? header : '';
+  if (!token || !timingSafeEqualString(token, config.app.internalToken)) {
+    res.status(403).json({ error: 'Forbidden', code: 'DIAG_AUTH_REQUIRED' });
+    return;
+  }
+  next();
+}
 
 // ---------------------------------------------------------------------------
 // GET /healthz — liveness (always 200 if process is up)
@@ -47,7 +60,7 @@ router.get('/readyz', async (_req: Request, res: Response): Promise<void> => {
 // GET /diagz — diagnostic helper: which migrations applied, which IGA tables
 // exist. Useful when debugging "why is /api/iga/applications crashing?".
 // ---------------------------------------------------------------------------
-router.get('/diagz', async (_req: Request, res: Response): Promise<void> => {
+router.get('/diagz', requireDiagToken, async (_req: Request, res: Response): Promise<void> => {
   const out: Record<string, unknown> = {};
   try {
     const m = await query<{ name: string; applied_at: string }>(
@@ -112,7 +125,7 @@ router.get('/diagz', async (_req: Request, res: Response): Promise<void> => {
 // ---------------------------------------------------------------------------
 // GET /metrics — Prometheus exposition format
 // ---------------------------------------------------------------------------
-router.get('/metrics', async (_req: Request, res: Response): Promise<void> => {
+router.get('/metrics', requireDiagToken, async (_req: Request, res: Response): Promise<void> => {
   const lines: string[] = [];
 
   // Outbox queue depth by status

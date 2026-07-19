@@ -13,6 +13,7 @@ export type LoginAuthErrorCode =
   | 'domain_not_permitted'
   | 'email_not_verified'
   | 'no_employee_record'
+  | 'adaptive_blocked'
   | 'auth_failed';
 
 export function redirectLoginAuthError(

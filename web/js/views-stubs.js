@@ -1,9 +1,12 @@
 import { api } from './api.js';
-import { el, esc, fmtDate, persistSearch, syncAppUrl } from './ui.js';
+import { el, esc, escAttrJson, fmtDate, persistSearch, syncAppUrl } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 
 function header(title, subtitle, action = '') {
-  return `<div class="page-header page-header--compact"><div><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div>${action ? `<div class="page-header-actions">${action}</div>` : ''}</div>`;
+  return `<div class="page-header page-header--compact">
+    <div><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div>
+    ${action ? `<div class="page-header-actions">${action}</div>` : ''}
+  </div>`;
 }
 
 function kpiStrip(items) {
@@ -20,7 +23,7 @@ function statCard(iconName, label, value, sub = '', cls = 'primary') {
     <div>
       <div class="stat-label">${esc(label)}</div>
       <div class="stat-value">${esc(String(value ?? 0))}</div>
-      ${sub ? `<div class="stat-sub">${sub}</div>` : ''}
+      ${sub ? `<div class="stat-sub">${typeof sub === 'string' ? esc(sub) : sub}</div>` : ''}
     </div>
   </div>`;
 }
@@ -63,9 +66,30 @@ async function parseSamlMetadataClient(metadata) {
 const norm = r => Array.isArray(r) ? r : (r?.data ?? []);
 
 // ─── 1. Groups ────────────────────────────────────────────────────────────────
-export async function viewGroups(content) {
-  content.replaceChildren(el(`<div>${header('Groups', 'Local groups, plus Google Workspace and AD groups synced through configured connectors', `<div style="display:flex;gap:0.5rem"><button class="btn btn-secondary" id="sync-groups-btn">⟳ Sync from Directory</button><button class="btn btn-primary" id="new-group-btn">+ New Group</button></div>`)}<div id="grp-msg" style="margin-bottom:0.75rem"></div><div id="list-area">${loading()}</div></div>`));
+export async function viewGroups(content, initialTab = 'directory') {
+  const tabMap = { directory: 'directory', tags: 'tags', 'tag-groups': 'tags' };
+  let activeTab = tabMap[initialTab] || 'directory';
+  content.replaceChildren(el(`<div class="ent-page">
+    ${header('Groups', 'Directory groups (local / Google / AD) and tag groups used by Application Access Policy',
+      `<div style="display:flex;gap:0.5rem">
+        <button class="btn btn-secondary" id="sync-groups-btn">⟳ Sync from Directory</button>
+        <button class="btn btn-primary" id="new-group-btn">+ New Group</button>
+        <button class="btn btn-primary" id="new-tg-btn" hidden>+ Tag Group</button>
+      </div>`)}
+    <div class="inline-tabs" id="grp-tabs" style="margin-bottom:1rem">
+      <button type="button" class="inline-tab${activeTab === 'directory' ? ' active' : ''}" data-tab="directory">Directory Groups</button>
+      <button type="button" class="inline-tab${activeTab === 'tags' ? ' active' : ''}" data-tab="tags">Tag Groups</button>
+    </div>
+    <div id="tab-directory" ${activeTab !== 'directory' ? 'hidden' : ''}>
+      <div id="grp-msg" style="margin-bottom:0.75rem"></div>
+      <div id="list-area">${loading()}</div>
+    </div>
+    <div id="tab-tags" ${activeTab !== 'tags' ? 'hidden' : ''}><div id="tg-area">${loading()}</div></div>
+  </div>`));
   const wrap = content.firstChild;
+  const syncBtn = wrap.querySelector('#sync-groups-btn');
+  const newGroupBtn = wrap.querySelector('#new-group-btn');
+  const newTgBtn = wrap.querySelector('#new-tg-btn');
 
   const sourceBadge = (src) => ({
     LOCAL:  '<span class="badge badge-neutral">Local</span>',
@@ -190,9 +214,8 @@ export async function viewGroups(content) {
     } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
   }
 
-  wrap.querySelector('#sync-groups-btn').addEventListener('click', async () => {
-    const btn = wrap.querySelector('#sync-groups-btn');
-    btn.disabled = true; btn.textContent = 'Syncing…';
+  syncBtn.addEventListener('click', async () => {
+    syncBtn.disabled = true; syncBtn.textContent = 'Syncing…';
     wrap.querySelector('#grp-msg').innerHTML = '';
     try {
       const r = await api.syncDirectoryGroups();
@@ -202,10 +225,10 @@ export async function viewGroups(content) {
     } catch (e) {
       wrap.querySelector('#grp-msg').innerHTML = errHtml(e.message);
     }
-    btn.disabled = false; btn.textContent = '⟳ Sync from Directory';
+    syncBtn.disabled = false; syncBtn.textContent = '⟳ Sync from Directory';
   });
 
-  wrap.querySelector('#new-group-btn').addEventListener('click', () => {
+  newGroupBtn.addEventListener('click', () => {
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>New Group</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="g-name" placeholder="Group name"></div>
       <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="g-desc" placeholder="Description"></div>
@@ -220,7 +243,121 @@ export async function viewGroups(content) {
     });
   });
 
-  await load();
+  async function openTagGroupMembersModal(groupId, groupName) {
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Tag Group — ${esc(groupName)}</h2></div>
+      <div class="modal-body"><div id="tg-m-list">${loading()}</div>
+        <div class="form-group" style="margin-top:1rem"><label class="form-label">Add member (Employee ID)</label>
+          <div style="display:flex;gap:0.5rem"><input class="form-input" id="tg-m-emp" placeholder="E12345" style="flex:1">
+          <button class="btn btn-primary" id="tg-m-add">Add</button></div></div>
+        <div id="tg-m-err"></div>
+      </div><div class="modal-footer"><button class="btn btn-secondary" id="tg-m-close">Close</button></div></div>`);
+    async function loadMembers() {
+      try {
+        const g = await api.getTagGroup(groupId);
+        const members = g.members || [];
+        const rows = members.length ? members.map(m => `
+          <tr><td class="cell-strong">${esc(m.full_name || m.emp_id)}</td>
+            <td class="muted">${esc(m.email_corp || '—')}</td>
+            <td><button class="btn btn-sm btn-danger rm-m" data-emp="${esc(m.emp_id)}">Remove</button></td></tr>`).join('')
+          : `<tr><td colspan="3"><p class="muted">No members.</p></td></tr>`;
+        bd.querySelector('#tg-m-list').innerHTML = `<div class="table-wrap"><table>
+          <thead><tr><th>Name</th><th>Email</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        bd.querySelectorAll('.rm-m').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            try { await api.removeTagGroupMember(groupId, btn.dataset.emp); await loadMembers(); await loadTagGroups(); }
+            catch (e) { alert(e.message); }
+          });
+        });
+      } catch (e) { bd.querySelector('#tg-m-list').innerHTML = errHtml(e.message); }
+    }
+    bd.querySelector('#tg-m-close').addEventListener('click', () => bd.remove());
+    bd.querySelector('#tg-m-add').addEventListener('click', async () => {
+      const empId = bd.querySelector('#tg-m-emp').value.trim();
+      if (!empId) return;
+      try {
+        await api.addTagGroupMember(groupId, empId);
+        bd.querySelector('#tg-m-emp').value = '';
+        await loadMembers(); await loadTagGroups();
+      } catch (e) { bd.querySelector('#tg-m-err').innerHTML = errHtml(e.message); }
+    });
+    await loadMembers();
+  }
+
+  async function loadTagGroups() {
+    const area = wrap.querySelector('#tg-area');
+    try {
+      const groups = norm(await api.listTagGroups(false));
+      const rows = groups.length ? groups.map(g => {
+        let tags = '—';
+        try { tags = (typeof g.tags === 'string' ? JSON.parse(g.tags) : g.tags || []).join(', '); } catch {}
+        return `<tr>
+          <td class="cell-strong">${esc(g.name)}</td>
+          <td class="muted" style="font-size:0.82rem">${esc(tags)}</td>
+          <td>${g.member_count ?? 0}</td>
+          <td>${g.active === 0 || g.active === false ? '<span class="badge badge-neutral">Inactive</span>' : '<span class="badge badge-success">Active</span>'}</td>
+          <td>
+            <button class="btn btn-sm btn-secondary manage-tg" data-id="${esc(String(g.id))}" data-name="${esc(g.name)}">Members</button>
+            <button class="btn btn-sm btn-danger del-tg" data-id="${esc(String(g.id))}">Delete</button>
+          </td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No tag groups yet. Used by Application Access Policy for group-based app grants.</p></div></td></tr>`;
+      area.innerHTML = `
+        <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">Tag groups are logical cohorts (by tags) for app assignment — distinct from directory groups synced from Google / AD.</p>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Tags</th><th>Members</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      area.querySelectorAll('.del-tg').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Deactivate this tag group?')) return;
+          try { await api.deleteTagGroup(btn.dataset.id); await loadTagGroups(); } catch (e) { alert(e.message); }
+        });
+      });
+      area.querySelectorAll('.manage-tg').forEach(btn => {
+        btn.addEventListener('click', () => openTagGroupMembersModal(btn.dataset.id, btn.dataset.name));
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  newTgBtn.addEventListener('click', () => {
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>New Tag Group</h2></div><div class="modal-body">
+      <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="tg-name"></div>
+      <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="tg-desc"></div>
+      <div class="form-group"><label class="form-label">Tags (comma-separated)</label>
+        <input class="form-input" id="tg-tags" placeholder="finance, apac, contractors"></div>
+      <div id="tg-err"></div>
+    </div><div class="modal-footer">
+      <button class="btn btn-primary" id="tg-save">Create</button>
+      <button class="btn btn-secondary" id="tg-cancel">Cancel</button>
+    </div></div>`);
+    bd.querySelector('#tg-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#tg-save').addEventListener('click', async () => {
+      const name = bd.querySelector('#tg-name').value.trim();
+      const tags = bd.querySelector('#tg-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+      if (!name || !tags.length) { bd.querySelector('#tg-err').innerHTML = errHtml('Name and at least one tag required'); return; }
+      try {
+        await api.createTagGroup({ name, description: bd.querySelector('#tg-desc').value, tags });
+        bd.remove(); await loadTagGroups();
+      } catch (e) { bd.querySelector('#tg-err').innerHTML = errHtml(e.message); }
+    });
+  });
+
+  async function showGrpTab(name) {
+    activeTab = name;
+    wrap.querySelectorAll('#grp-tabs .inline-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+    wrap.querySelector('#tab-directory').hidden = name !== 'directory';
+    wrap.querySelector('#tab-tags').hidden = name !== 'tags';
+    syncBtn.hidden = name !== 'directory';
+    newGroupBtn.hidden = name !== 'directory';
+    newTgBtn.hidden = name !== 'tags';
+    syncAppUrl('groups', name, 'directory');
+    if (name === 'directory') await load();
+    else await loadTagGroups();
+  }
+
+  wrap.querySelector('#grp-tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-tab]');
+    if (btn) void showGrpTab(btn.dataset.tab);
+  });
+
+  await showGrpTab(activeTab);
 }
 
 // ─── 1b. Bulk User Import ─────────────────────────────────────────────────────
@@ -634,7 +771,7 @@ export async function viewIdentityProfiles(content) {
 
 // ─── 4. MFA Methods ───────────────────────────────────────────────────────────
 export async function viewMfaMethods(content) {
-  content.replaceChildren(el(`<div>
+  content.replaceChildren(el(`<div class="ent-page">
     ${header('MFA Methods', 'Multi-factor authentication enrollment and enforcement policy')}
     <div id="mfa-area">${loading()}</div>
   </div>`));
@@ -846,7 +983,7 @@ export async function viewMfaMethods(content) {
               <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;max-height:220px;overflow-y:auto;margin-bottom:0.5rem">
                 ${items.map(u => `
                   <div class="search-dropdown-item" style="padding:0.55rem 0.85rem;cursor:pointer;display:flex;align-items:center;gap:0.6rem;border-bottom:1px solid var(--border)"
-                    data-user='${JSON.stringify({ emp_id: u.emp_id, full_name: u.full_name, email: u.email_corp, mfa_enforced: !!u.mfa_enforced })}'>
+                    data-user="${escAttrJson({ emp_id: u.emp_id, full_name: u.full_name, email: u.email_corp, mfa_enforced: !!u.mfa_enforced })}">
                     <span class="avatar" style="width:28px;height:28px;font-size:0.7rem;flex-shrink:0">${esc((u.full_name||'?').charAt(0).toUpperCase())}</span>
                     <div>
                       <div style="font-weight:600;font-size:0.875rem">${esc(u.full_name || u.emp_id)}</div>
@@ -1176,7 +1313,7 @@ export async function viewPasswordPolicies(content) {
           <td>${p.lockout_attempts ?? '—'}</td>
           <td>${p.is_default ? '<span class="badge badge-success">Default</span>' : '<span class="badge badge-neutral">Policy</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary edit-pp" data-p='${JSON.stringify({id:p.id,name:p.name,min_length:p.min_length,require_uppercase:p.require_uppercase,require_lowercase:p.require_lowercase,require_digits:p.require_digits,require_special:p.require_special,max_age_days:p.max_age_days,history_count:p.history_count,lockout_attempts:p.lockout_attempts,lockout_duration_min:p.lockout_duration_min,is_default:p.is_default})}'>Edit</button>
+            <button class="btn btn-sm btn-secondary edit-pp" data-p="${escAttrJson({id:p.id,name:p.name,min_length:p.min_length,require_uppercase:p.require_uppercase,require_lowercase:p.require_lowercase,require_digits:p.require_digits,require_special:p.require_special,max_age_days:p.max_age_days,history_count:p.history_count,lockout_attempts:p.lockout_attempts,lockout_duration_min:p.lockout_duration_min,is_default:p.is_default})}">Edit</button>
             <button class="btn btn-sm btn-danger del-pp" data-id="${esc(String(p.id))}">Delete</button>
           </td>
         </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">◎</div><p>No password policies.</p></div></td></tr>`;
@@ -2541,21 +2678,21 @@ export async function viewPrebuiltApps(content, opts = {}) {
 }
 
 // ─── 9. App Discovery ─────────────────────────────────────────────────────────
-export async function viewAppDiscovery(content) {
-  content.replaceChildren(el(`<div>${header('App Discovery', 'Shadow IT and application usage discovery')}<div id="disc-area">${loading()}</div></div>`));
+export async function viewAppDiscovery(content, opts = {}) {
+  const embed = !!opts.embed;
+  content.replaceChildren(el(`<div>
+    ${embed ? '' : header('App Discovery', 'Shadow IT and application usage discovery')}
+    <div id="disc-area">${loading()}</div>
+  </div>`));
   const wrap = content.firstChild;
   try {
     const r = await api.igaConnectors();
-    // igaConnectors returns { data: [...] } — normalise to array
     const allConnectors = Array.isArray(r) ? r : (r && r.data ? r.data : []);
     const disc = allConnectors.filter(c => (c.connector_type || c.type || '') === 'DISCOVERY');
     wrap.querySelector('#disc-area').innerHTML = `
-      <div class="card" style="margin-bottom:1rem;display:flex;gap:1rem;align-items:flex-start">
-        <div style="font-size:2rem">🔭</div>
-        <div>
-          <strong>Shadow IT Discovery</strong>
-          <p class="muted" style="margin-top:0.25rem">Automatic discovery by analysing SSO logs, Google Workspace audit trails, and proxy logs surfaces unsanctioned SaaS in use across your organisation. Currently, register connectors of type DISCOVERY below; full log-ingestion ships in Phase 5.</p>
-        </div>
+      <div class="card" style="margin-bottom:1rem">
+        <strong>Shadow IT Discovery</strong>
+        <p class="muted" style="margin-top:0.25rem">Surfaces unsanctioned SaaS from SSO logs, Workspace audit trails, and proxy logs. Register DISCOVERY connectors below; full log-ingestion ships in Phase 5.</p>
       </div>
       ${disc.length
         ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Last Run</th></tr></thead><tbody>
@@ -4371,7 +4508,7 @@ export async function viewAppAccessPolicy(content) {
         <div class="aap-actions">
           <div>
             <h3 class="section-title">Application Assignment</h3>
-            <p class="subtitle">Grant direct or group-based app access and manage tag groups.</p>
+            <p class="subtitle">Grant direct or group-based app access. Tag groups can also be managed under Identity → Groups → Tag Groups.</p>
           </div>
           <div class="aap-actions-btns">
             <button class="btn btn-primary" id="aap-assign-btn">+ Assign Access</button>
@@ -4702,7 +4839,7 @@ export async function viewPamResources(content) {
           <td class="muted">${r.port ?? '—'}</td>
           <td>${r.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary edit-pam" data-p='${JSON.stringify({id:r.id,name:r.name,type:r.type||r.resource_type,hostname:r.hostname,port:r.port,description:r.description||""})}'>Edit</button>
+            <button class="btn btn-sm btn-secondary edit-pam" data-p="${escAttrJson({id:r.id,name:r.name,type:r.type||r.resource_type,hostname:r.hostname,port:r.port,description:r.description||""})}">Edit</button>
             <button class="btn btn-sm btn-danger del-pam" data-id="${esc(String(r.id))}">Delete</button>
           </td>
         </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No PAM resources.</p></div></td></tr>`;
@@ -4883,18 +5020,24 @@ function wfStepRow(step, idx) {
   </div>`;
 }
 
-export async function viewWorkflowLibrary(content) {
-  content.replaceChildren(el(`<div>
-    ${header('Workflow Library', 'Multi-step automations (NOTIFY, birthright, webhook) on platform events — distinct from Event Triggers (single actions) and Application Access Policy (approval chains)', `<button class="btn btn-primary" id="new-wf-btn">+ New Workflow</button>`)}
+export async function viewWorkflowLibrary(content, initialTab = 'definitions') {
+  const tabMap = { definitions: 'definitions', defs: 'definitions', triggers: 'triggers', runs: 'runs' };
+  let activeTab = tabMap[initialTab] || 'definitions';
+  content.replaceChildren(el(`<div class="ent-page">
+    ${header('Workflows', 'Multi-step automations and single-action event hooks — Application Access Policy owns approval chains separately', `<button class="btn btn-primary" id="new-wf-btn">+ New Workflow</button><button class="btn btn-secondary" id="new-et-btn" hidden>+ New Trigger</button>`)}
     <div id="wf-stats" class="stat-grid" style="margin-bottom:1rem"></div>
-    <div class="cfg-tab-bar inline-tabs" style="margin-bottom:1rem">
-      <button type="button" class="cfg-tab inline-tab active" data-tab="defs">Definitions</button>
-      <button type="button" class="cfg-tab inline-tab" data-tab="runs">Run History</button>
+    <div class="inline-tabs" id="wf-tabs" style="margin-bottom:1rem">
+      <button type="button" class="inline-tab${activeTab === 'definitions' ? ' active' : ''}" data-tab="definitions">Definitions</button>
+      <button type="button" class="inline-tab${activeTab === 'triggers' ? ' active' : ''}" data-tab="triggers">Event Triggers</button>
+      <button type="button" class="inline-tab${activeTab === 'runs' ? ' active' : ''}" data-tab="runs">Run History</button>
     </div>
-    <div id="tab-defs"><div id="list-area">${loading()}</div></div>
-    <div id="tab-runs" style="display:none"><div id="runs-area">${loading()}</div></div>
+    <div id="tab-definitions" ${activeTab !== 'definitions' ? 'hidden' : ''}><div id="list-area">${loading()}</div></div>
+    <div id="tab-triggers" ${activeTab !== 'triggers' ? 'hidden' : ''}><div id="triggers-area">${loading()}</div></div>
+    <div id="tab-runs" ${activeTab !== 'runs' ? 'hidden' : ''}><div id="runs-area">${loading()}</div></div>
   </div>`));
   const wrap = content.firstChild;
+  const newWfBtn = wrap.querySelector('#new-wf-btn');
+  const newEtBtn = wrap.querySelector('#new-et-btn');
 
   async function loadDefs() {
     try {
@@ -4910,7 +5053,7 @@ export async function viewWorkflowLibrary(content) {
           <td>${w.steps_count ?? (Array.isArray(w.steps) ? w.steps.length : 0)}</td>
           <td>${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary edit-wf" data-id="${esc(String(w.id))}" data-p='${JSON.stringify({name:w.name,description:w.description||'',trigger_event:w.trigger_event||'',steps:w.steps||[]})}'>Edit</button>
+            <button class="btn btn-sm btn-secondary edit-wf" data-id="${esc(String(w.id))}" data-p="${escAttrJson({name:w.name,description:w.description||'',trigger_event:w.trigger_event||'',steps:w.steps||[]})}">Edit</button>
             <button class="btn btn-sm btn-danger del-wf" data-id="${esc(String(w.id))}">Delete</button>
           </td>
         </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No workflows defined. Create one to automate JOINER, LEAVER, or ACCESS_REQUEST events.</p></div></td></tr>`;
@@ -5020,27 +5163,8 @@ export async function viewWorkflowLibrary(content) {
     });
   }
 
-  wrap.querySelector('#new-wf-btn').addEventListener('click', () => openWfModal(null));
-  wrap.querySelectorAll('.cfg-tab').forEach(tab => {
-    tab.addEventListener('click', async () => {
-      wrap.querySelectorAll('.cfg-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const name = tab.dataset.tab;
-      wrap.querySelector('#tab-defs').style.display = name === 'defs' ? '' : 'none';
-      wrap.querySelector('#tab-runs').style.display = name === 'runs' ? '' : 'none';
-      if (name === 'runs') await loadRuns();
-    });
-  });
-
-  await loadDefs();
-}
-
-// ─── 17. Event Triggers ───────────────────────────────────────────────────────
-export async function viewEventTriggers(content) {
-  content.replaceChildren(el(`<div>${header('Event Triggers', 'Single-action hooks (webhook / Slack / email) on system events — use Workflow Library for multi-step flows', `<button class="btn btn-primary" id="new-et-btn">+ New Trigger</button>`)}<div id="list-area">${loading()}</div></div>`));
-  const wrap = content.firstChild;
-
-  async function load() {
+  async function loadTriggers() {
+    const area = wrap.querySelector('#triggers-area');
     try {
       const triggers = norm(await api.listEventTriggers());
       const chBadge = ch => ({ WEBHOOK: 'badge-info', SLACK: 'badge-success', TEAMS: 'badge-warning', EMAIL: 'badge-neutral' }[ch] || 'badge-neutral');
@@ -5052,21 +5176,21 @@ export async function viewEventTriggers(content) {
           <td class="muted" style="font-size:0.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(t.target_url||t.target||'—')}</td>
           <td>${t.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
           <td>
-            <button class="btn btn-sm btn-secondary edit-et" data-p='${JSON.stringify({id:t.id,name:t.name,event_type:t.event_type,channel:t.channel,target_url:t.target_url||t.target||"",secret:t.secret||""})}'>Edit</button>
+            <button class="btn btn-sm btn-secondary edit-et" data-p="${escAttrJson({id:t.id,name:t.name,event_type:t.event_type,channel:t.channel,target_url:t.target_url||t.target||"",secret:""})}">Edit</button>
             <button class="btn btn-sm btn-danger del-et" data-id="${esc(String(t.id))}">Delete</button>
           </td>
-        </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No event triggers.</p></div></td></tr>`;
-      wrap.querySelector('#list-area').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Event</th><th>Channel</th><th>Target</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
-      wrap.querySelectorAll('.del-et').forEach(btn => {
+        </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No event triggers. Use single-action webhooks/Slack/email here; multi-step flows go under Definitions.</p></div></td></tr>`;
+      area.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Event</th><th>Channel</th><th>Target</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      area.querySelectorAll('.del-et').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Delete this trigger?')) return;
-          try { await api.deleteEventTrigger(btn.dataset.id); await load(); } catch(e) { alert(e.message); }
+          try { await api.deleteEventTrigger(btn.dataset.id); await loadTriggers(); } catch(e) { alert(e.message); }
         });
       });
-      wrap.querySelectorAll('.edit-et').forEach(btn => {
+      area.querySelectorAll('.edit-et').forEach(btn => {
         btn.addEventListener('click', () => { let p; try { p = JSON.parse(btn.dataset.p); } catch { p = {}; } openEtModal(p.id, p); });
       });
-    } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
+    } catch(e) { area.innerHTML = errHtml(e.message); }
   }
 
   function openEtModal(id, d = {}) {
@@ -5078,22 +5202,49 @@ export async function viewEventTriggers(content) {
       <div class="form-group"><label class="form-label">Event Type</label><select class="form-select" id="et-event">${events.map(e => `<option ${d.event_type===e?'selected':''}>${e}</option>`).join('')}</select></div>
       <div class="form-group"><label class="form-label">Channel</label><select class="form-select" id="et-ch">${channels.map(c => `<option ${d.channel===c?'selected':''}>${c}</option>`).join('')}</select></div>
       <div class="form-group"><label class="form-label">Target URL</label><input class="form-input" id="et-url" value="${esc(d.target_url||'')}" placeholder="https://hooks.example.com/..."></div>
-      <div class="form-group"><label class="form-label">Signing Secret</label><input class="form-input" id="et-secret" value="${esc(d.secret||'')}" placeholder="Optional HMAC secret"></div>
+      <div class="form-group"><label class="form-label">Signing Secret</label><input class="form-input" id="et-secret" value="" placeholder="${isEdit ? 'Leave blank to keep existing' : 'Optional HMAC secret'}"></div>
       <div id="et-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="et-save">${isEdit ? 'Update' : 'Create'}</button><button class="btn btn-secondary" id="et-cancel">Cancel</button></div></div>`);
     bd.querySelector('#et-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#et-save').addEventListener('click', async () => {
-      const data = { name: bd.querySelector('#et-name').value, event_type: bd.querySelector('#et-event').value, channel: bd.querySelector('#et-ch').value, target_url: bd.querySelector('#et-url').value, secret: bd.querySelector('#et-secret').value };
+      const data = { name: bd.querySelector('#et-name').value, event_type: bd.querySelector('#et-event').value, channel: bd.querySelector('#et-ch').value, target_url: bd.querySelector('#et-url').value };
+      const secret = bd.querySelector('#et-secret').value;
+      if (secret) data.secret = secret;
       if (!data.name || !data.target_url) { bd.querySelector('#et-err').innerHTML = errHtml('Name and target URL required'); return; }
       try {
         if (isEdit) await api.updateEventTrigger(id, data); else await api.createEventTrigger(data);
-        bd.remove(); await load();
+        bd.remove(); await loadTriggers();
       } catch(e) { bd.querySelector('#et-err').innerHTML = errHtml(e.message); }
     });
   }
 
-  wrap.querySelector('#new-et-btn').addEventListener('click', () => openEtModal(null));
-  await load();
+  async function showWfTab(name) {
+    activeTab = name;
+    wrap.querySelectorAll('#wf-tabs .inline-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+    wrap.querySelector('#tab-definitions').hidden = name !== 'definitions';
+    wrap.querySelector('#tab-triggers').hidden = name !== 'triggers';
+    wrap.querySelector('#tab-runs').hidden = name !== 'runs';
+    newWfBtn.hidden = name !== 'definitions';
+    newEtBtn.hidden = name !== 'triggers';
+    syncAppUrl('workflowLibrary', name, 'definitions');
+    if (name === 'definitions') await loadDefs();
+    else if (name === 'triggers') await loadTriggers();
+    else if (name === 'runs') await loadRuns();
+  }
+
+  newWfBtn.addEventListener('click', () => openWfModal(null));
+  newEtBtn.addEventListener('click', () => openEtModal(null));
+  wrap.querySelector('#wf-tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-tab]');
+    if (btn) void showWfTab(btn.dataset.tab);
+  });
+
+  await showWfTab(activeTab);
+}
+
+/** @deprecated Use Workflows → Event Triggers tab */
+export async function viewEventTriggers(content) {
+  return viewWorkflowLibrary(content, 'triggers');
 }
 
 // ─── 18. Notifications ────────────────────────────────────────────────────────
@@ -5169,8 +5320,12 @@ function csvDownload(filename, rows) {
   a.click();
 }
 
-export async function viewSsoReports(content) {
-  content.replaceChildren(el(`<div>${header('SSO Reports', 'Login analytics, adoption and dormancy reports')}<div id="sso-area">${loading()}</div></div>`));
+export async function viewSsoReports(content, opts = {}) {
+  const embed = !!opts.embed;
+  content.replaceChildren(el(`<div>
+    ${embed ? '' : header('SSO Reports', 'Login analytics, adoption and dormancy reports')}
+    <div id="sso-area">${loading()}</div>
+  </div>`));
   const wrap = content.firstChild;
   try {
     const [summary, failed, adoption, dormant] = (await Promise.all([
@@ -5183,7 +5338,7 @@ export async function viewSsoReports(content) {
     const dormantRows = dormant.map(r => `<tr><td>${esc(r.email||'—')}</td><td class="muted">${r.last_login ? fmtDate(r.last_login) : 'Never'}</td></tr>`).join('') || `<tr><td colspan="2" class="muted">No data</td></tr>`;
 
     wrap.querySelector('#sso-area').innerHTML = `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+      <div class="grid-2">
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
             <h2 style="margin:0">Login Summary</h2>
@@ -5241,7 +5396,7 @@ export async function viewGeneralSettings(content) {
       : `<span style="background:#94a3b8;color:#fff;padding:2px 8px;border-radius:99px;font-size:0.75rem">Not installed</span>`;
 
     wrap.querySelector('#gs-area').innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:1.5rem;max-width:700px">
+      <div class="ent-stack">
 
         <!-- ── General (fields match general_settings / PUT API) ─────────── -->
         <div class="card">
@@ -5460,8 +5615,8 @@ export async function viewBranding(content) {
     const heroTitle = b.login_hero_title || 'Welcome back';
     const heroSub = b.login_hero_sub || 'Sign in to your Lenskart account';
     wrap.querySelector('#br-area').innerHTML = `
-      <div class="grid-3">
-        <div class="card" style="grid-column:span 2">
+      <div class="grid-main-side">
+        <div class="card">
           <h2>Branding Settings</h2>
           <p class="muted" style="margin:0 0 1rem;font-size:0.82rem">This page is the single editor for login appearance (Login Customization redirects here).</p>
           <div class="form-group"><label class="form-label">Organisation / App Name</label><input class="form-input" id="br-appname" value="${esc(orgName)}"></div>
@@ -5547,38 +5702,41 @@ export async function viewLicense(content) {
       { name: 'App Discovery', status: 'planned' },
     ];
     const featureHtml = features.map(f => {
-      const icon = f.status === 'live' ? '✓' : f.status === 'progress' ? '◑' : '○';
-      const color = f.status === 'live' ? 'var(--success, #22c55e)' : f.status === 'progress' ? '#f59e0b' : '#94a3b8';
-      return `<div style="display:flex;gap:0.5rem;align-items:center"><span style="color:${color};font-weight:700">${icon}</span><span>${esc(f.name)}</span></div>`;
+      const badge = f.status === 'live' ? 'badge-success' : f.status === 'progress' ? 'badge-warning' : 'badge-neutral';
+      const label = f.status === 'live' ? 'Live' : f.status === 'progress' ? 'Progress' : 'Planned';
+      return `<div class="ent-feature-row"><span>${esc(f.name)}</span><span class="badge ${badge}">${label}</span></div>`;
     }).join('');
+    // Use a real <table> for edition rows — never nested .kv grids (those crush value columns).
     wrap.querySelector('#lic-area').innerHTML = `
-      <div class="grid-3">
-        <div class="card" style="grid-column:span 2">
+      <div class="lic-layout">
+        <div class="card">
           <h2>Edition Details</h2>
-          <div class="kv" style="margin-top:1rem">
-            <div class="kv"><span class="k">Organisation</span><span class="v">${esc(s.display_name||s.org_name||'—')}</span></div>
-            <div class="kv"><span class="k">Edition</span><span class="v"><span class="badge badge-success">Enterprise Self-Hosted</span></span></div>
-            <div class="kv"><span class="k">Version</span><span class="v">1.0.0</span></div>
-            <div class="kv"><span class="k">Build</span><span class="v">lilg-idp-2026</span></div>
-            <div class="kv"><span class="k">License Type</span><span class="v">Perpetual + SaaS Option</span></div>
-          </div>
-          <h2 style="margin-top:1.5rem">Feature Matrix</h2>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-top:0.75rem">${featureHtml}</div>
-          <div style="margin-top:1.5rem;display:flex;gap:0.5rem">
+          <table class="lic-table">
+            <tbody>
+              <tr><th scope="row">Organisation</th><td>${esc(s.display_name||s.org_name||'—')}</td></tr>
+              <tr><th scope="row">Edition</th><td><span class="badge badge-success">Enterprise Self-Hosted</span></td></tr>
+              <tr><th scope="row">Version</th><td>1.0.0</td></tr>
+              <tr><th scope="row">Build</th><td><code>lilg-idp-2026</code></td></tr>
+              <tr><th scope="row">License Type</th><td>Perpetual + SaaS Option</td></tr>
+            </tbody>
+          </table>
+          <h2 style="margin-top:1.35rem">Feature Matrix</h2>
+          <div class="ent-feature-grid">${featureHtml}</div>
+          <div style="display:flex;gap:0.45rem;flex-wrap:wrap;margin-top:1.25rem;justify-content:flex-end">
             <a class="btn btn-secondary" href="mailto:support@lenskart.com">Contact Support</a>
             <a class="btn btn-secondary" href="/healthz" target="_blank">Health Check</a>
           </div>
         </div>
         <div class="card">
           <h2>Legend</h2>
-          <div style="display:grid;gap:0.5rem;margin-top:0.75rem">
-            <div style="display:flex;gap:0.5rem;align-items:center"><span style="color:var(--success,#22c55e);font-weight:700">✓</span> <span class="muted">Live in production</span></div>
-            <div style="display:flex;gap:0.5rem;align-items:center"><span style="color:#f59e0b;font-weight:700">◑</span> <span class="muted">In progress</span></div>
-            <div style="display:flex;gap:0.5rem;align-items:center"><span style="color:#94a3b8;font-weight:700">○</span> <span class="muted">Planned / roadmap</span></div>
+          <div class="ent-feature-grid" style="margin-top:0.5rem">
+            <div class="ent-feature-row"><span class="muted">Live in production</span><span class="badge badge-success">Live</span></div>
+            <div class="ent-feature-row"><span class="muted">In progress</span><span class="badge badge-warning">Progress</span></div>
+            <div class="ent-feature-row"><span class="muted">Planned / roadmap</span><span class="badge badge-neutral">Planned</span></div>
           </div>
-          <h2 style="margin-top:1.5rem">System Links</h2>
+          <h2 style="margin-top:1.35rem">System Links</h2>
           <div style="display:grid;gap:0.4rem;margin-top:0.5rem">
-            ${['/healthz','/readyz','/diagz','/metrics'].map(p => `<a href="${p}" target="_blank" class="btn btn-sm btn-secondary">${p}</a>`).join('')}
+            ${['/healthz','/readyz','/diagz','/metrics'].map(p => `<a href="${p}" target="_blank" class="btn btn-sm btn-secondary" style="justify-content:flex-start;font-family:var(--font-mono)">${p}</a>`).join('')}
           </div>
         </div>
       </div>`;
@@ -5603,7 +5761,7 @@ export async function viewTickets(content) {
       const priColor = p => ({ HIGH: 'badge-danger', MEDIUM: 'badge-warning', LOW: 'badge-neutral', CRITICAL: 'badge-danger' }[p] || 'badge-neutral');
       const stColor = s => ({ OPEN: 'badge-info', IN_PROGRESS: 'badge-warning', RESOLVED: 'badge-success', CLOSED: 'badge-neutral' }[s] || 'badge-neutral');
       const rows = tickets.length ? tickets.map(t => `
-        <tr class="tk-row" data-p='${JSON.stringify({id:t.id,subject:t.subject||t.title,category:t.category,status:t.status,priority:t.priority,description:t.description||"",requester_name:t.requester_name||t.requester_id||"",created_at:t.created_at||""})}' style="cursor:pointer">
+        <tr class="tk-row" data-p="${escAttrJson({id:t.id,subject:t.subject||t.title,category:t.category,status:t.status,priority:t.priority,description:t.description||"",requester_name:t.requester_name||t.requester_id||"",created_at:t.created_at||""})}" style="cursor:pointer">
           <td class="cell-strong">${esc(t.subject||t.title||'—')}</td>
           <td><span class="badge badge-info">${esc(t.category||'—')}</span></td>
           <td><span class="badge ${stColor(t.status)}">${esc(t.status||'—')}</span></td>
@@ -5621,11 +5779,11 @@ export async function viewTickets(content) {
   function openTkDetail(t) {
     const statuses = ['OPEN','IN_PROGRESS','RESOLVED','CLOSED'];
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${esc(t.subject||t.title||'Ticket')}</h2></div><div class="modal-body">
-      <div class="kv">
-        <div><span class="k">Category</span><span class="v">${esc(t.category||'—')}</span></div>
-        <div><span class="k">Priority</span><span class="v">${esc(t.priority||'—')}</span></div>
-        <div><span class="k">Requester</span><span class="v">${esc(t.requester_name||t.created_by||'—')}</span></div>
-        <div><span class="k">Created</span><span class="v">${t.created_at ? fmtDate(t.created_at) : '—'}</span></div>
+      <div class="kv-list">
+        <div class="kv"><span class="k">Category</span><span class="v">${esc(t.category||'—')}</span></div>
+        <div class="kv"><span class="k">Priority</span><span class="v">${esc(t.priority||'—')}</span></div>
+        <div class="kv"><span class="k">Requester</span><span class="v">${esc(t.requester_name||t.created_by||'—')}</span></div>
+        <div class="kv"><span class="k">Created</span><span class="v">${t.created_at ? fmtDate(t.created_at) : '—'}</span></div>
       </div>
       ${t.description ? `<p style="margin-top:1rem">${esc(t.description)}</p>` : ''}
       <div class="form-group" style="margin-top:1rem">
@@ -5722,18 +5880,18 @@ export async function viewSystemHealth(content) {
             <div class="stat-sub">${migrationCount ? esc(String(migrationCount) + ' migrations applied') : 'No migrations recorded'}</div>
           </div>
         </div>
-        <div class="grid-3">
+        <div class="grid-main-side">
+          <div class="card">
+            <h2>Connectors</h2>
+            ${connectors.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Status</th></tr></thead><tbody>
+              ${connectors.map(c => `<tr><td>${esc(c.name||'—')}</td><td class="muted">${esc(c.type||c.connector_type||'—')}</td><td>${(['ok','ACTIVE','CONNECTED','CONFIGURED'].includes(String(c.status||'').toUpperCase()) || c.status==='ok')?'<span class="badge badge-success">OK</span>':'<span class="badge badge-neutral">'+esc(c.status||'Unknown')+'</span>'}</td></tr>`).join('')}
+            </tbody></table></div>` : '<p class="muted">No connectors configured.</p>'}
+          </div>
           <div class="card">
             <h2>Outbox Depth</h2>
             <div style="display:grid;gap:0.5rem;margin-top:0.75rem">
               ${['PENDING','PROCESSING','DONE','DEAD'].map(k => `<div style="display:flex;justify-content:space-between"><span class="muted">${k}</span><strong>${outbox[k.toLowerCase()] ?? outbox[k] ?? 0}</strong></div>`).join('')}
             </div>
-          </div>
-          <div class="card" style="grid-column:span 2">
-            <h2>Connectors</h2>
-            ${connectors.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Status</th></tr></thead><tbody>
-              ${connectors.map(c => `<tr><td>${esc(c.name||'—')}</td><td class="muted">${esc(c.type||c.connector_type||'—')}</td><td>${(['ok','ACTIVE','CONNECTED','CONFIGURED'].includes(String(c.status||'').toUpperCase()) || c.status==='ok')?'<span class="badge badge-success">OK</span>':'<span class="badge badge-neutral">'+esc(c.status||'Unknown')+'</span>'}</td></tr>`).join('')}
-            </tbody></table></div>` : '<p class="muted">No connectors configured.</p>'}
           </div>
         </div>`;
     } catch(e) {

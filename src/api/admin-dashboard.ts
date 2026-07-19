@@ -8,7 +8,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { queryOne } from '../db/connection.js';
 import { safeQuery } from '../db/safe-query.js';
 import { asyncHandler } from '../utils/async-handler.js';
@@ -17,7 +17,7 @@ import { getGoogleOidcConfig, isGoogleOidcConfigured } from '../auth/google-oidc
 
 const router = Router();
 
-router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('overview'));
 
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   const [

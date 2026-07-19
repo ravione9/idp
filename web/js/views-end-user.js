@@ -36,6 +36,8 @@ const AUTH_ERROR_MESSAGES = {
     'Your Google email address is not verified.',
   no_employee_record:
     'No active account was found for this email. Ask an administrator to sync your user from Google Workspace or create your account.',
+  adaptive_blocked:
+    'Sign-in was blocked by the security policy. Contact an administrator if you believe this is a mistake.',
   auth_failed:
     'Google sign-in failed. Try again or use email and password.',
 };
@@ -53,26 +55,30 @@ function showAuthErrorFromUrl(errEl) {
 
 /* ---------- Login ---------- */
 export function renderLogin() {
-  const returnTo = loginReturnTo();
+  const loginParams = new URLSearchParams(location.search);
+  const returnTo = loginParams.get('return_to') || loginReturnTo();
   const ssoResume = returnTo.startsWith('/saml/resume/');
+  const pendingMfaChallenge = loginParams.get('mfa_challenge');
+  const pendingEnrollChallenge = loginParams.get('enroll_challenge');
+  const pendingEmail = loginParams.get('email') || '';
   const root = el(`
     <div class="auth-shell">
       <aside class="auth-hero">
         <div class="brand-mark">
-          <span class="brand-logo" style="width:32px;height:32px;background:linear-gradient(135deg,#fff,#dbeafe);border-radius:8px;display:inline-flex;align-items:center;justify-content:center;color:#1e3a8a;font-weight:800">L</span>
+          <span class="brand-logo" style="width:34px;height:34px;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.22);border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:700;letter-spacing:-0.02em">L</span>
           Lenskart IdP
         </div>
         <div>
-          <h1>One identity. Every application.</h1>
-          <p>Enterprise single sign-on, SAML 2.0 identity provider, and identity governance for Lenskart.</p>
+          <h1>Identity infrastructure for the enterprise.</h1>
+          <p>SSO, MFA, and governance in one control plane — built for operators who need precision, not noise.</p>
           <ul class="auth-features">
-            <li>SAML 2.0 SSO &amp; OIDC login</li>
-            <li>TOTP MFA, session management, password self-service</li>
-            <li>Identity lifecycle, access requests, certifications</li>
-            <li>Audit trail and compliance reports</li>
+            <li>SAML 2.0 SSO &amp; federated login</li>
+            <li>TOTP MFA, sessions, password self-service</li>
+            <li>Lifecycle, access requests, certifications</li>
+            <li>Attendance IGA, audit, compliance reports</li>
           </ul>
         </div>
-        <div class="auth-footer">© Lenskart Identity · idp.lenskart.com</div>
+        <div class="auth-footer">Lenskart Identity Platform</div>
       </aside>
       <main class="auth-panel">
         <div class="auth-theme-bar">
@@ -311,6 +317,19 @@ export function renderLogin() {
     });
   }
 
+  // Google OIDC may redirect here with an MFA / enroll challenge after passwordless Google auth
+  if (pendingMfaChallenge) {
+    renderMfaStep(pendingMfaChallenge, pendingEmail || 'your account');
+    return root;
+  }
+  if (pendingEnrollChallenge) {
+    renderMfaEnrollStep(pendingEnrollChallenge, pendingEmail || 'your account', {
+      graceActive: false,
+      gracePeriodHours: 24,
+    });
+    return root;
+  }
+
   wireEmailForm(root.querySelector('#step-email'));
   showAuthErrorFromUrl(root.querySelector('#login-error'));
 
@@ -469,9 +488,9 @@ export async function viewHome(me, content, initialTab = 'all') {
 export async function viewMyAccess(content) {
   const wrap = el(`
     <div class="enduser-page enduser-myaccess">
-      <div class="page-header">
+      <div class="page-header page-header--compact">
         <div><h1>My Access</h1><p class="subtitle">Entitlements and roles currently assigned to you</p></div>
-        <a href="#" data-go="request" class="btn btn-primary">Request access</a>
+        <div class="page-header-actions"><a href="#" data-go="request" class="btn btn-primary">Request access</a></div>
       </div>
       <div id="ma-table"><div class="loading-row"><span class="spinner"></span></div></div>
     </div>`);
@@ -503,12 +522,12 @@ export async function viewMyAccess(content) {
 export async function viewRequestAccess(content) {
   const wrap = el(`
     <div class="enduser-page enduser-request">
-      <div class="page-header">
+      <div class="page-header page-header--compact">
         <div><h1>Request Access</h1><p class="subtitle">Browse the application catalog and request access with business justification</p></div>
       </div>
 
       <!-- search + filter bar -->
-      <div class="card ra-filter-card" style="margin-bottom:1.25rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
+      <div class="card ra-filter-card" style="margin-bottom:0;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
         <input class="form-input" id="ra-search" placeholder="Search applications…" style="flex:1;min-width:200px">
         <select class="form-select" id="ra-type" style="width:auto">
           <option value="">All types</option>
@@ -694,7 +713,7 @@ export async function viewRequestAccess(content) {
 export async function viewMyTasks(content) {
   const wrap = el(`
     <div class="enduser-page enduser-tasks">
-      <div class="page-header"><div>
+      <div class="page-header page-header--compact"><div>
         <h1>My Tasks</h1><p class="subtitle">Pending approvals and access review certifications assigned to you</p>
       </div></div>
       <h3 class="section-title">Access request approvals</h3>
@@ -817,7 +836,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
   const validTab = tabs.includes(initialTab) ? initialTab : 'profile';
   const wrap = el(`
     <div class="enduser-page enduser-settings">
-      <div class="page-header"><div><h1>Account</h1><p class="subtitle">Profile, security, sessions and capabilities</p></div></div>
+      <div class="page-header page-header--compact"><div><h1>Account</h1><p class="subtitle">Profile, security, sessions and capabilities</p></div></div>
       <div class="tabs">
         <button class="tab${validTab === 'profile' ? ' active' : ''}" data-tab="profile">Profile</button>
         ${isLocal ? `<button class="tab${validTab === 'security' ? ' active' : ''}" data-tab="security">Security</button>` : ''}
@@ -934,14 +953,27 @@ export async function viewSettings(me, content, initialTab = 'profile') {
         <button class="btn btn-danger" id="mfa-disable" style="margin-left:0.5rem">Disable</button>
         <div id="mfa-action-result" style="margin-top:1rem"></div>
       </div>`;
+      function promptMfaStepUp(actionLabel) {
+        const password = prompt(`Enter your password to ${actionLabel} (leave blank if you signed in with Google):`) ?? '';
+        const code = prompt('Enter a current authenticator or backup code:') ?? '';
+        if (!code.trim()) return null;
+        const body = { code: code.trim() };
+        if (password.trim()) body.currentPassword = password.trim();
+        return body;
+      }
       target.querySelector('#mfa-disable').addEventListener('click', async () => {
         if (!confirm('Disable two-factor authentication?')) return;
-        await api.mfaDisable(); mfa();
+        const body = promptMfaStepUp('disable MFA');
+        if (!body) return;
+        try { await api.mfaDisable(body); mfa(); }
+        catch (err) { alert(err.message); }
       });
       target.querySelector('#mfa-regen').addEventListener('click', async () => {
         if (!confirm('Replace all backup codes? Old codes will stop working.')) return;
+        const body = promptMfaStepUp('regenerate backup codes');
+        if (!body) return;
         try {
-          const r = await api.mfaRegenCodes();
+          const r = await api.mfaRegenCodes(body);
           target.querySelector('#mfa-action-result').innerHTML = `<div class="alert alert-warning"><div>
             <div style="font-weight:600;margin-bottom:0.5rem">Save these backup codes — shown only once</div>
             <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.4rem;font-family:var(--font-mono);font-size:0.9rem">

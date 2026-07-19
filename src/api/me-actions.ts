@@ -19,7 +19,9 @@ import {
   getMfaStatus,
   regenerateBackupCodes,
   startEnrollment,
+  verifyTotp,
 } from '../auth/mfa.js';
+import { enforcePasswordPolicy } from '../services/password-policy.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
@@ -59,6 +61,12 @@ router.put('/password', async (req: Request, res: Response): Promise<void> => {
 
   if (parsed.data.currentPassword === parsed.data.newPassword) {
     res.status(400).json({ error: 'New password must differ from current' });
+    return;
+  }
+
+  const policyErr = await enforcePasswordPolicy(parsed.data.newPassword, { accountId: account.id });
+  if (policyErr) {
+    res.status(400).json({ error: policyErr, code: 'PASSWORD_POLICY' });
     return;
   }
 
@@ -167,12 +175,55 @@ router.post('/mfa/confirm', async (req: Request, res: Response): Promise<void> =
   }
 });
 
+const stepUpSchema = z.object({
+  currentPassword: z.string().min(1).optional(),
+  code:            z.string().min(6).max(8),
+});
+
+async function requireMfaStepUp(req: Request, res: Response): Promise<boolean> {
+  const user = req.user!;
+  const parsed = stepUpSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Password (local accounts) and a current TOTP/backup code are required' });
+    return false;
+  }
+
+  if (user.iss === 'local' || parsed.data.currentPassword) {
+    const account = await queryOne<{ password_hash: string }>(
+      'SELECT password_hash FROM local_accounts WHERE emp_id = ? AND active = 1',
+      [user.empId],
+    );
+    if (!account) {
+      res.status(403).json({ error: 'Password confirmation is required for this account' });
+      return false;
+    }
+    if (!parsed.data.currentPassword) {
+      res.status(400).json({ error: 'Current password is required' });
+      return false;
+    }
+    const ok = await verifyLocalPassword(parsed.data.currentPassword, account.password_hash);
+    if (!ok) {
+      res.status(401).json({ error: 'Current password is incorrect' });
+      return false;
+    }
+  }
+
+  const totpOk = await verifyTotp(user.empId, parsed.data.code);
+  if (!totpOk) {
+    res.status(401).json({ error: 'Invalid verification code' });
+    return false;
+  }
+  return true;
+}
+
 router.post('/mfa/disable', async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireMfaStepUp(req, res))) return;
   await disableMfa(req.user!.empId);
   res.json({ success: true });
 });
 
 router.post('/mfa/regenerate-codes', async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireMfaStepUp(req, res))) return;
   try {
     const codes = await regenerateBackupCodes(req.user!.empId);
     res.json({ backupCodes: codes });

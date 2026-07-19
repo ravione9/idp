@@ -4,14 +4,14 @@
  */
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne } from '../db/connection.js';
 import { sendNotification, dispatchPendingNotifications } from '../services/notification.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('workflows'));
 
 // GET / — list notifications paginated
 router.get('/', asyncHandler(async (req: Request, res: Response) => {

@@ -4,7 +4,7 @@
    Layout: SailPoint top nav + miniOrange-style admin sidebar.
    ============================================================ */
 import { api } from './api.js';
-import { el, esc, initials, persistSearch, syncAppUrl, portalRoleOf, isPortalAdmin, isPortalSuperAdmin } from './ui.js';
+import { el, esc, initials, persistSearch, syncAppUrl, portalRoleOf, isPortalAdmin, isPortalSuperAdmin, hasPortalModule } from './ui.js';
 import { icon } from './icons.js';
 import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import {
@@ -17,12 +17,10 @@ import {
 import {
   viewGroups, viewBulkUsers, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies,
-  viewAppDiscovery,
   viewDirectorySync,
   viewRoles, viewBirthright, viewAppAccessPolicy,
   viewPamResources, viewPamSessions, viewPamVault,
-  viewWorkflowLibrary, viewEventTriggers, viewNotifications,
-  viewSsoReports,
+  viewWorkflowLibrary, viewNotifications,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
   viewAttendanceIga,
 } from './views-stubs.js';
@@ -44,62 +42,59 @@ const ROUTES = {
   settings: { primary: 'settings', label: 'Security',       icon: 'shield',       view: viewSettings },
 
   /* ── Admin > Dashboard ── */
-  dashboard: { primary: 'admin', group: 'Overview', label: 'Dashboard', icon: 'dashboard', admin: true, view: viewDashboard },
+  dashboard: { primary: 'admin', group: 'Overview', label: 'Dashboard', icon: 'dashboard', admin: true, module: 'overview', view: viewDashboard },
 
   /* ── Admin > Identity ── */
-  users:            { primary: 'admin', group: 'Identity', label: 'Users / Identities',  icon: 'user',         admin: true, view: viewUsers },
-  groups:           { primary: 'admin', group: 'Identity', label: 'Groups',              icon: 'users',        admin: true, view: viewGroups },
-  bulkUsers:        { primary: 'admin', group: 'Identity', label: 'Bulk User Import',    icon: 'refresh',      admin: true, view: viewBulkUsers },
-  admins:           { primary: 'admin', group: 'Identity', label: 'Administrators',      icon: 'userShield',   super: true, view: viewAdmins },
-  systemUsers:      { primary: 'admin', group: 'Identity', label: 'System / Privileged', icon: 'userCog',      admin: true, view: viewSystemUsers },
-  identityProfiles: { primary: 'admin', group: 'Identity', label: 'Identity Profiles',   icon: 'identityCard', admin: true, view: viewIdentityProfiles },
+  users:            { primary: 'admin', group: 'Identity', label: 'Users / Identities',  icon: 'user',         admin: true, module: 'identity_users', view: viewUsers },
+  groups:           { primary: 'admin', group: 'Identity', label: 'Groups',              icon: 'users',        admin: true, module: 'identity_groups', view: viewGroups },
+  bulkUsers:        { primary: 'admin', group: 'Identity', label: 'Bulk User Import',    icon: 'refresh',      admin: true, module: 'identity_users', view: viewBulkUsers },
+  admins:           { primary: 'admin', group: 'Identity', label: 'Administrators',      icon: 'userShield',   admin: true, module: 'administrators', view: viewAdmins },
+  identityProfiles: { primary: 'admin', group: 'Identity', label: 'Identity Profiles',   icon: 'identityCard', admin: true, module: 'identity_users', view: viewIdentityProfiles },
+  /* systemUsers / PAM — not available yet (hidden) */
 
   /* ── Admin > Authentication ── */
-  ssoConfig:          { primary: 'admin', group: 'Authentication', label: 'SSO Configuration',   icon: 'key',         admin: true, view: viewAuth },
-  mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', icon: 'fingerprint', admin: true, view: viewMfaMethods },
-  adaptiveAuth:       { primary: 'admin', group: 'Authentication', label: 'Adaptive Auth',       icon: 'adaptive',    admin: true, view: viewAdaptiveAuth },
-  passwordPolicies:   { primary: 'admin', group: 'Authentication', label: 'Password Policies',   icon: 'lock',        admin: true, view: viewPasswordPolicies },
-  /* loginCustomization → branding (ROUTE_REDIRECTS). connectors → directorySync. */
+  ssoConfig:          { primary: 'admin', group: 'Authentication', label: 'SSO Configuration',   icon: 'key',         admin: true, module: 'authentication', view: viewAuth },
+  mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', icon: 'fingerprint', admin: true, module: 'authentication', view: viewMfaMethods },
+  adaptiveAuth:       { primary: 'admin', group: 'Authentication', label: 'Adaptive Auth',       icon: 'adaptive',    admin: true, module: 'authentication', view: viewAdaptiveAuth },
+  passwordPolicies:   { primary: 'admin', group: 'Authentication', label: 'Password Policies',   icon: 'lock',        admin: true, module: 'authentication', view: viewPasswordPolicies },
 
   /* ── Admin > Applications ── */
-  applications: { primary: 'admin', group: 'Applications', label: 'Applications', icon: 'catalog', admin: true, view: viewApplications },
-  appDiscovery: { primary: 'admin', group: 'Applications', label: 'App Discovery',       icon: 'search',  admin: true, view: viewAppDiscovery },
+  applications: { primary: 'admin', group: 'Applications', label: 'Applications', icon: 'catalog', admin: true, module: 'applications', view: viewApplications },
 
   /* ── Admin > Connections ── */
-  directorySync: { primary: 'admin', group: 'Connections', label: 'Directory Sync',       icon: 'refresh', admin: true, view: viewDirectorySync },
+  directorySync: { primary: 'admin', group: 'Connections', label: 'Directory Sync', icon: 'refresh', admin: true, module: 'connections', view: viewDirectorySync },
 
   /* ── Admin > Access Model ── */
-  roles:            { primary: 'admin', group: 'Access Model', label: 'Business Roles',           icon: 'tag',      admin: true, view: viewRoles },
-  birthright:       { primary: 'admin', group: 'Access Model', label: 'Birthright Rules',         icon: 'triangle', admin: true, view: viewBirthright },
-  appAccessPolicy:  { primary: 'admin', group: 'Access Model', label: 'Application Access Policy', icon: 'key',    admin: true, view: viewAppAccessPolicy },
+  roles:            { primary: 'admin', group: 'Access Model', label: 'Business Roles',            icon: 'tag',      admin: true, module: 'access_model', view: viewRoles },
+  birthright:       { primary: 'admin', group: 'Access Model', label: 'Birthright Rules',          icon: 'triangle', admin: true, module: 'access_model', view: viewBirthright },
+  appAccessPolicy:  { primary: 'admin', group: 'Access Model', label: 'Application Access Policy', icon: 'key',      admin: true, module: 'access_model', view: viewAppAccessPolicy },
 
-  /* ── Admin > Privileged Access ── */
-  pamResources: { primary: 'admin', group: 'Privileged Access', label: 'Privileged Resources', icon: 'server',   admin: true, view: viewPamResources },
-  pamSessions:  { primary: 'admin', group: 'Privileged Access', label: 'Privileged Sessions',  icon: 'activity', admin: true, view: viewPamSessions },
-  pamVault:     { primary: 'admin', group: 'Privileged Access', label: 'Credential Vault',     icon: 'vault',    admin: true, view: viewPamVault },
+  /* Privileged Access (PAM) — not designed yet; routes kept for deep-link safety but hidden */
+  pamResources: { primary: 'admin', group: 'Privileged Access', label: 'Privileged Resources', icon: 'server',   admin: true, hidden: true, module: 'pam', view: viewPamResources },
+  pamSessions:  { primary: 'admin', group: 'Privileged Access', label: 'Privileged Sessions',  icon: 'activity', admin: true, hidden: true, module: 'pam', view: viewPamSessions },
+  pamVault:     { primary: 'admin', group: 'Privileged Access', label: 'Credential Vault',     icon: 'vault',    admin: true, hidden: true, module: 'pam', view: viewPamVault },
+  systemUsers:  { primary: 'admin', group: 'Privileged Access', label: 'System / Privileged',  icon: 'userCog',  admin: true, hidden: true, module: 'pam', view: viewSystemUsers },
 
   /* ── Admin > Identity Governance ── */
-  reviews: { primary: 'admin', group: 'Identity Governance', label: 'Certifications',        icon: 'certificate', admin: true, view: viewReviews },
-  sod:     { primary: 'admin', group: 'Identity Governance', label: 'Segregation of Duties', icon: 'split',       admin: true, view: viewSod },
-  risk:    { primary: 'admin', group: 'Identity Governance', label: 'Risk',                  icon: 'alert',       admin: true, view: viewRisk },
-  attendanceIga: { primary: 'admin', group: 'Identity Governance', label: 'Attendance IGA', icon: 'activity', admin: true, view: viewAttendanceIga },
+  reviews: { primary: 'admin', group: 'Identity Governance', label: 'Certifications',        icon: 'certificate', admin: true, module: 'governance', view: viewReviews },
+  sod:     { primary: 'admin', group: 'Identity Governance', label: 'Segregation of Duties', icon: 'split',       admin: true, module: 'governance', view: viewSod },
+  risk:    { primary: 'admin', group: 'Identity Governance', label: 'Risk',                  icon: 'alert',       admin: true, module: 'governance', view: viewRisk },
+  attendanceIga: { primary: 'admin', group: 'Identity Governance', label: 'Attendance IGA', icon: 'activity', admin: true, module: 'governance', view: viewAttendanceIga },
 
   /* ── Admin > Workflows & Automation ── */
-  workflowLibrary: { primary: 'admin', group: 'Workflows', label: 'Workflow Library', icon: 'flow', admin: true, view: viewWorkflowLibrary },
-  eventTriggers:   { primary: 'admin', group: 'Workflows', label: 'Event Triggers',   icon: 'bolt', admin: true, view: viewEventTriggers },
-  notifications:   { primary: 'admin', group: 'Workflows', label: 'Notifications',    icon: 'bell', admin: true, view: viewNotifications },
+  workflowLibrary: { primary: 'admin', group: 'Workflows', label: 'Workflows', icon: 'flow', admin: true, module: 'workflows', view: viewWorkflowLibrary },
+  notifications:   { primary: 'admin', group: 'Workflows', label: 'Notifications', icon: 'bell', admin: true, module: 'workflows', view: viewNotifications },
 
   /* ── Admin > Reports ── */
-  audit:      { primary: 'admin', group: 'Reports', label: 'Audit Log',          icon: 'list',        admin: true, view: viewAudit },
-  ssoReports: { primary: 'admin', group: 'Reports', label: 'SSO Reports',        icon: 'chart',       admin: true, view: viewSsoReports },
-  reports:    { primary: 'admin', group: 'Reports', label: 'Compliance Reports', icon: 'certificate', admin: true, view: viewReports },
+  audit:   { primary: 'admin', group: 'Reports', label: 'Audit & SSO Reports', icon: 'list',        admin: true, module: 'reports', view: viewAudit },
+  reports: { primary: 'admin', group: 'Reports', label: 'Compliance Reports', icon: 'certificate', admin: true, module: 'reports', view: viewReports },
 
   /* ── Admin > Settings ── */
-  generalSettings:  { primary: 'admin', group: 'Settings', label: 'General',         icon: 'cog',         admin: true, view: viewGeneralSettings },
-  branding:         { primary: 'admin', group: 'Settings', label: 'Branding & Login', icon: 'paint',       admin: true, view: viewBranding },
-  license:          { primary: 'admin', group: 'Settings', label: 'License',         icon: 'certificate', super: true, view: viewLicense },
-  tickets:          { primary: 'admin', group: 'Settings', label: 'Tickets',         icon: 'ticket',      admin: true, view: viewTickets },
-  systemHealth:     { primary: 'admin', group: 'Settings', label: 'System Health',   icon: 'pulse',       admin: true, view: viewSystemHealth },
+  generalSettings:  { primary: 'admin', group: 'Settings', label: 'General',         icon: 'cog',         admin: true, module: 'settings', view: viewGeneralSettings },
+  branding:         { primary: 'admin', group: 'Settings', label: 'Branding & Login', icon: 'paint',       admin: true, module: 'settings', view: viewBranding },
+  license:          { primary: 'admin', group: 'Settings', label: 'License',         icon: 'certificate', admin: true, module: 'administrators', view: viewLicense },
+  tickets:          { primary: 'admin', group: 'Settings', label: 'Tickets',         icon: 'ticket',      admin: true, module: 'settings', view: viewTickets },
+  systemHealth:     { primary: 'admin', group: 'Settings', label: 'System Health',   icon: 'pulse',       admin: true, module: 'settings', view: viewSystemHealth },
 };
 
 /* Order of groups in the admin sidebar */
@@ -110,7 +105,7 @@ const ADMIN_GROUPS = [
   'Applications',
   'Connections',
   'Access Model',
-  'Privileged Access',
+  /* Privileged Access omitted — PAM not available yet */
   'Identity Governance',
   'Workflows',
   'Reports',
@@ -149,7 +144,10 @@ function buildShell() {
   const groupMap = new Map();
   for (const [key, r] of Object.entries(ROUTES)) {
     if (r.primary !== 'admin') continue;
+    if (r.hidden) continue;
+    if (r.module === 'pam') continue;
     if (r.super && !isSuper) continue;
+    if (r.module && !hasPortalModule(me, r.module, 'read')) continue;
     if (!groupMap.has(r.group)) groupMap.set(r.group, []);
     groupMap.get(r.group).push({ key, ...r });
   }
@@ -384,35 +382,56 @@ function applyActiveNav() {
    ROUTER
    ---------------------------------------------------------------- */
 const ROUTE_DEFAULT_TABS = {
-  applications:  'catalog',
-  settings:      'profile',
-  home:          'all',
-  audit:         'saml',
-  directorySync: 'sources',
+  applications:    'catalog',
+  settings:        'profile',
+  home:            'all',
+  audit:           'saml',
+  directorySync:   'sources',
+  workflowLibrary: 'definitions',
+  groups:          'directory',
 };
 
 /** Old nav keys that now point at a single live page (bookmarks / deep links). */
 const ROUTE_REDIRECTS = {
   loginCustomization: 'branding',
   connectors: 'directorySync',
+  eventTriggers: 'workflowLibrary',
+  appDiscovery: 'applications',
+  ssoReports: 'audit',
+};
+
+/** Optional default tab when an old key redirects. */
+const ROUTE_REDIRECT_TABS = {
+  eventTriggers: 'triggers',
+  appDiscovery: 'discovery',
+  ssoReports: 'sso',
 };
 
 async function navigate(key, opts = {}) {
   const me = state.me;
-  const explicitTab = 'tab' in opts;
+  let explicitTab = 'tab' in opts;
   let tab = explicitTab ? (opts.tab || null) : null;
 
-  if (ROUTE_REDIRECTS[key]) key = ROUTE_REDIRECTS[key];
+  if (ROUTE_REDIRECTS[key]) {
+    if (!explicitTab && ROUTE_REDIRECT_TABS[key]) {
+      tab = ROUTE_REDIRECT_TABS[key];
+      explicitTab = true;
+    }
+    key = ROUTE_REDIRECTS[key];
+  }
 
   if (APP_ROUTE_ALIASES[key]) {
     tab = tab || APP_ROUTE_ALIASES[key];
     key = 'applications';
+    explicitTab = true;
   }
 
   const route = ROUTES[key];
   if (!route) return;
   if (route.admin && !isPortalAdmin(me)) return;
   if (route.super && !isPortalSuperAdmin(me)) return;
+  if (route.hidden || route.module === 'pam') return;
+  if (route.module && !hasPortalModule(me, route.module, 'read')) return;
 
   state.current = key;
 
@@ -421,6 +440,9 @@ async function navigate(key, opts = {}) {
     tab = state.appsTab;
   } else if (explicitTab) {
     state.routeTab = tab || null;
+  } else if (ROUTE_DEFAULT_TABS[key]) {
+    tab = ROUTE_DEFAULT_TABS[key];
+    state.routeTab = tab;
   } else {
     state.routeTab = null;
     tab = null;
@@ -438,7 +460,7 @@ async function navigate(key, opts = {}) {
     else if (key === 'settings') await route.view(me, content, viewTab);
     else if (key === 'home') await route.view(me, content, viewTab);
     else await route.view(me, content);
-  } else if (key === 'audit') {
+  } else if (key === 'audit' || key === 'workflowLibrary' || key === 'groups') {
     await route.view(content, viewTab);
   } else if (key === 'directorySync') {
     await route.view(content, viewTab, me);

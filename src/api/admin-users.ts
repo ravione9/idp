@@ -14,7 +14,7 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { writebackPassword, ensureWritebackIdentityLinks } from '../services/password-writeback.js';
 import { backfillAdIdentityLinkIfMissing } from '../services/ad-sync.js';
@@ -31,9 +31,10 @@ import {
   regenerateBackupCodes,
 } from '../auth/mfa.js';
 import { PORTAL_ACCESSIBLE_STATES } from '../fsm/states.js';
+import { enforcePasswordPolicy } from '../services/password-policy.js';
 
 const router = Router();
-router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('identity_users'));
 
 function parsePolicyStringArray(raw: unknown): string[] {
   const normalize = (arr: unknown[]): string[] => arr
@@ -125,7 +126,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   const rows = await query<Record<string, unknown>>(
     `SELECT e.emp_id, e.full_name, e.email_corp, e.dept_id, e.employment_type,
             e.ilg_state, e.ilg_state_since, e.hire_date, e.manager_emp_id,
-            CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN') THEN la.role ELSE NULL END AS portal_role,
+            CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN','APP_CONTRIBUTOR','USER_GROUP_MANAGER','CUSTOM') THEN la.role ELSE NULL END AS portal_role,
             la.last_login_at, la.active AS local_active,
             COALESCE(
               GROUP_CONCAT(DISTINCT il.\`system\` ORDER BY il.\`system\` SEPARATOR ','), ''
@@ -164,7 +165,7 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
     `SELECT e.*,
             m.full_name  AS manager_name,
             m.email_corp AS manager_email,
-            CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN') THEN la.role ELSE NULL END AS portal_role,
+            CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN','APP_CONTRIBUTOR','USER_GROUP_MANAGER','CUSTOM') THEN la.role ELSE NULL END AS portal_role,
             la.last_login_at,
             la.active    AS local_active
        FROM employees e
@@ -202,7 +203,7 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
           `SELECT e.*,
                   m.full_name  AS manager_name,
                   m.email_corp AS manager_email,
-                  CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN') THEN la.role ELSE NULL END AS portal_role,
+                  CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN','APP_CONTRIBUTOR','USER_GROUP_MANAGER','CUSTOM') THEN la.role ELSE NULL END AS portal_role,
                   la.last_login_at,
                   la.active    AS local_active
              FROM employees e
@@ -459,6 +460,18 @@ router.post('/local', async (req: Request, res: Response): Promise<void> => {
   }
   const d = parsed.data;
 
+  // Only Super Admins may mint SUPER_ADMIN accounts (prevents operator escalation)
+  if (d.role === 'SUPER_ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
+    res.status(403).json({ error: 'Only Super Admins can create Super Admin accounts', code: 'INSUFFICIENT_ROLE' });
+    return;
+  }
+
+  const policyErr = await enforcePasswordPolicy(d.password);
+  if (policyErr) {
+    res.status(400).json({ error: policyErr, code: 'PASSWORD_POLICY' });
+    return;
+  }
+
   // Check email uniqueness
   const existing = await queryOne<{ c: number }>(
     `SELECT COUNT(*) AS c FROM employees WHERE email_corp = ?`, [d.email],
@@ -510,6 +523,12 @@ router.post('/:empId/reset-password', asyncHandler(async (req: Request, res: Res
   }
   const { newPassword, notifyUser } = parsed.data;
   const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'admin';
+
+  const policyErr = await enforcePasswordPolicy(newPassword);
+  if (policyErr) {
+    res.status(400).json({ error: policyErr, code: 'PASSWORD_POLICY' });
+    return;
+  }
 
   const employee = await queryOne<{ emp_id: string; email_corp: string; role: string | null }>(
     `SELECT emp_id, email_corp, role FROM employees WHERE emp_id = ?`,
@@ -646,10 +665,11 @@ router.post('/:empId/link-identity', async (req: Request, res: Response): Promis
 // PATCH /:empId/role  — assign or revoke portal administrator access
 // ---------------------------------------------------------------------------
 const patchRoleSchema = z.object({
-  role: z.enum(['USER', 'ADMIN', 'SUPER_ADMIN']),
+  /** USER = revoke; otherwise portal role id or system key (ADMIN, APP_CONTRIBUTOR, custom uuid, …) */
+  role: z.string().min(1),
 });
 
-router.patch('/:empId/role', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response): Promise<void> => {
+router.patch('/:empId/role', requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const { empId } = req.params;
   const parsed = patchRoleSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -667,14 +687,20 @@ router.patch('/:empId/role', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(a
     return;
   }
 
-  if (role === 'USER') {
+  if (role === 'USER' || role === 'NONE' || role === 'REVOKE') {
     await revokePortalRole(empId);
-  } else {
-    await assignPortalRole(empId, role, adminId);
+    logger.info({ empId, role: null, adminId }, 'Portal administrator role revoked');
+    res.json({ success: true, empId, portalRole: null });
+    return;
   }
 
-  logger.info({ empId, role, adminId }, 'Portal administrator role updated');
-  res.json({ success: true, empId, portalRole: role === 'USER' ? null : role });
+  try {
+    const assigned = await assignPortalRole(empId, role, adminId);
+    logger.info({ empId, role: assigned.roleKey, roleId: assigned.roleId, adminId }, 'Portal administrator role updated');
+    res.json({ success: true, empId, portalRole: assigned.roleKey, portalRoleId: assigned.roleId });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Assign failed' });
+  }
 }));
 
 // ---------------------------------------------------------------------------

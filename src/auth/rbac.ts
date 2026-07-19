@@ -5,11 +5,21 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
+import {
+  PORTAL_OPERATOR_ROLES,
+  hasModuleAccess,
+  resolvePortalAccess,
+  type PortalAccess,
+} from '../services/portal-roles.js';
 
 // ---------------------------------------------------------------------------
 // Role hierarchy (higher index = broader authority)
 // ---------------------------------------------------------------------------
-export const ROLES = ['EMPLOYEE', 'MANAGER', 'HRBP', 'ADMIN', 'SUPER_ADMIN'] as const;
+export const ROLES = [
+  'EMPLOYEE', 'MANAGER', 'HRBP',
+  'APP_CONTRIBUTOR', 'USER_GROUP_MANAGER', 'CUSTOM',
+  'ADMIN', 'SUPER_ADMIN',
+] as const;
 export type Role = (typeof ROLES)[number];
 
 const ROLE_INDEX: Record<string, number> = Object.fromEntries(
@@ -20,6 +30,12 @@ const ROLE_INDEX: Record<string, number> = Object.fromEntries(
  * Returns true if `userRole` has at least the privilege of `requiredRole`.
  */
 export function roleAtLeast(userRole: string, requiredRole: Role): boolean {
+  // Portal operators satisfy ADMIN for coarse router gates only.
+  // Every admin router MUST also use requirePortalModule() — module R/W is the real ACL.
+  // SUPER_ADMIN-only still requires SUPER_ADMIN (see requireRole).
+  if (requiredRole === 'ADMIN' && PORTAL_OPERATOR_ROLES.has(userRole)) {
+    return true;
+  }
   const userIdx = ROLE_INDEX[userRole] ?? -1;
   const reqIdx  = ROLE_INDEX[requiredRole] ?? 999;
   return userIdx >= reqIdx;
@@ -43,7 +59,17 @@ export function requireRole(...allowedRoles: Role[]) {
       return;
     }
 
-    // Check if the user's role satisfies at least one of the allowed roles
+    const superOnly = allowedRoles.length === 1 && allowedRoles[0] === 'SUPER_ADMIN';
+    if (superOnly && user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({
+        error: 'Forbidden',
+        code: 'INSUFFICIENT_ROLE',
+        required: allowedRoles,
+        got: user.role,
+      });
+      return;
+    }
+
     const hasRole = allowedRoles.some((allowed) => roleAtLeast(user.role, allowed));
     if (!hasRole) {
       res.status(403).json({
@@ -56,6 +82,45 @@ export function requireRole(...allowedRoles: Role[]) {
     }
 
     next();
+  };
+}
+
+/** Attach + enforce per-module portal permissions (PAM modules are never granted). */
+export function requirePortalModule(moduleKey: string) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const user = req.user;
+    if (!user) {
+      res.status(401).json({ error: 'Unauthenticated' });
+      return;
+    }
+    if (moduleKey === 'pam' || moduleKey.startsWith('pam')) {
+      res.status(501).json({
+        error: 'Privileged Access (PAM) is not available yet',
+        code: 'PAM_NOT_AVAILABLE',
+      });
+      return;
+    }
+
+    try {
+      const reqExt = req as Request & { portalAccess?: PortalAccess | null };
+      if (reqExt.portalAccess === undefined) {
+        reqExt.portalAccess = await resolvePortalAccess(user.empId, user.role);
+      }
+      const access = reqExt.portalAccess;
+      const level = ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? 'read' : 'write';
+      if (!hasModuleAccess(access, moduleKey, level)) {
+        res.status(403).json({
+          error: 'Forbidden',
+          code: 'INSUFFICIENT_MODULE',
+          module: moduleKey,
+          required: level,
+        });
+        return;
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
   };
 }
 

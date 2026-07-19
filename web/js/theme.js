@@ -1,21 +1,25 @@
 /* Portal colour themes — persisted in localStorage, applied via data-theme on <html>. */
 
 export const THEMES = [
-  { id: 'light',  label: 'Light',  color: '#2563eb' },
-  { id: 'dark',   label: 'Dark',   color: '#334155' },
-  { id: 'ocean',  label: 'Ocean',  color: '#0891b2' },
-  { id: 'slate',  label: 'Slate',  color: '#475569' },
-  { id: 'violet', label: 'Violet', color: '#7c3aed' },
+  { id: 'light',    label: 'Light' },
+  { id: 'dark',     label: 'Dark' },
+  { id: 'midnight', label: 'Midnight' },
+  { id: 'ocean',    label: 'Ocean' },
+  { id: 'slate',    label: 'Slate' },
+  { id: 'sand',     label: 'Sand' },
+  { id: 'violet',   label: 'Violet' },
 ];
 
 const STORAGE_KEY = 'idp_theme';
 
 const META_COLORS = {
-  light:  '#0f172a',
-  dark:   '#020617',
-  ocean:  '#0f766e',
-  slate:  '#1e293b',
-  violet: '#4c1d95',
+  light:    '#0a1628',
+  dark:     '#020617',
+  midnight: '#030510',
+  ocean:    '#134e4a',
+  slate:    '#1e293b',
+  sand:     '#3d3428',
+  violet:   '#2e1065',
 };
 
 export function getTheme() {
@@ -50,7 +54,7 @@ export function themeOptionsHtml() {
     <button type="button" class="theme-option${t.id === current ? ' active' : ''}"
       data-theme-option="${t.id}" title="${t.label}" aria-label="${t.label} theme"
       aria-checked="${t.id === current}">
-      <span class="theme-swatch" style="background:${t.color}"></span>
+      <span class="theme-swatch" aria-hidden="true"></span>
       <span class="theme-label">${t.label}</span>
     </button>`).join('');
 }

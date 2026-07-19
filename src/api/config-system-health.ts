@@ -4,7 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query } from '../db/connection.js';
 import { redis } from '../auth/session-store.js';
@@ -12,7 +12,7 @@ import logger from '../utils/logger.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('settings'));
 
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   const safeQuery = async <T>(sql: string, params: unknown[] = []): Promise<T[]> => {

@@ -6,7 +6,8 @@ import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
 import { queryOne } from '../db/connection.js';
 import { config, isSamlEnabled } from '../config.js';
-import { ROLES, roleAtLeast } from '../auth/rbac.js';
+import { ROLES } from '../auth/rbac.js';
+import { PORTAL_OPERATOR_ROLES, resolvePortalAccess } from '../services/portal-roles.js';
 
 const router = Router();
 
@@ -28,6 +29,8 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
   const role = user.role;
   const roleIndex = ROLES.indexOf(role as (typeof ROLES)[number]);
   const base = config.app.publicBaseUrl ?? config.saml?.baseUrl;
+  const portalAccess = await resolvePortalAccess(user.empId, role);
+  const canAdmin = !!portalAccess || PORTAL_OPERATOR_ROLES.has(role);
 
   res.json({
     session: {
@@ -35,16 +38,20 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
       email:     user.email,
       iss:       user.iss,
       expiresAt: user.expiresAt,
-      portalRole: role,
+      portalRole: portalAccess?.roleKey ?? role,
+      portalRoleName: portalAccess?.roleName ?? null,
+      portalRoleId: portalAccess?.roleId ?? null,
     },
     employee: emp,
+    portalModules: portalAccess?.modules ?? {},
     capabilities: {
       samlEnabled:     isSamlEnabled(),
-      metadataUrl:     roleAtLeast(role, 'ADMIN') && base ? `${base}/saml/metadata` : null,
+      metadataUrl:     canAdmin && base ? `${base}/saml/metadata` : null,
       canLaunchApps:   isSamlEnabled() && ['ACTIVE', 'REACTIVATED'].includes(emp['ilg_state'] as string),
-      canViewTeam:     roleIndex >= ROLES.indexOf('MANAGER'),
-      canViewDirectory: roleIndex >= ROLES.indexOf('MANAGER'),
-      canAdmin:        roleIndex >= ROLES.indexOf('ADMIN'),
+      canViewTeam:     roleIndex >= ROLES.indexOf('MANAGER') || canAdmin,
+      canViewDirectory: roleIndex >= ROLES.indexOf('MANAGER') || canAdmin,
+      canAdmin,
+      pamAvailable:    false,
     },
   });
 });

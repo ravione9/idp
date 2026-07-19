@@ -106,6 +106,19 @@ router.get(
     const limit  = Math.min(parseInt((req.query['limit']  as string) ?? '50', 10), 200);
     const offset = parseInt((req.query['offset'] as string) ?? '0', 10);
 
+    // Same scope gate as GET /:empId — managers must not read arbitrary history (IDOR)
+    const scope = getEmployeeScope(req);
+    if (scope.sql !== '1=1') {
+      const [{ allowed }] = await query<{ allowed: number }>(
+        `SELECT COUNT(*) AS allowed FROM employees e WHERE e.emp_id = ? AND (${scope.sql})`,
+        [empId, ...scope.params],
+      );
+      if (!allowed) {
+        res.status(403).json({ error: 'Outside your management scope' });
+        return;
+      }
+    }
+
     const rows = await query<Record<string, unknown>>(
       `SELECT id, from_state, to_state, reason_code, evidence, actor, actor_id, origin, ts, workflow_run_id
          FROM state_transitions

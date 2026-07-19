@@ -11,6 +11,7 @@ import { redis } from './session-store.js';
 import type { LilgUser } from './types.js';
 import { parseUserAgent } from '../utils/ua-parser.js';
 import { enrichSessionGeo } from '../utils/ip-geo.js';
+import { timingSafeEqualString } from '../utils/timing-safe.js';
 
 export const COOKIE_NAME = 'idp_sid';
 const SESSION_REDIS_PREFIX = 'idp:session:';
@@ -33,8 +34,8 @@ export function verifySessionCookie(raw: string): string | null {
     .update(id)
     .digest('base64url');
 
-  const ok = crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
-  return ok ? id : null;
+  // Length-safe compare — Buffer.timingSafeEqual throws on mismatched lengths (DoS → 500)
+  return timingSafeEqualString(sig, expected) ? id : null;
 }
 
 async function cacheSession(user: LilgUser): Promise<void> {

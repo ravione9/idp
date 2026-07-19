@@ -37,11 +37,12 @@ import { authenticateAdCorporateUser } from '../services/ad-auth.js';
 import { getClientIp } from '../utils/request-context.js';
 import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
 import { isPortalAccessible } from '../fsm/states.js';
+import { PORTAL_OPERATOR_ROLES } from '../services/portal-roles.js';
 
-const MFA_CHALLENGE_PREFIX        = 'lilg:mfa-challenge:';
-const MFA_ENROLL_CHALLENGE_PREFIX = 'lilg:mfa-enroll-challenge:';
+export const MFA_CHALLENGE_PREFIX        = 'lilg:mfa-challenge:';
+export const MFA_ENROLL_CHALLENGE_PREFIX = 'lilg:mfa-enroll-challenge:';
 const MFA_GRACE_PREFIX            = 'lilg:mfa-grace:';
-const MFA_CHALLENGE_TTL_S         = 300; // 5 min
+export const MFA_CHALLENGE_TTL_S         = 300; // 5 min
 
 const loginSchema = z.object({
   email:    z.string().email(),
@@ -62,7 +63,7 @@ const enrollConfirmSchema = z.object({
   code:              z.string().min(6).max(8),
 });
 
-interface MfaChallenge {
+export interface MfaChallenge {
   empId:     string;
   email:     string;
   role:      string;
@@ -70,14 +71,21 @@ interface MfaChallenge {
   createdAt: number;
   /** True when the adaptive engine returned STEP_UP (MFA + manager-approval hint). */
   stepUp?:   boolean;
+  /** Auth issuer — google challenges skip local account touch. */
+  iss?:      'local' | 'google';
+  sub?:      string;
+  returnTo?: string;
 }
 
-interface MfaEnrollChallenge {
+export interface MfaEnrollChallenge {
   empId:     string;
   email:     string;
   role:      string;
   accountId: number;
   createdAt: number;
+  iss?:      'local' | 'google';
+  sub?:      string;
+  returnTo?: string;
 }
 
 interface MfaPolicyRow {
@@ -93,7 +101,8 @@ interface MfaRequirementContext {
   gracePeriodHours: number;
 }
 
-const ADMIN_MFA_ROLES = new Set(['ADMIN', 'SUPER_ADMIN']);
+/** Any console operator role is subject to enforce_for_admins MFA policy. */
+const ADMIN_MFA_ROLES = PORTAL_OPERATOR_ROLES;
 
 function parsePolicyBoolean(raw: unknown, fallback: boolean): boolean {
   if (typeof raw === 'boolean') return raw;
@@ -150,7 +159,7 @@ function parsePolicyStringArray(raw: unknown): string[] {
   return normalize(trimmed.split(','));
 }
 
-async function getMfaRequirementContext(empId: string): Promise<MfaRequirementContext> {
+export async function getMfaRequirementContext(empId: string): Promise<MfaRequirementContext> {
   const employeeRowsPromise = query<{ mfa_enforced: number }>(
     'SELECT mfa_enforced FROM employees WHERE emp_id = ? LIMIT 1',
     [empId],
@@ -236,22 +245,27 @@ async function issueSessionAndRespond(
   res:     Response,
   req:     Request,
   account: { id: number; emp_id: string; email: string; role: string },
+  opts?: { iss?: 'local' | 'google'; sub?: string; returnTo?: string },
 ): Promise<void> {
+  const iss = opts?.iss ?? 'local';
+  const sub = opts?.sub ?? `local:${account.id}`;
   const sessionId = await createSession({
     empId:     account.emp_id,
     email:     account.email,
     role:      account.role,
-    iss:       'local',
-    sub:       `local:${account.id}`,
+    iss,
+    sub,
     ttlHours:  config.session.ttlCorporateHours,
     ip:        getClientIp(req),
     userAgent: req.get('user-agent') ?? '',
   });
 
-  await touchLocalLogin(account.id);
+  if (iss === 'local' && account.id > 0) {
+    await touchLocalLogin(account.id);
+  }
   setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
-  logger.info({ empId: account.emp_id, email: account.email }, 'Local admin login');
-  res.json({ success: true, redirect: '/' });
+  logger.info({ empId: account.emp_id, email: account.email, iss }, 'Login session issued');
+  res.json({ success: true, redirect: opts?.returnTo || '/' });
 }
 
 export async function localLoginHandler(req: Request, res: Response): Promise<void> {
@@ -423,12 +437,17 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
   await redis.del(key);
   await logAttempt(challenge.email, getClientIp(req), true, 'mfa-ok');
 
+  const sessionOpts: { iss?: 'local' | 'google'; sub?: string; returnTo?: string } = {
+    iss: challenge.iss ?? 'local',
+  };
+  if (challenge.sub) sessionOpts.sub = challenge.sub;
+  if (challenge.returnTo) sessionOpts.returnTo = challenge.returnTo;
   await issueSessionAndRespond(res, req, {
     id:     challenge.accountId,
     emp_id: challenge.empId,
     email:  challenge.email,
     role:   challenge.role,
-  });
+  }, sessionOpts);
 }
 
 async function loadEnrollChallenge(enrollChallengeId: string): Promise<MfaEnrollChallenge | null> {
@@ -484,21 +503,25 @@ export async function localLoginMfaEnrollConfirmHandler(req: Request, res: Respo
     await clearMfaGrace(challenge.empId);
     await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-ok');
 
+    const iss = challenge.iss ?? 'local';
+    const sub = challenge.sub ?? `local:${challenge.accountId}`;
     const sessionId = await createSession({
       empId:     challenge.empId,
       email:     challenge.email,
       role:      challenge.role,
-      iss:       'local',
-      sub:       `local:${challenge.accountId}`,
+      iss,
+      sub,
       ttlHours:  config.session.ttlCorporateHours,
       ip:        getClientIp(req),
       userAgent: req.get('user-agent') ?? '',
     });
 
-    await touchLocalLogin(challenge.accountId);
+    if (iss === 'local' && challenge.accountId > 0) {
+      await touchLocalLogin(challenge.accountId);
+    }
     setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
-    logger.info({ empId: challenge.empId, email: challenge.email }, 'Local login after MFA enrollment');
-    res.json({ success: true, redirect: '/', backupCodes });
+    logger.info({ empId: challenge.empId, email: challenge.email, iss }, 'Login after MFA enrollment');
+    res.json({ success: true, redirect: challenge.returnTo || '/', backupCodes });
   } catch (err) {
     await logAttempt(challenge.email, getClientIp(req), false, 'mfa-enroll-bad-code');
     res.status(400).json({ error: err instanceof Error ? err.message : 'Verification failed' });
@@ -523,6 +546,16 @@ export async function localLoginMfaEnrollDeferHandler(req: Request, res: Respons
   const mfaRequirements = await getMfaRequirementContext(challenge.empId);
   const graceRemainingMs = await getGraceRemainingMs(challenge.empId, mfaRequirements.gracePeriodHours);
   await redis.del(key);
+
+  // Portal operators may not defer MFA — privilege requires enrollment first
+  if (PORTAL_OPERATOR_ROLES.has((challenge.role || '').toUpperCase())) {
+    await logAttempt(challenge.email, getClientIp(req), false, 'mfa-enroll-defer-blocked-operator');
+    res.status(403).json({
+      error: 'Two-factor setup is required for administrator accounts before you can continue.',
+      code: 'MFA_ENROLL_REQUIRED',
+    });
+    return;
+  }
 
   if (graceRemainingMs > 0) {
     await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-deferred-grace');

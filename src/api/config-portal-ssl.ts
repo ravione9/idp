@@ -11,7 +11,7 @@
 import { Router, Request, Response } from 'express';
 import { X509Certificate, createPrivateKey } from 'node:crypto';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { queryOne, execute } from '../db/connection.js';
 import { reloadTlsContext, updateConnectionFlags } from '../services/portal-tls.js';
@@ -19,7 +19,7 @@ import logger from '../utils/logger.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('settings'));
 
 // ---------------------------------------------------------------------------
 // GET / — cert metadata + connection flags  (private key is never returned)
@@ -44,6 +44,7 @@ router.get(
 // ---------------------------------------------------------------------------
 router.post(
   '/',
+  requireRole('SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const { cert_pem, key_pem, ca_pem } = req.body as {
       cert_pem?: string;
@@ -155,6 +156,7 @@ router.post(
 // ---------------------------------------------------------------------------
 router.delete(
   '/',
+  requireRole('SUPER_ADMIN'),
   asyncHandler(async (_req: Request, res: Response) => {
     await execute(
       `UPDATE general_settings
@@ -179,6 +181,7 @@ router.delete(
 // ---------------------------------------------------------------------------
 router.put(
   '/connection',
+  requireRole('SUPER_ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const { portal_https_enabled, portal_allow_http } = req.body as {
       portal_https_enabled?: boolean;

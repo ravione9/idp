@@ -5,7 +5,7 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole, type Role } from '../auth/rbac.js';
+import { requireRole } from '../auth/rbac.js';
 import { config } from '../config.js';
 import {
   countLocalAdmins,
@@ -32,7 +32,8 @@ const createSchema = z.object({
   fullName: z.string().min(1).max(255),
   email:    z.string().email(),
   password: z.string().min(10).max(128),
-  role:     z.enum(['ADMIN', 'SUPER_ADMIN']),
+  /** portal role id or system key */
+  role:     z.string().min(1),
 });
 
 const bootstrapSchema = z.object({
@@ -92,7 +93,7 @@ router.post('/bootstrap', async (req: Request, res: Response): Promise<void> => 
 router.get(
   '/',
   requireAuth,
-  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requireRole('SUPER_ADMIN'),
   async (_req: Request, res: Response): Promise<void> => {
     const data = await listLocalAdmins();
     res.json({ data });
@@ -118,7 +119,7 @@ router.post(
         fullName:  parsed.data.fullName,
         email:     parsed.data.email,
         password:  parsed.data.password,
-        role:      parsed.data.role as Role,
+        role:      parsed.data.role,
         createdBy: req.user!.empId,
       });
 

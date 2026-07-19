@@ -3,7 +3,7 @@
 import { api } from './api.js';
 import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut, persistSearch, syncAppUrl, isPortalSuperAdmin } from './ui.js';
 import { icon as svgIcon } from './icons.js';
-import { viewOidcApps, viewPrebuiltApps } from './views-stubs.js';
+import { viewOidcApps, viewPrebuiltApps, viewAppDiscovery, viewSsoReports } from './views-stubs.js';
 
 // Shared helpers (mirrors views-stubs.js — not yet in a shared module)
 function openModal(html) {
@@ -238,9 +238,10 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
 }
 
 function header(title, subtitle, action = '') {
-  return `<div class="page-header">
+  return `<div class="page-header page-header--compact">
     <div><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div>
-    ${action}</div>`;
+    ${action ? `<div class="page-header-actions">${action}</div>` : ''}
+  </div>`;
 }
 
 function statCard(iconName, label, value, sub = '', cls = 'primary') {
@@ -299,7 +300,7 @@ export async function viewDashboard(content) {
     <td>${a.n}</td>
   </tr>`).join('');
 
-  const wrap = el(`<div>
+  const wrap = el(`<div class="ent-page">
     ${header('Dashboard', 'Overview of your identity and access management deployment')}
 
     <section class="stat-grid">
@@ -330,25 +331,25 @@ export async function viewDashboard(content) {
       </div>
     </div>
 
-    <div class="grid-3">
-      <div class="card" style="grid-column: span 2; min-width:0">
+    <div class="grid-main-side">
+      <div class="card">
         <h2>Recent SSO activity</h2>
         <p class="subtitle" style="margin-bottom:0.75rem">Latest SAML assertions issued by the IdP</p>
-        ${recent ? `<table><thead><tr><th>Time</th><th>Application</th><th>User</th><th>Binding</th></tr></thead><tbody>${recent}</tbody></table>` : `<div class="empty-state"><span class="empty-icon">⌖</span>No SSO assertions yet</div>`}
+        ${recent ? `<div class="table-wrap"><table><thead><tr><th>Time</th><th>Application</th><th>User</th><th>Binding</th></tr></thead><tbody>${recent}</tbody></table></div>` : `<div class="empty-state"><span class="empty-icon">⌖</span>No SSO assertions yet</div>`}
       </div>
       <div class="card">
         <h2>Top apps (7 days)</h2>
-        ${topApps ? `<table><thead><tr><th>App</th><th>Slug</th><th>Logins</th></tr></thead><tbody>${topApps}</tbody></table>` : `<div class="empty-state">No data yet</div>`}
+        ${topApps ? `<div class="table-wrap"><table><thead><tr><th>App</th><th>Slug</th><th>Logins</th></tr></thead><tbody>${topApps}</tbody></table></div>` : `<div class="empty-state">No data yet</div>`}
       </div>
-      <div class="card" style="grid-column: span 3">
-        <h2>System status</h2>
-        <div class="grid-3" style="margin-top:0.75rem">
-          <div class="kv"><div class="k">SAML IdP</div><div class="v">${sys.samlEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-warning">Not configured</span>'}</div></div>
-          <div class="kv"><div class="k">Public base URL</div><div class="v truncate">${esc(sys.publicBaseUrl || '—')}</div></div>
-          <div class="kv"><div class="k">Metadata</div><div class="v">${sys.metadataUrl ? `<a href="${esc(sys.metadataUrl)}" target="_blank">Open</a>` : '—'}</div></div>
-          <div class="kv"><div class="k">Google OIDC</div><div class="v">${sys.googleConfigured ? '<span class="badge badge-success">Configured</span>' : '<span class="badge badge-neutral">Not configured</span>'}</div></div>
-          <div class="kv"><div class="k">Zoho Mail SAML</div><div class="v">${sys.zohoSamlConfigured ? '<span class="badge badge-success">Registered</span>' : '<span class="badge badge-neutral">Not registered</span>'}</div></div>
-        </div>
+    </div>
+    <div class="card" style="margin-top:1rem">
+      <h2>System status</h2>
+      <div class="kv-list" style="margin-top:0.75rem">
+        <div class="kv"><div class="k">SAML IdP</div><div class="v">${sys.samlEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-warning">Not configured</span>'}</div></div>
+        <div class="kv"><div class="k">Public base URL</div><div class="v truncate" title="${esc(sys.publicBaseUrl || '')}">${esc(sys.publicBaseUrl || '—')}</div></div>
+        <div class="kv"><div class="k">Metadata</div><div class="v">${sys.metadataUrl ? `<a href="${esc(sys.metadataUrl)}" target="_blank">Open</a>` : '—'}</div></div>
+        <div class="kv"><div class="k">Google OIDC</div><div class="v">${sys.googleConfigured ? '<span class="badge badge-success">Configured</span>' : '<span class="badge badge-neutral">Not configured</span>'}</div></div>
+        <div class="kv"><div class="k">Zoho Mail SAML</div><div class="v">${sys.zohoSamlConfigured ? '<span class="badge badge-success">Registered</span>' : '<span class="badge badge-neutral">Not registered</span>'}</div></div>
       </div>
     </div>
   </div>`);
@@ -358,15 +359,16 @@ export async function viewDashboard(content) {
 /* ---------- Applications (unified: Catalog + SAML + OIDC) ---------- */
 export async function viewApplications(me, content, initialTab = 'catalog') {
   const tabs = [
-    { id: 'catalog',  label: 'Application Catalog' },
-    { id: 'saml',     label: 'SAML Applications' },
-    { id: 'oidc',     label: 'OIDC / OAuth' },
-    { id: 'prebuilt', label: 'Pre-built Integrations' },
+    { id: 'catalog',   label: 'Application Catalog' },
+    { id: 'saml',      label: 'SAML Applications' },
+    { id: 'oidc',      label: 'OIDC / OAuth' },
+    { id: 'prebuilt',  label: 'Pre-built Integrations' },
+    { id: 'discovery', label: 'App Discovery' },
   ];
   const validTab = tabs.some((t) => t.id === initialTab) ? initialTab : 'catalog';
 
   const wrap = el(`<div>
-    ${header('Applications', 'Application catalog, SAML service providers, OIDC / OAuth clients, and pre-built integrations')}
+    ${header('Applications', 'Catalog, SAML / OIDC clients, pre-built integrations, and shadow-IT discovery')}
     <div class="inline-tabs" id="apps-tabs">
       ${tabs.map((t) => `<button type="button" class="inline-tab${t.id === validTab ? ' active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('')}
     </div>
@@ -374,14 +376,16 @@ export async function viewApplications(me, content, initialTab = 'catalog') {
     <div id="apps-panel-saml" hidden></div>
     <div id="apps-panel-oidc" hidden></div>
     <div id="apps-panel-prebuilt" hidden></div>
+    <div id="apps-panel-discovery" hidden></div>
   </div>`);
   content.replaceChildren(wrap);
 
   const panels = {
-    catalog:  wrap.querySelector('#apps-panel-catalog'),
-    saml:     wrap.querySelector('#apps-panel-saml'),
-    oidc:     wrap.querySelector('#apps-panel-oidc'),
-    prebuilt: wrap.querySelector('#apps-panel-prebuilt'),
+    catalog:   wrap.querySelector('#apps-panel-catalog'),
+    saml:      wrap.querySelector('#apps-panel-saml'),
+    oidc:      wrap.querySelector('#apps-panel-oidc'),
+    prebuilt:  wrap.querySelector('#apps-panel-prebuilt'),
+    discovery: wrap.querySelector('#apps-panel-discovery'),
   };
 
   async function showTab(tabId) {
@@ -406,6 +410,9 @@ export async function viewApplications(me, content, initialTab = 'catalog') {
     } else if (tabId === 'prebuilt' && !panels.prebuilt.dataset.loaded) {
       panels.prebuilt.dataset.loaded = '1';
       await viewPrebuiltApps(panels.prebuilt, { embed: true });
+    } else if (tabId === 'discovery' && !panels.discovery.dataset.loaded) {
+      panels.discovery.dataset.loaded = '1';
+      await viewAppDiscovery(panels.discovery, { embed: true });
     }
   }
 
@@ -1065,29 +1072,30 @@ export async function viewUsers(content) {
 
 /* ---------- Administrators ---------- */
 export async function viewAdmins(content) {
-  const wrap = el(`<div>
+  const wrap = el(`<div class="ent-page">
     ${header(
-      'Administrators',
-      'Grant portal console access to directory users or create a local login account',
+      'Administrators & Roles',
+      'Assign console roles and create custom roles with per-module Read / Write access',
       '<button type="button" class="btn btn-primary btn-sm" id="afd-focus-btn">+ Add from Directory</button>',
     )}
 
-    <!-- ── Add from Directory (primary) ───────────────────────────────── -->
+    <div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">
+      <strong>No Privileged Access (PAM) role</strong> — PAM is not designed yet and cannot be granted.
+      Built-in roles: <strong>Super Admin</strong>, <strong>Admin</strong>, <strong>Application Contributor</strong>, <strong>User and Group Manager</strong>, plus custom roles below.
+    </div>
+
     <div class="card" id="afd-card" style="margin-bottom:1rem;border-left:3px solid var(--primary,#2563eb)">
       <h3 style="margin:0 0 0.25rem;font-size:1rem">Add from Directory</h3>
-      <p class="subtitle" style="margin:0 0 1rem">Search any employee synced from AD or Google and assign portal administrator access.</p>
+      <p class="subtitle" style="margin:0 0 1rem">Search any employee synced from AD or Google and assign a portal role.</p>
       <div id="afd-area">
         <div style="display:flex;gap:0.6rem;align-items:flex-end;flex-wrap:wrap">
           <div class="field" style="flex:1;min-width:220px;margin:0">
             <label>Search employee (name or email)</label>
             <input id="afd-search" class="form-control" placeholder="e.g. mohit.sharma@lenskart.in" autocomplete="off" />
           </div>
-          <div class="field" style="margin:0">
+          <div class="field" style="margin:0;min-width:220px">
             <label>Portal role</label>
-            <select id="afd-role" class="form-select">
-              <option value="ADMIN">Admin</option>
-              <option value="SUPER_ADMIN">Super Admin</option>
-            </select>
+            <select id="afd-role" class="form-select"><option value="">Loading…</option></select>
           </div>
           <button id="afd-btn" class="btn btn-primary" disabled>Assign role</button>
         </div>
@@ -1096,23 +1104,32 @@ export async function viewAdmins(content) {
       </div>
     </div>
 
-    <!-- ── Create brand-new local account ─────────────────────────────── -->
     <details class="card" style="margin-bottom:1rem">
       <summary style="cursor:pointer;font-weight:600">Create new local administrator account</summary>
-      <p class="subtitle" style="margin:0.5rem 0 1rem">Creates a new employee record + password login. Use sparingly — prefer adding from directory.</p>
+      <p class="subtitle" style="margin:0.5rem 0 1rem">Creates a new employee record + password login. Prefer adding from directory.</p>
       <div id="ca-error"></div>
       <form id="ca-form">
         <div class="grid-2">
           <div class="field"><label>Full name</label><input name="fullName" required /></div>
           <div class="field"><label>Email</label><input name="email" type="email" required /></div>
           <div class="field"><label>Password (min 10)</label><input name="password" type="password" minlength="10" required /></div>
-          <div class="field"><label>Role</label><select name="role"><option value="ADMIN">Admin</option><option value="SUPER_ADMIN">Super Admin</option></select></div>
+          <div class="field"><label>Role</label><select name="role" id="ca-role"><option value="">Loading…</option></select></div>
         </div>
         <button type="submit" class="btn btn-primary">Create administrator</button>
       </form>
     </details>
 
-    <!-- ── Administrators table ───────────────────────────────────────── -->
+    <div class="card" style="margin-bottom:1rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap">
+        <div>
+          <h2 style="margin:0">Custom Roles</h2>
+          <p class="subtitle" style="margin:0.35rem 0 0">Create a role and grant module Read / Write. PAM modules are not available.</p>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="cr-new-btn">+ New Custom Role</button>
+      </div>
+      <div id="cr-list" style="margin-top:1rem"><div class="loading-row"><span class="spinner"></span></div></div>
+    </div>
+
     <div class="table-wrap">
       <div class="table-toolbar"><strong id="admins-count">Administrators</strong></div>
       <table><thead><tr><th>Name / Email</th><th>Role</th><th>Type</th><th>Status</th><th>Last login</th><th></th></tr></thead>
@@ -1121,7 +1138,139 @@ export async function viewAdmins(content) {
   </div>`);
   content.replaceChildren(wrap);
 
-  // ── Administrators table ─────────────────────────────────────────────────
+  let portalRoles = [];
+  let portalModules = [];
+
+  function roleOptionsHtml(selected = 'pr-admin') {
+    const system = portalRoles.filter((r) => r.is_system && r.active);
+    const custom = portalRoles.filter((r) => !r.is_system && r.active);
+    return [
+      ...system.map((r) => `<option value="${esc(r.id)}" ${r.id === selected || r.role_key === selected ? 'selected' : ''}>${esc(r.name)}</option>`),
+      custom.length ? `<optgroup label="Custom roles">${custom.map((r) => `<option value="${esc(r.id)}" ${r.id === selected ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</optgroup>` : '',
+    ].join('');
+  }
+
+  function permSummary(perms) {
+    const keys = Object.keys(perms || {}).filter((k) => perms[k].read || perms[k].write);
+    if (!keys.length) return '<span class="muted">No modules</span>';
+    return keys.map((k) => {
+      const p = perms[k];
+      const rw = p.write ? 'R/W' : 'R';
+      return `<span class="badge badge-neutral" style="margin:0.1rem">${esc(k)} ${rw}</span>`;
+    }).join(' ');
+  }
+
+  async function loadRoles() {
+    try {
+      const [rolesRes, modRes] = await Promise.all([
+        api.listPortalRoles(),
+        api.listPortalModules().catch(() => ({ data: [] })),
+      ]);
+      portalRoles = rolesRes.data || [];
+      portalModules = modRes.data || [];
+      wrap.querySelector('#afd-role').innerHTML = roleOptionsHtml('pr-admin');
+      wrap.querySelector('#ca-role').innerHTML = roleOptionsHtml('pr-admin');
+      renderCustomRoles();
+    } catch (err) {
+      wrap.querySelector('#cr-list').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
+  function renderCustomRoles() {
+    const custom = portalRoles.filter((r) => !r.is_system);
+    const system = portalRoles.filter((r) => r.is_system);
+    wrap.querySelector('#cr-list').innerHTML = `
+      <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">Built-in (read-only): ${system.map((r) => esc(r.name)).join(' · ')}</p>
+      ${custom.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Modules</th><th>Status</th><th></th></tr></thead>
+        <tbody>${custom.map((r) => `<tr>
+          <td class="cell-strong">${esc(r.name)}<div class="muted" style="font-size:0.75rem">${esc(r.description || '')}</div></td>
+          <td>${permSummary(r.permissions)}</td>
+          <td>${r.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary cr-edit" data-id="${esc(r.id)}">Edit</button>
+            <button class="btn btn-sm btn-danger cr-del" data-id="${esc(r.id)}">Delete</button>
+          </td>
+        </tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty-state"><p>No custom roles yet. Click "+ New Custom Role" to create one with module Read/Write.</p></div>'}`;
+
+    wrap.querySelectorAll('.cr-edit').forEach((btn) => {
+      btn.addEventListener('click', () => openRoleModal(portalRoles.find((r) => r.id === btn.dataset.id)));
+    });
+    wrap.querySelectorAll('.cr-del').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Delete this custom role?')) return;
+        try { await api.deletePortalRole(btn.dataset.id); await loadRoles(); }
+        catch (e) { alert(e.message); }
+      });
+    });
+  }
+
+  function openRoleModal(existing = null) {
+    const isEdit = !!existing;
+    const perms = existing?.permissions || {};
+    const rows = (portalModules.length
+      ? portalModules
+      : [
+        { key: 'overview', label: 'Overview' }, { key: 'identity_users', label: 'Users / Identities' },
+        { key: 'identity_groups', label: 'Groups' }, { key: 'applications', label: 'Applications' },
+        { key: 'authentication', label: 'Authentication' }, { key: 'connections', label: 'Directory Sync' },
+        { key: 'access_model', label: 'Access Model' }, { key: 'governance', label: 'Identity Governance' },
+        { key: 'workflows', label: 'Workflows' }, { key: 'reports', label: 'Reports' },
+        { key: 'settings', label: 'Settings' }, { key: 'administrators', label: 'Administrators' },
+      ]).map((m) => {
+      const p = perms[m.key] || {};
+      return `<tr>
+        <td>${esc(m.label || m.key)}</td>
+        <td style="text-align:center"><input type="checkbox" class="cr-r" data-mod="${esc(m.key)}" ${p.read || p.write ? 'checked' : ''}></td>
+        <td style="text-align:center"><input type="checkbox" class="cr-w" data-mod="${esc(m.key)}" ${p.write ? 'checked' : ''}></td>
+      </tr>`;
+    }).join('');
+
+    const bd = openModal(`<div class="modal modal-wide"><div class="modal-header"><h2>${isEdit ? 'Edit' : 'New'} Custom Role</h2></div>
+      <div class="modal-body">
+        <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="cr-name" value="${esc(existing?.name || '')}"></div>
+        <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="cr-desc" value="${esc(existing?.description || '')}"></div>
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">Module access — Write implies Read. PAM is not listed (not available).</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Module</th><th>Read</th><th>Write</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>
+        <div id="cr-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="cr-save">${isEdit ? 'Save' : 'Create'}</button>
+        <button class="btn btn-secondary" id="cr-cancel">Cancel</button>
+      </div></div>`);
+
+    bd.querySelectorAll('.cr-w').forEach((w) => {
+      w.addEventListener('change', () => {
+        if (w.checked) {
+          const r = bd.querySelector(`.cr-r[data-mod="${w.dataset.mod}"]`);
+          if (r) r.checked = true;
+        }
+      });
+    });
+    bd.querySelector('#cr-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#cr-save').addEventListener('click', async () => {
+      const name = bd.querySelector('#cr-name').value.trim();
+      if (!name) { bd.querySelector('#cr-err').innerHTML = errHtml('Name is required'); return; }
+      const permissions = [...bd.querySelectorAll('.cr-r')].map((r) => {
+        const w = bd.querySelector(`.cr-w[data-mod="${r.dataset.mod}"]`);
+        return { moduleKey: r.dataset.mod, canRead: r.checked || !!w?.checked, canWrite: !!w?.checked };
+      }).filter((p) => p.canRead || p.canWrite);
+      if (!permissions.length) { bd.querySelector('#cr-err').innerHTML = errHtml('Select at least one module'); return; }
+      try {
+        if (isEdit) await api.updatePortalRole(existing.id, { name, description: bd.querySelector('#cr-desc').value, permissions });
+        else await api.createPortalRole({ name, description: bd.querySelector('#cr-desc').value, permissions });
+        bd.remove();
+        await loadRoles();
+      } catch (e) { bd.querySelector('#cr-err').innerHTML = errHtml(e.message); }
+    });
+  }
+
+  wrap.querySelector('#cr-new-btn').addEventListener('click', () => openRoleModal(null));
+
   async function loadTable() {
     try {
       const r = await api.listLocalAdmins();
@@ -1133,7 +1282,7 @@ export async function viewAdmins(content) {
               <div class="cell-strong">${esc(a.full_name || a.email)}</div>
               <div class="muted" style="font-size:0.75rem">${esc(a.email)}</div>
             </td>
-            <td><span class="badge badge-info">${esc(a.role)}</span></td>
+            <td><span class="badge badge-info">${esc(a.role_name || a.role)}</span></td>
             <td>${a.has_local_account
               ? '<span class="badge badge-neutral">Local</span>'
               : '<span class="badge badge-primary">SSO</span>'}</td>
@@ -1158,7 +1307,7 @@ export async function viewAdmins(content) {
       });
       wrap.querySelectorAll('[data-action="remove"]').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          if (!confirm('Remove admin role from this SSO user? They will become a regular user.')) return;
+          if (!confirm('Remove portal role from this user? They will become a regular user.')) return;
           try { await api.updateUserRole(btn.dataset.emp, 'USER'); loadTable(); }
           catch (err) { alert(err.message); }
         });
@@ -1207,9 +1356,10 @@ export async function viewAdmins(content) {
     searchTimer = setTimeout(async () => {
       try {
         const r = await api.listUsersUnified(q, '', '', 10, 0);
-        const items = (r.data || []).filter(u => !['ADMIN','SUPER_ADMIN'].includes(u.portal_role));
+        const taken = new Set(['ADMIN','SUPER_ADMIN','APP_CONTRIBUTOR','USER_GROUP_MANAGER','CUSTOM']);
+        const items = (r.data || []).filter(u => !taken.has(u.portal_role));
         if (!items.length) {
-          afdResults.innerHTML = `<div class="muted" style="padding:0.4rem 0;font-size:0.85rem">No matching users found (already admins are hidden)</div>`;
+          afdResults.innerHTML = `<div class="muted" style="padding:0.4rem 0;font-size:0.85rem">No matching users found (existing portal operators are hidden)</div>`;
           return;
         }
         afdResults.innerHTML = `<div class="search-dropdown" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;max-height:220px;overflow-y:auto">
@@ -1239,8 +1389,10 @@ export async function viewAdmins(content) {
     afdBtn.disabled = true;
     setMsg('Assigning…');
     try {
-      await api.updateUserRole(selectedEmp.emp_id, afdRole.value);
-      setMsg(`✓ ${selectedEmp.full_name} is now ${afdRole.value.replace('_', ' ')}`);
+      const roleId = afdRole.value;
+      const roleLabel = afdRole.selectedOptions[0]?.textContent || roleId;
+      await api.updateUserRole(selectedEmp.emp_id, roleId);
+      setMsg(`✓ ${selectedEmp.full_name} is now ${roleLabel}`);
       afdSearch.value = '';
       afdResults.innerHTML = '';
       selectedEmp = null;
@@ -1251,7 +1403,6 @@ export async function viewAdmins(content) {
     }
   });
 
-  // ── Create local admin form ──────────────────────────────────────────────
   wrap.querySelector('#ca-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const errEl = wrap.querySelector('#ca-error');
@@ -1260,12 +1411,14 @@ export async function viewAdmins(content) {
       await api.createLocalAdmin(Object.fromEntries(new FormData(e.target)));
       errEl.innerHTML = `<div class="alert alert-success">Administrator created.</div>`;
       e.target.reset();
+      wrap.querySelector('#ca-role').innerHTML = roleOptionsHtml('pr-admin');
       loadTable();
     } catch (err) {
       errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
     }
   });
 
+  await loadRoles();
   loadTable();
 }
 
@@ -1299,62 +1452,93 @@ export async function viewAuth(content) {
   };
   const domainsDisplay = (google?.hostedDomains?.length ? google.hostedDomains : [google?.hostedDomain].filter(Boolean)).join(', ');
 
-  wrap.querySelector('#auth-area').innerHTML = `<div class="grid-3">
-    <div class="card"><h2>SAML 2.0 Identity Provider</h2>
-      <p class="subtitle" style="margin-bottom:1rem">Issues SAML assertions to registered Service Providers</p>
-      <div class="kv-list">
-        <div class="kv"><div class="k">Status</div><div class="v">${s.samlEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-warning">Not configured</span>'}</div></div>
-        <div class="kv"><div class="k">Public base URL</div><div class="v">${esc(s.publicBaseUrl || '—')}</div></div>
-        <div class="kv"><div class="k">Entity ID</div><div class="v truncate" title="${esc(s.entityId || '')}">${esc(s.entityId || '—')}</div></div>
-        <div class="kv"><div class="k">Metadata</div><div class="v">${s.metadataUrl ? `<a href="${esc(s.metadataUrl)}" target="_blank">Open</a>` : '—'}</div></div>
+  wrap.querySelector('#auth-area').innerHTML = `<div class="ent-page">
+    <div class="grid-2 auth-config-row">
+      <div class="ent-panel">
+        <div class="ent-panel-head">
+          <div class="panel-meta">
+            <h2>SAML 2.0 Identity Provider</h2>
+            <p class="subtitle">Issues SAML assertions to registered Service Providers</p>
+          </div>
+        </div>
+        <div class="ent-panel-body">
+          <div class="kv-list">
+            <div class="kv"><div class="k">Status</div><div class="v">${s.samlEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-warning">Not configured</span>'}</div></div>
+            <div class="kv"><div class="k">Public base URL</div><div class="v">${esc(s.publicBaseUrl || '—')}</div></div>
+            <div class="kv"><div class="k">Entity ID</div><div class="v">${esc(s.entityId || '—')}</div></div>
+            <div class="kv"><div class="k">Metadata</div><div class="v">${s.metadataUrl ? `<a href="${esc(s.metadataUrl)}" target="_blank" rel="noopener">Open metadata</a>` : '—'}</div></div>
+          </div>
+          ${!s.samlEnabled ? `<div class="alert alert-warning" style="margin-top:1rem"><div>
+            <div style="font-weight:600;margin-bottom:0.3rem">SAML keys missing</div>
+            Run <code>bash scripts/gen-saml-dev-keys.sh</code>, paste <code>SAML_IDP_PRIVATE_KEY_PEM</code> and <code>SAML_IDP_CERT_PEM</code> into <code>.env</code>, then restart.</div></div>` : ''}
+        </div>
       </div>
-      ${!s.samlEnabled ? `<div class="alert alert-warning" style="margin-top:1rem"><div>
-        <div style="font-weight:500;margin-bottom:0.3rem">SAML keys missing</div>
-        Run <code>bash scripts/gen-saml-dev-keys.sh</code>, paste <code>SAML_IDP_PRIVATE_KEY_PEM</code> and <code>SAML_IDP_CERT_PEM</code> into <code>.env</code>, then restart.</div></div>` : ''}
+      <div class="ent-panel">
+        <div class="ent-panel-head">
+          <div class="panel-meta">
+            <h2>Local password login</h2>
+            <p class="subtitle">Email + password administrators</p>
+          </div>
+        </div>
+        <div class="ent-panel-body">
+          <div class="kv-list">
+            <div class="kv"><div class="k">Endpoint</div><div class="v"><code>POST /auth/local/login</code></div></div>
+            <div class="kv"><div class="k">Master admin</div><div class="v">From <code>MASTER_ADMIN_EMAIL</code> in <code>.env</code></div></div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="card"><h2>Inbound OIDC providers</h2>
-      <p class="subtitle" style="margin-bottom:1rem">Google Workspace federated login for end users</p>
-      <div class="kv-list">
-        <div class="kv"><div class="k">Login endpoint</div><div class="v"><a href="/auth/google">/auth/google</a></div></div>
-        <div class="kv"><div class="k">Redirect URI</div><div class="v"><code>${esc(redirectUri)}</code></div></div>
-        <div class="kv"><div class="k">Configured</div><div class="v">${google?.configured ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-warning">No</span>'}</div></div>
-        <div class="kv"><div class="k">Client ID source</div><div class="v">${sourceLabel('clientId')}</div></div>
-        <div class="kv"><div class="k">Client secret source</div><div class="v">${sourceLabel('clientSecret')}</div></div>
-        <div class="kv"><div class="k">Hosted domains</div><div class="v">${esc(domainsDisplay || '—')}</div></div>
-        <div class="kv"><div class="k">Domain source</div><div class="v">${sourceLabel('hostedDomain')}</div></div>
+    <div class="ent-panel">
+      <div class="ent-panel-head">
+        <div class="panel-meta">
+          <h2>Inbound OIDC providers</h2>
+          <p class="subtitle">Google Workspace federated login for end users</p>
+        </div>
       </div>
-      ${googleLoadError ? `<div class="alert alert-warning" style="margin-top:1rem">${esc(googleLoadError)}</div>` : ''}
-      ${google ? `
-      <form id="auth-google-form" style="margin-top:1rem">
-        <div class="form-group">
-          <label class="form-label">OAuth Client ID</label>
-          <input class="form-input" id="auth-google-client-id" value="${esc(google.clientId || '')}" placeholder="123456.apps.googleusercontent.com">
+      <div class="ent-panel-body">
+        <div class="auth-oidc-split">
+          <div>
+            <div class="kv-list">
+              <div class="kv"><div class="k">Login endpoint</div><div class="v"><code>/auth/google</code></div></div>
+              <div class="kv"><div class="k">Redirect URI</div><div class="v"><code>${esc(redirectUri)}</code></div></div>
+              <div class="kv"><div class="k">Configured</div><div class="v">${google?.configured ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-warning">No</span>'}</div></div>
+              <div class="kv"><div class="k">Client ID source</div><div class="v">${sourceLabel('clientId')}</div></div>
+              <div class="kv"><div class="k">Client secret source</div><div class="v">${sourceLabel('clientSecret')}</div></div>
+              <div class="kv"><div class="k">Hosted domains</div><div class="v">${esc(domainsDisplay || '—')}</div></div>
+              <div class="kv"><div class="k">Domain source</div><div class="v">${sourceLabel('hostedDomain')}</div></div>
+            </div>
+            ${googleLoadError ? `<div class="alert alert-warning" style="margin-top:1rem">${esc(googleLoadError)}</div>` : ''}
+          </div>
+          ${google ? `
+          <div class="config-form-panel">
+            <h3>Google OIDC settings</h3>
+            <form id="auth-google-form">
+              <div class="form-group">
+                <label class="form-label">OAuth Client ID</label>
+                <input class="form-input" id="auth-google-client-id" value="${esc(google.clientId || '')}" placeholder="123456.apps.googleusercontent.com">
+              </div>
+              <div class="form-group">
+                <label class="form-label">OAuth Client Secret</label>
+                <input class="form-input" id="auth-google-client-secret" type="password" placeholder="${google.hasClientSecret ? 'Saved (leave blank to keep current)' : 'GOCSPX-...'}">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Workspace domains</label>
+                <textarea class="form-textarea" id="auth-google-hosted-domain" rows="3" placeholder="lenskart.com&#10;lenskart.in&#10;dealskart.in">${esc((google.hostedDomains?.length ? google.hostedDomains.join('\n') : google.hostedDomain) || '')}</textarea>
+                <p class="form-hint">One domain per line (or comma-separated). Same list as Directory Sync → Google Workspace.</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label">OAuth JSON (optional)</label>
+                <textarea class="form-textarea" id="auth-google-json" rows="4" placeholder='Paste downloaded OAuth client JSON (contains web.client_id + web.client_secret)'></textarea>
+              </div>
+              <div id="auth-google-msg"></div>
+              <button class="btn btn-primary" id="auth-google-save" type="submit">Save Google OIDC Settings</button>
+            </form>
+          </div>` : ''}
         </div>
-        <div class="form-group">
-          <label class="form-label">OAuth Client Secret</label>
-          <input class="form-input" id="auth-google-client-secret" type="password" placeholder="${google.hasClientSecret ? 'Saved (leave blank to keep current)' : 'GOCSPX-...'}">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Workspace domains</label>
-          <textarea class="form-textarea" id="auth-google-hosted-domain" rows="3" placeholder="lenskart.com&#10;lenskart.in&#10;dealskart.in">${esc((google.hostedDomains?.length ? google.hostedDomains.join('\n') : google.hostedDomain) || '')}</textarea>
-          <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">One domain per line (or comma-separated). Same list as Directory Sync → Google Workspace. Used for portal sign-in allowlist.</p>
-        </div>
-        <div class="form-group">
-          <label class="form-label">OAuth JSON (optional)</label>
-          <textarea class="form-textarea" id="auth-google-json" rows="4" placeholder='Paste downloaded OAuth client JSON (contains web.client_id + web.client_secret)'></textarea>
-        </div>
-        <div id="auth-google-msg" style="margin-top:0.6rem"></div>
-        <button class="btn btn-primary" id="auth-google-save" type="submit">Save Google OIDC Settings</button>
-      </form>` : ''}
-      <p class="subtitle">Zoho Mail is consumed as a SAML application — see <a href="#" data-go="applications" data-tab="saml">SAML Applications</a>.</p>
+        <p class="card-footnote">Zoho Mail is consumed as a SAML application — see <a href="#" data-go="applications" data-tab="saml">SAML Applications</a>.</p>
+      </div>
     </div>
-    <div class="card"><h2>Local password login</h2>
-      <p class="subtitle" style="margin-bottom:1rem">Email + password administrators</p>
-      <div class="kv-list">
-        <div class="kv"><div class="k">Endpoint</div><div class="v"><code>POST /auth/local/login</code></div></div>
-        <div class="kv"><div class="k">Master admin</div><div class="v">From <code>MASTER_ADMIN_EMAIL</code> in <code>.env</code></div></div>
-      </div>
-    </div></div>`;
+  </div>`;
   wrap.querySelectorAll('[data-go]').forEach((a) => {
     a.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1405,13 +1589,27 @@ export async function viewAuth(content) {
 
 /* ---------- Audit ---------- */
 export async function viewAudit(content, initialTab = 'saml') {
-  const validTab = initialTab === 'system' ? 'system' : 'saml';
-  const wrap = el(`<div>${header('Audit Logs', 'SSO assertions and tamper-evident system audit trail')}
-    <div class="tabs"><button class="tab${validTab === 'saml' ? ' active' : ''}" data-tab="saml">SSO assertions</button><button class="tab${validTab === 'system' ? ' active' : ''}" data-tab="system">System audit</button></div>
-    <div id="aud"><div class="loading-row"><span class="spinner"></span></div></div></div>`);
+  const tabs = ['saml', 'system', 'sso'];
+  const validTab = tabs.includes(initialTab) ? initialTab : 'saml';
+  const wrap = el(`<div class="ent-page">${header('Audit & SSO Reports', 'SSO assertions, system audit trail, and login analytics')}
+    <div class="inline-tabs" id="audit-tabs" style="margin-bottom:1rem">
+      <button type="button" class="inline-tab${validTab === 'saml' ? ' active' : ''}" data-tab="saml">SSO assertions</button>
+      <button type="button" class="inline-tab${validTab === 'system' ? ' active' : ''}" data-tab="system">System audit</button>
+      <button type="button" class="inline-tab${validTab === 'sso' ? ' active' : ''}" data-tab="sso">SSO Reports</button>
+    </div>
+    <div id="aud-saml" ${validTab !== 'saml' ? 'hidden' : ''}><div class="loading-row"><span class="spinner"></span></div></div>
+    <div id="aud-system" ${validTab !== 'system' ? 'hidden' : ''}></div>
+    <div id="aud-sso" ${validTab !== 'sso' ? 'hidden' : ''}></div>
+  </div>`);
   content.replaceChildren(wrap);
+  const panels = {
+    saml: wrap.querySelector('#aud-saml'),
+    system: wrap.querySelector('#aud-system'),
+    sso: wrap.querySelector('#aud-sso'),
+  };
+
   async function loadSaml() {
-    const t = wrap.querySelector('#aud');
+    const t = panels.saml;
     t.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
     try {
       const r = await api.samlAudit(); const rows = r.data || [];
@@ -1431,7 +1629,7 @@ export async function viewAudit(content, initialTab = 'saml') {
     }
   }
   async function loadSystem() {
-    const t = wrap.querySelector('#aud');
+    const t = panels.system;
     t.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
     try {
       const r = await api.systemAudit(); const rows = r.data || [];
@@ -1442,13 +1640,22 @@ export async function viewAudit(content, initialTab = 'saml') {
         : `<div class="card empty-state">No audit entries yet</div>`;
     } catch (err) { t.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; }
   }
-  function showTab(name) {
-    wrap.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+  async function showTab(name) {
+    wrap.querySelectorAll('#audit-tabs .inline-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+    for (const [id, panel] of Object.entries(panels)) panel.hidden = id !== name;
     syncAppUrl('audit', name, 'saml');
-    if (name === 'saml') loadSaml(); else loadSystem();
+    if (name === 'saml') await loadSaml();
+    else if (name === 'system') await loadSystem();
+    else if (name === 'sso' && !panels.sso.dataset.loaded) {
+      panels.sso.dataset.loaded = '1';
+      await viewSsoReports(panels.sso, { embed: true });
+    }
   }
-  wrap.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => showTab(tab.dataset.tab)));
-  showTab(validTab);
+  wrap.querySelector('#audit-tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-tab]');
+    if (btn) void showTab(btn.dataset.tab);
+  });
+  await showTab(validTab);
 }
 
 /* ---------- Reviews / SoD / Risk / Reports ---------- */

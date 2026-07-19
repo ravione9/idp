@@ -23,6 +23,7 @@ import { ILGState, TransitionActor, TransitionOrigin } from '../fsm/states.js';
 import { RiskEngine } from '../services/risk-engine.js';
 import { getOutboxQueueDepth } from '../utils/outbox.js';
 import logger from '../utils/logger.js';
+import { timingSafeEqualString } from '../utils/timing-safe.js';
 import { runAttendanceIgaPipeline } from '../services/attendance-iga/orchestrator.js';
 import { loadAttendanceIgaConfig } from '../services/attendance-iga/config.js';
 
@@ -34,8 +35,9 @@ const riskEngine = new RiskEngine();
 // Internal token guard middleware
 // ---------------------------------------------------------------------------
 function requireInternalToken(req: Request, res: Response, next: NextFunction): void {
-  const token = req.headers['x-internal-token'];
-  if (!token || token !== config.app.internalToken) {
+  const header = req.headers['x-internal-token'];
+  const token = typeof header === 'string' ? header : '';
+  if (!token || !timingSafeEqualString(token, config.app.internalToken)) {
     res.status(403).json({ error: 'Invalid or missing X-Internal-Token' });
     return;
   }
@@ -172,8 +174,26 @@ router.post('/ingest/truein', async (req: Request, res: Response): Promise<void>
   // Support delta mode via body parameter
   const deltaOnly = Boolean(req.body?.['delta']);
   const sinceDate = req.body?.['since'] as string | undefined;
+  const forceLegacy = Boolean(req.body?.['force']);
 
   try {
+    // When Attendance IGA owns Truein, skip legacy ingest unless explicitly forced.
+    try {
+      const iga = await loadAttendanceIgaConfig();
+      if (iga.enabled && !forceLegacy) {
+        log.info({ durationMs: Date.now() - started }, 'Legacy Truein ingest skipped — Attendance IGA enabled');
+        res.json({
+          success: true,
+          skipped: true,
+          totalIngested: 0,
+          deltaOnly,
+          durationMs: Date.now() - started,
+          reason: 'Attendance IGA is enabled; use that pipeline (admin console or POST /api/internal/attendance-iga/run). Pass force:true to run this legacy ingest anyway.',
+        });
+        return;
+      }
+    } catch { /* config missing → continue legacy path */ }
+
     const trueinBaseUrl = process.env['TRUEIN_API_BASE_URL'] ?? 'https://api.truein.com/v1';
     const trueinApiKey  = process.env['TRUEIN_API_KEY'] ?? '';
 
@@ -227,19 +247,13 @@ router.post('/ingest/truein', async (req: Request, res: Response): Promise<void>
       if (records.length < 500) hasMore = false;
     }
 
-    let attendanceIgaEnabled = false;
-    try {
-      attendanceIgaEnabled = Boolean((await loadAttendanceIgaConfig()).enabled);
-    } catch { /* ignore */ }
-    log.info({ totalIngested, deltaOnly, durationMs: Date.now() - started, attendanceIgaEnabled }, 'True-in ingest complete');
+    log.info({ totalIngested, deltaOnly, forceLegacy, durationMs: Date.now() - started }, 'True-in ingest complete');
     res.json({
       success: true,
       totalIngested,
       deltaOnly,
+      forceLegacy: forceLegacy || undefined,
       durationMs: Date.now() - started,
-      warning: attendanceIgaEnabled
-        ? 'Attendance IGA is also enabled — prefer that pipeline for Truein fetch + suspensions to avoid dual ingest races'
-        : undefined,
     });
   } catch (err) {
     log.error({ err }, 'True-in ingest failed');

@@ -568,14 +568,16 @@ To add a new migration:
 ```
 web/
 ├── index.html        ← single page, loads app.js as ES module
-├── css/styles.css    ← enterprise theme (light, sidebar, cards)
+├── css/styles.css    ← enterprise design system (tokens, shell, primitives, .ent-*)
 └── js/app.js         ← SPA: router, views, API client
 ```
 
+**Visual system** — IBM Plex Sans / Mono; cool slate surfaces; dense headers, tables, and KPIs; shared `.ent-*` panel/toolbar primitives (Attendance IGA `.aig-*` remains compatible). Themes: light / dark / midnight / ocean / slate / sand / violet via `data-theme` (`web/js/theme.js`, `localStorage` key `idp_theme`).
+
 ### 9.2 Layout
 
-- **Login screen** — split: brand hero (gradient) + sign-in card. **Identity-first flow**: email step → password step (avatar + "Not you?" link) → optional MFA verify or MFA enrollment (QR) inline when required. Google SSO button on email step.
-- **Console** — fixed top primary nav + contextual left sidebar (user or admin mode).
+- **Login screen** — split: brand hero (grid + gradient) + sign-in card. **Identity-first flow**: email step → password step (avatar + "Not you?" link) → optional MFA verify or MFA enrollment (QR) inline when required. Google SSO button on email step.
+- **Console** — fixed top primary nav + contextual left sidebar (user or admin mode); content pane uses subtle atmosphere + page-enter motion.
 - **Routing** — SPA state is reflected in the URL: `/?v=<route>` (e.g. `users`, `settings`, `applications`) with optional `?tab=<subtab>` (e.g. `sessions`, `prebuilt`, `favs`). A full page refresh restores the same view and sub-tab. Per-page search/filter text is persisted in `sessionStorage` via `persistSearch()` and re-applied on load.
 - **Admin → Authentication** — shows Google OIDC status and supports SUPER_ADMIN save of Client ID / Secret / Hosted Domain (or pasted OAuth web-client JSON) into DB overrides.
 
@@ -598,16 +600,18 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | Group | Sidebar items |
 |---|---|
 | **Overview** | Dashboard |
-| **Identity** | Users / Identities · Groups · Bulk User Import · Administrators · System / Privileged Users · Identity Profiles |
+| **Identity** | Users / Identities · Groups (Directory · Tag Groups) · Bulk User Import · Administrators *(SUPER_ADMIN)* · System / Privileged Users *(SUPER_ADMIN / PAM)* · Identity Profiles |
 | **Authentication** | SSO Configuration · Strong Auth Methods · Adaptive Auth · Password Policies |
-| **Applications** | Application Catalog · SAML Applications · OIDC / OAuth · App Discovery |
+| **Applications** | Applications (tabs: Catalog · SAML · OIDC · Pre-built · App Discovery) |
 | **Connections** | Directory Sync (Connectors redirects here) |
 | **Access Model** | Business Roles · Birthright Rules · Application Access Policy |
-| **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault |
+| **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault — **SUPER_ADMIN only** (portal `ADMIN` excludes PAM) |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
-| **Workflows** | Workflow Library · Event Triggers · Notifications |
-| **Reports** | Audit Log · SSO Reports · Compliance Reports |
+| **Workflows** | Workflows (tabs: Definitions · Event Triggers · Run History) · Notifications |
+| **Reports** | Audit & SSO Reports (tabs: SSO assertions · System audit · SSO Reports) · Compliance Reports |
 | **Settings** | General · Branding & Login · License · Tickets · System Health |
+
+**Merged / redirected routes** (bookmarks still work): `loginCustomization`→`branding`, `connectors`→`directorySync`, `eventTriggers`→`workflowLibrary?tab=triggers`, `appDiscovery`→`applications?tab=discovery`, `ssoReports`→`audit?tab=sso`. Groups also exposes Tag Groups under `/?v=groups&tab=tags`.
 
 **Account** (everyone) — top-right profile dropdown
 - Account settings (Profile / Security / Sessions / Two-factor)
@@ -620,6 +624,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/login` — login form (no auth)
 - `/` — console (default landing: admins → Dashboard, others → My Apps)
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
+- `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=groups&tab=tags`)
 
 **Attendance IGA admin console** (`/?v=attendanceIga`) — tabs: Dashboard · Configuration · Import History · Approvals · Executions. Pipeline: fetch attendance (REST API with exponential-backoff retry, or CSV upload) → staging validation → employee match (employee ID → email → username) → rule evaluation (uses `leave_records`, `holiday_calendar`, exclusions) → optional approval → connector actions (suspend, disable, revoke sessions, remove apps/groups/roles) → audit + notification → rollback restores snapshot.
 
@@ -759,14 +764,16 @@ docker exec -i idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg < migrations/<
 
 | Surface | Control |
 |---|---|
-| Local password | `bcryptjs` cost 12, ≥10 chars on change, history retained |
-| Session cookie | HMAC-signed, `HttpOnly`, `SameSite=Lax`, `Secure` (configurable for dev) |
-| MFA | TOTP RFC 6238, 30-second window, ±1 step skew tolerance, hashed backup codes |
+| Local password | `bcryptjs` cost 12; default `password_policies` enforced on create/change/reset (complexity + history) |
+| Session cookie | HMAC-signed (length-safe verify), `HttpOnly`, `SameSite=Lax`, `Secure` (configurable for dev). Redis cache always re-checks DB `revoked_at` + live role |
+| MFA | TOTP RFC 6238, ±1 step skew, hashed backup codes. Enforced for local **and Google** login when policy/adaptive requires it. Portal operators cannot defer enrollment. Disable/regen requires password (local) + TOTP step-up |
 | Rate limiting | 10 req / minute / (IP + email) on auth endpoints |
 | Forensics | `auth_attempts` table records every attempt with reason + IP |
-| Internal API | `X-Internal-Token` shared secret (`INTERNAL_TOKEN`) |
+| Internal API | `X-Internal-Token` timing-safe compare (`INTERNAL_TOKEN`). Also required for `/diagz` and `/metrics` |
+| Outbound HTTP | `assertSafeOutboundUrl` blocks loopback/private/link-local/metadata (Attendance IGA, workflow webhooks, event triggers) |
+| XSS | `esc()` / `escAttrJson()` for HTML text and JSON-in-attribute sinks |
 | Audit | Hash-chained `audit_log` (tamper-evident) |
-| RBAC | Role hierarchy: `EMPLOYEE < MANAGER < HRBP < ADMIN < SUPER_ADMIN` |
+| RBAC | Job hierarchy + **server-enforced** portal module R/W via `requirePortalModule` on admin/IGA routers. Coarse `ADMIN` gate still admits portal operators, but module ACL is authoritative. Google OIDC write + portal SSL mutate = **Super Admin only**. Creating `SUPER_ADMIN` accounts = Super Admin only. **PAM is not available** (APIs return 501). |
 | ABAC | `policy-engine.ts` evaluates rules on resource access |
 | Headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` |
 
@@ -854,6 +861,92 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-19 — VAPT hardening (portal RBAC, MFA, SSRF, XSS)
+
+**Why** — Security review found portal module permissions were UI-only (scoped operators had full Admin API power), plus session/MFA/XSS/SSRF gaps.
+
+**What changed:**
+
+- **RBAC** — `requirePortalModule(...)` on all `/api/admin/*` and IGA admin routes; Super Admin–only for Google OIDC PUT, portal SSL mutate, and minting `SUPER_ADMIN` local accounts.
+- **Sessions** — Redis session hit re-validates DB revocation + refreshes role; HMAC cookie verify is length-safe (no `timingSafeEqual` throw).
+- **MFA** — Google OIDC runs the same MFA/adaptive gate as local login; `enforce_for_admins` covers all portal operator roles; operators cannot defer enrollment; MFA disable/regen requires step-up.
+- **Password policy** — default policy enforced on self-service change, admin create, and admin reset.
+- **SSRF** — outbound URL allowlist/denylist for Attendance IGA, workflow webhooks, event triggers.
+- **XSS** — `esc()` escapes `'`; JSON-in-`data-*` uses `escAttrJson`.
+- **Diagnostics** — `/diagz` and `/metrics` require `X-Internal-Token`; internal token compares are timing-safe.
+- **IDOR** — employee state-history applies management scope.
+- **SAML** — AuthnRequest Issuer extraction strips XML comments and prefers Issuer inside `<AuthnRequest>`.
+
+### TBD — 2026-07-19 — SSO Configuration UI polish
+
+**Why** — Authentication / SSO Configuration page looked flat and misaligned (cramped 3-column grid, inconsistent label/value rows, form mixed into read-only panel).
+
+**What changed:**
+
+- **Layout** — SSO page uses `ent-panel` stacks: SAML + local login in a balanced 2-column row; OIDC status and Google settings form in a split panel.
+- **Design system** — upgraded `.kv-list` / `.kv` (bordered rows, uppercase labels, aligned values), pill badges with status dots, structured `.card-head` / `.card-body`, theme-aware content background.
+- **Assets** — cache bust `2026-07-19-ui-pro1`.
+
+### TBD — 2026-07-19 — Portal themes: Midnight + Sand
+
+**Why** — Users requested additional appearance options beyond the original five themes.
+
+**What changed:**
+
+- **Themes** — added **Midnight** (deep indigo dark) and **Sand** (warm cream light) with full token palettes in `web/css/styles.css`.
+- **Picker** — `web/js/theme.js` registers seven themes; swatch previews and `theme-color` meta updated.
+- **Boot** — `web/index.html` inline theme guard accepts `midnight` and `sand`; asset cache bust `2026-07-19-theme2`.
+
+### TBD — 2026-07-19 — Portal module roles (no PAM) + custom R/W
+
+**Why** — Need clear console roles without PAM (not designed yet), plus Application Contributor, User & Group Manager, and custom roles with per-module Read/Write.
+
+**What changed:**
+
+- **Migration `032_portal_module_roles.sql`** — `portal_roles` + `portal_role_permissions`; expands `local_accounts.role`; seeds Super Admin, Admin, Application Contributor, User and Group Manager.
+- **No PAM role** — Privileged Access hidden from sidebar; `/api/admin/pam/*` returns `501 PAM_NOT_AVAILABLE`.
+- **Custom roles** — Super Admin creates roles under Administrators with module Read/Write matrix.
+- **Session** — `/api/me` returns `portalModules` + `portalRoleName`; sidebar/routes gated by module.
+- **API** — `/api/admin/portal-roles` CRUD; `requirePortalModule` middleware.
+
+### TBD — 2026-07-19 — UI layout QC (License vertical text + shared grids)
+
+**Why** — License Edition Details rendered values as vertical single-character columns; same nested-`.kv` / `grid-column:span` pattern risked Branding, Health, Dashboard, and Tickets. Local Docker was also serving a baked image, so host `web/` edits never appeared until remount/rebuild.
+
+**What changed:**
+
+- **Root cause** — nested `.kv` inside `.kv` packed rows into the 160px label track + `word-break:break-all` → character-per-line wrap.
+- **License** — Edition Details uses a real `<table class="lic-table">` (not `.kv` / `.ent-kv`).
+- **CSS** — hardened `.kv` / `.ent-kv`; new `.grid-main-side` / `.lic-layout`.
+- **Pages** — Branding, System Health, Dashboard system status, Tickets detail, SSO Reports cards.
+- **Local Docker** — `docker-compose.local.yml` mounts `./web:/app/web:ro` so UI edits show on `:8081` without image rebuild.
+- **Assets** — cache bust `2026-07-19-lic-fix1`.
+
+### TBD — 2026-07-18 — Duplicate surface merger (nav + tabs)
+
+**Why** — Several admin pages duplicated the same capability under separate sidebar entries (triggers vs workflows, discovery vs applications, SSO reports vs audit, tag groups vs groups).
+
+**What changed:**
+
+- **Workflows** — Event Triggers merged as a tab under Workflows; old `eventTriggers` redirects to `workflowLibrary?tab=triggers`.
+- **Applications** — App Discovery merged as a tab; old `appDiscovery` redirects to `applications?tab=discovery`.
+- **Audit & SSO Reports** — SSO Reports merged as a tab; old `ssoReports` redirects to `audit?tab=sso`.
+- **Groups** — Tag Groups CRUD under `/?v=groups&tab=tags` (same APIs as Application Access Policy).
+- **Attendance** — when Attendance IGA is enabled, legacy `POST /api/internal/ingest/truein` skips unless `force:true` (pairs with existing risk-scan skip).
+- **Assets** — cache bust `2026-07-18-dup-merge1`.
+
+### TBD — 2026-07-18 — Enterprise UI polish (console-wide design system)
+
+**Why** — Admin and end-user pages looked uneven next to Attendance IGA; the console needed a single professional craft level.
+
+**What changed:**
+
+- **Typography** — IBM Plex Sans + IBM Plex Mono; tighter type scale and letter-spacing.
+- **Tokens** — cooler slate palette, smaller radii, quieter shadows, focus rings.
+- **Shell** — denser topnav/sidebar; content atmosphere + page-enter motion; refined tables, badges, modals, buttons, forms, empty states.
+- **Shared primitives** — `.ent-*` panel/toolbar/status classes; AIG styles remain; unified `header()` / `statCard()` markup.
+- **Surfaces** — login hero, License matrix, General Settings stack, end-user portal headers.
 
 ### `eb6eec8` — 2026-07-18 — Full-codebase QC pass (security, CRUD, roles, dual pipelines)
 

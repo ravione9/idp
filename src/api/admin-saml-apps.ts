@@ -6,7 +6,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole } from '../auth/rbac.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { config, isSamlEnabled } from '../config.js';
 import { execute, query } from '../db/connection.js';
 import logger from '../utils/logger.js';
@@ -14,7 +14,7 @@ import { parseSpMetadataXml } from '../saml/parse-sp-metadata.js';
 
 const router = Router();
 
-router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'));
+router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('applications'));
 
 const registerSpSchema = z.object({
   name:            z.string().min(1).max(100),
