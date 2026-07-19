@@ -862,7 +862,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-19 — VAPT hardening (portal RBAC, MFA, SSRF, XSS)
+### 6a35471 — 2026-07-19 — VAPT hardening (portal RBAC, MFA, SSRF, XSS)
 
 **Why** — Security review found portal module permissions were UI-only (scoped operators had full Admin API power), plus session/MFA/XSS/SSRF gaps.
 
