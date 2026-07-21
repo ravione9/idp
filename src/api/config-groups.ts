@@ -28,7 +28,7 @@ const LEGACY_GROUP_LIST_SQL = `
   ORDER BY g.name`;
 
 const GROUP_MEMBERS_SQL = `
-  SELECT m.emp_id, e.full_name, e.email_corp
+  SELECT m.emp_id, e.employee_number, e.full_name, e.email_corp
    FROM group_members m
    JOIN employees e ON e.emp_id = (m.emp_id COLLATE utf8mb4_unicode_ci)
   WHERE m.group_id = ?`;
@@ -85,6 +85,34 @@ async function groupSourceSystem(groupId: string): Promise<string> {
     [groupId],
   );
   return row?.source_system ?? 'LOCAL';
+}
+
+/** Resolve email, employee_number, or emp_id → employee row. */
+async function resolveEmployeeKey(
+  raw: string,
+): Promise<{ emp_id: string; employee_number: string | null } | null> {
+  const key = raw.trim();
+  if (!key) return null;
+  const byEmpId = await queryOne<{ emp_id: string; employee_number: string | null }>(
+    `SELECT emp_id, employee_number FROM employees WHERE emp_id = ? LIMIT 1`,
+    [key],
+  );
+  if (byEmpId) return byEmpId;
+
+  const byNumber = await queryOne<{ emp_id: string; employee_number: string | null }>(
+    `SELECT emp_id, employee_number FROM employees WHERE employee_number = ? LIMIT 1`,
+    [key],
+  );
+  if (byNumber) return byNumber;
+
+  if (key.includes('@')) {
+    const byEmail = await queryOne<{ emp_id: string; employee_number: string | null }>(
+      `SELECT emp_id, employee_number FROM employees WHERE email_corp = ? LIMIT 1`,
+      [key.toLowerCase()],
+    );
+    if (byEmail) return byEmail;
+  }
+  return null;
 }
 
 // POST /sync — pull groups + members from Google / AD connectors (syncGroups config)
@@ -179,6 +207,7 @@ router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 // POST /:id/members — add member (local groups only)
+// Accepts empId, employeeNumber, or email — resolves to employees.emp_id
 router.post('/:id/members', asyncHandler(async (req: Request, res: Response) => {
   const exists = await queryOne<{ id: string }>(
     `SELECT id FROM \`groups\` WHERE id = ?`, [req.params['id']],
@@ -188,14 +217,110 @@ router.post('/:id/members', asyncHandler(async (req: Request, res: Response) => 
     res.status(409).json({ error: 'Members of synced groups are managed by directory sync (Google / AD)' });
     return;
   }
-  const { empId } = req.body as { empId: string };
-  if (!empId) { res.status(400).json({ error: 'empId required' }); return; }
+  const body = req.body as { empId?: string; employeeNumber?: string; email?: string };
+  const resolved = await resolveEmployeeKey(
+    body.empId || body.employeeNumber || body.email || '',
+  );
+  if (!resolved) {
+    res.status(404).json({ error: 'Employee not found — use email, Employee ID, or directory emp_id' });
+    return;
+  }
   const addedBy = (req as unknown as { user?: { empId?: string } }).user?.empId ?? null;
   await execute(
     `INSERT IGNORE INTO group_members (group_id, emp_id, added_by) VALUES (?, ?, ?)`,
-    [req.params['id'], empId, addedBy],
+    [req.params['id'], resolved.emp_id, addedBy],
   );
-  res.status(201).json({ success: true });
+  res.status(201).json({ success: true, empId: resolved.emp_id, employeeNumber: resolved.employee_number });
+}));
+
+// POST /:id/members/bulk — add many members to a local group
+// Body: { members: string[] } — each entry is email, employee_number, or emp_id
+router.post('/:id/members/bulk', asyncHandler(async (req: Request, res: Response) => {
+  const groupId = req.params['id']!;
+  const exists = await queryOne<{ id: string }>(
+    `SELECT id FROM \`groups\` WHERE id = ?`, [groupId],
+  );
+  if (!exists) { res.status(404).json({ error: 'Group not found' }); return; }
+  if ((await groupSourceSystem(groupId)) !== 'LOCAL') {
+    res.status(409).json({ error: 'Members of synced groups are managed by directory sync (Google / AD)' });
+    return;
+  }
+
+  const raw = (req.body as { members?: unknown }).members;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    res.status(400).json({ error: 'members array required' });
+    return;
+  }
+  if (raw.length > 500) {
+    res.status(400).json({ error: 'Maximum 500 members per bulk request' });
+    return;
+  }
+
+  const addedBy = (req as unknown as { user?: { empId?: string } }).user?.empId ?? null;
+  const results: Array<{ input: string; ok: boolean; empId?: string; employeeNumber?: string | null; error?: string }> = [];
+  let added = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const entry of raw) {
+    const input = String(entry ?? '').trim();
+    if (!input) {
+      failed += 1;
+      results.push({ input, ok: false, error: 'Empty value' });
+      continue;
+    }
+    try {
+      const resolved = await resolveEmployeeKey(input);
+      if (!resolved) {
+        failed += 1;
+        results.push({ input, ok: false, error: 'Employee not found' });
+        continue;
+      }
+      const existing = await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM group_members WHERE group_id = ? AND emp_id = ? LIMIT 1`,
+        [groupId, resolved.emp_id],
+      );
+      if (existing) {
+        skipped += 1;
+        results.push({
+          input,
+          ok: true,
+          empId: resolved.emp_id,
+          employeeNumber: resolved.employee_number,
+          error: 'Already a member',
+        });
+        continue;
+      }
+      await execute(
+        `INSERT IGNORE INTO group_members (group_id, emp_id, added_by) VALUES (?, ?, ?)`,
+        [groupId, resolved.emp_id, addedBy],
+      );
+      added += 1;
+      results.push({
+        input,
+        ok: true,
+        empId: resolved.emp_id,
+        employeeNumber: resolved.employee_number,
+      });
+    } catch (err) {
+      failed += 1;
+      results.push({
+        input,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  logger.info({ groupId, added, skipped, failed, by: addedBy }, 'Bulk group members add');
+  res.json({
+    success: failed === 0,
+    added,
+    skipped,
+    failed,
+    processed: results.length,
+    results,
+  });
 }));
 
 // DELETE /:id/members/:empId — remove member (local groups only)
@@ -208,9 +333,13 @@ router.delete('/:id/members/:empId', asyncHandler(async (req: Request, res: Resp
     res.status(409).json({ error: 'Members of synced groups are managed by directory sync (Google / AD)' });
     return;
   }
+  // Allow remove by emp_id or employee_number
+  const key = String(req.params['empId'] || '');
+  const resolved = await resolveEmployeeKey(key);
+  const empId = resolved?.emp_id || key;
   await execute(
     `DELETE FROM group_members WHERE group_id = ? AND emp_id = ?`,
-    [req.params['id'], req.params['empId']],
+    [req.params['id'], empId],
   );
   res.json({ success: true });
 }));

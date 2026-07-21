@@ -1046,7 +1046,7 @@ export async function viewUsers(content) {
         ? rows.map((u) => `<tr>
           <td><div style="display:flex;align-items:center;gap:0.6rem">
             <span class="avatar" style="width:30px;height:30px;font-size:0.7rem">${esc(initials(u.full_name))}</span>
-            <div><div class="cell-strong">${esc(u.full_name)}</div><div class="muted" style="font-size:0.75rem">${esc(u.emp_id)}</div></div>
+            <div><div class="cell-strong">${esc(u.full_name)}</div><div class="muted" style="font-size:0.75rem">${esc(u.employee_number || u.emp_id)}</div></div>
           </div></td>
           <td>${esc(u.email_corp)}</td><td>${esc(u.dept_id || '—')}</td><td>${esc(u.employment_type || '—')}</td>
           <td>${ilgBadge(u.ilg_state)}</td>

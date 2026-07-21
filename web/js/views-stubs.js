@@ -106,13 +106,26 @@ export async function viewGroups(content, initialTab = 'directory') {
           <label class="form-label">Add member</label>
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
             <input class="form-input" id="gm-search" placeholder="Search name or email…" style="flex:1;min-width:180px">
-            <input class="form-input" id="gm-emp" placeholder="Or enter Employee ID" style="width:160px">
+            <input class="form-input" id="gm-emp" placeholder="Employee ID or email" style="width:180px">
             <button class="btn btn-primary" id="gm-add">Add</button>
           </div>
           <div id="gm-pick" style="margin-top:0.5rem"></div>
+        </div>
+        <div class="form-group" style="margin-top:1rem">
+          <label class="form-label">Bulk add members</label>
+          <p class="muted" style="font-size:0.78rem;margin:0 0 0.4rem">Paste emails, Employee IDs, or directory IDs — one per line (or comma-separated). Max 500.</p>
+          <textarea class="form-input" id="gm-bulk" rows="5" placeholder="ravi.verma1@lenskart.in&#10;116970&#10;LOC58DC3A00"></textarea>
+          <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center;flex-wrap:wrap">
+            <button type="button" class="btn btn-primary" id="gm-bulk-add">Bulk add</button>
+            <span class="muted" style="font-size:0.78rem" id="gm-bulk-hint"></span>
+          </div>
         </div>`}
         <div id="gm-err"></div>
       </div><div class="modal-footer"><button class="btn btn-secondary" id="gm-close">Close</button></div></div>`);
+
+    function displayEmpId(m) {
+      return m.employee_number || m.emp_id || '—';
+    }
 
     async function loadMembers() {
       try {
@@ -122,7 +135,11 @@ export async function viewGroups(content, initialTab = 'directory') {
           <tr>
             <td class="cell-strong">${esc(m.full_name || m.emp_id)}</td>
             <td class="muted">${esc(m.email_corp || '—')}</td>
-            <td class="muted">${esc(m.emp_id)}</td>
+            <td>
+              <div class="cell-strong" style="font-size:0.85rem">${esc(displayEmpId(m))}</div>
+              ${m.employee_number && m.emp_id && String(m.employee_number) !== String(m.emp_id)
+                ? `<div class="muted" style="font-size:0.72rem">Dir: ${esc(m.emp_id)}</div>` : ''}
+            </td>
             ${isSynced ? '<td></td>' : `<td><button class="btn btn-sm btn-danger gm-rm" data-emp="${esc(m.emp_id)}">Remove</button></td>`}
           </tr>`).join('')
           : `<tr><td colspan="4"><p class="muted">No members yet.</p></td></tr>`;
@@ -152,11 +169,15 @@ export async function viewGroups(content, initialTab = 'directory') {
           if (q.length < 2) { pick.innerHTML = ''; return; }
           try {
             const users = norm(await api.listUsersUnified(q, 'ACTIVE', '', 15));
-            pick.innerHTML = users.length ? users.map(u => `
+            pick.innerHTML = users.length ? users.map(u => {
+              const idLabel = u.employee_number || u.emp_id;
+              return `
               <button type="button" class="btn btn-sm btn-secondary gm-pick" style="margin:0.25rem 0.25rem 0 0"
-                data-emp="${esc(u.emp_id)}" data-label="${esc(u.full_name || u.emp_id)}">
-                ${esc(u.full_name || u.emp_id)} <span class="muted">(${esc(u.email_corp || u.emp_id)})</span>
-              </button>`).join('') : '<span class="muted">No users found</span>';
+                data-emp="${esc(u.employee_number || u.emp_id)}" data-label="${esc(u.full_name || u.emp_id)}">
+                ${esc(u.full_name || u.emp_id)}
+                <span class="muted">(${esc(u.email_corp || '')} · ${esc(idLabel)})</span>
+              </button>`;
+            }).join('') : '<span class="muted">No users found</span>';
             pick.querySelectorAll('.gm-pick').forEach(btn => {
               btn.addEventListener('click', () => {
                 bd.querySelector('#gm-emp').value = btn.dataset.emp;
@@ -174,8 +195,49 @@ export async function viewGroups(content, initialTab = 'directory') {
           await api.addGroupMember(groupId, empId);
           bd.querySelector('#gm-emp').value = '';
           bd.querySelector('#gm-search').value = '';
+          bd.querySelector('#gm-err').innerHTML = '';
           await loadMembers(); await load();
         } catch (e) { bd.querySelector('#gm-err').innerHTML = errHtml(e.message); }
+      });
+
+      bd.querySelector('#gm-bulk-add')?.addEventListener('click', async () => {
+        const raw = bd.querySelector('#gm-bulk').value || '';
+        const members = raw
+          .split(/[\n,;]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const errEl = bd.querySelector('#gm-err');
+        const hint = bd.querySelector('#gm-bulk-hint');
+        errEl.innerHTML = '';
+        if (!members.length) {
+          errEl.innerHTML = errHtml('Paste at least one email or Employee ID');
+          return;
+        }
+        const btn = bd.querySelector('#gm-bulk-add');
+        btn.disabled = true;
+        btn.textContent = 'Adding…';
+        if (hint) hint.textContent = `${members.length} entries…`;
+        try {
+          const r = await api.addGroupMembersBulk(groupId, members);
+          const msg = `Added ${r.added || 0}`
+            + (r.skipped ? `, skipped ${r.skipped}` : '')
+            + (r.failed ? `, failed ${r.failed}` : '');
+          if (hint) hint.textContent = msg;
+          if (r.failed) {
+            const fails = (r.results || []).filter((x) => !x.ok).slice(0, 8)
+              .map((x) => `${esc(x.input)}: ${esc(x.error || 'failed')}`).join('<br>');
+            errEl.innerHTML = `<div class="alert alert-warning">${esc(msg)}<div style="margin-top:0.4rem;font-size:0.8rem">${fails}</div></div>`;
+          } else {
+            errEl.innerHTML = `<div class="alert alert-success">${esc(msg)}</div>`;
+            bd.querySelector('#gm-bulk').value = '';
+          }
+          await loadMembers(); await load();
+        } catch (e) {
+          errEl.innerHTML = errHtml(e.message || 'Bulk add failed');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Bulk add';
+        }
       });
     }
 
@@ -4838,7 +4900,7 @@ function initUsersTab(panel, me = null) {
       overlay.querySelector('#pp-avatar').textContent = initial;
       overlay.querySelector('#pp-name').textContent   = emp.full_name || empId;
       overlay.querySelector('#pp-sub').textContent    =
-        [emp.emp_id, emp.email_corp, emp.dept_id].filter(Boolean).join('  ·  ');
+        [emp.employee_number || emp.emp_id, emp.email_corp, emp.dept_id].filter(Boolean).join('  ·  ');
 
       const activeSources = profileSourceBadges(emp, links);
       overlay.querySelector('#pp-badges').innerHTML =

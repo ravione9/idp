@@ -556,6 +556,10 @@ To add a new migration:
 | `GET` | `/api/admin/app-access-policy/applications` | Assignable apps (IGA catalog + auto-mirrored SAML SPs) |
 | `GET`/`POST` | `/api/admin/app-access-policy/tag-groups[/:id]` | Tag group CRUD |
 | `POST`/`DELETE` | `/api/admin/app-access-policy/tag-groups/:id/members[/:empId]` | Tag group membership |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/groups[/:id]` | Identity directory groups (local + synced) |
+| `POST`/`DELETE` | `/api/admin/groups/:id/members[/:empId]` | Add/remove member on **local** groups (accepts email, `employee_number`, or `emp_id`) |
+| `POST` | `/api/admin/groups/:id/members/bulk` | Bulk-add members to a **local** group (`{ members: string[] }`, max 500) |
+| `POST` | `/api/admin/groups/sync` | Pull groups/members from Google / AD connectors |
 | `GET`/`POST`/`DELETE` | `/api/admin/app-access-policy/assignments[/:id]` | User, identity-group, or tag-group application grants |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/app-access-policy/workflows[/:id]` | Group access approval workflows |
 | `GET` | `/api/admin/app-access-policy/audit` | Application access policy audit log |
@@ -920,6 +924,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### pending — 2026-07-21 — Consistent Employee ID + bulk local group members
+
+**Why** — UI showed directory `emp_id` (e.g. `LOC58DC3A00`) in Groups / Users while Universal Directory showed HR `employee_number` (e.g. `116970`). Local groups also needed paste-based bulk add.
+
+**What changed:**
+
+- **Display** — Groups members modal, admin Users list, and profile header prefer `employee_number`, with directory `emp_id` as secondary when different.
+- **API** — group member add/remove resolve by email / `employee_number` / `emp_id`; new `POST /api/admin/groups/:id/members/bulk` (max 500).
+- **UI** — local group Manage Members modal gains bulk-add textarea; asset cache `ud3`.
 
 ### `e9fb5e4` — 2026-07-21 — Directory profile view + manual edit + Google attr sync
 

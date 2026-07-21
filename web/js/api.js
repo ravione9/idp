@@ -122,7 +122,8 @@ Object.assign(api, {
   updateGroup:      (id, data) => f(`/api/admin/groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteGroup:      (id) => f(`/api/admin/groups/${id}`, { method: 'DELETE' }),
   addGroupMember:   (id, empId) => f(`/api/admin/groups/${id}/members`, { method: 'POST', body: JSON.stringify({ empId }) }),
-  removeGroupMember:(id, empId) => f(`/api/admin/groups/${id}/members/${empId}`, { method: 'DELETE' }),
+  addGroupMembersBulk: (id, members) => f(`/api/admin/groups/${id}/members/bulk`, { method: 'POST', body: JSON.stringify({ members }) }),
+  removeGroupMember:(id, empId) => f(`/api/admin/groups/${id}/members/${encodeURIComponent(empId)}`, { method: 'DELETE' }),
 
   // Identity Profiles
   listIdentityProfiles:  () => f('/api/admin/identity-profiles'),
