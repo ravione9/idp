@@ -837,16 +837,8 @@ export async function viewMfaMethods(content) {
         return trimmed.split(',').map((v) => v.trim()).filter(Boolean);
       };
       const excludedGroupIds = parseExcludedGroupIds(policy['excluded_group_ids']);
-      const excludedGroupSet = new Set(excludedGroupIds);
-      const groupRows = groups.length
-        ? groups.map((g) => `
-          <label class="mfa-exclude-row" data-label="${esc(String(g.name || g.id).toLowerCase())}"
-            style="display:flex;align-items:center;gap:0.55rem;padding:0.45rem 0.55rem;border-bottom:1px solid var(--border);cursor:pointer">
-            <input type="checkbox" class="mfa-exclude-group" value="${esc(String(g.id))}" ${excludedGroupSet.has(String(g.id)) ? 'checked' : ''}>
-            <span style="font-size:0.85rem">${esc(g.name || g.id)}</span>
-            <span class="muted" style="margin-left:auto;font-size:0.75rem">${esc(g.source_system || 'LOCAL')}</span>
-          </label>`).join('')
-        : `<div class="muted" style="padding:0.55rem;font-size:0.82rem">No groups found. Create/sync groups first in Identity → Groups.</div>`;
+      const groupById = new Map(groups.map((g) => [String(g.id), g]));
+      const excludedIds = new Set(excludedGroupIds.map(String));
 
       const cards = methodDefs.map((m) => {
         const isAllowed = allowedSet.has(m.key);
@@ -1076,13 +1068,28 @@ export async function viewMfaMethods(content) {
             </div>
             <div class="form-group" style="grid-column:1/-1">
               <label class="form-label" style="font-weight:600">Exclude Groups from Policy MFA</label>
-              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Members of selected groups are excluded from global/admin MFA policy. Per-user enforce still applies.</p>
-              <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:center;margin-bottom:0.45rem;flex-wrap:wrap">
-                <input class="form-input" id="policy-exclude-search" placeholder="Search groups..." style="max-width:260px" />
-                <span class="muted" style="font-size:0.78rem"><span id="policy-exclude-count">0</span> groups selected</span>
-              </div>
-              <div id="policy-exclude-list" style="border:1px solid var(--border);border-radius:8px;max-height:210px;overflow:auto;background:var(--surface-2)">
-                ${groupRows}
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Drag groups to the right column (or use the arrows) to exclude them from global/admin MFA policy. Per-user enforce still applies.</p>
+              <div class="mfa-exclude-shuttle" id="mfa-exclude-shuttle" data-empty="${groups.length ? '0' : '1'}">
+                <div class="mfa-exclude-col">
+                  <div class="mfa-exclude-col-head">
+                    <strong>Available groups</strong>
+                    <span class="muted" id="mfa-avail-count">0</span>
+                  </div>
+                  <input class="form-input mfa-exclude-search" id="policy-exclude-search" placeholder="Search available…" autocomplete="off" />
+                  <div class="mfa-exclude-list" id="mfa-avail-list" data-side="available" aria-label="Available groups"></div>
+                </div>
+                <div class="mfa-exclude-actions" aria-hidden="true">
+                  <button type="button" class="btn btn-secondary btn-sm" id="mfa-exclude-add" title="Exclude selected">→</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="mfa-exclude-remove" title="Restore selected">←</button>
+                </div>
+                <div class="mfa-exclude-col">
+                  <div class="mfa-exclude-col-head">
+                    <strong>Excluded from MFA</strong>
+                    <span class="muted"><span id="policy-exclude-count">0</span> selected</span>
+                  </div>
+                  <div class="mfa-exclude-hint muted">Drop groups here</div>
+                  <div class="mfa-exclude-list mfa-exclude-list--target" id="mfa-excl-list" data-side="excluded" aria-label="Excluded groups"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -1116,24 +1123,135 @@ export async function viewMfaMethods(content) {
           <a href="/?v=settings" class="btn btn-secondary">My Enrollment →</a>
         </div>`;
 
+      const availListEl = wrap.querySelector('#mfa-avail-list');
+      const exclListEl = wrap.querySelector('#mfa-excl-list');
       const excludeSearchEl = wrap.querySelector('#policy-exclude-search');
-      const excludeRows = Array.from(wrap.querySelectorAll('.mfa-exclude-row'));
-      const excludeChecks = Array.from(wrap.querySelectorAll('.mfa-exclude-group'));
       const excludeCountEl = wrap.querySelector('#policy-exclude-count');
+      const availCountEl = wrap.querySelector('#mfa-avail-count');
+      const selectedAvail = new Set();
+      const selectedExcl = new Set();
+      let dragGroupId = null;
 
-      function updateExcludeCount() {
-        if (!excludeCountEl) return;
-        excludeCountEl.textContent = String(excludeChecks.filter((cb) => cb.checked).length);
+      function groupLabel(g) {
+        return String(g?.name || g?.id || '');
       }
-      excludeChecks.forEach((cb) => cb.addEventListener('change', updateExcludeCount));
-      excludeSearchEl?.addEventListener('input', () => {
-        const q = excludeSearchEl.value.trim().toLowerCase();
-        excludeRows.forEach((row) => {
-          const label = (row.dataset.label || '').toLowerCase();
-          row.style.display = (!q || label.includes(q)) ? 'flex' : 'none';
+
+      function renderGroupItem(g, side) {
+        const id = String(g.id);
+        const selected = (side === 'available' ? selectedAvail : selectedExcl).has(id);
+        return `<div class="mfa-exclude-item${selected ? ' is-selected' : ''}"
+            draggable="true" data-id="${esc(id)}" data-side="${side}"
+            data-label="${esc(groupLabel(g).toLowerCase())}" role="option" aria-selected="${selected ? 'true' : 'false'}">
+            <span class="mfa-exclude-item-name">${esc(groupLabel(g))}</span>
+            <span class="mfa-exclude-item-src muted">${esc(g.source_system || 'LOCAL')}</span>
+          </div>`;
+      }
+
+      function renderExcludeShuttle() {
+        if (!availListEl || !exclListEl) return;
+        const q = (excludeSearchEl?.value || '').trim().toLowerCase();
+        const available = groups.filter((g) => !excludedIds.has(String(g.id)));
+        const excluded = [...excludedIds]
+          .map((id) => groupById.get(id) || { id, name: `${id} (missing)`, source_system: '—' })
+          .sort((a, b) => groupLabel(a).localeCompare(groupLabel(b)));
+
+        const filteredAvail = available.filter((g) => {
+          if (!q) return true;
+          return groupLabel(g).toLowerCase().includes(q)
+            || String(g.source_system || '').toLowerCase().includes(q);
         });
+
+        availListEl.innerHTML = filteredAvail.length
+          ? filteredAvail.map((g) => renderGroupItem(g, 'available')).join('')
+          : `<div class="mfa-exclude-empty muted">${groups.length ? 'No matching groups' : 'No groups found. Create/sync groups in Identity → Groups.'}</div>`;
+        exclListEl.innerHTML = excluded.length
+          ? excluded.map((g) => renderGroupItem(g, 'excluded')).join('')
+          : `<div class="mfa-exclude-empty muted">Drag groups here to exclude</div>`;
+
+        if (availCountEl) availCountEl.textContent = String(available.length);
+        if (excludeCountEl) excludeCountEl.textContent = String(excluded.length);
+      }
+
+      function moveToExcluded(ids) {
+        ids.forEach((id) => {
+          excludedIds.add(String(id));
+          selectedAvail.delete(String(id));
+        });
+        renderExcludeShuttle();
+      }
+
+      function moveToAvailable(ids) {
+        ids.forEach((id) => {
+          excludedIds.delete(String(id));
+          selectedExcl.delete(String(id));
+        });
+        renderExcludeShuttle();
+      }
+
+      function bindListInteractions(listEl, side) {
+        if (!listEl) return;
+        listEl.addEventListener('click', (e) => {
+          const item = e.target.closest('.mfa-exclude-item');
+          if (!item) return;
+          const id = item.dataset.id;
+          const bag = side === 'available' ? selectedAvail : selectedExcl;
+          if (e.ctrlKey || e.metaKey) {
+            if (bag.has(id)) bag.delete(id); else bag.add(id);
+          } else {
+            bag.clear();
+            bag.add(id);
+          }
+          renderExcludeShuttle();
+        });
+        listEl.addEventListener('dblclick', (e) => {
+          const item = e.target.closest('.mfa-exclude-item');
+          if (!item) return;
+          if (side === 'available') moveToExcluded([item.dataset.id]);
+          else moveToAvailable([item.dataset.id]);
+        });
+        listEl.addEventListener('dragstart', (e) => {
+          const item = e.target.closest('.mfa-exclude-item');
+          if (!item) return;
+          dragGroupId = item.dataset.id;
+          e.dataTransfer.setData('text/plain', dragGroupId);
+          e.dataTransfer.effectAllowed = 'move';
+          item.classList.add('is-dragging');
+        });
+        listEl.addEventListener('dragend', (e) => {
+          const item = e.target.closest('.mfa-exclude-item');
+          item?.classList.remove('is-dragging');
+          dragGroupId = null;
+          availListEl?.classList.remove('is-drop-target');
+          exclListEl?.classList.remove('is-drop-target');
+        });
+        listEl.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          listEl.classList.add('is-drop-target');
+        });
+        listEl.addEventListener('dragleave', (e) => {
+          if (!listEl.contains(e.relatedTarget)) listEl.classList.remove('is-drop-target');
+        });
+        listEl.addEventListener('drop', (e) => {
+          e.preventDefault();
+          listEl.classList.remove('is-drop-target');
+          const id = e.dataTransfer.getData('text/plain') || dragGroupId;
+          if (!id) return;
+          if (side === 'excluded') moveToExcluded([id]);
+          else moveToAvailable([id]);
+        });
+      }
+
+      bindListInteractions(availListEl, 'available');
+      bindListInteractions(exclListEl, 'excluded');
+      excludeSearchEl?.addEventListener('input', () => renderExcludeShuttle());
+      wrap.querySelector('#mfa-exclude-add')?.addEventListener('click', () => {
+        if (selectedAvail.size) moveToExcluded([...selectedAvail]);
       });
-      updateExcludeCount();
+      wrap.querySelector('#mfa-exclude-remove')?.addEventListener('click', () => {
+        if (selectedExcl.size) moveToAvailable([...selectedExcl]);
+      });
+      renderExcludeShuttle();
 
       // ── Save SMTP / Email API / SMS delivery ───────────────────────────────
       function syncEmailTransportUi() {
@@ -1251,9 +1369,7 @@ export async function viewMfaMethods(content) {
       wrap.querySelector('#save-policy-btn').addEventListener('click', async () => {
         const msg = wrap.querySelector('#policy-msg');
         msg.innerHTML = '';
-        const excludedGroups = Array
-          .from(wrap.querySelectorAll('.mfa-exclude-group:checked'))
-          .map((n) => n.value);
+        const excludedGroups = [...excludedIds];
         const allowed_methods = Array
           .from(wrap.querySelectorAll('.policy-method:checked'))
           .map((n) => n.value);
