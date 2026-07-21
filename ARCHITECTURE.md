@@ -926,7 +926,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### pending — 2026-07-21 — Universal Directory users: real totals + pagination
+### `5b11c4a` — 2026-07-21 — Universal Directory users: real totals + pagination
 
 **Why** — Users tab requested `limit=200` and showed `users.length` as KPIs, so a ~7700 Google directory looked like only 200 users.
 
