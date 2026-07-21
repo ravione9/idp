@@ -2397,32 +2397,25 @@ td code, .td-code { font-size: 0.78rem; }
   margin-top: 0.3rem;
 }
 
-.pp-close-x {
-  position: absolute;
-  top: 0.85rem;
-  right: 0.85rem;
-  background: transparent;
-  border: none;
-  font-size: 1.1rem;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  line-height: 1;
-  transition: background 0.15s, color 0.15s;
-}
-.pp-close-x:hover {
-  background: var(--danger-bg, #fff1f2);
-  color: var(--danger, #ef4444);
-}
-
-.pp-lifecycle {
+.pp-actions {
   grid-column: 3;
   grid-row: 1 / 3;
   display: flex;
   flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-end;
+  z-index: 2;
+}
+
+.pp-lifecycle {
+  display: flex;
+  flex-direction: column;
   gap: 0.35rem;
   align-items: flex-end;
+}
+
+#pp-close-x {
+  min-width: 4.5rem;
 }
 
 /* ?? Tab bar ?? */

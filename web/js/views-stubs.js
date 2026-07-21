@@ -4888,8 +4888,6 @@ function initUsersTab(panel, me = null) {
     overlay.className = 'profile-panel-overlay';
     overlay.innerHTML = `
       <div class="profile-panel" id="pp-panel">
-        <button class="pp-close-x" id="pp-close-x" title="Close (Esc)">✕</button>
-
         <!-- ── Header ───────────────────────────────────────────────────────── -->
         <div class="pp-header" id="pp-header">
           <div class="pp-avatar" id="pp-avatar">?</div>
@@ -4898,7 +4896,10 @@ function initUsersTab(panel, me = null) {
             <div class="pp-sub" id="pp-sub"></div>
             <div class="pp-badges" id="pp-badges"></div>
           </div>
-          <div class="pp-lifecycle" id="pp-lifecycle"></div>
+          <div class="pp-actions">
+            <div class="pp-lifecycle" id="pp-lifecycle"></div>
+            <button type="button" class="btn btn-secondary btn-sm" id="pp-close-x" title="Close (Esc)">Close</button>
+          </div>
         </div>
 
         <!-- ── Tab bar ──────────────────────────────────────────────────────── -->
@@ -4923,15 +4924,26 @@ function initUsersTab(panel, me = null) {
       });
     });
 
-    // Close helpers
+    // Close helpers — Close button / Esc only (no outside-click dismiss)
     function closePanel() {
+      document.removeEventListener('keydown', onKey);
       const panel2 = overlay.querySelector('#pp-panel');
+      if (!panel2 || !overlay.isConnected) {
+        overlay.remove();
+        return;
+      }
       panel2.classList.remove('pp-open');
-      panel2.addEventListener('transitionend', () => overlay.remove(), { once: true });
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        overlay.remove();
+      };
+      panel2.addEventListener('transitionend', finish, { once: true });
+      setTimeout(finish, 350);
     }
-    // Do not close on outside click — only ✕ / Esc dismiss the panel.
+    const onKey = (e) => { if (e.key === 'Escape') closePanel(); };
     overlay.querySelector('#pp-close-x').addEventListener('click', closePanel);
-    const onKey = (e) => { if (e.key === 'Escape') { closePanel(); document.removeEventListener('keydown', onKey); } };
     document.addEventListener('keydown', onKey);
 
     // State
