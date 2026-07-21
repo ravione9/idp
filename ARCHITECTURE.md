@@ -913,7 +913,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-21 — Fix MFA policy GET shadowed by `/:empId`
+### `977256f` — 2026-07-21 — Fix MFA policy GET shadowed by `/:empId`
 
 **Why** — Saving excluded groups appeared to work, then the shuttle reset: `GET /api/admin/users/mfa-policy` was matched as `GET /:empId` (`empId=mfa-policy`) → 404 → UI treated policy as empty.
 
