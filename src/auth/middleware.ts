@@ -129,40 +129,51 @@ async function getSessionFromDb(sessionId: string): Promise<LilgUser | null> {
   return user;
 }
 
+/** Resolve portal session from cookie without sending a response (null if absent/invalid). */
+export async function resolveSession(req: Request): Promise<LilgUser | null> {
+  const cookieHeader = req.headers['cookie'] ?? '';
+  const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([^;]+)`));
+  if (!match) return null;
+
+  const sessionId = verifySessionCookie(match[1]!);
+  if (!sessionId) return null;
+
+  let user = await getSessionFromRedis(sessionId);
+  if (!user) {
+    user = await getSessionFromDb(sessionId);
+  }
+  if (!user) return null;
+
+  void query(
+    'UPDATE idp_sessions SET last_active_at = UTC_TIMESTAMP() WHERE session_id = ?',
+    [sessionId],
+  ).catch((err) => logger.warn({ err }, 'Failed to update last_active_at'));
+
+  return user;
+}
+
 // ---------------------------------------------------------------------------
 // requireAuth middleware
 // ---------------------------------------------------------------------------
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   void (async () => {
-    const cookieHeader = req.headers['cookie'] ?? '';
-    const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([^;]+)`));
-    if (!match) {
-      res.status(401).json({ error: 'Unauthenticated', code: 'NO_SESSION' });
-      return;
-    }
-
-    const sessionId = verifySessionCookie(match[1]);
-    if (!sessionId) {
-      res.status(401).json({ error: 'Invalid session cookie', code: 'BAD_SIGNATURE' });
-      return;
-    }
-
-    let user = await getSessionFromRedis(sessionId);
+    const user = await resolveSession(req);
     if (!user) {
-      user = await getSessionFromDb(sessionId);
-    }
-
-    if (!user) {
+      const cookieHeader = req.headers['cookie'] ?? '';
+      const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([^;]+)`));
+      if (!match) {
+        res.status(401).json({ error: 'Unauthenticated', code: 'NO_SESSION' });
+        return;
+      }
+      const sessionId = verifySessionCookie(match[1]!);
+      if (!sessionId) {
+        res.status(401).json({ error: 'Invalid session cookie', code: 'BAD_SIGNATURE' });
+        return;
+      }
       res.clearCookie(COOKIE_NAME);
       res.status(401).json({ error: 'Session expired or revoked', code: 'SESSION_EXPIRED' });
       return;
     }
-
-    // Slide last_active_at in DB (async, non-blocking)
-    void query(
-      'UPDATE idp_sessions SET last_active_at = UTC_TIMESTAMP() WHERE session_id = ?',
-      [sessionId],
-    ).catch((err) => logger.warn({ err }, 'Failed to update last_active_at'));
 
     req.user = user;
     next();

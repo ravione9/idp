@@ -323,6 +323,21 @@ Apps can be registered:
 
 Every assertion issued is recorded in `saml_assertion_log` (sp_id, emp_id, binding, ts). Used by **Audit Logs → SSO assertions**.
 
+### 6.4a OIDC / OAuth 2.0 Authorization Server (OP) — live
+
+This IdP is also an OpenID Provider. Relying parties register in `oidc_clients` (Admin → Applications → OIDC / OAuth). Signing keys reuse the SAML RSA key when present; otherwise an auto-generated key is persisted under `OIDC_KEY_DIR` / `SAML_KEY_DIR`.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /.well-known/openid-configuration` | Discovery document |
+| `GET /.well-known/jwks.json` | Public JWKS (RS256) |
+| `GET /oauth/authorize` | Authorization Code + PKCE; unauthenticated users → login → `/oauth/resume/:id` |
+| `GET /oauth/resume/:pendingId` | Resume authorize after portal sign-in |
+| `POST /oauth/token` | `authorization_code` and `refresh_token` grants; issues JWT access + ID tokens |
+| `GET\|POST /oauth/userinfo` | Bearer access-token claims |
+
+**Admin registry:** `GET/POST/PUT/DELETE /api/admin/oidc-clients`, `POST …/rotate-secret` (module: `authentication`). Secrets are bcrypt-hashed; plaintext shown once on create/rotate. Auth codes and refresh tokens are hashed in `oauth_tokens`; access/ID tokens are short-lived JWTs (not stored).
+
 ### 6.4 Pre-seeded SAML applications
 
 | Application | Slug | Entity ID | ACS URL | Notes |
@@ -497,6 +512,12 @@ To add a new migration:
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
 | `GET`/`PUT` | `/api/admin/general-settings/google-oidc` | Read/update Google inbound OIDC credentials (SUPER_ADMIN) |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/oidc-clients[/:id]` | OIDC RP client registry (redirect URIs, scopes, grants, rotate secret) |
+| `GET` | `/.well-known/openid-configuration` | OIDC discovery (public) |
+| `GET` | `/.well-known/jwks.json` | OIDC JWKS (public) |
+| `GET` | `/oauth/authorize` `/oauth/resume/:id` | OIDC authorize + login resume |
+| `POST` | `/oauth/token` | OIDC token endpoint |
+| `GET`/`POST` | `/oauth/userinfo` | OIDC UserInfo |
 | `GET` | `/api/admin/audit/saml` | SAML assertions log |
 | `GET` | `/api/admin/audit/system` | `audit_log` rows |
 | `GET` | `/api/admin/app-access-policy/summary` | Assignment / workflow / audit counts |
@@ -821,7 +842,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ### Phase 3 — Modern AM
 
-- OIDC issuer endpoints (`/.well-known/openid-configuration`, `/oauth/authorize`, `/oauth/token`, `/oauth/userinfo`) — schema staged in `oidc_clients`, `oauth_tokens`
+- ✅ **OIDC / OAuth 2.0 Authorization Server (OP)** — discovery, JWKS, authorize (code + PKCE), token (code + refresh), UserInfo; admin client registry with edit/rotate (`src/oidc/*`, `/api/admin/oidc-clients`)
 - WebAuthn / passkeys — schema staged in `webauthn_credentials`
 - WS-Federation, header-based SSO (legacy proxy)
 - Adaptive / risk-based MFA step-up (deny / MFA / allow decision)
@@ -861,6 +882,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-21 — OIDC Client Registry + OAuth / OIDC Issuer (OP)
+
+**Why** — Phase 3 AM: apps need this IdP to issue OIDC tokens (not only SAML). Client registry UI existed; issuer routes did not.
+
+**What changed:**
+
+- **OP** — `src/oidc/*`: discovery, JWKS, `/oauth/authorize` (+ login resume), `/oauth/token` (code + refresh, PKCE), `/oauth/userinfo`; RS256 JWT access + ID tokens via `jose`.
+- **Keys** — reuse SAML IdP RSA key when configured; else auto-generate + persist under `OIDC_KEY_DIR`.
+- **Registry** — hardened `/api/admin/oidc-clients` (zod validation, GET by id, edit redirects/scopes/grants); UI edit modal + live endpoint banner.
+- **Docs / roadmap** — §6.4a + Phase 3 item marked live.
 
 ### 6a35471 — 2026-07-19 — VAPT hardening (portal RBAC, MFA, SSRF, XSS)
 

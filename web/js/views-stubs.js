@@ -2264,6 +2264,7 @@ function openOidcWizard(app, opts = {}) {
   const idpAuthorize  = `${origin}/oauth/authorize`;
   const idpToken      = `${origin}/oauth/token`;
   const idpUserinfo   = `${origin}/oauth/userinfo`;
+  const idpJwks       = `${origin}/.well-known/jwks.json`;
   const tips = vendorTips(app.id, app);
 
   const initial = {
@@ -2308,9 +2309,8 @@ function openOidcWizard(app, opts = {}) {
             Open <strong>${esc(app.name)}</strong>'s OAuth / OpenID Connect settings and paste these IdP values.
             Most apps accept the <strong>Discovery URL</strong> alone and fetch the rest automatically.
           </p>
-          <div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">
-            OIDC issuer routes (<code>/oauth/authorize</code>, <code>/oauth/token</code>, …) are on the Phase 3 roadmap.
-            Client registration stores credentials now; full token exchange ships in a follow-up release.
+          <div class="alert alert-success" style="margin-bottom:1rem;font-size:0.85rem">
+            OIDC issuer is <strong>live</strong> — authorization code + PKCE, token, refresh, UserInfo, and JWKS.
           </div>
           <div class="form-group">
             <label class="form-label">Issuer</label>
@@ -2331,6 +2331,10 @@ function openOidcWizard(app, opts = {}) {
           <div class="form-group">
             <label class="form-label">UserInfo Endpoint</label>
             ${readonlyInput(idpUserinfo, 'oidc-userinfo')}
+          </div>
+          <div class="form-group">
+            <label class="form-label">JWKS URI</label>
+            ${readonlyInput(idpJwks, 'oidc-jwks')}
           </div>
         `,
       },
@@ -2533,6 +2537,7 @@ export async function viewOidcApps(content, opts = {}) {
           <td class="muted" style="font-size:0.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(parseJsonArr(c.redirect_uris).join(', '))}">${esc(parseJsonArr(c.redirect_uris).join(', ') || '—')}</td>
           <td>${c.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
           <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary edit-oidc" data-id="${esc(String(c.id))}">Edit</button>
             <button class="btn btn-sm btn-secondary rotate-oidc" data-id="${esc(String(c.id))}" data-name="${esc(c.name||c.client_name||'')}">↻ Rotate</button>
             <button class="btn btn-sm btn-danger del-oidc" data-id="${esc(String(c.id))}">Delete</button>
           </td>
@@ -2540,7 +2545,16 @@ export async function viewOidcApps(content, opts = {}) {
         : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No OIDC clients registered yet — use the Pre-built Integrations tab or register a custom app.</p></div></td></tr>`;
 
       const clientCount = clients.length;
+      const origin = window.location.origin;
       wrap.querySelector('#list-area').innerHTML = `
+        <div class="info-box" style="margin-bottom:1rem;font-size:0.85rem">
+          <strong>Issuer endpoints</strong> —
+          Discovery: <code>${esc(origin)}/.well-known/openid-configuration</code>
+          · Authorize: <code>/oauth/authorize</code>
+          · Token: <code>/oauth/token</code>
+          · UserInfo: <code>/oauth/userinfo</code>
+          · JWKS: <code>/.well-known/jwks.json</code>
+        </div>
         <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem">
           <h2 style="margin:0;font-size:1.05rem;font-weight:700">Registered Clients
             ${clientCount ? `<span class="badge badge-info" style="font-size:0.75rem;margin-left:0.4rem">${clientCount}</span>` : ''}
@@ -2566,7 +2580,72 @@ export async function viewOidcApps(content, opts = {}) {
           } catch(e) { alert(e.message); }
         });
       });
+      wrap.querySelectorAll('.edit-oidc').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          try {
+            const c = await api.getOidcClient(btn.dataset.id);
+            openEditOidcModal(c, async () => await load());
+          } catch (e) { alert(e.message); }
+        });
+      });
     } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
+  }
+
+  function openEditOidcModal(c, onDone) {
+    const uris = parseJsonArr(c.redirect_uris).join('\n');
+    const scopes = parseJsonArr(c.scopes).join(' ');
+    const grants = parseJsonArr(c.grant_types);
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Edit OIDC Client</h2></div>
+      <div class="modal-body">
+        <div class="form-group"><label class="form-label">Display Name</label>
+          <input class="form-input" id="e-name" value="${esc(c.name || '')}"></div>
+        <div class="form-group"><label class="form-label">Client ID</label>
+          <input class="form-input" value="${esc(c.client_id)}" readonly></div>
+        <div class="form-group"><label class="form-label">Redirect URIs (one per line)</label>
+          <textarea class="form-textarea" id="e-uris" rows="4">${esc(uris)}</textarea></div>
+        <div class="form-group"><label class="form-label">Scopes (space-separated)</label>
+          <input class="form-input" id="e-scopes" value="${esc(scopes || 'openid email profile')}"></div>
+        <div class="form-group"><label class="form-label">Grant types</label>
+          <label style="display:block;margin:0.25rem 0"><input type="checkbox" id="e-g-code" ${grants.includes('authorization_code') ? 'checked' : ''}> authorization_code</label>
+          <label style="display:block;margin:0.25rem 0"><input type="checkbox" id="e-g-refresh" ${grants.includes('refresh_token') ? 'checked' : ''}> refresh_token</label>
+        </div>
+        <div class="form-group"><label class="form-label">Status</label>
+          <select class="form-input" id="e-active">
+            <option value="1" ${c.active ? 'selected' : ''}>Active</option>
+            <option value="0" ${!c.active ? 'selected' : ''}>Off</option>
+          </select></div>
+        <div id="e-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="e-cancel">Cancel</button>
+        <button class="btn btn-primary" id="e-save">Save</button>
+      </div>
+    </div>`);
+    bd.querySelector('#e-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#e-save').addEventListener('click', async () => {
+      const errEl = bd.querySelector('#e-err');
+      errEl.innerHTML = '';
+      const redirect_uris = bd.querySelector('#e-uris').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      const scopesArr = bd.querySelector('#e-scopes').value.trim().split(/\s+/).filter(Boolean);
+      const grant_types = [];
+      if (bd.querySelector('#e-g-code').checked) grant_types.push('authorization_code');
+      if (bd.querySelector('#e-g-refresh').checked) grant_types.push('refresh_token');
+      if (!redirect_uris.length) { errEl.innerHTML = `<div class="alert alert-error">At least one redirect URI is required.</div>`; return; }
+      if (!scopesArr.includes('openid')) { errEl.innerHTML = `<div class="alert alert-error">scopes must include openid.</div>`; return; }
+      try {
+        await api.updateOidcClient(c.id, {
+          name: bd.querySelector('#e-name').value.trim(),
+          redirect_uris,
+          scopes: scopesArr,
+          grant_types,
+          active: Number(bd.querySelector('#e-active').value),
+        });
+        bd.remove();
+        if (onDone) onDone();
+      } catch (e) {
+        errEl.innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+      }
+    });
   }
 
   // ── parse JSON-stored arrays (DB stores as JSON strings) ────────────────────

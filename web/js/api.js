@@ -144,6 +144,7 @@ Object.assign(api, {
 
   // OIDC Clients
   listOidcClients:    () => f('/api/admin/oidc-clients'),
+  getOidcClient:      (id) => f(`/api/admin/oidc-clients/${id}`),
   createOidcClient:   (data) => f('/api/admin/oidc-clients', { method: 'POST', body: JSON.stringify(data) }),
   updateOidcClient:   (id, data) => f(`/api/admin/oidc-clients/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteOidcClient:   (id) => f(`/api/admin/oidc-clients/${id}`, { method: 'DELETE' }),

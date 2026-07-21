@@ -42,6 +42,8 @@ import configPasswordPoliciesRouter from './api/config-password-policies.js';
 import configBrandingRouter from './api/config-branding.js';
 import configGeneralSettingsRouter from './api/config-general-settings.js';
 import configOidcClientsRouter from './api/config-oidc-clients.js';
+import oidcRouter from './oidc/router.js';
+import { ensureOidcKeys } from './oidc/keys.js';
 import configPamRouter from './api/config-pam.js';
 import configPortalRolesRouter from './api/config-portal-roles.js';
 import configWorkflowsRouter from './api/config-workflows.js';
@@ -165,6 +167,12 @@ app.post('/auth/local/login/mfa-enroll/defer',    loginRateLimiter, (req, res) =
 app.use('/saml', samlRouter);
 
 // ---------------------------------------------------------------------------
+// OIDC / OAuth 2.0 Authorization Server (OP)
+// Discovery + JWKS + authorize / token / userinfo
+// ---------------------------------------------------------------------------
+app.use('/', oidcRouter);
+
+// ---------------------------------------------------------------------------
 // Public API routes (auth required)
 // ---------------------------------------------------------------------------
 app.use('/api/me',        meRouter);
@@ -280,6 +288,13 @@ async function main(): Promise<void> {
 
   await sessionRedis.connect();
   logger.info('Redis connected');
+
+  try {
+    await ensureOidcKeys();
+    logger.info('OIDC OP signing keys ready');
+  } catch (err) {
+    logger.error({ err }, 'OIDC OP key bootstrap failed — OIDC issuer will not work');
+  }
 
   try {
     await ensureMasterAdminFromEnv();
