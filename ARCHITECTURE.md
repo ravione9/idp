@@ -193,7 +193,7 @@ A bootstrap account is provisioned from `MASTER_ADMIN_EMAIL` + `MASTER_ADMIN_PAS
 
 ### 5.4 MFA (multi-method)
 
-Supported methods (policy-controlled via `mfa_policy.allowed_methods`):
+Supported methods (policy-controlled via `mfa_policy.allowed_methods` + optional per-group `mfa_group_policies`):
 
 | Method | Storage | Login verify |
 |--------|---------|--------------|
@@ -210,9 +210,11 @@ Supported methods (policy-controlled via `mfa_policy.allowed_methods`):
   - adaptive engine returns `MFA` / `STEP_UP`
   - user has any active MFA method
   - user-level enforcement (`employees.mfa_enforced = 1`)
+  - group policy enforce (`mfa_group_policies.enforce = 1` for a group the user belongs to)
   - global policy `mfa_policy.global_enforce = true`
   - admin policy `mfa_policy.enforce_for_admins = true` and role is `ADMIN` / `SUPER_ADMIN`
-- Group exclusions: `mfa_policy.excluded_group_ids` bypasses **global/admin policy MFA** only.
+- Group exclusions: `mfa_policy.excluded_group_ids` bypasses **global/admin policy MFA** only (not per-user or group-enforce).
+- **Group method policies** (`mfa_group_policies`, migration `038`): Admin → Strong Auth Methods → **MFA Policies** tab. Global `allowed_methods` is the ceiling; if the user is in any group with an active policy, allowed methods = intersection(global, union(group policies)). Users with no matching group policy use global methods only.
 - Login flow when MFA is enabled:
   1. `POST /auth/local/login {email, password}` → `{mfaRequired:true, challengeId, availableMethods[]}`.
   2. User verifies via TOTP/backup (`POST /auth/local/login/mfa-verify`), email/SMS OTP (`POST /auth/local/login/mfa-send-otp` then verify), or passkey (`POST /auth/local/login/mfa-webauthn/*`).
@@ -391,6 +393,7 @@ To add a new migration:
 | `local_accounts` | Email/password admin accounts |
 | `local_password_history` | Password change history |
 | `mfa_secrets` | TOTP secret + hashed backup codes |
+| `mfa_group_policies` | **(038)** Per-group allowed MFA methods + optional enforce |
 | `auth_attempts` | Every login attempt (forensics) |
 | `lilg_sessions` | Issued sessions |
 | `lilg_schema_migrations` | Migration tracking |
@@ -507,6 +510,7 @@ To add a new migration:
 | `GET` | `/api/admin/users/:empId` | Full profile: employee, identity links, sessions, password writeback log |
 | `POST` | `/api/admin/users/local` | Create local employee + password account |
 | `PATCH` | `/api/admin/users/:empId/role` | Assign/revoke portal administrator access (`local_accounts` only; does not change job designation) |
+| `PUT` | `/api/admin/users/:empId/profile` | Manual edit of directory profile attrs (dept, employee ID, designation, …) |
 | `GET` | `/api/admin/users/:empId/mfa` | Admin MFA status for a specific user |
 | `POST` | `/api/admin/users/:empId/mfa/enroll` | Start user MFA enrollment (returns QR + secret) |
 | `POST` | `/api/admin/users/:empId/mfa/confirm` | Confirm user MFA with 6-digit code |
@@ -514,7 +518,11 @@ To add a new migration:
 | `POST` | `/api/admin/users/:empId/mfa/regenerate-codes` | Regenerate user MFA backup codes |
 | `POST` | `/api/admin/users/:empId/mfa/enforce` | Set/clear per-user MFA enforcement |
 | `GET` | `/api/admin/users/mfa-policy` | Read global MFA policy |
-| `POST` | `/api/admin/users/mfa-policy` | Update global MFA policy (`global_enforce`, `enforce_for_admins`, `grace_period_hours`, `excluded_group_ids`) |
+| `POST` | `/api/admin/users/mfa-policy` | Update global MFA policy (`global_enforce`, `enforce_for_admins`, `grace_period_hours`, `excluded_group_ids`, `allowed_methods`) |
+| `GET` | `/api/admin/users/mfa-group-policies` | List per-group MFA method policies |
+| `POST` | `/api/admin/users/mfa-group-policies` | Create group MFA policy (`groupId`, `allowedMethods`, `enforce`, `active`) |
+| `PUT` | `/api/admin/users/mfa-group-policies/:id` | Update group MFA policy |
+| `DELETE` | `/api/admin/users/mfa-group-policies/:id` | Delete group MFA policy |
 | `GET` | `/api/admin/users/mfa-delivery-status` | Email/SMS OTP delivery config for Admin GUI (no secrets; `hasSmtpPass` / `hasSmsApiKey`) |
 | `PUT` | `/api/admin/users/mfa-delivery` | Save SMTP + SMS gateway settings into `general_settings` (GUI takes precedence over env) |
 | `POST` | `/api/admin/users/:empId/reset-password` | Admin password reset with AD/Google writeback |
@@ -912,6 +920,27 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-21 — Directory profile view + manual edit + Google attr sync
+
+**Why** — Profile drawer failed to open (`openProfilePanel` vs `openProfileDrawer`); Google dept/employee ID often empty; operators need manual edit when sync does not fill fields.
+
+**What changed:**
+
+- **UI** — fixed profile drawer open; Overview **Edit profile** modal; show Employee ID vs Directory ID separately.
+- **API** — `PUT /api/admin/users/:empId/profile` (manual attrs, `sync_status=MANUAL`).
+- **Google extract** — richer employeeId/externalIds/customSchemas; department falls back to OU leaf; title/costCenter/location scan all orgs.
+
+### TBD — 2026-07-21 — MFA Policies tab: group-wise allowed methods
+
+**Why** — Operators need to assign MFA methods per directory group (e.g. store staff TOTP-only), not only org-wide.
+
+**What changed:**
+
+- **Migration `038_mfa_group_policies.sql`** — `mfa_group_policies` (group_id, allowed_methods, enforce, active).
+- **Resolver** — `getAllowedMfaMethods(empId)` intersects global ceiling with union of the user’s group policies; `enforce` requires MFA at login.
+- **API** — `GET/POST/PUT/DELETE /api/admin/users/mfa-group-policies` (registered before `/:empId`).
+- **UI** — Strong Auth Methods gains **MFA Policies** tab (create/edit/delete per group).
 
 ### `977256f` — 2026-07-21 — Fix MFA policy GET shadowed by `/:empId`
 

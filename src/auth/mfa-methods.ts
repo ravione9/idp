@@ -23,26 +23,125 @@ export interface MfaMethodDetails {
   webauthn?: { enabled: boolean; credentials: number };
 }
 
-export async function getAllowedMfaMethods(): Promise<MfaMethodKey[]> {
+export interface MfaGroupPolicyRow {
+  id: number;
+  group_id: string;
+  allowed_methods: unknown;
+  enforce: number;
+  active: number;
+  notes: string | null;
+  group_name?: string | null;
+  source_system?: string | null;
+  updated_at?: Date | string | null;
+  updated_by?: string | null;
+}
+
+function normalizeMethods(raw: unknown): MfaMethodKey[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((k): k is MfaMethodKey =>
+    typeof k === 'string' && (MFA_METHOD_KEYS as readonly string[]).includes(k),
+  );
+}
+
+function parseMethodsJson(raw: unknown): MfaMethodKey[] {
+  if (Array.isArray(raw)) return normalizeMethods(raw);
+  if (typeof raw !== 'string') return [];
+  try {
+    return normalizeMethods(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+/** Org-wide ceiling from mfa_policy.allowed_methods (no group context). */
+export async function getGlobalAllowedMfaMethods(): Promise<MfaMethodKey[]> {
   const row = await queryOne<{ policy_value: string }>(
     `SELECT policy_value FROM mfa_policy WHERE policy_key = 'allowed_methods' LIMIT 1`,
     [],
   );
   if (!row?.policy_value) return [...DEFAULT_ALLOWED];
-  try {
-    const parsed = JSON.parse(row.policy_value) as unknown;
-    if (!Array.isArray(parsed)) return [...DEFAULT_ALLOWED];
-    return parsed.filter((k): k is MfaMethodKey =>
-      typeof k === 'string' && (MFA_METHOD_KEYS as readonly string[]).includes(k),
-    );
-  } catch {
-    return [...DEFAULT_ALLOWED];
-  }
+  const parsed = parseMethodsJson(row.policy_value);
+  return parsed.length ? parsed : [...DEFAULT_ALLOWED];
 }
 
-export async function isMethodAllowed(method: MfaMethodKey): Promise<boolean> {
-  const allowed = await getAllowedMfaMethods();
+/**
+ * Resolve allowed MFA methods for a user.
+ * - Global policy is always the ceiling.
+ * - If the user belongs to one or more groups with active mfa_group_policies,
+ *   allowed = intersection(global, union(group policies)).
+ * - Otherwise allowed = global.
+ */
+export async function getAllowedMfaMethods(empId?: string | null): Promise<MfaMethodKey[]> {
+  const global = await getGlobalAllowedMfaMethods();
+  if (!empId) return global;
+
+  const groupRows = await query<{ allowed_methods: unknown }>(
+    `SELECT p.allowed_methods
+       FROM mfa_group_policies p
+       JOIN group_members gm ON gm.group_id = (p.group_id COLLATE utf8mb4_unicode_ci)
+      WHERE p.active = 1
+        AND gm.emp_id = ?`,
+    [empId],
+  ).catch(() => [] as { allowed_methods: unknown }[]);
+
+  if (!groupRows.length) return global;
+
+  const union = new Set<MfaMethodKey>();
+  for (const row of groupRows) {
+    for (const m of parseMethodsJson(row.allowed_methods)) union.add(m);
+  }
+  if (union.size === 0) return [];
+
+  return global.filter((m) => union.has(m));
+}
+
+export async function isMethodAllowed(
+  method: MfaMethodKey,
+  empId?: string | null,
+): Promise<boolean> {
+  const allowed = await getAllowedMfaMethods(empId);
   return allowed.includes(method);
+}
+
+/** True when any active group policy for this user has enforce=1. */
+export async function isUserInEnforcedMfaGroup(empId: string): Promise<boolean> {
+  const row = await queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n
+       FROM mfa_group_policies p
+       JOIN group_members gm ON gm.group_id = (p.group_id COLLATE utf8mb4_unicode_ci)
+      WHERE p.active = 1
+        AND p.enforce = 1
+        AND gm.emp_id = ?`,
+    [empId],
+  ).catch(() => null);
+  return Number(row?.n ?? 0) > 0;
+}
+
+export async function listMfaGroupPolicies(): Promise<MfaGroupPolicyRow[]> {
+  return query<MfaGroupPolicyRow>(
+    `SELECT p.id, p.group_id, p.allowed_methods, p.enforce, p.active, p.notes,
+            p.updated_at, p.updated_by,
+            g.name AS group_name, g.source_system
+       FROM mfa_group_policies p
+       LEFT JOIN \`groups\` g ON g.id = (p.group_id COLLATE utf8mb4_unicode_ci)
+      ORDER BY g.name IS NULL, g.name ASC, p.id ASC`,
+    [],
+  ).catch(() => [] as MfaGroupPolicyRow[]);
+}
+
+export function serializeGroupPolicy(row: MfaGroupPolicyRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    groupId: row.group_id,
+    groupName: row.group_name ?? row.group_id,
+    sourceSystem: row.source_system ?? 'LOCAL',
+    allowedMethods: parseMethodsJson(row.allowed_methods),
+    enforce: row.enforce === 1,
+    active: row.active !== 0,
+    notes: row.notes,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+    updatedBy: row.updated_by,
+  };
 }
 
 interface MethodEnrollmentRow {

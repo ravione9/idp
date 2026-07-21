@@ -30,12 +30,21 @@ import {
   disableMfa,
   regenerateBackupCodes,
 } from '../auth/mfa.js';
+import {
+  MFA_METHOD_KEYS,
+  listMfaGroupPolicies,
+  serializeGroupPolicy,
+  type MfaMethodKey,
+} from '../auth/mfa-methods.js';
 import { PORTAL_ACCESSIBLE_STATES } from '../fsm/states.js';
 import { enforcePasswordPolicy } from '../services/password-policy.js';
 import { appendAuditLog } from '../utils/audit-log.js';
 import { writeDirectoryUserAudit } from '../services/google-attr-map.js';
 import crypto from 'crypto';
 
+const MFA_METHOD_ENUM = z.enum(
+  MFA_METHOD_KEYS as unknown as [MfaMethodKey, ...MfaMethodKey[]],
+);
 const router = Router();
 router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('identity_users'));
 
@@ -554,6 +563,154 @@ router.put('/mfa-delivery', async (req: Request, res: Response): Promise<void> =
 });
 
 // ---------------------------------------------------------------------------
+// Group-wise MFA method policies
+// ---------------------------------------------------------------------------
+const mfaGroupPolicySchema = z.object({
+  groupId: z.string().min(1).max(36),
+  allowedMethods: z.array(MFA_METHOD_ENUM).min(1),
+  enforce: z.boolean().optional(),
+  active: z.boolean().optional(),
+  notes: z.string().max(500).optional().nullable(),
+});
+
+router.get('/mfa-group-policies', asyncHandler(async (_req: Request, res: Response) => {
+  const rows = await listMfaGroupPolicies();
+  res.json({ data: rows.map(serializeGroupPolicy) });
+}));
+
+router.post('/mfa-group-policies', asyncHandler(async (req: Request, res: Response) => {
+  const parsed = mfaGroupPolicySchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid payload' });
+    return;
+  }
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId
+    ?? (req as unknown as { session?: { emp_id?: string } }).session?.emp_id
+    ?? 'system';
+  const { groupId, allowedMethods, enforce = false, active = true, notes = null } = parsed.data;
+
+  const group = await queryOne<{ id: string }>(`SELECT id FROM \`groups\` WHERE id = ? LIMIT 1`, [groupId]);
+  if (!group) {
+    res.status(404).json({ error: 'Group not found' });
+    return;
+  }
+
+  const existing = await queryOne<{ id: number }>(
+    `SELECT id FROM mfa_group_policies WHERE group_id = ? LIMIT 1`,
+    [groupId],
+  );
+  if (existing) {
+    res.status(409).json({ error: 'A policy already exists for this group. Edit it instead.' });
+    return;
+  }
+
+  await execute(
+    `INSERT INTO mfa_group_policies (group_id, allowed_methods, enforce, active, notes, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      groupId,
+      JSON.stringify(allowedMethods),
+      enforce ? 1 : 0,
+      active ? 1 : 0,
+      notes || null,
+      String(adminId).slice(0, 64),
+    ],
+  );
+
+  const rows = await listMfaGroupPolicies();
+  const created = rows.find((r) => r.group_id === groupId);
+  logger.info({ by: adminId, groupId, allowedMethods }, 'Created MFA group policy');
+  res.status(201).json({ success: true, data: created ? serializeGroupPolicy(created) : null });
+}));
+
+router.put('/mfa-group-policies/:id', asyncHandler(async (req: Request, res: Response) => {
+  const id = parseInt(String(req.params['id']), 10);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: 'Invalid policy id' });
+    return;
+  }
+  const parsed = mfaGroupPolicySchema.partial().safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid payload' });
+    return;
+  }
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId
+    ?? (req as unknown as { session?: { emp_id?: string } }).session?.emp_id
+    ?? 'system';
+
+  const current = await queryOne<{ id: number; group_id: string }>(
+    `SELECT id, group_id FROM mfa_group_policies WHERE id = ? LIMIT 1`,
+    [id],
+  );
+  if (!current) {
+    res.status(404).json({ error: 'Policy not found' });
+    return;
+  }
+
+  const d = parsed.data;
+  if (d.groupId && d.groupId !== current.group_id) {
+    const clash = await queryOne<{ id: number }>(
+      `SELECT id FROM mfa_group_policies WHERE group_id = ? AND id != ? LIMIT 1`,
+      [d.groupId, id],
+    );
+    if (clash) {
+      res.status(409).json({ error: 'Another policy already targets that group' });
+      return;
+    }
+    const group = await queryOne<{ id: string }>(`SELECT id FROM \`groups\` WHERE id = ? LIMIT 1`, [d.groupId]);
+    if (!group) {
+      res.status(404).json({ error: 'Group not found' });
+      return;
+    }
+  }
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (d.groupId !== undefined) { sets.push('group_id = ?'); params.push(d.groupId); }
+  if (d.allowedMethods !== undefined) {
+    sets.push('allowed_methods = ?');
+    params.push(JSON.stringify(d.allowedMethods));
+  }
+  if (d.enforce !== undefined) { sets.push('enforce = ?'); params.push(d.enforce ? 1 : 0); }
+  if (d.active !== undefined) { sets.push('active = ?'); params.push(d.active ? 1 : 0); }
+  if (d.notes !== undefined) { sets.push('notes = ?'); params.push(d.notes || null); }
+  sets.push('updated_by = ?');
+  params.push(String(adminId).slice(0, 64));
+  sets.push('updated_at = UTC_TIMESTAMP()');
+  params.push(id);
+
+  if (sets.length <= 2) {
+    res.status(400).json({ error: 'No fields to update' });
+    return;
+  }
+
+  await execute(`UPDATE mfa_group_policies SET ${sets.join(', ')} WHERE id = ?`, params);
+
+  const rows = await listMfaGroupPolicies();
+  const updated = rows.find((r) => Number(r.id) === id);
+  logger.info({ by: adminId, id, updates: d }, 'Updated MFA group policy');
+  res.json({ success: true, data: updated ? serializeGroupPolicy(updated) : null });
+}));
+
+router.delete('/mfa-group-policies/:id', asyncHandler(async (req: Request, res: Response) => {
+  const id = parseInt(String(req.params['id']), 10);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: 'Invalid policy id' });
+    return;
+  }
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId
+    ?? (req as unknown as { session?: { emp_id?: string } }).session?.emp_id
+    ?? 'system';
+  const result = await execute(`DELETE FROM mfa_group_policies WHERE id = ?`, [id]);
+  if (result.affectedRows === 0) {
+    res.status(404).json({ error: 'Policy not found' });
+    return;
+  }
+  logger.info({ by: adminId, id }, 'Deleted MFA group policy');
+  res.json({ success: true });
+}));
+
+// ---------------------------------------------------------------------------
 // GET /:empId  — full profile: employee + all identity links + recent logins
 // ---------------------------------------------------------------------------
 router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
@@ -675,6 +832,108 @@ router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
     ...(profileEmpId !== empId ? { migratedFrom: empId } : {}),
   });
 });
+
+// ---------------------------------------------------------------------------
+// PUT /:empId/profile — manual directory profile edit (when sync does not fill fields)
+// ---------------------------------------------------------------------------
+const updateProfileSchema = z.object({
+  firstName: z.string().max(100).optional().nullable(),
+  lastName: z.string().max(100).optional().nullable(),
+  displayName: z.string().min(1).max(200).optional(),
+  fullName: z.string().min(1).max(200).optional(),
+  employeeNumber: z.string().max(64).optional().nullable(),
+  username: z.string().max(100).optional().nullable(),
+  department: z.string().max(100).optional().nullable(),
+  designation: z.string().max(200).optional().nullable(),
+  mobile: z.string().max(40).optional().nullable(),
+  location: z.string().max(200).optional().nullable(),
+  costCenter: z.string().max(80).optional().nullable(),
+  officeAddress: z.string().max(500).optional().nullable(),
+  managerEmpId: z.string().max(64).optional().nullable(),
+});
+
+router.put('/:empId/profile', asyncHandler(async (req: Request, res: Response) => {
+  const empId = String(req.params['empId'] || '');
+  const parsed = updateProfileSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid payload' });
+    return;
+  }
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId
+    ?? (req as unknown as { session?: { emp_id?: string } }).session?.emp_id
+    ?? 'system';
+
+  const existing = await queryOne<Record<string, unknown>>(
+    `SELECT emp_id, full_name, first_name, last_name, employee_number, username,
+            dept_id, role, mobile, location, cost_center, office_address, manager_emp_id
+       FROM employees WHERE emp_id = ? LIMIT 1`,
+    [empId],
+  );
+  if (!existing) {
+    res.status(404).json({ error: 'Employee not found' });
+    return;
+  }
+
+  const d = parsed.data;
+  const fullName = (d.displayName ?? d.fullName)?.trim();
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  const changes: Record<string, { old: unknown; new: unknown }> = {};
+
+  const put = (col: string, val: unknown) => {
+    if (val === undefined) return;
+    const next = val === null || val === '' ? null : val;
+    const old = existing[col];
+    if (String(old ?? '') === String(next ?? '')) return;
+    changes[col] = { old: old ?? null, new: next };
+    sets.push(`${col} = ?`);
+    params.push(next);
+  };
+
+  put('first_name', d.firstName);
+  put('last_name', d.lastName);
+  if (fullName !== undefined) put('full_name', fullName || null);
+  put('employee_number', d.employeeNumber);
+  put('username', d.username);
+  put('dept_id', d.department);
+  put('role', d.designation);
+  put('mobile', d.mobile);
+  put('location', d.location);
+  put('cost_center', d.costCenter);
+  put('office_address', d.officeAddress);
+  put('manager_emp_id', d.managerEmpId);
+
+  if (!sets.length) {
+    res.json({ success: true, updated: false, employee: existing });
+    return;
+  }
+
+  sets.push(`sync_status = 'MANUAL'`, 'updated_at = UTC_TIMESTAMP()');
+  await execute(`UPDATE employees SET ${sets.join(', ')} WHERE emp_id = ?`, [...params, empId]);
+
+  await writeDirectoryUserAudit({
+    empId,
+    action: 'MANUAL_PROFILE_UPDATE',
+    adminEmpId: String(adminId),
+    source: 'ADMIN',
+    changedFields: Object.keys(changes),
+    oldValues: Object.fromEntries(Object.entries(changes).map(([k, v]) => [k, v.old])),
+    newValues: Object.fromEntries(Object.entries(changes).map(([k, v]) => [k, v.new])),
+  });
+
+  const employee = await queryOne<Record<string, unknown>>(
+    `SELECT e.*,
+            m.full_name  AS manager_name,
+            m.email_corp AS manager_email
+       FROM employees e
+       LEFT JOIN employees m ON m.emp_id = e.manager_emp_id
+      WHERE e.emp_id = ?`,
+    [empId],
+  );
+
+  logger.info({ empId, by: adminId, fields: Object.keys(changes) }, 'Admin updated directory user profile');
+  res.json({ success: true, updated: true, employee });
+}));
 
 // ---------------------------------------------------------------------------
 // MFA admin endpoints — manage MFA for a specific employee

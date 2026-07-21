@@ -54,7 +54,7 @@ export async function getMfaStatus(empId: string): Promise<MfaStatus> {
       'SELECT email_corp, mobile FROM employees WHERE emp_id = ? LIMIT 1',
       [empId],
     ),
-    getAllowedMfaMethods(),
+    getAllowedMfaMethods(empId),
   ]);
 
   let codes: string[] = [];

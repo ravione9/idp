@@ -85,7 +85,7 @@ export async function sendEmailOtp(
   empId: string,
   purpose: 'enroll' | 'login',
 ): Promise<{ sent: boolean; devCode?: string }> {
-  if (!(await isMethodAllowed('email_otp'))) {
+  if (!(await isMethodAllowed('email_otp', empId))) {
     throw new Error('Email OTP is not enabled by policy');
   }
 
@@ -138,7 +138,7 @@ export async function sendSmsOtp(
   empId: string,
   purpose: 'enroll' | 'login',
 ): Promise<{ sent: boolean; devCode?: string; maskedPhone?: string }> {
-  if (!(await isMethodAllowed('sms_otp'))) {
+  if (!(await isMethodAllowed('sms_otp', empId))) {
     throw new Error('SMS OTP is not enabled by policy');
   }
 

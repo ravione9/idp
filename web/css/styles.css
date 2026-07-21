@@ -3848,6 +3848,26 @@ body.nav-locked { overflow: hidden; }
   padding-left: 0.55rem;
   padding-right: 0.55rem;
 }
+.mfa-tab-pane.is-hidden,
+.is-hidden {
+  display: none !important;
+}
+.mfa-method-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.mfa-method-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface-3, var(--surface));
+  border: 1px solid var(--border);
+  color: var(--text);
+}
 @media (max-width: 720px) {
   .mfa-exclude-shuttle {
     grid-template-columns: 1fr;

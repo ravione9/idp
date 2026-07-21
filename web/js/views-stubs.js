@@ -776,6 +776,7 @@ export async function viewMfaMethods(content) {
     <div id="mfa-area">${loading()}</div>
   </div>`));
   const wrap = content.firstChild;
+  let mfaActiveTab = 'overview';
 
   const methodDefs = [
     { key: 'totp',         label: 'Authenticator App (TOTP)', desc: 'Time-based one-time passwords via Google Authenticator, Authy, etc.' },
@@ -807,14 +808,16 @@ export async function viewMfaMethods(content) {
 
   async function loadMfaPage() {
     try {
-      const [status, policyRes, groupsRes, deliveryRes] = await Promise.all([
+      const [status, policyRes, groupsRes, deliveryRes, groupPolRes] = await Promise.all([
         api.mfaStatus().catch(() => ({})),
         api.getMfaPolicy().catch(() => ({ data: {} })),
         api.listGroups().catch(() => ({ data: [] })),
         api.getMfaDeliveryStatus().catch(() => ({ data: {} })),
+        api.listMfaGroupPolicies().catch(() => ({ data: [] })),
       ]);
       const policy = policyRes?.data || {};
       const groups = norm(groupsRes);
+      const groupPolicies = norm(groupPolRes);
       const enrolled = status?.methods || [];
       const allowedMethods = Array.isArray(policy.allowed_methods)
         ? policy.allowed_methods
@@ -867,7 +870,31 @@ export async function viewMfaMethods(content) {
       const emailMode = emailDelivery.mode || 'none';
       const smsMode = smsDelivery.mode || 'none';
 
+      const methodLabel = (key) => methodDefs.find((m) => m.key === key)?.label || key;
+      const policyRowsHtml = groupPolicies.length
+        ? groupPolicies.map((p) => {
+          const methods = Array.isArray(p.allowedMethods) ? p.allowedMethods : [];
+          return `<tr data-id="${esc(String(p.id))}">
+            <td class="cell-strong">${esc(p.groupName || p.groupId)}</td>
+            <td><span class="badge badge-neutral">${esc(p.sourceSystem || 'LOCAL')}</span></td>
+            <td><div class="mfa-method-chips">${methods.map((k) => `<span class="mfa-method-chip">${esc(methodLabel(k))}</span>`).join('') || '<span class="muted">—</span>'}</div></td>
+            <td>${p.enforce ? '<span class="badge badge-danger">Enforce</span>' : '<span class="badge badge-neutral">Optional</span>'}</td>
+            <td>${p.active === false ? '<span class="badge badge-warning">Off</span>' : '<span class="badge badge-success">Active</span>'}</td>
+            <td class="table-actions">
+              <button type="button" class="btn btn-sm btn-secondary mfa-gp-edit" data-id="${esc(String(p.id))}">Edit</button>
+              <button type="button" class="btn btn-sm btn-danger mfa-gp-del" data-id="${esc(String(p.id))}">Delete</button>
+            </td>
+          </tr>`;
+        }).join('')
+        : `<tr><td colspan="6"><div class="empty-state"><p>No group MFA policies yet. Assign allowed methods per directory group.</p></div></td></tr>`;
+
       wrap.querySelector('#mfa-area').innerHTML = `
+        <div class="inline-tabs" id="mfa-page-tabs" style="margin-bottom:1.25rem">
+          <button type="button" class="inline-tab${mfaActiveTab === 'overview' ? ' active' : ''}" data-tab="overview">Overview &amp; Global Policy</button>
+          <button type="button" class="inline-tab${mfaActiveTab === 'policies' ? ' active' : ''}" data-tab="policies">MFA Policies</button>
+        </div>
+
+        <div id="mfa-tab-overview" class="mfa-tab-pane${mfaActiveTab === 'overview' ? '' : ' is-hidden'}">
         <!-- ── Stats ── -->
         <div class="stat-grid" style="margin-bottom:1.5rem">
           ${statCard('shieldCheck', 'Methods Enrolled',   enrolledCount,      status?.enabled ? 'Active' : 'Not active', 'primary')}
@@ -1121,6 +1148,35 @@ export async function viewMfaMethods(content) {
 
         <div style="margin-top:0.5rem">
           <a href="/?v=settings" class="btn btn-secondary">My Enrollment →</a>
+        </div>
+        </div><!-- /mfa-tab-overview -->
+
+        <div id="mfa-tab-policies" class="mfa-tab-pane${mfaActiveTab === 'policies' ? '' : ' is-hidden'}">
+          <div class="card" style="margin-bottom:1rem">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:0.85rem">
+              <div>
+                <div style="font-weight:700;font-size:1rem">Group MFA Policies</div>
+                <p class="muted" style="font-size:0.85rem;margin:0.2rem 0 0">Assign which MFA methods members of each group may use. Global allowed methods are the ceiling. Multiple group policies for one user are combined (union), then limited by global settings.</p>
+              </div>
+              <button type="button" class="btn btn-primary" id="mfa-gp-add">+ Add group policy</button>
+            </div>
+            <div id="mfa-gp-msg" style="margin-bottom:0.75rem"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Group</th>
+                    <th>Source</th>
+                    <th>Allowed methods</th>
+                    <th>Enforce</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="mfa-gp-tbody">${policyRowsHtml}</tbody>
+              </table>
+            </div>
+          </div>
         </div>`;
 
       const availListEl = wrap.querySelector('#mfa-avail-list');
@@ -1496,6 +1552,130 @@ export async function viewMfaMethods(content) {
           selectedUser.mfa_enforced = false;
           setActionMsg(`✓ MFA disabled for ${selectedUser.full_name}.`);
         } catch (e) { setActionMsg(e.message, true); }
+      });
+
+      // ── Tabs ──────────────────────────────────────────────────────────────
+      function showMfaTab(name) {
+        mfaActiveTab = name;
+        wrap.querySelectorAll('#mfa-page-tabs .inline-tab').forEach((t) => {
+          t.classList.toggle('active', t.dataset.tab === name);
+        });
+        wrap.querySelector('#mfa-tab-overview')?.classList.toggle('is-hidden', name !== 'overview');
+        wrap.querySelector('#mfa-tab-policies')?.classList.toggle('is-hidden', name !== 'policies');
+      }
+      wrap.querySelectorAll('#mfa-page-tabs .inline-tab').forEach((btn) => {
+        btn.addEventListener('click', () => showMfaTab(btn.dataset.tab));
+      });
+
+      // ── Group MFA policies ────────────────────────────────────────────────
+      function openGroupPolicyModal(existing = null) {
+        const usedIds = new Set(groupPolicies.map((p) => String(p.groupId)));
+        if (existing) usedIds.delete(String(existing.groupId));
+        const groupOpts = groups
+          .filter((g) => !usedIds.has(String(g.id)) || (existing && String(g.id) === String(existing.groupId)))
+          .map((g) => `<option value="${esc(String(g.id))}"${existing && String(g.id) === String(existing.groupId) ? ' selected' : ''}>${esc(g.name || g.id)} (${esc(g.source_system || 'LOCAL')})</option>`)
+          .join('');
+        const selectedMethods = new Set(
+          Array.isArray(existing?.allowedMethods) ? existing.allowedMethods.map(String) : ['totp', 'backup_codes'],
+        );
+        const methodChecks = methodDefs.map((m) => `
+          <label class="mfa-policy-method" style="display:flex;align-items:center;gap:0.55rem;padding:0.35rem 0;cursor:pointer">
+            <input type="checkbox" class="mfa-gp-method" value="${esc(m.key)}" ${selectedMethods.has(m.key) ? 'checked' : ''}>
+            <span style="font-size:0.875rem">${esc(m.label)}</span>
+          </label>`).join('');
+
+        const bd = openModal(`<div class="modal" style="width:560px;max-width:96vw">
+          <div class="modal-header"><h2>${existing ? 'Edit' : 'Add'} group MFA policy</h2></div>
+          <div class="modal-body">
+            <div id="mfa-gp-err"></div>
+            <div class="form-group">
+              <label class="form-label">Group</label>
+              <select class="form-select" id="mfa-gp-group" ${existing ? '' : ''}>
+                <option value="">Select a group…</option>
+                ${groupOpts || '<option value="" disabled>No groups available</option>'}
+              </select>
+              <p class="muted" style="font-size:0.78rem;margin:0.35rem 0 0">One policy per group. Methods must also be enabled under Global Policy.</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Allowed MFA methods</label>
+              <div class="mfa-policy-methods">${methodChecks}</div>
+            </div>
+            <div class="form-group" style="display:flex;flex-direction:column;gap:0.45rem">
+              <label class="mfa-policy-method" style="display:flex;align-items:center;gap:0.55rem;cursor:pointer">
+                <input type="checkbox" id="mfa-gp-enforce" ${existing?.enforce ? 'checked' : ''}>
+                <span style="font-size:0.875rem">Enforce MFA for this group</span>
+              </label>
+              <label class="mfa-policy-method" style="display:flex;align-items:center;gap:0.55rem;cursor:pointer">
+                <input type="checkbox" id="mfa-gp-active" ${existing && existing.active === false ? '' : 'checked'}>
+                <span style="font-size:0.875rem">Policy active</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Notes (optional)</label>
+              <input class="form-input" id="mfa-gp-notes" maxlength="500" value="${esc(existing?.notes || '')}" placeholder="e.g. Store staff — TOTP only">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="mfa-gp-cancel">Cancel</button>
+            <button type="button" class="btn btn-primary" id="mfa-gp-save">${existing ? 'Save changes' : 'Create policy'}</button>
+          </div>
+        </div>`);
+
+        bd.querySelector('#mfa-gp-cancel').addEventListener('click', () => bd.remove());
+        bd.querySelector('#mfa-gp-save').addEventListener('click', async () => {
+          const errEl = bd.querySelector('#mfa-gp-err');
+          errEl.innerHTML = '';
+          const groupId = bd.querySelector('#mfa-gp-group').value;
+          const allowedMethods = Array.from(bd.querySelectorAll('.mfa-gp-method:checked')).map((n) => n.value);
+          if (!groupId) {
+            errEl.innerHTML = errHtml('Select a group');
+            return;
+          }
+          if (!allowedMethods.length) {
+            errEl.innerHTML = errHtml('Select at least one MFA method');
+            return;
+          }
+          const payload = {
+            groupId,
+            allowedMethods,
+            enforce: !!bd.querySelector('#mfa-gp-enforce')?.checked,
+            active: !!bd.querySelector('#mfa-gp-active')?.checked,
+            notes: bd.querySelector('#mfa-gp-notes').value.trim() || null,
+          };
+          const btn = bd.querySelector('#mfa-gp-save');
+          btn.disabled = true;
+          try {
+            if (existing) await api.updateMfaGroupPolicy(existing.id, payload);
+            else await api.createMfaGroupPolicy(payload);
+            bd.remove();
+            mfaActiveTab = 'policies';
+            await loadMfaPage();
+          } catch (e) {
+            errEl.innerHTML = errHtml(e.message || 'Save failed');
+            btn.disabled = false;
+          }
+        });
+      }
+
+      wrap.querySelector('#mfa-gp-add')?.addEventListener('click', () => openGroupPolicyModal());
+      wrap.querySelectorAll('.mfa-gp-edit').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const pol = groupPolicies.find((p) => String(p.id) === String(btn.dataset.id));
+          if (pol) openGroupPolicyModal(pol);
+        });
+      });
+      wrap.querySelectorAll('.mfa-gp-del').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Delete this group MFA policy?')) return;
+          try {
+            await api.deleteMfaGroupPolicy(btn.dataset.id);
+            mfaActiveTab = 'policies';
+            await loadMfaPage();
+          } catch (e) {
+            const msg = wrap.querySelector('#mfa-gp-msg');
+            if (msg) msg.innerHTML = errHtml(e.message);
+          }
+        });
       });
 
     } catch(e) {
@@ -4462,7 +4642,101 @@ function initUsersTab(panel, me = null) {
   }
 
   // ── Full profile slide-in drawer (godmode) ──────────────────────────────────
-  async function openProfilePanel(empId) {
+  // Manual profile edit (when directory sync did not fill fields)
+  function openEditProfileModal(emp, onSaved) {
+    const bd = openModal(`<div class="modal" style="width:640px;max-width:96vw">
+      <div class="modal-header"><h2>Edit profile — ${esc(emp.full_name || emp.emp_id || '')}</h2></div>
+      <div class="modal-body">
+        <p class="muted" style="font-size:0.82rem;margin:0 0 0.85rem">Updates are stored on the IdP user record (sync status becomes <strong>MANUAL</strong>). A later Google sync may overwrite fields that are enabled under Sync Settings.</p>
+        <div id="pp-edit-err"></div>
+        <div class="form-2col">
+          <div class="form-group">
+            <label class="form-label">First name</label>
+            <input class="form-input" id="pp-e-first" value="${esc(emp.first_name || '')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Last name</label>
+            <input class="form-input" id="pp-e-last" value="${esc(emp.last_name || '')}">
+          </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label class="form-label">Display name</label>
+            <input class="form-input" id="pp-e-display" value="${esc(emp.full_name || '')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Employee ID</label>
+            <input class="form-input" id="pp-e-empno" value="${esc(emp.employee_number || '')}" placeholder="HR / Google employee ID">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Username</label>
+            <input class="form-input" id="pp-e-user" value="${esc(emp.username || '')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Department</label>
+            <input class="form-input" id="pp-e-dept" value="${esc(emp.dept_id || '')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Designation</label>
+            <input class="form-input" id="pp-e-role" value="${esc(emp.role || '')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Mobile</label>
+            <input class="form-input" id="pp-e-mobile" value="${esc(emp.mobile || '')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Location</label>
+            <input class="form-input" id="pp-e-loc" value="${esc(emp.location || '')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Cost center</label>
+            <input class="form-input" id="pp-e-cc" value="${esc(emp.cost_center || '')}">
+          </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label class="form-label">Office address</label>
+            <input class="form-input" id="pp-e-addr" value="${esc(emp.office_address || '')}">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="pp-e-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="pp-e-save">Save profile</button>
+      </div>
+    </div>`);
+
+    bd.querySelector('#pp-e-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#pp-e-save').addEventListener('click', async () => {
+      const errEl = bd.querySelector('#pp-edit-err');
+      errEl.innerHTML = '';
+      const btn = bd.querySelector('#pp-e-save');
+      const payload = {
+        firstName: bd.querySelector('#pp-e-first').value.trim() || null,
+        lastName: bd.querySelector('#pp-e-last').value.trim() || null,
+        displayName: bd.querySelector('#pp-e-display').value.trim() || undefined,
+        employeeNumber: bd.querySelector('#pp-e-empno').value.trim() || null,
+        username: bd.querySelector('#pp-e-user').value.trim() || null,
+        department: bd.querySelector('#pp-e-dept').value.trim() || null,
+        designation: bd.querySelector('#pp-e-role').value.trim() || null,
+        mobile: bd.querySelector('#pp-e-mobile').value.trim() || null,
+        location: bd.querySelector('#pp-e-loc').value.trim() || null,
+        costCenter: bd.querySelector('#pp-e-cc').value.trim() || null,
+        officeAddress: bd.querySelector('#pp-e-addr').value.trim() || null,
+      };
+      if (!payload.displayName) {
+        errEl.innerHTML = errHtml('Display name is required');
+        return;
+      }
+      btn.disabled = true;
+      try {
+        await api.updateUserProfile(emp.emp_id, payload);
+        bd.remove();
+        if (typeof onSaved === 'function') await onSaved();
+      } catch (e) {
+        errEl.innerHTML = errHtml(e.message || 'Save failed');
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function openProfileDrawer(empId) {
     // Remove any existing panel
     document.querySelector('.profile-panel-overlay')?.remove();
 
@@ -4631,12 +4905,14 @@ function initUsersTab(panel, me = null) {
       const recentLogins = profileData.recentLogins  || [];
       const writebackLog = profileData.writebackLog  || [];
       const mfaStatus    = profileData.mfaStatus     || { enrolled: false, enabled: false, remainingBackupCodes: 0, lastUsedAt: null };
+      const activeSources = profileSourceBadges(emp, links);
       const body         = overlay.querySelector('#pp-body');
 
       // ── Overview tab ─────────────────────────────────────────────────────────
       if (tab === 'overview') {
         const attrs = [
-          ['Employee ID',      esc(emp.employee_number || emp.emp_id || '—')],
+          ['Employee ID',      esc(emp.employee_number || '—')],
+          ['Directory ID',     esc(emp.emp_id || '—')],
           ['Username',         esc(emp.username || '—')],
           ['Corporate Email',  esc(emp.email_corp || '—')],
           ['Department',       esc(emp.dept_id    || '—')],
@@ -4647,6 +4923,7 @@ function initUsersTab(panel, me = null) {
           ['Location',         esc(emp.location || emp.city || '—')],
           ['Cost Center',      esc(emp.cost_center || '—')],
           ['Phone',            esc(emp.mobile || '—')],
+          ['Office Address',   esc(emp.office_address || '—')],
           ['Joining Date',     emp.hire_date ? fmtDate(emp.hire_date) : '—'],
           ['Employment Type',  esc(emp.employment_type || '—')],
           ['State',            stateBadge(emp.ilg_state)],
@@ -4654,7 +4931,7 @@ function initUsersTab(panel, me = null) {
           ['Last Sync Time',   emp.attrs_synced_at ? fmtDate(emp.attrs_synced_at)
             : (links.find(l => l.last_synced_at)?.last_synced_at ? fmtDate(links.find(l => l.last_synced_at).last_synced_at) : '—')],
           ['Sync Status',      emp.sync_status
-            ? `<span class="badge ${emp.sync_status==='SYNCED'?'badge-success':'badge-neutral'}">${esc(emp.sync_status)}</span>`
+            ? `<span class="badge ${emp.sync_status==='SYNCED'?'badge-success':emp.sync_status==='MANUAL'?'badge-info':'badge-neutral'}">${esc(emp.sync_status)}</span>`
             : '—'],
           ['Portal Administrator', emp.portal_role
             ? `<span class="badge badge-primary">${esc(emp.portal_role)}</span>`
@@ -4663,7 +4940,11 @@ function initUsersTab(panel, me = null) {
         ];
 
         body.innerHTML = `
-          <p class="pp-section-title">Account Details</p>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.35rem">
+            <p class="pp-section-title" style="margin:0">Account Details</p>
+            <button type="button" class="btn btn-sm btn-primary" id="pp-edit-profile">Edit profile</button>
+          </div>
+          <p class="muted" style="font-size:0.78rem;margin:0 0 0.75rem">If Google/AD sync did not fill department or employee ID, update them here.</p>
           <div class="pp-attr-grid">
             ${attrs.map(([k, v]) => `
               <div class="pp-attr">
@@ -4688,6 +4969,12 @@ function initUsersTab(panel, me = null) {
             </table>
           </div>` : ''}`;
 
+        overlay.querySelector('#pp-edit-profile')?.addEventListener('click', () => {
+          openEditProfileModal(emp, async () => {
+            await reloadProfile(true);
+            try { await loadUsers(); } catch { /* list may not be visible */ }
+          });
+        });
       }
 
       // ── Identity Links tab ───────────────────────────────────────────────────

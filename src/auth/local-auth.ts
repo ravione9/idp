@@ -31,6 +31,7 @@ import {
   resolveWebAuthnOrigin,
   verifyWebAuthnAuthentication,
 } from './mfa-webauthn.js';
+import { isUserInEnforcedMfaGroup } from './mfa-methods.js';
 import { query, queryOne } from '../db/connection.js';
 import {
   ensureMasterAdminFromEnv,
@@ -104,6 +105,7 @@ interface MfaRequirementContext {
   globalEnforce: boolean;
   enforceForAdmins: boolean;
   userInExcludedGroup: boolean;
+  groupEnforce: boolean;
   gracePeriodHours: number;
 }
 
@@ -180,7 +182,11 @@ export async function getMfaRequirementContext(empId: string): Promise<MfaRequir
     return [] as MfaPolicyRow[];
   });
 
-  const [employeeRows, policyRows] = await Promise.all([employeeRowsPromise, policyRowsPromise]);
+  const [employeeRows, policyRows, groupEnforce] = await Promise.all([
+    employeeRowsPromise,
+    policyRowsPromise,
+    isUserInEnforcedMfaGroup(empId),
+  ]);
 
   const policyMap = new Map(policyRows.map((row) => [row.policy_key, row.policy_value]));
   const globalEnforce = parsePolicyBoolean(policyMap.get('global_enforce'), false);
@@ -209,7 +215,14 @@ export async function getMfaRequirementContext(empId: string): Promise<MfaRequir
     parsePolicyNumber(policyMap.get('grace_period_hours'), 24),
   );
 
-  return { userEnforced, globalEnforce, enforceForAdmins, userInExcludedGroup, gracePeriodHours };
+  return {
+    userEnforced,
+    globalEnforce,
+    enforceForAdmins,
+    userInExcludedGroup,
+    groupEnforce,
+    gracePeriodHours,
+  };
 }
 
 function mfaGraceKey(empId: string): string {
@@ -347,8 +360,9 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     //   • adaptive engine returned MFA or STEP_UP (risk signal), or
     //   • user already has TOTP enrolled (existing behaviour preserved), or
     //   • policy requires MFA. Group exclusions only bypass global/admin policy;
-    //     explicit per-user enforcement still takes precedence.
+    //     explicit per-user / per-group enforce still takes precedence.
     const policyRequiresMfa = mfaRequirements.userEnforced
+      || mfaRequirements.groupEnforce
       || (
         !mfaRequirements.userInExcludedGroup
         && (

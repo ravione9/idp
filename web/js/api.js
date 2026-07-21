@@ -288,7 +288,8 @@ Object.assign(api, {
     if (filters.employeeId) p.set('employeeId', filters.employeeId);
     return f(`/api/admin/users?${p}`);
   },
-  getUserProfile:      (empId) => f(`/api/admin/users/${empId}`),
+  getUserProfile:      (empId) => f(`/api/admin/users/${encodeURIComponent(empId)}`),
+  updateUserProfile:   (empId, data) => f(`/api/admin/users/${encodeURIComponent(empId)}/profile`, { method: 'PUT', body: JSON.stringify(data) }),
   createLocalUser:     (data) => f('/api/admin/users/local', { method: 'POST', body: JSON.stringify(data) }),
   exportUsers:         (source = '', state = '') =>
     f(`/api/admin/users/export?source=${encodeURIComponent(source)}&state=${encodeURIComponent(state)}`),
@@ -303,6 +304,10 @@ Object.assign(api, {
   getMfaDeliveryStatus: () => f('/api/admin/users/mfa-delivery-status'),
   saveMfaDelivery:     (data) => f('/api/admin/users/mfa-delivery', { method: 'PUT', body: JSON.stringify(data) }),
   updateMfaPolicy:     (data) => f('/api/admin/users/mfa-policy', { method: 'POST', body: JSON.stringify(data) }),
+  listMfaGroupPolicies: () => f('/api/admin/users/mfa-group-policies'),
+  createMfaGroupPolicy: (data) => f('/api/admin/users/mfa-group-policies', { method: 'POST', body: JSON.stringify(data) }),
+  updateMfaGroupPolicy: (id, data) => f(`/api/admin/users/mfa-group-policies/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteMfaGroupPolicy: (id) => f(`/api/admin/users/mfa-group-policies/${id}`, { method: 'DELETE' }),
   adminResetPassword:  (empId, newPassword, notifyUser = false) =>
     f(`/api/admin/users/${empId}/reset-password`, { method: 'POST', body: JSON.stringify({ newPassword, notifyUser }) }),
   updateUserRole:      (empId, role) => f(`/api/admin/users/${empId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),

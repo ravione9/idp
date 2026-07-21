@@ -75,7 +75,7 @@ export async function getWebAuthnRegistrationOptions(
   email: string,
   origin: string,
 ): Promise<{ options: Awaited<ReturnType<typeof generateRegistrationOptions>>; challengeId: string }> {
-  if (!(await isMethodAllowed('webauthn'))) {
+  if (!(await isMethodAllowed('webauthn', empId))) {
     throw new Error('WebAuthn is not enabled by policy');
   }
 

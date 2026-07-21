@@ -204,24 +204,79 @@ function primaryOrg(gUser: admin_directory_v1.Schema$User): admin_directory_v1.S
   return orgs.find((o: admin_directory_v1.Schema$UserOrganization) => o.primary) ?? orgs[0];
 }
 
+/** Best-effort department from Google org data or OU path. */
+function extractDepartment(gUser: admin_directory_v1.Schema$User): string | undefined {
+  const orgs = gUser.organizations ?? [];
+  for (const o of orgs) {
+    const d = o.department?.trim();
+    if (d) return d;
+  }
+  const ou = (gUser.orgUnitPath || '').replace(/^\/+/, '').trim();
+  if (!ou || ou === '/') return undefined;
+  // Prefer leaf OU as department (e.g. "/Lenskart/Retail/Store Ops" → "Store Ops")
+  const leaf = ou.split('/').filter(Boolean).pop();
+  return leaf || ou;
+}
+
+function extractTitle(gUser: admin_directory_v1.Schema$User): string | undefined {
+  const orgs = gUser.organizations ?? [];
+  for (const o of orgs) {
+    const t = o.title?.trim();
+    if (t) return t;
+  }
+  return undefined;
+}
+
+function extractEmployeeId(gUser: admin_directory_v1.Schema$User): string | undefined {
+  const g = gUser as admin_directory_v1.Schema$User & { employeeId?: string | null };
+  if (g.employeeId?.trim()) return g.employeeId.trim();
+
+  const ext = g.externalIds ?? [];
+  const preferredTypes = ['organization', 'employee', 'work', 'custom'];
+  for (const type of preferredTypes) {
+    const hit = ext.find((x: admin_directory_v1.Schema$UserExternalId) => (x.type || '').toLowerCase() === type)?.value?.trim();
+    if (hit) return hit;
+  }
+  const any = ext.find((x: admin_directory_v1.Schema$UserExternalId) => x.value?.trim())?.value?.trim();
+  if (any) return any;
+
+  // Custom schema fallback: Employee_ID / employeeId style keys
+  const schemas = g.customSchemas ?? {};
+  for (const schema of Object.values(schemas)) {
+    if (!schema || typeof schema !== 'object') continue;
+    for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+      if (!/employee.?id|emp.?id|employee.?number/i.test(k)) continue;
+      if (typeof v === 'string' && v.trim()) return v.trim();
+      if (v && typeof v === 'object' && 'value' in (v as object)) {
+        const val = String((v as { value?: unknown }).value ?? '').trim();
+        if (val) return val;
+      }
+    }
+  }
+  return undefined;
+}
+
 function extractSourceValue(gUser: admin_directory_v1.Schema$User, sourceAttr: string): string | undefined {
   const org = primaryOrg(gUser);
   switch (sourceAttr) {
-    case 'employeeId': {
-      const g = gUser as admin_directory_v1.Schema$User & { employeeId?: string | null };
-      return g.externalIds?.find((x: admin_directory_v1.Schema$UserExternalId) => (x.type || '').toLowerCase() === 'organization')?.value?.trim()
-        || g.employeeId?.trim()
-        || g.externalIds?.find((x: admin_directory_v1.Schema$UserExternalId) => (x.type || '').toLowerCase() === 'custom')?.value?.trim()
-        || undefined;
-    }
+    case 'employeeId':
+      return extractEmployeeId(gUser);
     case 'organizations.department':
-      return org?.department?.trim() || undefined;
+      return extractDepartment(gUser);
     case 'organizations.title':
-      return org?.title?.trim() || undefined;
+      return extractTitle(gUser) || org?.title?.trim() || undefined;
     case 'organizations.costCenter':
-      return org?.costCenter?.trim() || undefined;
+      return org?.costCenter?.trim()
+        || (gUser.organizations ?? []).map((o: admin_directory_v1.Schema$UserOrganization) => o.costCenter?.trim()).find(Boolean)
+        || undefined;
     case 'organizations.location':
-      return org?.location?.trim() || undefined;
+      return org?.location?.trim()
+        || (gUser.organizations ?? []).map((o: admin_directory_v1.Schema$UserOrganization) => o.location?.trim()).find(Boolean)
+        || undefined;
+    case 'orgUnitPath': {
+      const ou = (gUser.orgUnitPath || '').trim();
+      return ou && ou !== '/' ? ou : undefined;
+    }
     case 'manager': {
       const rel = (gUser.relations ?? []).find((r: admin_directory_v1.Schema$UserRelation) => (r.type || '').toLowerCase() === 'manager');
       return rel?.value?.trim().toLowerCase() || undefined;
@@ -419,6 +474,7 @@ export const GOOGLE_SOURCE_ATTR_OPTIONS = [
   'organizations.title',
   'organizations.costCenter',
   'organizations.location',
+  'orgUnitPath',
   'manager',
   'phones',
   'addresses',
