@@ -562,7 +562,7 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--overlay);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
-  z-index: 1000;
+  z-index: 1200; /* above profile drawer (1100) so nested edit modals center on screen */
   display: flex;
   align-items: center;
   justify-content: center;
