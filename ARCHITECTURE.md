@@ -934,7 +934,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 - **`src/services/google-sync.ts`** — `runGoogleFullSync` / inbound disable-deleted path use `FULL_SYNC`.
 
-### pending — 2026-07-21 — Group members CSV upload (add + remove)
+### `f970de8` — 2026-07-21 — Group members CSV upload (add + remove)
 
 **Why** — Operators need to add/remove many local-group members from a spreadsheet, not only paste text.
 
