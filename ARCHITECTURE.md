@@ -926,6 +926,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### pending — 2026-07-21 — Connector Sync Scope clears persist on save
+
+**Why** — Clearing Sync OUs / Groups / Users and saving reloaded the old values: the UI omitted empty fields, so `PUT /connectors/:id` merge kept prior `config_json` keys.
+
+**What changed:**
+
+- **UI** — `collectFormData` sends `''` for cleared non-secret fields (secrets still omit blank to keep stored value).
+- **API** — empty/`null` config values delete the key on merge.
+- Asset cache `ud5`.
+
 ### `f970de8` — 2026-07-21 — Fix Google Full Sync 500 (`FULL` vs `FULL_SYNC`)
 
 **Why** — `POST /api/admin/directory/google/full-sync` returned 500 while incremental sync succeeded. `connector_runs.run_type` ENUM allows `FULL_SYNC`, but the code inserted `FULL`.

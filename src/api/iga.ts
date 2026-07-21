@@ -357,6 +357,11 @@ router.put(
       for (const [k, v] of Object.entries(configJson)) {
         // Don't overwrite secret fields with redaction placeholder
         if (typeof v === 'string' && v === '••••••••') continue;
+        // Empty string = explicitly clear (e.g. Sync Scope OU / users / groups)
+        if (v === '' || v === null) {
+          delete merged[k];
+          continue;
+        }
         merged[k] = v;
       }
       await execute(

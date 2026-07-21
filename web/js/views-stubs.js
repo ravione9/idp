@@ -4132,6 +4132,13 @@ function initSourcesTab(panel) {
     await api.saveGoogleOidcSettings(payload);
   }
 
+  // Secrets: omit blank on save so merge keeps the existing stored value.
+  // Everything else (incl. Sync Scope) must send '' so clears persist.
+  const CONNECTOR_SECRET_FIELDS = new Set([
+    'serviceAccountKey', 'bindPassword', 'clientSecret', 'apiToken',
+    'bearerToken', 'oauthToken', 'apiKey',
+  ]);
+
   function collectFormData(bd, connectorType) {
     connectorType = normalizeConnectorType(connectorType);
     const meta = CONNECTOR_TYPES[connectorType] || { fields: [] };
@@ -4143,8 +4150,11 @@ function initSourcesTab(panel) {
       else if (f === 'useSsl') {
         configJson['useSsl']   = el2.value === 'ldaps';
         configJson['startTls'] = el2.value === 'starttls';
+      } else {
+        const val = el2.value.trim();
+        if (val !== '') configJson[f] = val;
+        else if (!CONNECTOR_SECRET_FIELDS.has(f)) configJson[f] = '';
       }
-      else if (el2.value.trim() !== '') configJson[f] = el2.value.trim();
     }
     return {
       name:          bd.querySelector('#cfg-name').value.trim(),
