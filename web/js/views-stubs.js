@@ -30,7 +30,7 @@ function statCard(iconName, label, value, sub = '', cls = 'primary') {
 
 function openModal(html) {
   const bd = el(`<div class="modal-backdrop">${html}</div>`);
-  bd.addEventListener('click', (e) => { if (e.target === bd) bd.remove(); });
+  // Do not close on backdrop click — only Cancel / Close / explicit actions dismiss.
   document.body.appendChild(bd);
   return bd;
 }
@@ -4929,7 +4929,7 @@ function initUsersTab(panel, me = null) {
       panel2.classList.remove('pp-open');
       panel2.addEventListener('transitionend', () => overlay.remove(), { once: true });
     }
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) closePanel(); });
+    // Do not close on outside click — only ✕ / Esc dismiss the panel.
     overlay.querySelector('#pp-close-x').addEventListener('click', closePanel);
     const onKey = (e) => { if (e.key === 'Escape') { closePanel(); document.removeEventListener('keydown', onKey); } };
     document.addEventListener('keydown', onKey);

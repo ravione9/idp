@@ -8,7 +8,7 @@ import { viewOidcApps, viewPrebuiltApps, viewAppDiscovery, viewSsoReports } from
 // Shared helpers (mirrors views-stubs.js — not yet in a shared module)
 function openModal(html) {
   const bd = el(`<div class="modal-backdrop">${html}</div>`);
-  bd.addEventListener('click', (e) => { if (e.target === bd) bd.remove(); });
+  // Do not close on backdrop click — only Cancel / Close / explicit actions dismiss.
   document.body.appendChild(bd);
   return bd;
 }
@@ -1736,7 +1736,6 @@ export async function viewReviews(content) {
     </div></div>`);
     document.body.appendChild(bd);
     bd.querySelector('#items-close').addEventListener('click', () => bd.remove());
-    bd.addEventListener('click', e => { if (e.target === bd) bd.remove(); });
 
     try {
       const r = await api.igaReviewItems(campaignId);
@@ -1816,7 +1815,6 @@ export async function viewReviews(content) {
     </div></div>`);
     document.body.appendChild(bd);
     bd.querySelector('#nrc-cancel').addEventListener('click', () => bd.remove());
-    bd.addEventListener('click', e => { if (e.target === bd) bd.remove(); });
     bd.querySelector('#nrc-save').addEventListener('click', async () => {
       const data = {
         name:        bd.querySelector('#nrc-name').value.trim(),
@@ -1957,7 +1955,6 @@ export async function viewSod(content) {
     </div></div>`);
     document.body.appendChild(bd);
     bd.querySelector('#sp-cancel').addEventListener('click', () => bd.remove());
-    bd.addEventListener('click', e => { if (e.target === bd) bd.remove(); });
     bd.querySelector('#sp-save').addEventListener('click', async () => {
       let conflictGroups;
       try { conflictGroups = JSON.parse(bd.querySelector('#sp-groups').value || '[]'); }
