@@ -2267,16 +2267,20 @@ function openOidcWizard(app, opts = {}) {
   const idpJwks       = `${origin}/.well-known/jwks.json`;
   const tips = vendorTips(app.id, app);
 
+  const allowedScopes = new Set(['openid', 'email', 'profile']);
+  const allowedGrants = new Set(['authorization_code', 'refresh_token']);
   const initial = {
     name:           app.name,
     catalog_slug:   app.id,
     category:       app.cat,
     redirectsRaw:   '',
-    grants:         [...(app.grants || ['authorization_code'])],
-    scopes:         [...(app.scopes || ['openid', 'email', 'profile'])],
+    grants:         (app.grants || ['authorization_code', 'refresh_token']).filter((g) => allowedGrants.has(g)),
+    scopes:         (app.scopes || ['openid', 'email', 'profile']).filter((s) => allowedScopes.has(s)),
     response_types: ['code'],
     token_endpoint_auth_method: 'client_secret_basic',
   };
+  if (!initial.scopes.includes('openid')) initial.scopes.unshift('openid');
+  if (!initial.grants.length) initial.grants = ['authorization_code', 'refresh_token'];
 
   runWizard({
     title:    `Add ${app.name}`,
@@ -2288,68 +2292,70 @@ function openOidcWizard(app, opts = {}) {
         id: 'overview', label: 'Overview',
         render: () => `
           <div class="info-box">
-            <strong>How this works</strong>
+            <strong>Integration steps</strong>
             <ol class="wiz-tip-list">
-              <li>Copy the <strong>IdP OIDC endpoints</strong> from step 2 into ${esc(app.name)}'s OAuth / OIDC settings.</li>
-              <li>Paste the <strong>redirect URIs</strong> that ${esc(app.name)} gives you into step 3.</li>
-              <li>Click <strong>Register</strong> — this IdP <em>auto-generates</em> a <strong>Client ID</strong> and <strong>Client Secret</strong>. Copy both into ${esc(app.name)}; the secret is shown <strong>once</strong>.</li>
+              <li>In ${esc(app.name)}, open OAuth / OpenID Connect settings and paste the <strong>Discovery URL</strong> from the next step.</li>
+              <li>Copy ${esc(app.name)}'s <strong>redirect URI</strong> and paste it in step 3.</li>
+              <li>Finish registration — this IdP creates a <strong>Client ID</strong> and <strong>Client Secret</strong>. Paste both into ${esc(app.name)}. The secret is shown only once.</li>
             </ol>
           </div>
-          <h3 style="font-size:0.95rem;margin:1.25rem 0 0.5rem">Vendor setup steps</h3>
-          <ol class="wiz-tip-list">
-            ${tips.setupSteps.map((s) => `<li>${s}</li>`).join('')}
-          </ol>
-          ${tips.docsUrl ? `<p style="font-size:0.85rem;margin-top:1rem"><a href="${esc(tips.docsUrl)}" target="_blank" rel="noopener">Open ${esc(app.name)} OIDC documentation →</a></p>` : ''}
+          ${tips.setupSteps?.length ? `
+            <h3 style="font-size:0.95rem;margin:1.25rem 0 0.5rem">Vendor notes</h3>
+            <ol class="wiz-tip-list">
+              ${tips.setupSteps.map((s) => `<li>${s}</li>`).join('')}
+            </ol>` : ''}
+          ${tips.docsUrl ? `<p style="font-size:0.85rem;margin-top:1rem"><a href="${esc(tips.docsUrl)}" target="_blank" rel="noopener">${esc(app.name)} documentation →</a></p>` : ''}
         `,
       },
       {
         id: 'idp', label: 'IdP Details',
         render: () => `
           <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
-            Open <strong>${esc(app.name)}</strong>'s OAuth / OpenID Connect settings and paste these IdP values.
-            Most apps accept the <strong>Discovery URL</strong> alone and fetch the rest automatically.
+            Paste the Discovery URL into <strong>${esc(app.name)}</strong>. Most apps load the remaining endpoints automatically.
           </p>
-          <div class="alert alert-success" style="margin-bottom:1rem;font-size:0.85rem">
-            OIDC issuer is <strong>live</strong> — authorization code + PKCE, token, refresh, UserInfo, and JWKS.
+          <div class="form-group">
+            <label class="form-label">Discovery URL</label>
+            ${readonlyInput(idpDiscovery, 'oidc-disc')}
           </div>
           <div class="form-group">
             <label class="form-label">Issuer</label>
             ${readonlyInput(idpIssuer, 'oidc-iss')}
           </div>
-          <div class="form-group">
-            <label class="form-label">OpenID Discovery URL <span class="muted" style="font-weight:400;font-size:0.78rem">(recommended — paste once)</span></label>
-            ${readonlyInput(idpDiscovery, 'oidc-disc')}
-          </div>
-          <div class="form-group">
-            <label class="form-label">Authorization Endpoint</label>
-            ${readonlyInput(idpAuthorize, 'oidc-authz')}
-          </div>
-          <div class="form-group">
-            <label class="form-label">Token Endpoint</label>
-            ${readonlyInput(idpToken, 'oidc-token')}
-          </div>
-          <div class="form-group">
-            <label class="form-label">UserInfo Endpoint</label>
-            ${readonlyInput(idpUserinfo, 'oidc-userinfo')}
-          </div>
-          <div class="form-group">
-            <label class="form-label">JWKS URI</label>
-            ${readonlyInput(idpJwks, 'oidc-jwks')}
-          </div>
+          <details class="oidc-more-endpoints" style="margin-top:0.75rem">
+            <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;color:var(--text-muted)">Additional endpoints</summary>
+            <div style="margin-top:0.85rem;display:grid;gap:0.75rem">
+              <div class="form-group" style="margin:0">
+                <label class="form-label">Authorization</label>
+                ${readonlyInput(idpAuthorize, 'oidc-authz')}
+              </div>
+              <div class="form-group" style="margin:0">
+                <label class="form-label">Token</label>
+                ${readonlyInput(idpToken, 'oidc-token')}
+              </div>
+              <div class="form-group" style="margin:0">
+                <label class="form-label">UserInfo</label>
+                ${readonlyInput(idpUserinfo, 'oidc-userinfo')}
+              </div>
+              <div class="form-group" style="margin:0">
+                <label class="form-label">JWKS</label>
+                ${readonlyInput(idpJwks, 'oidc-jwks')}
+              </div>
+            </div>
+          </details>
         `,
       },
       {
         id: 'redirects', label: 'Redirect URIs',
         render: (d) => `
           <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
-            One per line. ${esc(app.name)} will send users to one of these URLs after they authenticate.
+            Enter the callback URL(s) from ${esc(app.name)} — one per line.
           </p>
           <div class="form-group">
-            <label class="form-label">Allowed Redirect URIs <span style="color:var(--danger)">*</span></label>
-            <textarea class="form-textarea" id="w-uris" rows="5" placeholder="https://app.example.com/callback&#10;https://app.example.com/auth/callback">${esc(d.redirectsRaw || '')}</textarea>
+            <label class="form-label">Redirect URIs <span style="color:var(--danger)">*</span></label>
+            <textarea class="form-textarea" id="w-uris" rows="4" placeholder="https://app.example.com/callback">${esc(d.redirectsRaw || '')}</textarea>
           </div>
           <div class="form-group">
-            <label class="form-label">Display Name</label>
+            <label class="form-label">Display name</label>
             <input class="form-input" id="w-name" value="${esc(d.name)}">
           </div>
         `,
@@ -2376,27 +2382,26 @@ function openOidcWizard(app, opts = {}) {
           const scope = (id) => d.scopes.includes(id) ? 'checked' : '';
           return `
             <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
-              The defaults work for most apps. Adjust if ${esc(app.name)}'s docs require something different.
+              Defaults suit most applications. Change only if ${esc(app.name)} requires different settings.
             </p>
             <div class="form-2col">
               <div class="form-group">
-                <label class="form-label">Grant Types</label>
+                <label class="form-label">Grant types</label>
                 <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-code" ${grant('authorization_code')}><label for="gt-code">authorization_code</label></div>
                 <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-refresh" ${grant('refresh_token')}><label for="gt-refresh">refresh_token</label></div>
-                <div class="form-check-row"><input type="checkbox" class="form-check" id="gt-creds" ${grant('client_credentials')}><label for="gt-creds">client_credentials</label></div>
               </div>
               <div class="form-group">
                 <label class="form-label">Scopes</label>
-                ${['openid','email','profile','groups','roles'].map((s) => `
+                ${['openid','email','profile'].map((s) => `
                   <div class="form-check-row"><input type="checkbox" class="form-check" id="sc-${s}" ${scope(s)}><label for="sc-${s}">${esc(s)}</label></div>
                 `).join('')}
               </div>
               <div class="form-group span2">
-                <label class="form-label">Token Endpoint Auth Method</label>
+                <label class="form-label">Client authentication</label>
                 <select class="form-select" id="w-tea">
-                  <option value="client_secret_basic">client_secret_basic (recommended)</option>
-                  <option value="client_secret_post">client_secret_post</option>
-                  <option value="none">none (public clients / PKCE)</option>
+                  <option value="client_secret_basic">Client secret (Basic) — recommended</option>
+                  <option value="client_secret_post">Client secret (POST body)</option>
+                  <option value="none">None (public client + PKCE)</option>
                 </select>
               </div>
             </div>
@@ -2406,37 +2411,40 @@ function openOidcWizard(app, opts = {}) {
           body.querySelector('#w-tea').value = d.token_endpoint_auth_method;
         },
         validate: (_d, body) => {
-          const grants = ['gt-code','gt-refresh','gt-creds']
-            .filter((id) => body.querySelector('#' + id).checked);
-          if (!grants.length) return 'Select at least one grant type.';
+          if (!body.querySelector('#gt-code').checked && !body.querySelector('#gt-refresh').checked) {
+            return 'Select at least one grant type.';
+          }
+          if (!body.querySelector('#sc-openid').checked) {
+            return 'The openid scope is required.';
+          }
           return null;
         },
         collect: (d, body) => {
           d.grants = [];
           if (body.querySelector('#gt-code').checked)    d.grants.push('authorization_code');
           if (body.querySelector('#gt-refresh').checked) d.grants.push('refresh_token');
-          if (body.querySelector('#gt-creds').checked)   d.grants.push('client_credentials');
-          d.scopes = ['openid','email','profile','groups','roles']
+          d.scopes = ['openid', 'email', 'profile']
             .filter((s) => body.querySelector('#sc-' + s).checked);
           d.token_endpoint_auth_method = body.querySelector('#w-tea').value;
         },
       },
       {
         id: 'review', label: 'Activate',
-        finishLabel: '✓ Register & Reveal Secret',
+        finishLabel: 'Register app',
         render: (d) => {
           const uris = (d.redirectsRaw || '').split('\n').map((s) => s.trim()).filter(Boolean);
           return `
             <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
-              Review the values below. Clicking <strong>Register</strong> creates the client in this IdP and
-              <strong>auto-generates</strong> a Client ID and Client Secret (shown on the next screen only).
+              Confirm the configuration. Registration generates a Client ID and Client Secret for you to paste into ${esc(app.name)}.
             </p>
-            <div class="card">
-              <div class="kv"><div class="k">Name</div><div class="v">${esc(d.name)}</div></div>
-              <div class="kv"><div class="k">Redirect URIs</div><div class="v" style="word-break:break-all">${uris.map((u) => `<code style="font-size:0.78rem;display:block">${esc(u)}</code>`).join('')}</div></div>
-              <div class="kv"><div class="k">Grant Types</div><div class="v">${d.grants.map((g) => `<span class="badge badge-info" style="margin-right:0.25rem">${esc(g)}</span>`).join('')}</div></div>
-              <div class="kv"><div class="k">Scopes</div><div class="v">${d.scopes.map((s) => `<span class="badge badge-neutral" style="margin-right:0.25rem">${esc(s)}</span>`).join('')}</div></div>
-              <div class="kv"><div class="k">Token Auth</div><div class="v"><code>${esc(d.token_endpoint_auth_method)}</code></div></div>
+            <div class="ent-panel">
+              <div class="kv-list">
+                <div class="kv"><div class="k">Name</div><div class="v">${esc(d.name)}</div></div>
+                <div class="kv"><div class="k">Redirect URIs</div><div class="v" style="word-break:break-all">${uris.map((u) => `<code style="font-size:0.78rem;display:block">${esc(u)}</code>`).join('') || '—'}</div></div>
+                <div class="kv"><div class="k">Grant types</div><div class="v">${esc(d.grants.join(', ') || '—')}</div></div>
+                <div class="kv"><div class="k">Scopes</div><div class="v">${esc(d.scopes.join(', ') || '—')}</div></div>
+                <div class="kv"><div class="k">Token auth</div><div class="v"><code>${esc(d.token_endpoint_auth_method)}</code></div></div>
+              </div>
             </div>
           `;
         },
@@ -2457,8 +2465,12 @@ function openOidcWizard(app, opts = {}) {
       bd.querySelector('#wiz-body').innerHTML = `
         <div class="wizard-success">
           <div class="check-circle">${svgIcon('check')}</div>
-          <h3>${esc(d.name)} is registered</h3>
-          <p class="muted">Copy the credentials below — the secret will <strong>not</strong> be shown again.</p>
+          <h3>${esc(d.name)} registered</h3>
+          <p class="muted">Share these values with ${esc(app.name)}. The client secret is shown only once.</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Discovery URL</label>
+          ${readonlyInput(idpDiscovery, 'r-disc')}
         </div>
         <div class="form-group">
           <label class="form-label">Client ID</label>
@@ -2486,19 +2498,28 @@ function openOidcWizard(app, opts = {}) {
 // ─── 8. OIDC / OAuth Applications ────────────────────────────────────────────
 export async function viewOidcApps(content, opts = {}) {
   const embed = !!opts.embed;
-  const actionBtn = `<button class="btn btn-primary" id="new-oidc-btn">+ Register Custom App</button>`;
+  const origin = window.location.origin;
+  const discoveryUrl = `${origin}/.well-known/openid-configuration`;
+  const actionBtn = `<button class="btn btn-primary" id="new-oidc-btn">Register app</button>`;
   content.replaceChildren(el(`<div>
     ${embed
       ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actionBtn}</div>`
-      : header('OIDC / OAuth Applications',
-        'OAuth 2.0 and OpenID Connect — registered clients and pre-built integrations',
-        actionBtn)}
+      : header('OIDC / OAuth', 'Register applications that sign in through this Identity Provider', actionBtn)}
 
-    <!-- ── Registered Clients ───────────────────────────────────────────── -->
-    <div id="list-area" style="margin-bottom:2.5rem">${loading()}</div>
+    <div class="ent-panel" style="margin-bottom:1.25rem">
+      <div class="card-head"><h2 style="margin:0;font-size:1rem">Issuer</h2></div>
+      <div class="card-body">
+        <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">
+          Give this Discovery URL to the application, together with the Client ID and Client Secret created at registration.
+        </p>
+        ${readonlyInput(discoveryUrl, 'oidc-page-disc')}
+      </div>
+    </div>
 
+    <div id="list-area">${loading()}</div>
   </div>`));
   const wrap = content.firstChild;
+  wireCopyButtons(wrap);
 
   wrap.querySelector('#new-oidc-btn')?.addEventListener('click', () => {
     const app = SSO_CATALOG.find((a) => a.id === 'custom-oidc');
@@ -2512,75 +2533,53 @@ export async function viewOidcApps(content, opts = {}) {
     }
   });
 
-  // ── My Applications tab ────────────────────────────────────────────────────
   async function load() {
     try {
       const r = await api.listOidcClients();
-      // Backend returns { data: [...] } — normalise
       const clients = Array.isArray(r) ? r : (r && r.data ? r.data : []);
-      const rows = clients.length ? clients.map(c => `
+      const rows = clients.length ? clients.map((c) => `
         <tr>
-          <td>
-            <div style="display:flex;align-items:center;gap:0.6rem">
-              <div style="width:32px;height:32px;border-radius:8px;background:${
-                ['#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444'][
-                  (c.name||'?').charCodeAt(0)%6]};
-                color:#fff;font-weight:700;font-size:0.875rem;display:flex;
-                align-items:center;justify-content:center;flex-shrink:0">
-                ${esc((c.name||c.client_name||'?')[0].toUpperCase())}
-              </div>
-              <span class="cell-strong">${esc(c.name || c.client_name || '—')}</span>
-            </div>
-          </td>
+          <td><span class="cell-strong">${esc(c.name || c.client_name || '—')}</span></td>
           <td><code style="font-size:0.75rem;user-select:all">${esc(c.client_id)}</code></td>
           <td class="muted" style="font-size:0.8rem">${esc(parseJsonArr(c.grant_types).join(', ') || '—')}</td>
-          <td class="muted" style="font-size:0.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(parseJsonArr(c.redirect_uris).join(', '))}">${esc(parseJsonArr(c.redirect_uris).join(', ') || '—')}</td>
+          <td class="muted" style="font-size:0.8rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+              title="${esc(parseJsonArr(c.redirect_uris).join(', '))}">${esc(parseJsonArr(c.redirect_uris).join(', ') || '—')}</td>
           <td>${c.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
-          <td style="white-space:nowrap">
+          <td class="actions" style="white-space:nowrap">
             <button class="btn btn-sm btn-secondary edit-oidc" data-id="${esc(String(c.id))}">Edit</button>
-            <button class="btn btn-sm btn-secondary rotate-oidc" data-id="${esc(String(c.id))}" data-name="${esc(c.name||c.client_name||'')}">↻ Rotate</button>
+            <button class="btn btn-sm btn-secondary rotate-oidc" data-id="${esc(String(c.id))}" data-name="${esc(c.name || c.client_name || '')}">Rotate secret</button>
             <button class="btn btn-sm btn-danger del-oidc" data-id="${esc(String(c.id))}">Delete</button>
           </td>
         </tr>`).join('')
-        : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No OIDC clients registered yet — use the Pre-built Integrations tab or register a custom app.</p></div></td></tr>`;
+        : `<tr><td colspan="6"><div class="empty-state"><p>No applications registered yet.</p><p class="muted" style="font-size:0.85rem">Register an app to create a Client ID and Client Secret.</p></div></td></tr>`;
 
-      const clientCount = clients.length;
-      const origin = window.location.origin;
       wrap.querySelector('#list-area').innerHTML = `
-        <div class="info-box" style="margin-bottom:1rem;font-size:0.85rem">
-          <strong>Issuer endpoints</strong> —
-          Discovery: <code>${esc(origin)}/.well-known/openid-configuration</code>
-          · Authorize: <code>/oauth/authorize</code>
-          · Token: <code>/oauth/token</code>
-          · UserInfo: <code>/oauth/userinfo</code>
-          · JWKS: <code>/.well-known/jwks.json</code>
-        </div>
-        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem">
-          <h2 style="margin:0;font-size:1.05rem;font-weight:700">Registered Clients
-            ${clientCount ? `<span class="badge badge-info" style="font-size:0.75rem;margin-left:0.4rem">${clientCount}</span>` : ''}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.75rem">
+          <h2 style="margin:0;font-size:1.05rem;font-weight:700">Registered applications
+            ${clients.length ? `<span class="badge badge-info" style="font-size:0.75rem;margin-left:0.35rem">${clients.length}</span>` : ''}
           </h2>
         </div>
         <div class="table-wrap"><table>
-          <thead><tr><th>App Name</th><th>Client ID</th><th>Grant Types</th><th>Redirect URIs</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Client ID</th><th>Grants</th><th>Redirect URIs</th><th>Status</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>`;
 
-      wrap.querySelectorAll('.del-oidc').forEach(btn => {
+      wrap.querySelectorAll('.del-oidc').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          if (!confirm('Delete this OIDC client?')) return;
-          try { await api.deleteOidcClient(btn.dataset.id); await load(); } catch(e) { alert(e.message); }
+          if (!confirm('Delete this OIDC application?')) return;
+          try { await api.deleteOidcClient(btn.dataset.id); await load(); } catch (e) { alert(e.message); }
         });
       });
-      wrap.querySelectorAll('.rotate-oidc').forEach(btn => {
+      wrap.querySelectorAll('.rotate-oidc').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          if (!confirm(`Rotate secret for "${btn.dataset.name}"? The current secret will stop working immediately.`)) return;
+          if (!confirm(`Rotate the client secret for "${btn.dataset.name}"? The current secret will stop working immediately.`)) return;
           try {
             const result = await api.rotateOidcSecret(btn.dataset.id);
             showSecretModal(null, result.client_secret, async () => await load());
-          } catch(e) { alert(e.message); }
+          } catch (e) { alert(e.message); }
         });
       });
-      wrap.querySelectorAll('.edit-oidc').forEach(btn => {
+      wrap.querySelectorAll('.edit-oidc').forEach((btn) => {
         btn.addEventListener('click', async () => {
           try {
             const c = await api.getOidcClient(btn.dataset.id);
@@ -2588,29 +2587,29 @@ export async function viewOidcApps(content, opts = {}) {
           } catch (e) { alert(e.message); }
         });
       });
-    } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
+    } catch (e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
   }
 
   function openEditOidcModal(c, onDone) {
     const uris = parseJsonArr(c.redirect_uris).join('\n');
     const scopes = parseJsonArr(c.scopes).join(' ');
     const grants = parseJsonArr(c.grant_types);
-    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Edit OIDC Client</h2></div>
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Edit application</h2></div>
       <div class="modal-body">
-        <div class="form-group"><label class="form-label">Display Name</label>
+        <div class="form-group"><label class="form-label">Display name</label>
           <input class="form-input" id="e-name" value="${esc(c.name || '')}"></div>
         <div class="form-group"><label class="form-label">Client ID</label>
-          <input class="form-input" value="${esc(c.client_id)}" readonly></div>
-        <div class="form-group"><label class="form-label">Redirect URIs (one per line)</label>
+          <input class="form-input" value="${esc(c.client_id)}" readonly onclick="this.select()"></div>
+        <div class="form-group"><label class="form-label">Redirect URIs <span class="muted" style="font-weight:400">(one per line)</span></label>
           <textarea class="form-textarea" id="e-uris" rows="4">${esc(uris)}</textarea></div>
-        <div class="form-group"><label class="form-label">Scopes (space-separated)</label>
+        <div class="form-group"><label class="form-label">Scopes</label>
           <input class="form-input" id="e-scopes" value="${esc(scopes || 'openid email profile')}"></div>
         <div class="form-group"><label class="form-label">Grant types</label>
-          <label style="display:block;margin:0.25rem 0"><input type="checkbox" id="e-g-code" ${grants.includes('authorization_code') ? 'checked' : ''}> authorization_code</label>
-          <label style="display:block;margin:0.25rem 0"><input type="checkbox" id="e-g-refresh" ${grants.includes('refresh_token') ? 'checked' : ''}> refresh_token</label>
+          <label class="form-check-row"><input type="checkbox" id="e-g-code" ${grants.includes('authorization_code') ? 'checked' : ''}> authorization_code</label>
+          <label class="form-check-row"><input type="checkbox" id="e-g-refresh" ${grants.includes('refresh_token') ? 'checked' : ''}> refresh_token</label>
         </div>
         <div class="form-group"><label class="form-label">Status</label>
-          <select class="form-input" id="e-active">
+          <select class="form-select" id="e-active">
             <option value="1" ${c.active ? 'selected' : ''}>Active</option>
             <option value="0" ${!c.active ? 'selected' : ''}>Off</option>
           </select></div>
@@ -2631,7 +2630,7 @@ export async function viewOidcApps(content, opts = {}) {
       if (bd.querySelector('#e-g-code').checked) grant_types.push('authorization_code');
       if (bd.querySelector('#e-g-refresh').checked) grant_types.push('refresh_token');
       if (!redirect_uris.length) { errEl.innerHTML = `<div class="alert alert-error">At least one redirect URI is required.</div>`; return; }
-      if (!scopesArr.includes('openid')) { errEl.innerHTML = `<div class="alert alert-error">scopes must include openid.</div>`; return; }
+      if (!scopesArr.includes('openid')) { errEl.innerHTML = `<div class="alert alert-error">Scopes must include openid.</div>`; return; }
       try {
         await api.updateOidcClient(c.id, {
           name: bd.querySelector('#e-name').value.trim(),
@@ -2648,24 +2647,28 @@ export async function viewOidcApps(content, opts = {}) {
     });
   }
 
-  // ── parse JSON-stored arrays (DB stores as JSON strings) ────────────────────
   function parseJsonArr(v) {
     if (!v) return [];
     if (Array.isArray(v)) return v;
     try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; }
   }
 
-  // ── show secret in modal (secret rotation) ──────────────────────────────────
   function showSecretModal(clientId, secret, onDone) {
-    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>🔑 Save Your Client Secret</h2></div>
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>New client secret</h2></div>
       <div class="modal-body">
-        <div class="info-box">This secret will <strong>not</strong> be shown again. Copy it now and store it securely.</div>
+        <div class="alert alert-warning" style="margin-bottom:1rem">Copy and store this secret now. It will not be shown again.</div>
         ${clientId ? `<div class="form-group"><label class="form-label">Client ID</label><input class="form-input" value="${esc(clientId)}" readonly onclick="this.select()"></div>` : ''}
-        <div class="form-group"><label class="form-label">Client Secret</label><input class="form-input" id="secret-val" value="${esc(secret||'')}" readonly onclick="this.select()" style="font-family:var(--font-mono);letter-spacing:0.04em"></div>
-        <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard?.writeText(document.querySelector('#secret-val').value).then(()=>this.textContent='✓ Copied!');this.textContent='✓ Copied!'">Copy to Clipboard</button>
+        <div class="form-group"><label class="form-label">Client Secret</label>
+          <input class="form-input" id="secret-val" value="${esc(secret || '')}" readonly onclick="this.select()" style="font-family:var(--font-mono)"></div>
+        <button type="button" class="btn btn-secondary btn-sm" id="secret-copy">Copy secret</button>
       </div>
-      <div class="modal-footer"><button class="btn btn-primary" id="sec-done">Done — I've saved the secret</button></div>
+      <div class="modal-footer"><button class="btn btn-primary" id="sec-done">Done</button></div>
     </div>`);
+    bd.querySelector('#secret-copy')?.addEventListener('click', () => {
+      const val = bd.querySelector('#secret-val')?.value || '';
+      navigator.clipboard?.writeText(val);
+      bd.querySelector('#secret-copy').textContent = 'Copied';
+    });
     bd.querySelector('#sec-done').addEventListener('click', () => { bd.remove(); if (onDone) onDone(); });
   }
 
@@ -5770,8 +5773,8 @@ export async function viewLicense(content) {
       { name: 'SSO / SAML 2.0', status: 'live' },
       { name: 'Multi-Factor Auth (TOTP)', status: 'live' },
       { name: 'IGA / Access Reviews', status: 'live' },
-      { name: 'OIDC Client Registry', status: 'progress' },
-      { name: 'OIDC / OAuth Issuer', status: 'planned' },
+      { name: 'OIDC Client Registry', status: 'live' },
+      { name: 'OIDC / OAuth Issuer', status: 'live' },
       { name: 'Directory Sync', status: 'live' },
       { name: 'Connector Provisioning', status: 'progress' },
       { name: 'Attendance IGA', status: 'live' },

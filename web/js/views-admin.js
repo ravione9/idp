@@ -361,14 +361,14 @@ export async function viewApplications(me, content, initialTab = 'catalog') {
   const tabs = [
     { id: 'catalog',   label: 'Application Catalog' },
     { id: 'saml',      label: 'SAML Applications' },
-    { id: 'oidc',      label: 'OIDC / OAuth' },
+    { id: 'oidc',      label: 'OIDC' },
     { id: 'prebuilt',  label: 'Pre-built Integrations' },
     { id: 'discovery', label: 'App Discovery' },
   ];
   const validTab = tabs.some((t) => t.id === initialTab) ? initialTab : 'catalog';
 
   const wrap = el(`<div>
-    ${header('Applications', 'Catalog, SAML / OIDC clients, pre-built integrations, and shadow-IT discovery')}
+    ${header('Applications', 'Catalog, SAML, and OIDC apps')}
     <div class="inline-tabs" id="apps-tabs">
       ${tabs.map((t) => `<button type="button" class="inline-tab${t.id === validTab ? ' active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('')}
     </div>
