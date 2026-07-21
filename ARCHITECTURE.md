@@ -932,7 +932,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-07-21 — Google group sync auto-discovery (blank Sync Groups)
+### `f2710d8` — 2026-07-21 — Google group sync auto-discovery (blank Sync Groups)
 
 **Why** — Google inbound user sync succeeded but Identity → Groups stayed empty. Unlike AD, blank `syncGroups` skipped group mirroring entirely, and the JWT omitted `admin.directory.group.readonly` unless Sync Groups was filled in.
 
