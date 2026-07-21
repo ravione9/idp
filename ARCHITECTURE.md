@@ -883,7 +883,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-21 — OIDC Client Registry + OAuth / OIDC Issuer (OP)
+### 363f782 — 2026-07-21 — OIDC Client Registry + OAuth / OIDC Issuer (OP)
 
 **Why** — Phase 3 AM: apps need this IdP to issue OIDC tokens (not only SAML). Client registry UI existed; issuer routes did not.
 
