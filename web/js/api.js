@@ -47,8 +47,15 @@ Object.assign(api, {
   deactivateSamlApp:(id) => f(`/api/admin/saml-apps/${id}`, { method: 'DELETE' }),
   updateSamlApp:    (id, data) => f(`/api/admin/saml-apps/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   activateSamlApp:  (id) => f(`/api/admin/saml-apps/${id}/activate`, { method: 'PUT' }),
-  samlAudit:        () => f('/api/admin/audit/saml'),
-  systemAudit:      () => f('/api/admin/audit/system'),
+  samlAudit:        (params = {}) => f(`/api/admin/audit/saml?${new URLSearchParams(params)}`),
+  systemAudit:      (params = {}) => f(`/api/admin/audit/system?${new URLSearchParams(params)}`),
+  authAttemptsAudit:(params = {}) => f(`/api/admin/audit/auth-attempts?${new URLSearchParams(params)}`),
+  auditIntegrity:   (limit = 1000) => f(`/api/admin/audit/integrity?limit=${limit}`),
+  auditSummary:     (params = {}) => f(`/api/admin/audit/summary?${new URLSearchParams(params)}`),
+  auditExportUrl:   (kind, params = {}) => {
+    const q = new URLSearchParams({ ...params, export: 'csv' });
+    return `/api/admin/audit/${kind}?${q}`;
+  },
 
   localLogin: (email, password) =>
     f('/auth/local/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
@@ -229,10 +236,13 @@ Object.assign(api, {
   systemHealth:  () => f('/api/admin/system-health'),
 
   // SSO Reports
-  ssoLoginSummary:  () => f('/api/admin/sso-reports/login-summary'),
-  ssoFailedLogins:  () => f('/api/admin/sso-reports/failed-logins'),
-  ssoAppAdoption:   () => f('/api/admin/sso-reports/app-adoption'),
-  ssoDormantUsers:  () => f('/api/admin/sso-reports/dormant-users'),
+  ssoLoginSummary:  (params = {}) => f(`/api/admin/sso-reports/login-summary?${new URLSearchParams(params)}`),
+  ssoFailedLogins:  (params = {}) => f(`/api/admin/sso-reports/failed-logins?${new URLSearchParams(params)}`),
+  ssoAppAdoption:   (params = {}) => f(`/api/admin/sso-reports/app-adoption?${new URLSearchParams(params)}`),
+  ssoDormantUsers:  (params = {}) => f(`/api/admin/sso-reports/dormant-users?${new URLSearchParams(params)}`),
+  createComplianceReport: (data) => f('/api/iga/reports', { method: 'POST', body: JSON.stringify(data) }),
+  getComplianceReport: (id) => f(`/api/iga/reports/${id}`),
+  complianceReportExportUrl: (id) => `/api/iga/reports/${id}?export=json`,
 
   // Business Roles
   listBusinessRoles:     () => f('/api/admin/business-roles'),

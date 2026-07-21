@@ -1588,66 +1588,394 @@ export async function viewAuth(content) {
 }
 
 /* ---------- Audit ---------- */
+function isoDateDaysAgo(days) {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+function auditFilterBar(fieldsHtml, extras = '') {
+  return `<div class="ent-panel audit-filter-panel">
+    <div class="ent-panel-head">
+      <div class="panel-meta">
+        <h2>Filters</h2>
+        <p class="subtitle">Date range, search, and export for compliance evidence</p>
+      </div>
+      <div class="audit-preset-row">
+        <button type="button" class="btn btn-sm btn-secondary audit-preset" data-days="7">7d</button>
+        <button type="button" class="btn btn-sm btn-secondary audit-preset" data-days="30">30d</button>
+        <button type="button" class="btn btn-sm btn-secondary audit-preset" data-days="90">90d</button>
+      </div>
+    </div>
+    <div class="ent-panel-body">
+      <div class="audit-filter-grid">
+        <div class="form-group">
+          <label class="form-label">From</label>
+          <input type="date" class="form-input audit-from" value="${esc(isoDateDaysAgo(30))}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">To</label>
+          <input type="date" class="form-input audit-to" value="${esc(todayIso())}">
+        </div>
+        ${fieldsHtml}
+      </div>
+      <div class="audit-filter-actions">
+        <button type="button" class="btn btn-primary audit-apply">Apply filters</button>
+        <button type="button" class="btn btn-secondary audit-reset">Reset</button>
+        <button type="button" class="btn btn-secondary audit-export">Export CSV</button>
+        ${extras}
+        <span class="muted audit-meta-count" style="margin-left:auto;font-size:0.8rem"></span>
+      </div>
+    </div>
+  </div>`;
+}
+async function downloadAuditCsv(url, filename) {
+  const res = await fetch(url, { credentials: 'include' });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      const body = await res.json();
+      msg = body.error || body.message || msg;
+    } catch { /* ignore */ }
+    throw new Error(msg || 'Export failed');
+  }
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
 export async function viewAudit(content, initialTab = 'saml') {
-  const tabs = ['saml', 'system', 'sso'];
+  const tabs = ['saml', 'system', 'auth', 'sso'];
   const validTab = tabs.includes(initialTab) ? initialTab : 'saml';
-  const wrap = el(`<div class="ent-page">${header('Audit & SSO Reports', 'SSO assertions, system audit trail, and login analytics')}
+  const wrap = el(`<div class="ent-page">${header('Audit & SSO Reports', 'Low-level audit trails, login forensics, and SSO analytics for compliance')}
     <div class="inline-tabs" id="audit-tabs" style="margin-bottom:1rem">
       <button type="button" class="inline-tab${validTab === 'saml' ? ' active' : ''}" data-tab="saml">SSO assertions</button>
       <button type="button" class="inline-tab${validTab === 'system' ? ' active' : ''}" data-tab="system">System audit</button>
-      <button type="button" class="inline-tab${validTab === 'sso' ? ' active' : ''}" data-tab="sso">SSO Reports</button>
+      <button type="button" class="inline-tab${validTab === 'auth' ? ' active' : ''}" data-tab="auth">Auth attempts</button>
+      <button type="button" class="inline-tab${validTab === 'sso' ? ' active' : ''}" data-tab="sso">SSO analytics</button>
     </div>
+    <div id="aud-summary" class="stat-grid audit-summary-grid" style="margin-bottom:1rem"></div>
     <div id="aud-saml" ${validTab !== 'saml' ? 'hidden' : ''}><div class="loading-row"><span class="spinner"></span></div></div>
     <div id="aud-system" ${validTab !== 'system' ? 'hidden' : ''}></div>
+    <div id="aud-auth" ${validTab !== 'auth' ? 'hidden' : ''}></div>
     <div id="aud-sso" ${validTab !== 'sso' ? 'hidden' : ''}></div>
   </div>`);
   content.replaceChildren(wrap);
   const panels = {
     saml: wrap.querySelector('#aud-saml'),
     system: wrap.querySelector('#aud-system'),
+    auth: wrap.querySelector('#aud-auth'),
     sso: wrap.querySelector('#aud-sso'),
   };
+  const state = {
+    saml: { from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', binding: '', offset: 0, limit: 50 },
+    system: { from: isoDateDaysAgo(30), to: todayIso(), q: '', actor: '', action: '', offset: 0, limit: 50 },
+    auth: { from: isoDateDaysAgo(30), to: todayIso(), q: '', ip: '', success: '', reason: '', offset: 0, limit: 50 },
+  };
 
-  async function loadSaml() {
-    const t = panels.saml;
-    t.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+  async function refreshSummary(from, to) {
+    const box = wrap.querySelector('#aud-summary');
     try {
-      const r = await api.samlAudit(); const rows = r.data || [];
-      t.innerHTML = rows.length
-        ? `<div class="table-wrap"><table>
-            <thead><tr><th>Time</th><th>Application</th><th>User</th><th>Binding</th><th>Relay state</th></tr></thead>
-            <tbody>${rows.map((r) => `<tr>
-              <td class="muted">${fmtDate(r.ts)}</td>
-              <td class="cell-strong">${esc(r.sp_name)}</td>
-              <td>${esc(r.emp_name || r.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(r.emp_email || '')}</span></td>
-              <td><span class="badge badge-info">${esc(r.binding)}</span></td>
-              <td class="muted truncate" title="${esc(r.relay_state || '')}">${esc(r.relay_state || '—')}</td>
-            </tr>`).join('')}</tbody></table></div>`
-        : `<div class="card empty-state"><span class="empty-icon">⌖</span>No SSO activity yet</div>`;
-    } catch (err) {
-      t.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      const r = await api.auditSummary({ from, to });
+      const d = r.data || {};
+      box.innerHTML = `
+        ${statCard('saml', 'SSO assertions', d.ssoAssertions ?? 0, 'in selected range', 'primary')}
+        ${statCard('list', 'System events', d.systemAuditEvents ?? 0, 'tamper-evident log', 'info')}
+        ${statCard('alert', 'Failed logins', d.failedLogins ?? 0, 'auth attempts', 'danger')}
+        ${statCard('check', 'Successful logins', d.successfulLogins ?? 0, 'auth attempts', 'success')}`;
+    } catch {
+      box.innerHTML = '';
     }
   }
-  async function loadSystem() {
-    const t = panels.system;
-    t.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
-    try {
-      const r = await api.systemAudit(); const rows = r.data || [];
-      t.innerHTML = rows.length
-        ? `<div class="table-wrap"><table>
-            <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead>
-            <tbody>${rows.map((r) => `<tr><td class="muted">${fmtDate(r.ts)}</td><td class="cell-strong">${esc(r.actor)}</td><td><code>${esc(r.action)}</code></td><td>${esc(r.target)}</td></tr>`).join('')}</tbody></table></div>`
-        : `<div class="card empty-state">No audit entries yet</div>`;
-    } catch (err) { t.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; }
+
+  function readFilters(panel, kind) {
+    const from = panel.querySelector('.audit-from')?.value || state[kind].from;
+    const to = panel.querySelector('.audit-to')?.value || state[kind].to;
+    Object.assign(state[kind], { from, to });
+    if (kind === 'saml') {
+      state.saml.q = panel.querySelector('.audit-q')?.value.trim() || '';
+      state.saml.app = panel.querySelector('.audit-app')?.value.trim() || '';
+      state.saml.binding = panel.querySelector('.audit-binding')?.value || '';
+    } else if (kind === 'system') {
+      state.system.q = panel.querySelector('.audit-q')?.value.trim() || '';
+      state.system.actor = panel.querySelector('.audit-actor')?.value.trim() || '';
+      state.system.action = panel.querySelector('.audit-action')?.value.trim() || '';
+    } else if (kind === 'auth') {
+      state.auth.q = panel.querySelector('.audit-q')?.value.trim() || '';
+      state.auth.ip = panel.querySelector('.audit-ip')?.value.trim() || '';
+      state.auth.success = panel.querySelector('.audit-success')?.value || '';
+      state.auth.reason = panel.querySelector('.audit-reason')?.value.trim() || '';
+    }
+    return state[kind];
   }
+
+  function wireFilterChrome(panel, kind, reload) {
+    panel.querySelectorAll('.audit-preset').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const days = Number(btn.dataset.days) || 30;
+        panel.querySelector('.audit-from').value = isoDateDaysAgo(days);
+        panel.querySelector('.audit-to').value = todayIso();
+        state[kind].offset = 0;
+        void reload();
+      });
+    });
+    panel.querySelector('.audit-apply')?.addEventListener('click', () => {
+      state[kind].offset = 0;
+      void reload();
+    });
+    panel.querySelector('.audit-reset')?.addEventListener('click', () => {
+      state[kind] = { ...state[kind], from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', binding: '', actor: '', action: '', ip: '', success: '', reason: '', offset: 0 };
+      void reload(true);
+    });
+    panel.querySelector('.audit-export')?.addEventListener('click', async () => {
+      const f = readFilters(panel, kind);
+      const params = { from: f.from, to: f.to, limit: '10000' };
+      if (kind === 'saml') {
+        if (f.q) params.q = f.q;
+        if (f.app) params.app = f.app;
+        if (f.binding) params.binding = f.binding;
+      } else if (kind === 'system') {
+        if (f.q) params.q = f.q;
+        if (f.actor) params.actor = f.actor;
+        if (f.action) params.action = f.action;
+      } else {
+        if (f.q) params.q = f.q;
+        if (f.ip) params.ip = f.ip;
+        if (f.success) params.success = f.success;
+        if (f.reason) params.reason = f.reason;
+      }
+      const pathKind = kind === 'auth' ? 'auth-attempts' : kind === 'system' ? 'system' : 'saml';
+      try {
+        await downloadAuditCsv(api.auditExportUrl(pathKind, params), `${pathKind}-${f.from}-${f.to}.csv`);
+      } catch (err) {
+        alert(err.message || 'Export failed');
+      }
+    });
+  }
+
+  function pagerHtml(meta, offset, limit) {
+    const total = meta?.total ?? 0;
+    const page = Math.floor(offset / limit) + 1;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    return `<div class="audit-pager">
+      <button type="button" class="btn btn-sm btn-secondary audit-prev" ${offset <= 0 ? 'disabled' : ''}>Previous</button>
+      <span class="muted">Page ${page} of ${pages} · ${total} total</span>
+      <button type="button" class="btn btn-sm btn-secondary audit-next" ${offset + limit >= total ? 'disabled' : ''}>Next</button>
+    </div>`;
+  }
+
+  async function loadSaml(rebuild = false) {
+    const t = panels.saml;
+    if (rebuild || !t.querySelector('.audit-filter-panel')) {
+      t.innerHTML = `${auditFilterBar(`
+        <div class="form-group"><label class="form-label">User / email</label>
+          <input class="form-input audit-q" placeholder="name or email" value="${esc(state.saml.q)}"></div>
+        <div class="form-group"><label class="form-label">Application</label>
+          <input class="form-input audit-app" placeholder="app name or slug" value="${esc(state.saml.app)}"></div>
+        <div class="form-group"><label class="form-label">Binding</label>
+          <select class="form-select audit-binding">
+            <option value="">All</option>
+            <option value="POST" ${state.saml.binding === 'POST' ? 'selected' : ''}>POST</option>
+            <option value="REDIRECT" ${state.saml.binding === 'REDIRECT' ? 'selected' : ''}>REDIRECT</option>
+            <option value="IDP_INITIATED" ${state.saml.binding === 'IDP_INITIATED' ? 'selected' : ''}>IDP_INITIATED</option>
+          </select></div>`)}
+        <div class="audit-table-area"><div class="loading-row"><span class="spinner"></span></div></div>`;
+      wireFilterChrome(t, 'saml', (rb) => loadSaml(!!rb));
+    }
+    const area = t.querySelector('.audit-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const f = readFilters(t, 'saml');
+      await refreshSummary(f.from, f.to);
+      const params = { from: f.from, to: f.to, limit: String(f.limit), offset: String(f.offset) };
+      if (f.q) params.q = f.q;
+      if (f.app) params.app = f.app;
+      if (f.binding) params.binding = f.binding;
+      const r = await api.samlAudit(params);
+      const rows = r.data || [];
+      const meta = r.meta || {};
+      t.querySelector('.audit-meta-count').textContent = `${meta.total ?? rows.length} matching assertions`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Time</th><th>Application</th><th>User</th><th>Binding</th><th>Request ID</th><th>Relay state</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="muted">${fmtDate(row.ts)}</td>
+              <td class="cell-strong">${esc(row.sp_name)}<br><span class="muted" style="font-size:0.75rem">${esc(row.sp_slug || '')}</span></td>
+              <td>${esc(row.emp_name || row.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(row.emp_email || '')}</span></td>
+              <td><span class="badge badge-info">${esc(row.binding)}</span></td>
+              <td class="muted truncate" title="${esc(row.request_id || '')}">${esc(row.request_id || '—')}</td>
+              <td class="muted truncate" title="${esc(row.relay_state || '')}">${esc(row.relay_state || '—')}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(meta, f.offset, f.limit)}`
+        : `<div class="card empty-state"><span class="empty-icon">⌖</span>No SSO assertions for this filter</div>`;
+      area.querySelector('.audit-prev')?.addEventListener('click', () => {
+        state.saml.offset = Math.max(0, state.saml.offset - state.saml.limit);
+        void loadSaml();
+      });
+      area.querySelector('.audit-next')?.addEventListener('click', () => {
+        state.saml.offset += state.saml.limit;
+        void loadSaml();
+      });
+    } catch (err) {
+      area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
+  async function loadSystem(rebuild = false) {
+    const t = panels.system;
+    if (rebuild || !t.querySelector('.audit-filter-panel')) {
+      t.innerHTML = `${auditFilterBar(`
+        <div class="form-group"><label class="form-label">Search</label>
+          <input class="form-input audit-q" placeholder="actor, action, target, payload" value="${esc(state.system.q)}"></div>
+        <div class="form-group"><label class="form-label">Actor</label>
+          <input class="form-input audit-actor" placeholder="emp id / system" value="${esc(state.system.actor)}"></div>
+        <div class="form-group"><label class="form-label">Action</label>
+          <input class="form-input audit-action" placeholder="e.g. MFA_DISABLE" value="${esc(state.system.action)}"></div>`,
+        `<button type="button" class="btn btn-sm btn-secondary" id="audit-verify-chain">Verify integrity</button>`)}
+        <div id="audit-integrity-msg"></div>
+        <div class="audit-table-area"><div class="loading-row"><span class="spinner"></span></div></div>`;
+      wireFilterChrome(t, 'system', (rb) => loadSystem(!!rb));
+      t.querySelector('#audit-verify-chain')?.addEventListener('click', async () => {
+        const msg = t.querySelector('#audit-integrity-msg');
+        msg.innerHTML = `<div class="muted" style="padding:0.5rem 0">Verifying hash chain…</div>`;
+        try {
+          const r = await api.auditIntegrity(2000);
+          const d = r.data || {};
+          msg.innerHTML = d.valid
+            ? `<div class="alert alert-success">Hash chain intact — checked ${d.checked} rows.</div>`
+            : `<div class="alert alert-error">Integrity failure at id ${esc(String(d.firstInvalidId))} (checked ${d.checked}).</div>`;
+        } catch (err) {
+          msg.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+        }
+      });
+    }
+    const area = t.querySelector('.audit-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const f = readFilters(t, 'system');
+      await refreshSummary(f.from, f.to);
+      const params = { from: f.from, to: f.to, limit: String(f.limit), offset: String(f.offset) };
+      if (f.q) params.q = f.q;
+      if (f.actor) params.actor = f.actor;
+      if (f.action) params.action = f.action;
+      const r = await api.systemAudit(params);
+      const rows = r.data || [];
+      const meta = r.meta || {};
+      t.querySelector('.audit-meta-count').textContent = `${meta.total ?? rows.length} matching events`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
+            <tbody>${rows.map((row, idx) => {
+              let payload = row.payload;
+              if (typeof payload === 'string') {
+                try { payload = JSON.parse(payload); } catch { /* keep string */ }
+              }
+              const payloadStr = payload == null ? '' : (typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2));
+              return `<tr>
+                <td class="muted">${fmtDate(row.ts)}</td>
+                <td class="cell-strong">${esc(row.actor)}</td>
+                <td><code>${esc(row.action)}</code></td>
+                <td>${esc(row.target || '—')}</td>
+                <td>${payloadStr
+                  ? `<button type="button" class="btn btn-sm btn-secondary audit-payload-btn" data-idx="${idx}">View</button>
+                     <pre class="audit-payload is-hidden" data-payload-idx="${idx}">${esc(payloadStr)}</pre>`
+                  : '<span class="muted">—</span>'}</td>
+              </tr>`;
+            }).join('')}</tbody></table></div>${pagerHtml(meta, f.offset, f.limit)}`
+        : `<div class="card empty-state">No audit entries for this filter</div>`;
+      area.querySelectorAll('.audit-payload-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const pre = area.querySelector(`[data-payload-idx="${btn.dataset.idx}"]`);
+          if (!pre) return;
+          pre.classList.toggle('is-hidden');
+          btn.textContent = pre.classList.contains('is-hidden') ? 'View' : 'Hide';
+        });
+      });
+      area.querySelector('.audit-prev')?.addEventListener('click', () => {
+        state.system.offset = Math.max(0, state.system.offset - state.system.limit);
+        void loadSystem();
+      });
+      area.querySelector('.audit-next')?.addEventListener('click', () => {
+        state.system.offset += state.system.limit;
+        void loadSystem();
+      });
+    } catch (err) {
+      area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
+  async function loadAuth(rebuild = false) {
+    const t = panels.auth;
+    if (rebuild || !t.querySelector('.audit-filter-panel')) {
+      t.innerHTML = `${auditFilterBar(`
+        <div class="form-group"><label class="form-label">Email</label>
+          <input class="form-input audit-q" placeholder="user@lenskart.com" value="${esc(state.auth.q)}"></div>
+        <div class="form-group"><label class="form-label">IP</label>
+          <input class="form-input audit-ip" placeholder="client IP" value="${esc(state.auth.ip)}"></div>
+        <div class="form-group"><label class="form-label">Result</label>
+          <select class="form-select audit-success">
+            <option value="">All</option>
+            <option value="1" ${state.auth.success === '1' ? 'selected' : ''}>Success</option>
+            <option value="0" ${state.auth.success === '0' ? 'selected' : ''}>Failed</option>
+          </select></div>
+        <div class="form-group"><label class="form-label">Reason</label>
+          <input class="form-input audit-reason" placeholder="invalid_password, mfa_required…" value="${esc(state.auth.reason)}"></div>`)}
+        <div class="audit-table-area"><div class="loading-row"><span class="spinner"></span></div></div>`;
+      wireFilterChrome(t, 'auth', (rb) => loadAuth(!!rb));
+    }
+    const area = t.querySelector('.audit-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const f = readFilters(t, 'auth');
+      await refreshSummary(f.from, f.to);
+      const params = { from: f.from, to: f.to, limit: String(f.limit), offset: String(f.offset) };
+      if (f.q) params.q = f.q;
+      if (f.ip) params.ip = f.ip;
+      if (f.success) params.success = f.success;
+      if (f.reason) params.reason = f.reason;
+      const r = await api.authAttemptsAudit(params);
+      const rows = r.data || [];
+      const meta = r.meta || {};
+      t.querySelector('.audit-meta-count').textContent = `${meta.total ?? rows.length} matching attempts`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Time</th><th>Email</th><th>IP</th><th>Result</th><th>Reason</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="muted">${fmtDate(row.ts)}</td>
+              <td class="cell-strong">${esc(row.email || '—')}</td>
+              <td class="muted" style="font-family:var(--mono,monospace)">${esc(row.ip || '—')}</td>
+              <td>${row.success ? '<span class="badge badge-success">Success</span>' : '<span class="badge badge-danger">Failed</span>'}</td>
+              <td><code>${esc(row.reason || '—')}</code></td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(meta, f.offset, f.limit)}`
+        : `<div class="card empty-state">No auth attempts for this filter</div>`;
+      area.querySelector('.audit-prev')?.addEventListener('click', () => {
+        state.auth.offset = Math.max(0, state.auth.offset - state.auth.limit);
+        void loadAuth();
+      });
+      area.querySelector('.audit-next')?.addEventListener('click', () => {
+        state.auth.offset += state.auth.limit;
+        void loadAuth();
+      });
+    } catch (err) {
+      area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
   async function showTab(name) {
     wrap.querySelectorAll('#audit-tabs .inline-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     for (const [id, panel] of Object.entries(panels)) panel.hidden = id !== name;
     syncAppUrl('audit', name, 'saml');
-    if (name === 'saml') await loadSaml();
-    else if (name === 'system') await loadSystem();
-    else if (name === 'sso' && !panels.sso.dataset.loaded) {
-      panels.sso.dataset.loaded = '1';
+    if (name === 'saml') await loadSaml(true);
+    else if (name === 'system') await loadSystem(true);
+    else if (name === 'auth') await loadAuth(true);
+    else if (name === 'sso') {
+      panels.sso.innerHTML = '';
       await viewSsoReports(panels.sso, { embed: true });
     }
   }
@@ -2003,14 +2331,102 @@ export async function viewRisk(content) {
 }
 
 export async function viewReports(content) {
-  await simpleTable(
-    content, 'Compliance Reports', 'SOX, GDPR, HIPAA evidence — generated snapshots',
-    () => api.igaReports(),
-    ['Name', 'Framework', 'Period', 'Generated', 'Artifact'],
-    (r) => `<td class="cell-strong">${esc(r.name)}</td>
-      <td><span class="badge badge-info">${esc(r.framework || '—')}</span></td>
-      <td class="muted">${esc(r.period || '—')}</td>
-      <td class="muted">${r.generated_at ? fmtDate(r.generated_at) : '—'}</td>
-      <td>${r.artifact_url ? `<a href="${esc(r.artifact_url)}" target="_blank" class="btn btn-sm btn-secondary">Download</a>` : '—'}</td>`,
-  );
+  const wrap = el(`<div class="ent-page">
+    ${header('Compliance Reports', 'Generate SOX / GDPR / HIPAA / PCI evidence snapshots from audit trails',
+      `<button class="btn btn-primary" id="comp-new">+ Generate report</button>`)}
+    <div id="comp-msg"></div>
+    <div id="comp-area"><div class="loading-row"><span class="spinner"></span></div></div>
+  </div>`);
+  content.replaceChildren(wrap);
+
+  async function load() {
+    const area = wrap.querySelector('#comp-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.igaReports();
+      const rows = r.data || [];
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Name</th><th>Framework</th><th>Period</th><th>Generated</th><th>Evidence</th></tr></thead>
+            <tbody>${rows.map((row) => {
+              const period = (row.period_start || row.period_end)
+                ? `${row.period_start || '—'} → ${row.period_end || '—'}`
+                : (row.period || '—');
+              return `<tr>
+                <td class="cell-strong">${esc(row.name)}</td>
+                <td><span class="badge badge-info">${esc(row.framework || '—')}</span></td>
+                <td class="muted">${esc(period)}</td>
+                <td class="muted">${row.generated_at ? fmtDate(row.generated_at) : '—'}</td>
+                <td>
+                  <a class="btn btn-sm btn-secondary" href="${esc(api.complianceReportExportUrl(row.id))}" target="_blank" rel="noopener">Download JSON</a>
+                </td>
+              </tr>`;
+            }).join('')}</tbody></table></div>`
+        : `<div class="card empty-state"><span class="empty-icon">▣</span>No compliance snapshots yet. Generate one for your audit period.</div>`;
+    } catch (err) {
+      area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
+  wrap.querySelector('#comp-new').addEventListener('click', () => {
+    const from = isoDateDaysAgo(90);
+    const to = todayIso();
+    const bd = openModal(`<div class="modal" style="max-width:520px">
+      <div class="modal-header"><h2>Generate compliance report</h2></div>
+      <div class="modal-body">
+        <p class="muted" style="margin-top:0">Aggregates SSO assertions, system audit events, auth attempts, and hash-chain integrity for the selected period.</p>
+        <div class="form-group"><label class="form-label">Name</label>
+          <input class="form-input" id="comp-name" value="Quarterly access evidence"></div>
+        <div class="form-group"><label class="form-label">Framework</label>
+          <select class="form-select" id="comp-fw">
+            <option value="SOX">SOX</option>
+            <option value="GDPR">GDPR</option>
+            <option value="HIPAA">HIPAA</option>
+            <option value="PCI">PCI</option>
+            <option value="ISO27001">ISO 27001</option>
+            <option value="CUSTOM">Custom</option>
+          </select></div>
+        <div class="form-row-2">
+          <div class="form-group"><label class="form-label">Period start</label>
+            <input type="date" class="form-input" id="comp-from" value="${esc(from)}"></div>
+          <div class="form-group"><label class="form-label">Period end</label>
+            <input type="date" class="form-input" id="comp-to" value="${esc(to)}"></div>
+        </div>
+        <div id="comp-modal-msg"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="comp-save">Generate</button>
+        <button class="btn btn-secondary" id="comp-cancel">Cancel</button>
+      </div>
+    </div>`);
+    bd.querySelector('#comp-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#comp-save').addEventListener('click', async () => {
+      const msg = bd.querySelector('#comp-modal-msg');
+      const btn = bd.querySelector('#comp-save');
+      const payload = {
+        name: bd.querySelector('#comp-name').value.trim(),
+        framework: bd.querySelector('#comp-fw').value,
+        periodStart: bd.querySelector('#comp-from').value,
+        periodEnd: bd.querySelector('#comp-to').value,
+      };
+      if (!payload.name || !payload.periodStart || !payload.periodEnd) {
+        msg.innerHTML = `<div class="alert alert-error">Name and period are required.</div>`;
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Generating…';
+      try {
+        await api.createComplianceReport(payload);
+        bd.remove();
+        wrap.querySelector('#comp-msg').innerHTML = `<div class="alert alert-success">Compliance evidence report generated.</div>`;
+        await load();
+      } catch (err) {
+        msg.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+        btn.disabled = false;
+        btn.textContent = 'Generate';
+      }
+    });
+  });
+
+  await load();
 }

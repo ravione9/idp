@@ -7066,58 +7066,116 @@ function csvDownload(filename, rows) {
 
 export async function viewSsoReports(content, opts = {}) {
   const embed = !!opts.embed;
-  content.replaceChildren(el(`<div>
+  content.replaceChildren(el(`<div class="${embed ? '' : 'ent-page'}">
     ${embed ? '' : header('SSO Reports', 'Login analytics, adoption and dormancy reports')}
     <div id="sso-area">${loading()}</div>
   </div>`));
   const wrap = content.firstChild;
-  try {
-    const [summary, failed, adoption, dormant] = (await Promise.all([
-      api.ssoLoginSummary(), api.ssoFailedLogins(), api.ssoAppAdoption(), api.ssoDormantUsers()
-    ])).map(norm);
+  const area = wrap.querySelector('#sso-area');
 
-    const summaryRows = summary.map(r => `<tr><td>${esc(r.app||r.application||'—')}</td><td>${r.count ?? 0}</td></tr>`).join('') || `<tr><td colspan="2" class="muted">No data</td></tr>`;
-    const failedRows = failed.map(r => `<tr><td>${esc(r.email||'—')}</td><td>${r.count ?? 0}</td><td class="muted">${r.last_attempt ? fmtDate(r.last_attempt) : '—'}</td></tr>`).join('') || `<tr><td colspan="3" class="muted">No data</td></tr>`;
-    const adoptionRows = adoption.map(r => `<tr><td>${esc(r.app||r.application||'—')}</td><td>${r.entitled ?? 0}</td><td>${r.signed_in ?? 0}</td><td>${r.adoption_pct != null ? r.adoption_pct+'%' : '—'}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">No data</td></tr>`;
-    const dormantRows = dormant.map(r => `<tr><td>${esc(r.email||'—')}</td><td class="muted">${r.last_login ? fmtDate(r.last_login) : 'Never'}</td></tr>`).join('') || `<tr><td colspan="2" class="muted">No data</td></tr>`;
+  function daysAgo(n) {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - n);
+    return d.toISOString().slice(0, 10);
+  }
+  function today() { return new Date().toISOString().slice(0, 10); }
 
-    wrap.querySelector('#sso-area').innerHTML = `
-      <div class="grid-2">
-        <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
-            <h2 style="margin:0">Login Summary</h2>
-            <button class="btn btn-sm btn-secondary" id="exp-summary">Export CSV</button>
-          </div>
-          <div class="table-wrap"><table><thead><tr><th>App</th><th>Logins</th></tr></thead><tbody>${summaryRows}</tbody></table></div>
-        </div>
-        <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
-            <h2 style="margin:0">Failed Logins</h2>
-            <button class="btn btn-sm btn-secondary" id="exp-failed">Export CSV</button>
-          </div>
-          <div class="table-wrap"><table><thead><tr><th>Email</th><th>Count</th><th>Last Attempt</th></tr></thead><tbody>${failedRows}</tbody></table></div>
-        </div>
-        <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
-            <h2 style="margin:0">App Adoption</h2>
-            <button class="btn btn-sm btn-secondary" id="exp-adoption">Export CSV</button>
-          </div>
-          <div class="table-wrap"><table><thead><tr><th>App</th><th>Entitled</th><th>Signed In</th><th>Adoption</th></tr></thead><tbody>${adoptionRows}</tbody></table></div>
-        </div>
-        <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
-            <h2 style="margin:0">Dormant Users</h2>
-            <button class="btn btn-sm btn-secondary" id="exp-dormant">Export CSV</button>
-          </div>
-          <div class="table-wrap"><table><thead><tr><th>Email</th><th>Last Login</th></tr></thead><tbody>${dormantRows}</tbody></table></div>
-        </div>
-      </div>`;
+  async function load(from = daysAgo(30), to = today()) {
+    area.innerHTML = loading();
+    try {
+      const params = { from, to };
+      const [summaryRes, failedRes, adoptionRes, dormantRes] = await Promise.all([
+        api.ssoLoginSummary(params),
+        api.ssoFailedLogins(params),
+        api.ssoAppAdoption(params),
+        api.ssoDormantUsers(params),
+      ]);
+      const summary = norm(summaryRes);
+      const failed = norm(failedRes);
+      const adoption = norm(adoptionRes);
+      const dormant = norm(dormantRes);
+      const meta = summaryRes.meta || failedRes.meta || { from, to, days: 30 };
 
-    wrap.querySelector('#exp-summary').addEventListener('click', () => csvDownload('login-summary.csv', [['App','Logins'], ...summary.map(r => [r.app||r.application||'', r.count||0])]));
-    wrap.querySelector('#exp-failed').addEventListener('click', () => csvDownload('failed-logins.csv', [['Email','Count','Last Attempt'], ...failed.map(r => [r.email||'', r.count||0, r.last_attempt||''])]));
-    wrap.querySelector('#exp-adoption').addEventListener('click', () => csvDownload('app-adoption.csv', [['App','Entitled','Signed In','Adoption %'], ...adoption.map(r => [r.app||r.application||'', r.entitled||0, r.signed_in||0, r.adoption_pct||''])]));
-    wrap.querySelector('#exp-dormant').addEventListener('click', () => csvDownload('dormant-users.csv', [['Email','Last Login'], ...dormant.map(r => [r.email||'', r.last_login||'Never'])]));
-  } catch(e) { wrap.querySelector('#sso-area').innerHTML = errHtml(e.message); }
+      const summaryRows = summary.map(r => `<tr><td>${esc(r.app||r.application||'—')}</td><td>${r.count ?? 0}</td></tr>`).join('') || `<tr><td colspan="2" class="muted">No data</td></tr>`;
+      const failedRows = failed.map(r => `<tr><td>${esc(r.email||'—')}</td><td>${r.count ?? 0}</td><td class="muted">${r.last_attempt ? fmtDate(r.last_attempt) : '—'}</td></tr>`).join('') || `<tr><td colspan="3" class="muted">No data</td></tr>`;
+      const adoptionRows = adoption.map(r => `<tr><td>${esc(r.app||r.application||'—')}</td><td>${r.entitled ?? 0}</td><td>${r.signed_in ?? 0}</td><td>${r.adoption_pct != null ? r.adoption_pct+'%' : '—'}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">No data</td></tr>`;
+      const dormantRows = dormant.map(r => `<tr><td>${esc(r.email||'—')}</td><td class="muted">${r.last_login ? fmtDate(r.last_login) : 'Never'}</td></tr>`).join('') || `<tr><td colspan="2" class="muted">No data</td></tr>`;
+
+      area.innerHTML = `
+        <div class="ent-panel" style="margin-bottom:1rem">
+          <div class="ent-panel-head">
+            <div class="panel-meta">
+              <h2>Report window</h2>
+              <p class="subtitle">Analytics for SSO adoption, failures, and dormancy</p>
+            </div>
+            <div class="audit-preset-row">
+              <button type="button" class="btn btn-sm btn-secondary sso-preset" data-days="7">7d</button>
+              <button type="button" class="btn btn-sm btn-secondary sso-preset" data-days="30">30d</button>
+              <button type="button" class="btn btn-sm btn-secondary sso-preset" data-days="90">90d</button>
+            </div>
+          </div>
+          <div class="ent-panel-body">
+            <div class="audit-filter-grid" style="max-width:520px">
+              <div class="form-group"><label class="form-label">From</label>
+                <input type="date" class="form-input" id="sso-from" value="${esc(from)}"></div>
+              <div class="form-group"><label class="form-label">To</label>
+                <input type="date" class="form-input" id="sso-to" value="${esc(to)}"></div>
+            </div>
+            <div class="audit-filter-actions">
+              <button type="button" class="btn btn-primary" id="sso-apply">Apply</button>
+              <span class="muted" style="font-size:0.8rem">Window: ${esc(meta.from || from)} → ${esc(meta.to || to || 'now')}</span>
+            </div>
+          </div>
+        </div>
+        <div class="mfa-delivery-split">
+          <div class="ent-panel">
+            <div class="ent-panel-head">
+              <div class="panel-meta"><h2>Login summary</h2><p class="subtitle">SSO assertions per application</p></div>
+              <button class="btn btn-sm btn-secondary" id="exp-summary">Export CSV</button>
+            </div>
+            <div class="ent-panel-body"><div class="table-wrap"><table><thead><tr><th>App</th><th>Logins</th></tr></thead><tbody>${summaryRows}</tbody></table></div></div>
+          </div>
+          <div class="ent-panel">
+            <div class="ent-panel-head">
+              <div class="panel-meta"><h2>Failed logins</h2><p class="subtitle">Portal auth failures by email</p></div>
+              <button class="btn btn-sm btn-secondary" id="exp-failed">Export CSV</button>
+            </div>
+            <div class="ent-panel-body"><div class="table-wrap"><table><thead><tr><th>Email</th><th>Count</th><th>Last attempt</th></tr></thead><tbody>${failedRows}</tbody></table></div></div>
+          </div>
+          <div class="ent-panel">
+            <div class="ent-panel-head">
+              <div class="panel-meta"><h2>App adoption</h2><p class="subtitle">Active employees vs signed-in</p></div>
+              <button class="btn btn-sm btn-secondary" id="exp-adoption">Export CSV</button>
+            </div>
+            <div class="ent-panel-body"><div class="table-wrap"><table><thead><tr><th>App</th><th>Entitled</th><th>Signed in</th><th>Adoption</th></tr></thead><tbody>${adoptionRows}</tbody></table></div></div>
+          </div>
+          <div class="ent-panel">
+            <div class="ent-panel-head">
+              <div class="panel-meta"><h2>Dormant users</h2><p class="subtitle">No session activity in window</p></div>
+              <button class="btn btn-sm btn-secondary" id="exp-dormant">Export CSV</button>
+            </div>
+            <div class="ent-panel-body"><div class="table-wrap"><table><thead><tr><th>Email</th><th>Last login</th></tr></thead><tbody>${dormantRows}</tbody></table></div></div>
+          </div>
+        </div>`;
+
+      area.querySelector('#sso-apply')?.addEventListener('click', () => {
+        void load(area.querySelector('#sso-from').value, area.querySelector('#sso-to').value);
+      });
+      area.querySelectorAll('.sso-preset').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          void load(daysAgo(Number(btn.dataset.days) || 30), today());
+        });
+      });
+      area.querySelector('#exp-summary')?.addEventListener('click', () => csvDownload('login-summary.csv', [['App','Logins'], ...summary.map(r => [r.app||r.application||'', r.count||0])]));
+      area.querySelector('#exp-failed')?.addEventListener('click', () => csvDownload('failed-logins.csv', [['Email','Count','Last Attempt'], ...failed.map(r => [r.email||'', r.count||0, r.last_attempt||''])]));
+      area.querySelector('#exp-adoption')?.addEventListener('click', () => csvDownload('app-adoption.csv', [['App','Entitled','Signed In','Adoption %'], ...adoption.map(r => [r.app||r.application||'', r.entitled||0, r.signed_in||0, r.adoption_pct||''])]));
+      area.querySelector('#exp-dormant')?.addEventListener('click', () => csvDownload('dormant-users.csv', [['Email','Last Login'], ...dormant.map(r => [r.email||'', r.last_login||'Never'])]));
+    } catch (e) {
+      area.innerHTML = errHtml(e.message);
+    }
+  }
+
+  await load();
 }
 
 // ─── 20. General Settings ────────────────────────────────────────────────────
