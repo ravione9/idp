@@ -913,7 +913,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-21 — Email OTP: HTTP API transport + Admin GUI
+### `07895eb` — 2026-07-21 — Email OTP: HTTP API transport + Admin GUI
 
 **Why** — Operators need API-based email (SendGrid-style gateway) in addition to classic SMTP.
 
@@ -923,7 +923,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **Dispatch** — `notification.ts` posts `{ to, subject, body, from }` when transport is `api`.
 - **UI** — Email OTP form offers SMTP vs HTTP API pills; status shows Ready · SMTP / Ready · API.
 
-### TBD — 2026-07-21 — MFA OTP delivery configurable from Admin GUI
+### `07895eb` — 2026-07-21 — MFA OTP delivery configurable from Admin GUI
 
 **Why** — Operators need to configure Email/SMS OTP delivery from the portal (enterprise forms), not by editing `.env`.
 
@@ -935,7 +935,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **UI** — MFA Methods “OTP delivery channels” enterprise panel (SMTP + SMS forms, status badges, clear actions).
 - **Docs** — env vars documented as optional fallbacks.
 
-### TBD — 2026-07-21 — MFA: Email OTP, SMS OTP, WebAuthn
+### `07895eb` — 2026-07-21 — MFA: Email OTP, SMS OTP, WebAuthn
 
 **Why** — Admin MFA Methods listed WebAuthn, Email OTP, and SMS OTP as planned only; operators need enrollment, login verification, and policy toggles.
 
@@ -947,7 +947,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **UI** — Admin MFA Methods live badges + policy checkboxes; Settings MFA grid; login step supports OTP + passkey.
 - **Env** — optional `SMS_API_URL`, `MFA_OTP_DEV_LOG`, `WEBAUTHN_RP_ID`.
 
-### TBD — 2026-07-21 — Connector status = Connected only after test
+### `07895eb` — 2026-07-21 — Connector status = Connected only after test
 
 **Why** — Directory sources showed ACTIVE immediately on save even when never tested/synced.
 
@@ -955,9 +955,9 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 - New connectors start as **CONFIGURED**; **CONNECTED** only after a successful Test Connection (or health check).
 - Failed tests set **ERROR**; periodic health scheduler re-checks every 15 minutes.
-- Sync requires CONNECTED (legacy ACTIVE still allowed). Migration 034 backfills never-synced ACTIVE → CONFIGURED.
+- Sync requires CONNECTED (legacy ACTIVE still allowed). Migration `037_connector_health.sql` backfills never-synced ACTIVE → CONFIGURED.
 
-### TBD — 2026-07-21 — Universal Directory enterprise users module
+### `07895eb` — 2026-07-21 — Universal Directory enterprise users module
 
 **Why** — Google-synced users lacked department/employee ID and other org attrs; Operators needed bulk import, richer local user create, attribute mapping, sync controls, and bulk actions in one place.
 
