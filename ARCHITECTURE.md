@@ -925,7 +925,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### pending — 2026-07-21 — Consistent Employee ID + bulk local group members
+### `e6bfa28` — 2026-07-21 — Consistent Employee ID + bulk local group members
 
 **Why** — UI showed directory `emp_id` (e.g. `LOC58DC3A00`) in Groups / Users while Universal Directory showed HR `employee_number` (e.g. `116970`). Local groups also needed paste-based bulk add.
 
