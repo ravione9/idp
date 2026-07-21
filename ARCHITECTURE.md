@@ -921,7 +921,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-21 — Directory profile view + manual edit + Google attr sync
+### `e9fb5e4` — 2026-07-21 — Directory profile view + manual edit + Google attr sync
 
 **Why** — Profile drawer failed to open (`openProfilePanel` vs `openProfileDrawer`); Google dept/employee ID often empty; operators need manual edit when sync does not fill fields.
 
