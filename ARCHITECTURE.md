@@ -932,7 +932,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-07-21 — OAuth / OIDC app integration visibility
+### `0e77701` — 2026-07-21 — OAuth / OIDC app integration visibility
 
 **Why** — OIDC client registry lived under Applications but the API required the `authentication` module; the tab was labeled only “OIDC”, so OAuth app integration was easy to miss next to SAML.
 
