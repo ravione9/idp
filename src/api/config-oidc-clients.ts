@@ -8,13 +8,14 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole, requirePortalModule } from '../auth/rbac.js';
+import { requireRole, requireAnyPortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne, execute } from '../db/connection.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('authentication'));
+// Lives under Admin → Applications → OIDC / OAuth (also allow Authentication module)
+router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requireAnyPortalModule('applications', 'authentication'));
 
 function genSecret(len = 32): string {
   return crypto.randomBytes(len).toString('base64url');

@@ -2493,7 +2493,7 @@ const SSO_CATALOG = [
   _app('sap-travex',     'SAP Travel Expense',     'sap.com',             'Travel',          _S, 'SAP Travel & Expense supports SAML 2.0 SSO via Cloud Identity Services.'),
   // ── Custom & Generic ──────────────────────────────────────────────────────
   _app('custom-saml',    'Custom SAML App',        null,                  'Custom',          _S, 'Register any application that supports SAML 2.0 Service Provider SSO.'),
-  _app('custom-oidc',    'Custom OIDC App',        null,                  'Custom',          _O, 'Register any application that supports OpenID Connect / OAuth 2.0.', ['openid','email','profile'], ['authorization_code','refresh_token']),
+  _app('custom-oidc',    'Custom OAuth / OIDC App', null,                 'Custom',          _O, 'Register any application that supports OpenID Connect / OAuth 2.0 (Client ID + Secret).', ['openid','email','profile'], ['authorization_code','refresh_token']),
   _app('custom-legacy',  'Legacy App (Header)',    null,                  'Custom',          _S, 'Use header-based or reverse-proxy SSO for applications that cannot do SAML/OIDC natively.'),
 ];
 
@@ -3239,10 +3239,13 @@ export async function viewOidcApps(content, opts = {}) {
   const embed = !!opts.embed;
   const origin = window.location.origin;
   const discoveryUrl = `${origin}/.well-known/openid-configuration`;
-  const actionBtn = `<button class="btn btn-primary" id="new-oidc-btn">Register app</button>`;
+  const actionBtn = `<button class="btn btn-primary" id="new-oidc-btn">+ Register OAuth / OIDC app</button>`;
   content.replaceChildren(el(`<div>
     ${embed
-      ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actionBtn}</div>`
+      ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap">
+           <p class="muted" style="margin:0;font-size:0.85rem;flex:1;min-width:220px">Register OAuth 2.0 / OpenID Connect apps that use this IdP as the authorization server (Client ID + Secret).</p>
+           ${actionBtn}
+         </div>`
       : header('OIDC / OAuth', 'Register applications that sign in through this Identity Provider', actionBtn)}
 
     <div class="ent-panel" style="margin-bottom:1.25rem">
@@ -3250,6 +3253,7 @@ export async function viewOidcApps(content, opts = {}) {
       <div class="card-body">
         <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">
           Give this Discovery URL to the application, together with the Client ID and Client Secret created at registration.
+          Or use <strong>Pre-built Integrations</strong> and filter <em>OIDC / OAuth</em>.
         </p>
         ${readonlyInput(discoveryUrl, 'oidc-page-disc')}
       </div>
@@ -3430,6 +3434,11 @@ export async function viewPrebuiltApps(content, opts = {}) {
         <input class="form-input" id="pbi-search" placeholder="Search integrations…" style="max-width:220px">
       </div>
     </div>
+    <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.65rem" id="pbi-proto-filters">
+      ${[['All','All protocols'],['SAML','SAML'],['OIDC','OIDC / OAuth']].map(([id, label]) =>
+        `<button type="button" class="btn btn-sm ${id==='All'?'btn-primary':'btn-secondary'} pbi-proto" data-proto="${esc(id)}">${esc(label)}</button>`
+      ).join('')}
+    </div>
     <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:1rem" id="pbi-filters">
       ${['All',...new Set(SSO_CATALOG.map(a=>a.cat))].map(c =>
         `<button class="btn btn-sm ${c==='All'?'btn-primary':'btn-secondary'} pbi-filter" data-cat="${esc(c)}">${esc(c)}</button>`
@@ -3449,13 +3458,15 @@ export async function viewPrebuiltApps(content, opts = {}) {
   }
 
   let activeCat = 'All';
+  let activeProto = 'All';
   let searchQ   = '';
 
   function renderGrid() {
     const q = searchQ.toLowerCase();
     const visible = SSO_CATALOG.filter(a =>
       (activeCat === 'All' || a.cat === activeCat) &&
-      (!q || a.name.toLowerCase().includes(q) || a.cat.toLowerCase().includes(q))
+      (activeProto === 'All' || a.protocol === activeProto) &&
+      (!q || a.name.toLowerCase().includes(q) || a.cat.toLowerCase().includes(q) || a.protocol.toLowerCase().includes(q))
     );
 
     wrap.querySelector('#pbi-grid').innerHTML = visible.map(app => `
@@ -3464,7 +3475,7 @@ export async function viewPrebuiltApps(content, opts = {}) {
           ${catalogIcon(app)}
           <div>
             <div style="font-weight:600;font-size:0.875rem;line-height:1.2">${esc(app.name)}</div>
-            <span class="badge ${app.protocol==='OIDC'?'badge-info':'badge-warning'}" style="font-size:0.62rem">${esc(app.protocol)}</span>
+            <span class="badge ${app.protocol==='OIDC'?'badge-info':'badge-warning'}" style="font-size:0.62rem">${esc(app.protocol === 'OIDC' ? 'OIDC / OAuth' : app.protocol)}</span>
           </div>
         </div>
         <div class="muted" style="font-size:0.72rem;margin-bottom:0.65rem;line-height:1.45;min-height:2.5em">${esc((app.hint||'').slice(0,80))}${(app.hint||'').length>80?'…':''}</div>
@@ -3484,6 +3495,16 @@ export async function viewPrebuiltApps(content, opts = {}) {
 
   wrap.querySelector('#pbi-search').addEventListener('input', e => { searchQ = e.target.value; renderGrid(); });
   persistSearch(wrap.querySelector('#pbi-search'), 'integrations');
+  wrap.querySelectorAll('.pbi-proto').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeProto = btn.dataset.proto;
+      wrap.querySelectorAll('.pbi-proto').forEach(b => {
+        b.classList.toggle('btn-primary',   b.dataset.proto === activeProto);
+        b.classList.toggle('btn-secondary', b.dataset.proto !== activeProto);
+      });
+      renderGrid();
+    });
+  });
   wrap.querySelectorAll('.pbi-filter').forEach(btn => {
     btn.addEventListener('click', () => {
       activeCat = btn.dataset.cat;

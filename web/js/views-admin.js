@@ -62,7 +62,9 @@ function spMetadataUploadHtml(pfx) {
           <div class="muted" style="font-size:0.75rem;margin-top:0.5rem">or paste XML below</div>
         </div>
         <textarea class="form-textarea" id="${pfx}-meta-paste" rows="4" placeholder="&lt;EntityDescriptor xmlns=&quot;urn:oasis:names:tc:SAML:2.0:metadata&quot; entityID=&quot;...&quot;&gt;..."></textarea>
+        <p class="muted" style="font-size:0.72rem;margin:0.35rem 0 0">Must be SP SAML metadata (<code>EntityDescriptor</code>). Not a license key or IdP certificate.</p>
         <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-meta-parse" style="margin-top:0.5rem">Parse metadata &amp; fill fields</button>
+        <div id="${pfx}-meta-err" style="margin-top:0.5rem"></div>
       </div>
     </div>
     <hr class="span2" style="border:none;border-top:1px solid var(--border);margin:0.15rem 0 0.35rem">
@@ -71,6 +73,7 @@ function spMetadataUploadHtml(pfx) {
 
 function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
   const errEl = bd.querySelector(`#${errId}`);
+  const metaErrEl = bd.querySelector(`#${pfx}-meta-err`);
   const fileEl = bd.querySelector(`#${pfx}-meta-file`);
   const pasteEl = bd.querySelector(`#${pfx}-meta-paste`);
   const parseBtn = bd.querySelector(`#${pfx}-meta-parse`);
@@ -81,6 +84,15 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
 
   if (idpMetaOpenLink) {
     idpMetaOpenLink.href = idpMetaUrl;
+  }
+
+  function showParseMsg(html, ok = false) {
+    const box = metaErrEl || errEl;
+    if (!box) return;
+    box.innerHTML = ok
+      ? `<div class="alert alert-success">${html}</div>`
+      : errHtml(html);
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   function applyParsed(data) {
@@ -110,15 +122,13 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
         slugEl.value = nameEl2.value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       }
     }
-    if (errEl) {
-      errEl.innerHTML = '<div class="alert alert-success">Metadata parsed — review the fields below, then save.</div>';
-    }
+    showParseMsg('Metadata parsed — review the fields below, then save.', true);
   }
 
   async function doParse(xml) {
     const trimmed = (xml || '').trim();
     if (!trimmed) {
-      if (errEl) errEl.innerHTML = errHtml('Paste or upload SP metadata XML first.');
+      showParseMsg('Paste or upload SP metadata XML first.');
       return;
     }
     parseBtn.disabled = true;
@@ -127,10 +137,10 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
       const r = await parseSamlMetadataClient(trimmed);
       applyParsed(r.data || r);
     } catch (e) {
-      if (errEl) errEl.innerHTML = errHtml(e.message || 'Could not parse metadata.');
+      showParseMsg(e.message || 'Could not parse metadata.');
     }
     parseBtn.disabled = false;
-    parseBtn.textContent = 'Parse metadata';
+    parseBtn.textContent = 'Parse metadata & fill fields';
   }
 
   parseBtn.addEventListener('click', () => doParse(pasteEl.value));
@@ -142,7 +152,7 @@ function bindSpMetadataUpload(bd, pfx, { errId, nameId, slugId, isEdit }) {
       pasteEl.value = text;
       await doParse(text);
     } catch (e) {
-      if (errEl) errEl.innerHTML = errHtml('Could not read file: ' + e.message);
+      showParseMsg('Could not read file: ' + e.message);
     }
     fileEl.value = '';
   });
@@ -244,9 +254,9 @@ function header(title, subtitle, action = '') {
   </div>`;
 }
 
-function statCard(iconName, label, value, sub = '', cls = 'primary', navKey = '') {
+function statCard(iconName, label, value, sub = '', cls = 'primary', navKey = '', navTab = '') {
   const clickable = navKey
-    ? ` stat-card-action" data-nav="${esc(navKey)}" role="link" tabindex="0" title="Open ${esc(label)}`
+    ? ` stat-card-action" data-nav="${esc(navKey)}"${navTab ? ` data-tab="${esc(navTab)}"` : ''} role="link" tabindex="0" title="Open ${esc(label)}`
     : '';
   return `<div class="stat-card${clickable}">
     <div class="stat-icon ${cls}">${svgIcon(iconName)}</div>
@@ -261,7 +271,9 @@ function statCard(iconName, label, value, sub = '', cls = 'primary', navKey = ''
 function bindStatCardNav(root) {
   root.querySelectorAll('.stat-card-action[data-nav]').forEach((card) => {
     const go = () => {
-      if (window.LILG_NAV) window.LILG_NAV(card.dataset.nav);
+      if (!window.LILG_NAV) return;
+      const tab = card.dataset.tab;
+      window.LILG_NAV(card.dataset.nav, tab ? { tab } : {});
     };
     card.addEventListener('click', go);
     card.addEventListener('keydown', (e) => {
@@ -320,7 +332,8 @@ export async function viewDashboard(content) {
 
     <section class="stat-grid">
       ${statCard('users',       'Total users',       c.employees,                            `${c.activeEmployees} active`,    'primary', 'users')}
-      ${statCard('saml',        'SAML apps',         c.activeSamlApps,                       `${c.samlApps} registered`,       'accent',  'applications')}
+      ${statCard('saml',        'SAML apps',         c.activeSamlApps,                       `${c.samlApps} registered`,       'accent',  'applications', 'saml')}
+      ${statCard('oidc',        'OIDC / OAuth apps', c.activeOidcClients ?? 0,               `${c.oidcClients ?? 0} registered`, 'purple', 'applications', 'oidc')}
       ${statCard('activity',    'Active sessions',   c.activeSessions,                       'across all users',               'success')}
       ${statCard('key',         'SSO logins (24h)',  c.assertions24h,                        `${c.assertions7d} in 7 days`,    'info',    'audit')}
       ${statCard('check',       'Pending tasks',     c.pendingApprovals + c.pendingReviews,  `${c.pendingApprovals} approvals · ${c.pendingReviews} reviews`, 'warning', 'tasks')}
@@ -377,14 +390,14 @@ export async function viewApplications(me, content, initialTab = 'catalog') {
   const tabs = [
     { id: 'catalog',   label: 'Application Catalog' },
     { id: 'saml',      label: 'SAML Applications' },
-    { id: 'oidc',      label: 'OIDC' },
+    { id: 'oidc',      label: 'OIDC / OAuth' },
     { id: 'prebuilt',  label: 'Pre-built Integrations' },
     { id: 'discovery', label: 'App Discovery' },
   ];
   const validTab = tabs.some((t) => t.id === initialTab) ? initialTab : 'catalog';
 
   const wrap = el(`<div>
-    ${header('Applications', 'Catalog, SAML, and OIDC apps')}
+    ${header('Applications', 'Catalog, SAML, and OIDC / OAuth app integrations')}
     <div class="inline-tabs" id="apps-tabs">
       ${tabs.map((t) => `<button type="button" class="inline-tab${t.id === validTab ? ' active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('')}
     </div>

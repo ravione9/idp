@@ -666,7 +666,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Overview** | Dashboard |
 | **Identity** | Users / Identities · Groups (Directory · Tag Groups) · Bulk User Import · Administrators *(SUPER_ADMIN)* · System / Privileged Users *(SUPER_ADMIN / PAM)* · Identity Profiles |
 | **Authentication** | SSO Configuration · Strong Auth Methods · Adaptive Auth · Password Policies |
-| **Applications** | Applications (tabs: Catalog · SAML · OIDC · Pre-built · App Discovery) |
+| **Applications** | Applications (tabs: Catalog · SAML · OIDC / OAuth · Pre-built · App Discovery) |
 | **Connections** | Directory Sync (Connectors redirects here) |
 | **Access Model** | Business Roles · Birthright Rules · Application Access Policy |
 | **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault — **SUPER_ADMIN only** (portal `ADMIN` excludes PAM) |
@@ -931,6 +931,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-07-21 — OAuth / OIDC app integration visibility
+
+**Why** — OIDC client registry lived under Applications but the API required the `authentication` module; the tab was labeled only “OIDC”, so OAuth app integration was easy to miss next to SAML.
+
+**What changed:**
+
+- **`src/api/config-oidc-clients.ts`** — allow `applications` or `authentication` portal modules.
+- **Dashboard** — OIDC / OAuth apps KPI (active + registered) deep-links to Applications → OIDC / OAuth.
+- **Applications UI** — tab renamed **OIDC / OAuth**; Pre-built Integrations gain All / SAML / OIDC·OAuth protocol filters; Custom OAuth / OIDC app card clarified.
+- Asset cache `oauth1`.
 
 ### `f2710d8` — 2026-07-21 — Google group sync auto-discovery (blank Sync Groups)
 

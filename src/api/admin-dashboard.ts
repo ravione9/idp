@@ -33,6 +33,8 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
     pendingReviews,
     openSodViolations,
     mfaEnrolled,
+    oidcClients,
+    activeOidcClients,
   ] = await Promise.all([
     queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM employees', []).catch(() => ({ n: 0 })),
     queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM employees WHERE ilg_state IN ('ACTIVE','REACTIVATED')", []).catch(() => ({ n: 0 })),
@@ -46,6 +48,8 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
     queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM access_review_items WHERE decision = 'PENDING'", []).catch(() => ({ n: 0 })),
     queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM sod_violations WHERE status = 'OPEN'", []).catch(() => ({ n: 0 })),
     queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM mfa_secrets WHERE enabled = 1', []).catch(() => ({ n: 0 })),
+    queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM oidc_clients', []).catch(() => ({ n: 0 })),
+    queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM oidc_clients WHERE active = 1', []).catch(() => ({ n: 0 })),
   ]);
 
   const recentAssertions = await safeQuery<{ ts: string; emp_id: string; sp_name: string; binding: string }>(
@@ -90,6 +94,8 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
       pendingReviews:   pendingReviews?.n ?? 0,
       openSodViolations: openSodViolations?.n ?? 0,
       mfaEnrolled:      mfaEnrolled?.n ?? 0,
+      oidcClients:      oidcClients?.n ?? 0,
+      activeOidcClients: activeOidcClients?.n ?? 0,
     },
     ilgStates:        ilgStateRows,
     recentAssertions,
