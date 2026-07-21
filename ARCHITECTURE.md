@@ -926,7 +926,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### pending — 2026-07-21 — Harden Google portal sign-in against MFA/OIDC failures
+### `853bf0c` — 2026-07-21 — Harden Google portal sign-in against MFA/OIDC failures
 
 **Why** — `/auth/google/callback` returned generic `auth_failed` when MFA method tables were missing/unavailable, and clearing Google connector Workspace domains could remove the only hosted-domain source for OIDC.
 
