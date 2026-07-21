@@ -43,13 +43,17 @@ export function parseGoogleServiceAccountKey(saKeyRaw: string): Record<string, s
   }
 }
 
+/** True when Sync Groups means “all Workspace groups” (blank, `*`, or `ALL`). */
+export function isGoogleGroupSyncAll(cfg: Record<string, unknown>): boolean {
+  const raw = parseCsvList(cfg['syncGroups']);
+  if (!raw.length) return true;
+  return raw.length === 1 && (raw[0] === '*' || raw[0].toUpperCase() === 'ALL');
+}
+
 /** Scopes to request at token time — must match Admin Console domain-wide delegation exactly. */
-export function googleJwtScopes(cfg: Record<string, unknown>): string[] {
-  const scopes = [GOOGLE_DIRECTORY_USER_SCOPE];
-  if (parseCsvList(cfg['syncGroups']).length > 0) {
-    scopes.push(GOOGLE_DIRECTORY_GROUP_SCOPE);
-  }
-  return scopes;
+export function googleJwtScopes(_cfg?: Record<string, unknown>): string[] {
+  // Always include group.readonly: blank Sync Groups auto-mirrors Workspace groups (like AD).
+  return [GOOGLE_DIRECTORY_USER_SCOPE, GOOGLE_DIRECTORY_GROUP_SCOPE];
 }
 
 export function resolveGoogleImpersonationEmail(
@@ -97,7 +101,7 @@ export function formatGoogleAuthError(err: unknown, cfg: Record<string, unknown>
     `   Client ID: ${clientId || '(copy client_id from the JSON key)'}`,
     `   OAuth scopes: ${scopeCsv}`,
     `3) Admin Email must be a Workspace super admin (you set: ${admin}) — not the service account email.`,
-    `4) If you added Sync Groups, the group.readonly scope above must be in the delegation list.`,
+    `4) Both scopes above must be in the delegation list (user + group.readonly) — group sync runs even when Sync Groups is blank.`,
   ].join(' ');
 }
 
@@ -123,19 +127,22 @@ export function resolveGoogleSyncScope(cfg: Record<string, unknown>): GoogleSync
   const customerDomains = parseGoogleHostedDomains(
     cfg['customerDomains'] ?? cfg['customerDomain'] ?? config.google.hostedDomain ?? '',
   );
+  // `*` / `ALL` / blank = mirror all groups into IdP, not a user-import filter.
+  const groupFilter = isGoogleGroupSyncAll(cfg)
+    ? []
+    : parseCsvList(cfg['syncGroups']).map((g) => g.toLowerCase());
   return {
     customerDomain: primaryGoogleHostedDomain(customerDomains),
     customerDomains,
     adminEmail: String(cfg['adminEmail'] ?? cfg['serviceAccountEmail'] ?? '').trim(),
     provisionOrgUnit: normalizeOrgUnitPath(String(cfg['provisionOrgUnit'] ?? '/Employees')),
     orgUnits: parseCsvList(cfg['syncOrgUnits']).map(normalizeOrgUnitPath),
-    groups: parseCsvList(cfg['syncGroups']).map((g) => g.toLowerCase()),
+    groups: groupFilter,
     users: parseCsvList(cfg['syncUsers']).map((u) => u.toLowerCase()),
     includeSubOrgUnits: cfg['includeSubOrgUnits'] !== false && cfg['includeSubOrgUnits'] !== 'false',
+    // Default on: mirror memberships unless explicitly disabled.
     syncGroupMemberships:
-      cfg['syncGroupMemberships'] === true
-      || cfg['syncGroupMemberships'] === 'true'
-      || (parseCsvList(cfg['syncGroups']).length > 0 && cfg['syncGroupMemberships'] !== false && cfg['syncGroupMemberships'] !== 'false'),
+      cfg['syncGroupMemberships'] !== false && cfg['syncGroupMemberships'] !== 'false',
   };
 }
 

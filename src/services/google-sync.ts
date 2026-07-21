@@ -541,12 +541,22 @@ export async function runGoogleSync(
       usersUpdated = inbound.updated;
       usersDisabled = inbound.disabled;
       let groupSummary = '';
-      if (scope.groups.length > 0) {
-        const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope);
+      try {
+        const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope, cfg);
+        const mode = gs.autoAll ? ' (auto-all)' : '';
         groupSummary =
           ` | Groups: ${gs.groupsSynced} synced, ${gs.membersSynced} members` +
-          (gs.errors.length ? ` (${gs.errors.length} errors)` : '');
+          mode +
+          (gs.errors.length
+            ? ` (${gs.errors.length} errors: ${gs.errors.slice(0, 2).join('; ')}${gs.errors.length > 2 ? '…' : ''})`
+            : gs.groupsSynced === 0
+              ? ' (none matched — add group emails in Sync Groups, or use * / blank for auto-all)'
+              : '');
         errors.push(...gs.errors);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        groupSummary = ` | Groups: failed (${msg})`;
+        errors.push(`Google group sync: ${msg}`);
       }
 
       const notFoundHint = inbound.notFoundEmails.length

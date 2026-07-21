@@ -333,7 +333,7 @@ export async function viewGroups(content, initialTab = 'directory') {
         </tr>`;
       }).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No groups yet. Create a local group or sync from Google / AD connectors.</p></div></td></tr>`;
       wrap.querySelector('#list-area').innerHTML = `
-        <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">Configure <strong>Sync Groups</strong> on your Google or AD connector (Connections → Directory Sync), then click <strong>Sync from Directory</strong>.</p>
+        <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">Google/AD connectors mirror directory groups on sync (blank Sync Groups = auto). Or click <strong>Sync from Directory</strong> here. Ensure Google domain-wide delegation includes <code>admin.directory.group.readonly</code>.</p>
         <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Source</th><th>Members</th><th>Last Sync</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
       wrap.querySelectorAll('.del-group').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -3572,8 +3572,8 @@ const FIELD_LABELS = {
   serviceAccountKey:  'Service Account JSON Key',
   adminEmail:         'Admin Email (Workspace super admin — required for domain-wide delegation)',
   syncOrgUnits:       'Sync OUs (one per line, e.g. /Sales — blank = all OUs)',
-  syncGroups:         'Sync Groups (Google: group email; AD: CN, sAMAccountName, full DN, or * for all security groups)',
-  syncGroupMemberships: 'Mirror group membership into IdP Groups (recommended when Sync Groups is set)',
+  syncGroups:         'Sync Groups (Google: group email, blank/* = all Workspace groups up to 200; AD: CN/sAMAccountName/DN, blank/* = all security groups)',
+  syncGroupMemberships: 'Mirror group membership into IdP Groups (on by default)',
   syncUsers:          'Sync Users (one per line, user email — optional filter)',
   provisionOrgUnit:   'Provision OU (outbound new users, e.g. /Employees)',
   includeSubOrgUnits: 'Include sub-OUs',
@@ -3994,14 +3994,16 @@ function initSourcesTab(panel) {
         <div id="cfg-pane-conn" class="cfg-pane">
           <div style="display:grid;grid-template-columns:1fr;gap:0">${isGoogle ? googleConnFields : adConnFields}</div>
           ${isGoogle ? `<div class="alert alert-info" style="font-size:0.8rem;margin-top:1rem;line-height:1.45">
-            <strong>Domain-wide delegation</strong> (one-time in Google): Cloud Console → Service account → enable delegation → Admin Console → API controls → add SA Client ID with scope
+            <strong>Domain-wide delegation</strong> (one-time in Google): Cloud Console → Service account → enable delegation → Admin Console → API controls → add SA Client ID with scopes
             <code style="font-size:0.72rem">https://www.googleapis.com/auth/admin.directory.user</code>
+            and
+            <code style="font-size:0.72rem">https://www.googleapis.com/auth/admin.directory.group.readonly</code>
           </div>` : ''}
         </div>
         ${isGoogle ? `<div id="cfg-pane-auth" class="cfg-pane" style="display:none">${googleAuthFields}</div>` : ''}
         <div id="cfg-pane-scope" class="cfg-pane" style="display:none">
           ${isGoogle
-            ? '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">Choose which OUs, groups, and users to import. Leave all blank to sync the <strong>entire</strong> Google directory.</p>'
+            ? '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">Choose which OUs / users to import. Leave blank to sync the <strong>entire</strong> directory. <strong>Sync Groups</strong> mirrors Workspace groups into Identity → Groups (blank or <code>*</code> = auto up to 200). Domain-wide delegation must include <code>admin.directory.group.readonly</code>.</p>'
             : '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">List AD groups to mirror into <strong>Identity → Groups</strong>. User sync must run first so members can be linked. Leave blank to auto-sync up to <strong>200 security groups</strong>.</p>'}
           <div style="display:grid;grid-template-columns:1fr;gap:0">${isGoogle ? googleScopeFields : adScopeFields}</div>
         </div>` : `

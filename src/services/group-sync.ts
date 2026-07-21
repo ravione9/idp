@@ -14,9 +14,13 @@ import {
   buildGoogleJwtAuth,
   resolveGoogleSyncScope,
   parseCsvList,
+  isGoogleGroupSyncAll,
   type GoogleSyncScope,
 } from './google-directory-config.js';
 import logger from '../utils/logger.js';
+
+/** Cap auto-discovered Google groups (same idea as AD’s 200). */
+const GOOGLE_GROUP_AUTO_CAP = 200;
 
 let groupSyncSchemaReady: boolean | null = null;
 
@@ -162,17 +166,89 @@ async function resolveEmpIdByAdMember(member: {
   return resolveEmpIdByAdSam(member.sam, email);
 }
 
+async function listGoogleDirectoryGroupEmails(
+  directory: admin_directory_v1.Admin,
+): Promise<{ emails: string[]; truncated: boolean; error?: string }> {
+  const emails: string[] = [];
+  let pageToken: string | undefined;
+  try {
+    do {
+      const res = await directory.groups.list({
+        // Multi-domain tenants: my_customer returns groups across all hosted domains.
+        customer: 'my_customer',
+        maxResults: 200,
+        ...(pageToken ? { pageToken } : {}),
+      });
+      for (const g of res.data.groups ?? []) {
+        const email = (g.email ?? '').trim().toLowerCase();
+        if (!email) continue;
+        emails.push(email);
+        if (emails.length >= GOOGLE_GROUP_AUTO_CAP) {
+          return { emails, truncated: true };
+        }
+      }
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+    return { emails, truncated: false };
+  } catch (err) {
+    return {
+      emails: [],
+      truncated: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function resolveGoogleGroupKeys(
+  directory: admin_directory_v1.Admin,
+  scope: GoogleSyncScope,
+  cfg?: Record<string, unknown>,
+): Promise<{ keys: string[]; errors: string[]; autoAll: boolean }> {
+  const autoAll = cfg ? isGoogleGroupSyncAll(cfg) : scope.groups.length === 0;
+  if (!autoAll) {
+    return { keys: scope.groups, errors: [], autoAll: false };
+  }
+
+  const listed = await listGoogleDirectoryGroupEmails(directory);
+  if (listed.error) {
+    return { keys: [], errors: [listed.error], autoAll: true };
+  }
+  if (!listed.emails.length) {
+    return {
+      keys: [],
+      errors: ['No Google Workspace groups found (check group.readonly domain-wide delegation)'],
+      autoAll: true,
+    };
+  }
+  const errors: string[] = [];
+  if (listed.truncated) {
+    errors.push(`Auto-sync capped at ${GOOGLE_GROUP_AUTO_CAP} groups — list emails in Sync Groups to target specific ones`);
+  }
+  return { keys: listed.emails, errors, autoAll: true };
+}
+
 export async function syncGoogleDirectoryGroups(
   connectorId: string,
   directory: admin_directory_v1.Admin,
   scope: GoogleSyncScope,
-): Promise<GroupSyncSummary> {
-  const summary: GroupSyncSummary = { groupsSynced: 0, membersSynced: 0, errors: [] };
-  if (!scope.groups.length) return summary;
+  cfg?: Record<string, unknown>,
+): Promise<GroupSyncSummary & { autoAll: boolean }> {
+  const summary: GroupSyncSummary & { autoAll: boolean } = {
+    groupsSynced: 0,
+    membersSynced: 0,
+    errors: [],
+    autoAll: false,
+  };
 
-  const syncMembers = scope.syncGroupMemberships || scope.groups.length > 0;
+  const resolved = await resolveGoogleGroupKeys(directory, scope, cfg);
+  summary.autoAll = resolved.autoAll;
+  summary.errors.push(...resolved.errors);
+  const groupKeys = resolved.keys;
+  if (!groupKeys.length) return summary;
 
-  for (const groupEmail of scope.groups) {
+  const syncMembers = scope.syncGroupMemberships !== false;
+
+  for (const groupEmail of groupKeys) {
     try {
       const gRes = await directory.groups.get({ groupKey: groupEmail });
       const g = gRes.data;
@@ -199,17 +275,20 @@ export async function syncGoogleDirectoryGroups(
         });
         for (const m of mRes.data.members ?? []) {
           if (m.type !== 'USER' || !m.email) continue;
-          try {
-            const u = await directory.users.get({ userKey: m.email });
-            const empId = await resolveEmpIdByGoogleId(
-              u.data.id ?? m.email,
-              u.data.primaryEmail ?? m.email,
-            );
-            if (empId) empIds.push(empId);
-          } catch {
-            const empId = await resolveEmpIdByEmail(m.email);
-            if (empId) empIds.push(empId);
+          // Prefer member id/email first — avoid N+1 users.get when already linked.
+          let empId = await resolveEmpIdByGoogleId(m.id ?? m.email, m.email);
+          if (!empId) {
+            try {
+              const u = await directory.users.get({ userKey: m.email });
+              empId = await resolveEmpIdByGoogleId(
+                u.data.id ?? m.email,
+                u.data.primaryEmail ?? m.email,
+              );
+            } catch {
+              empId = await resolveEmpIdByEmail(m.email);
+            }
           }
+          if (empId) empIds.push(empId);
         }
         pageToken = mRes.data.nextPageToken ?? undefined;
       } while (pageToken);
@@ -354,11 +433,10 @@ export async function syncAllDirectoryGroups(): Promise<GroupSyncSummary> {
 
     if (conn.connector_type === 'GOOGLE' || conn.connector_type === 'GOOGLE_WORKSPACE') {
       const scope = resolveGoogleSyncScope(cfg);
-      if (!scope.groups.length) continue;
       try {
         const auth = buildGoogleJwtAuth(cfg);
         const directory = google.admin({ version: 'directory_v1', auth });
-        const part = await syncGoogleDirectoryGroups(conn.id, directory, scope);
+        const part = await syncGoogleDirectoryGroups(conn.id, directory, scope, cfg);
         total.groupsSynced += part.groupsSynced;
         total.membersSynced += part.membersSynced;
         total.errors.push(...part.errors);

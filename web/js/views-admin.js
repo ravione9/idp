@@ -244,8 +244,11 @@ function header(title, subtitle, action = '') {
   </div>`;
 }
 
-function statCard(iconName, label, value, sub = '', cls = 'primary') {
-  return `<div class="stat-card">
+function statCard(iconName, label, value, sub = '', cls = 'primary', navKey = '') {
+  const clickable = navKey
+    ? ` stat-card-action" data-nav="${esc(navKey)}" role="link" tabindex="0" title="Open ${esc(label)}`
+    : '';
+  return `<div class="stat-card${clickable}">
     <div class="stat-icon ${cls}">${svgIcon(iconName)}</div>
     <div>
       <div class="stat-label">${esc(label)}</div>
@@ -253,6 +256,18 @@ function statCard(iconName, label, value, sub = '', cls = 'primary') {
       ${sub ? `<div class="stat-sub">${esc(sub)}</div>` : ''}
     </div>
   </div>`;
+}
+
+function bindStatCardNav(root) {
+  root.querySelectorAll('.stat-card-action[data-nav]').forEach((card) => {
+    const go = () => {
+      if (window.LILG_NAV) window.LILG_NAV(card.dataset.nav);
+    };
+    card.addEventListener('click', go);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+    });
+  });
 }
 
 /* ---------- Dashboard ---------- */
@@ -304,14 +319,14 @@ export async function viewDashboard(content) {
     ${header('Dashboard', 'Overview of your identity and access management deployment')}
 
     <section class="stat-grid">
-      ${statCard('users',       'Total users',       c.employees,                            `${c.activeEmployees} active`,    'primary')}
-      ${statCard('saml',        'SAML apps',         c.activeSamlApps,                       `${c.samlApps} registered`,       'accent')}
+      ${statCard('users',       'Total users',       c.employees,                            `${c.activeEmployees} active`,    'primary', 'users')}
+      ${statCard('saml',        'SAML apps',         c.activeSamlApps,                       `${c.samlApps} registered`,       'accent',  'applications')}
       ${statCard('activity',    'Active sessions',   c.activeSessions,                       'across all users',               'success')}
-      ${statCard('key',         'SSO logins (24h)',  c.assertions24h,                        `${c.assertions7d} in 7 days`,    'info')}
-      ${statCard('check',       'Pending tasks',     c.pendingApprovals + c.pendingReviews,  'approvals + reviews',            'warning')}
-      ${statCard('alert',       'SoD violations',    c.openSodViolations,                    'open',                           'danger')}
-      ${statCard('shieldCheck', 'MFA enrolled',      c.mfaEnrolled,                          'admins',                         'purple')}
-      ${statCard('userShield',  'Local admins',      c.localAdmins,                          'console accounts',               'teal')}
+      ${statCard('key',         'SSO logins (24h)',  c.assertions24h,                        `${c.assertions7d} in 7 days`,    'info',    'audit')}
+      ${statCard('check',       'Pending tasks',     c.pendingApprovals + c.pendingReviews,  `${c.pendingApprovals} approvals · ${c.pendingReviews} reviews`, 'warning', 'tasks')}
+      ${statCard('alert',       'SoD violations',    c.openSodViolations,                    'open',                           'danger',  'sod')}
+      ${statCard('shieldCheck', 'MFA enrolled',      c.mfaEnrolled,                          'admins',                         'purple',  'mfaMethods')}
+      ${statCard('userShield',  'Local admins',      c.localAdmins,                          'console accounts',               'teal',    'admins')}
     </section>
 
     <div class="chart-row">
@@ -353,6 +368,7 @@ export async function viewDashboard(content) {
       </div>
     </div>
   </div>`);
+  bindStatCardNav(wrap);
   content.replaceChildren(wrap);
 }
 
