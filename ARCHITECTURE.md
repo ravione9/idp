@@ -926,6 +926,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### pending — 2026-07-21 — Harden Google portal sign-in against MFA/OIDC failures
+
+**Why** — `/auth/google/callback` returned generic `auth_failed` when MFA method tables were missing/unavailable, and clearing Google connector Workspace domains could remove the only hosted-domain source for OIDC.
+
+**What changed:**
+
+- **MFA** — enrollment / WebAuthn / policy lookups catch missing-table errors so Google login precheck does not throw.
+- **Google callback** — maps OAuth token errors (`invalid_client`, `invalid_grant`, …) to `google_oauth_error`; MFA gate includes `groupEnforce`.
+- **Connector save** — empty `customerDomain` no longer deleted on merge; Portal sign-in save requires Workspace domains.
+
 ### `e532d06` — 2026-07-21 — Connector Sync Scope clears persist on save
 
 **Why** — Clearing Sync OUs / Groups / Users and saving reloaded the old values: the UI omitted empty fields, so `PUT /connectors/:id` merge kept prior `config_json` keys.

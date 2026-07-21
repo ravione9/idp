@@ -300,6 +300,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     }
 
     const policyRequiresMfa = mfaRequirements.userEnforced
+      || mfaRequirements.groupEnforce
       || (
         !mfaRequirements.userInExcludedGroup
         && (
@@ -382,7 +383,22 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
     res.redirect(returnTo);
   } catch (err) {
-    logger.error({ err }, 'Google OIDC callback failed');
+    const axiosData = (err as { response?: { data?: { error?: string; error_description?: string } } })
+      ?.response?.data;
+    const oauthErr = axiosData?.error;
+    logger.error(
+      { err, oauthErr, oauthDesc: axiosData?.error_description, returnTo },
+      'Google OIDC callback failed',
+    );
+    if (
+      oauthErr === 'invalid_client'
+      || oauthErr === 'unauthorized_client'
+      || oauthErr === 'redirect_uri_mismatch'
+      || oauthErr === 'invalid_grant'
+    ) {
+      redirectLoginAuthError(res, 'google_oauth_error', returnTo);
+      return;
+    }
     redirectLoginAuthError(res, 'auth_failed', returnTo);
   }
 }

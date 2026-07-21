@@ -359,6 +359,9 @@ router.put(
         if (typeof v === 'string' && v === '••••••••') continue;
         // Empty string = explicitly clear (e.g. Sync Scope OU / users / groups)
         if (v === '' || v === null) {
+          // Keep Workspace domains on Google connectors — clearing them breaks portal Google sign-in
+          // when OIDC hosted domains are sourced from the connector.
+          if (k === 'customerDomain' || k === 'customerDomains') continue;
           delete merged[k];
           continue;
         }

@@ -27,7 +27,7 @@ const AUTH_ERROR_MESSAGES = {
   google_access_denied:
     'Google sign-in was cancelled or denied.',
   google_oauth_error:
-    'Google returned an error during sign-in. Check OAuth client settings and redirect URI in Google Cloud Console.',
+    'Google returned an error during sign-in. Verify Client ID/Secret under Directory Sync → Google Workspace → Portal sign-in, and that Authorized redirect URI is https://idp.lenskart.com/auth/google/callback.',
   wrong_hosted_domain:
     'This Google account is not from an allowed Workspace domain.',
   domain_not_permitted:

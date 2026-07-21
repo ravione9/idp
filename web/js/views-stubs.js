@@ -4128,7 +4128,12 @@ function initSourcesTab(panel) {
     if (clientId) payload.clientId = clientId;
     if (clientSecret) payload.clientSecret = clientSecret;
     if (oauthClientJson) payload.oauthClientJson = oauthClientJson;
-    if (!payload.hostedDomain && !payload.clientId && !payload.oauthClientJson) return;
+    // Nothing to persist (blank Portal sign-in + blank Workspace domains)
+    if (!payload.hostedDomain && !payload.clientId && !payload.clientSecret && !payload.oauthClientJson) return;
+    // Workspace domains are required for Google portal login — do not call API with empty domain
+    if (!payload.hostedDomain && (payload.clientId || payload.clientSecret || payload.oauthClientJson)) {
+      throw new Error('Workspace domain(s) are required on the Connection tab for Google portal sign-in.');
+    }
     await api.saveGoogleOidcSettings(payload);
   }
 

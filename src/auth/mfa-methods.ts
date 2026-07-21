@@ -58,7 +58,7 @@ export async function getGlobalAllowedMfaMethods(): Promise<MfaMethodKey[]> {
   const row = await queryOne<{ policy_value: string }>(
     `SELECT policy_value FROM mfa_policy WHERE policy_key = 'allowed_methods' LIMIT 1`,
     [],
-  );
+  ).catch(() => null);
   if (!row?.policy_value) return [...DEFAULT_ALLOWED];
   const parsed = parseMethodsJson(row.policy_value);
   return parsed.length ? parsed : [...DEFAULT_ALLOWED];
@@ -154,7 +154,7 @@ export async function getMethodEnrollments(empId: string): Promise<MethodEnrollm
   return query<MethodEnrollmentRow>(
     `SELECT method, enabled, metadata FROM mfa_method_enrollments WHERE emp_id = ?`,
     [empId],
-  );
+  ).catch(() => [] as MethodEnrollmentRow[]);
 }
 
 export async function setMethodEnrollment(
@@ -182,7 +182,7 @@ export async function countWebAuthnCredentials(empId: string): Promise<number> {
   const row = await queryOne<{ n: number }>(
     'SELECT COUNT(*) AS n FROM webauthn_credentials WHERE emp_id = ?',
     [empId],
-  );
+  ).catch(() => null);
   return row?.n ?? 0;
 }
 
@@ -255,7 +255,7 @@ export async function isAnyMfaEnabled(
   const extra = await queryOne<{ n: number }>(
     `SELECT COUNT(*) AS n FROM mfa_method_enrollments WHERE emp_id = ? AND enabled = 1`,
     [empId],
-  );
+  ).catch(() => null);
   if ((extra?.n ?? 0) > 0) return true;
   const webauthn = await countWebAuthnCredentials(empId);
   return webauthn > 0;
