@@ -558,7 +558,8 @@ To add a new migration:
 | `POST`/`DELETE` | `/api/admin/app-access-policy/tag-groups/:id/members[/:empId]` | Tag group membership |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/groups[/:id]` | Identity directory groups (local + synced) |
 | `POST`/`DELETE` | `/api/admin/groups/:id/members[/:empId]` | Add/remove member on **local** groups (accepts email, `employee_number`, or `emp_id`) |
-| `POST` | `/api/admin/groups/:id/members/bulk` | Bulk-add members to a **local** group (`{ members: string[] }`, max 500) |
+| `GET` | `/api/admin/groups/members/csv-template` | CSV template for bulk add/remove (`email,employee_id`) |
+| `POST` | `/api/admin/groups/:id/members/bulk` | Bulk add/remove on a **local** group (`{ members[] }` or `{ csvText }`, `action: add\|remove`, max 500) |
 | `POST` | `/api/admin/groups/sync` | Pull groups/members from Google / AD connectors |
 | `GET`/`POST`/`DELETE` | `/api/admin/app-access-policy/assignments[/:id]` | User, identity-group, or tag-group application grants |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/app-access-policy/workflows[/:id]` | Group access approval workflows |
@@ -924,6 +925,24 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### pending — 2026-07-21 — Fix Google Full Sync 500 (`FULL` vs `FULL_SYNC`)
+
+**Why** — `POST /api/admin/directory/google/full-sync` returned 500 while incremental sync succeeded. `connector_runs.run_type` ENUM allows `FULL_SYNC`, but the code inserted `FULL`.
+
+**What changed:**
+
+- **`src/services/google-sync.ts`** — `runGoogleFullSync` / inbound disable-deleted path use `FULL_SYNC`.
+
+### pending — 2026-07-21 — Group members CSV upload (add + remove)
+
+**Why** — Operators need to add/remove many local-group members from a spreadsheet, not only paste text.
+
+**What changed:**
+
+- **API** — `POST /api/admin/groups/:id/members/bulk` accepts `csvText` and `action: add|remove`; `GET /api/admin/groups/members/csv-template`.
+- **UI** — Manage Members modal: download template + Choose CSV for add and remove (local groups only).
+- Asset cache `ud4`.
 
 ### `e6bfa28` — 2026-07-21 — Consistent Employee ID + bulk local group members
 

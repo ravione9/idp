@@ -115,6 +115,171 @@ async function resolveEmployeeKey(
   return null;
 }
 
+const MEMBER_CSV_HEADER = /^(email|employee_id|employeeid|employee_number|emp_id|empid|member|identifier)$/i;
+
+/** Split a simple CSV line (supports quoted commas). */
+function splitCsvLine(line: string): string[] {
+  const parts = line.match(/("([^"]|"")*"|[^,]*)/g);
+  if (!parts) return [line.trim()];
+  return parts.map((p) => p.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+}
+
+/**
+ * Parse member identifiers from CSV text.
+ * Accepts header row (email / employee_id / emp_id) or a single-column list.
+ */
+function parseMemberCsv(csvText: string): string[] {
+  const lines = csvText
+    .replace(/^\uFEFF/, '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'));
+  if (!lines.length) return [];
+
+  const firstCells = splitCsvLine(lines[0]!);
+  const hasHeader = firstCells.some((c) => MEMBER_CSV_HEADER.test(c));
+  const out: string[] = [];
+
+  if (hasHeader) {
+    const headers = firstCells.map((h) => h.toLowerCase().replace(/["']/g, ''));
+    const pickIdx = (...names: string[]) => {
+      for (const n of names) {
+        const i = headers.indexOf(n);
+        if (i >= 0) return i;
+      }
+      return -1;
+    };
+    const emailIdx = pickIdx('email', 'email_corp', 'corporate_email');
+    const empNoIdx = pickIdx('employee_id', 'employeeid', 'employee_number', 'employee number');
+    const empIdIdx = pickIdx('emp_id', 'empid', 'directory_id');
+    const memberIdx = pickIdx('member', 'identifier', 'id');
+
+    for (let i = 1; i < lines.length; i++) {
+      const cells = splitCsvLine(lines[i]!);
+      const candidates = [
+        emailIdx >= 0 ? cells[emailIdx] : '',
+        empNoIdx >= 0 ? cells[empNoIdx] : '',
+        empIdIdx >= 0 ? cells[empIdIdx] : '',
+        memberIdx >= 0 ? cells[memberIdx] : '',
+      ].map((v) => (v || '').trim()).filter(Boolean);
+      if (candidates[0]) out.push(candidates[0]!);
+    }
+    return out;
+  }
+
+  for (const line of lines) {
+    const cells = splitCsvLine(line);
+    const key = (cells[0] || '').trim();
+    if (key) out.push(key);
+  }
+  return out;
+}
+
+type BulkMemberResult = {
+  input: string;
+  ok: boolean;
+  empId?: string;
+  employeeNumber?: string | null;
+  error?: string;
+};
+
+async function bulkMutateMembers(
+  groupId: string,
+  members: string[],
+  action: 'add' | 'remove',
+  addedBy: string | null,
+): Promise<{
+  added: number;
+  removed: number;
+  skipped: number;
+  failed: number;
+  results: BulkMemberResult[];
+}> {
+  const results: BulkMemberResult[] = [];
+  let added = 0;
+  let removed = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const entry of members) {
+    const input = String(entry ?? '').trim();
+    if (!input) {
+      failed += 1;
+      results.push({ input, ok: false, error: 'Empty value' });
+      continue;
+    }
+    try {
+      const resolved = await resolveEmployeeKey(input);
+      if (!resolved) {
+        failed += 1;
+        results.push({ input, ok: false, error: 'Employee not found' });
+        continue;
+      }
+      const existing = await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM group_members WHERE group_id = ? AND emp_id = ? LIMIT 1`,
+        [groupId, resolved.emp_id],
+      );
+
+      if (action === 'add') {
+        if (existing) {
+          skipped += 1;
+          results.push({
+            input,
+            ok: true,
+            empId: resolved.emp_id,
+            employeeNumber: resolved.employee_number,
+            error: 'Already a member',
+          });
+          continue;
+        }
+        await execute(
+          `INSERT IGNORE INTO group_members (group_id, emp_id, added_by) VALUES (?, ?, ?)`,
+          [groupId, resolved.emp_id, addedBy],
+        );
+        added += 1;
+        results.push({
+          input,
+          ok: true,
+          empId: resolved.emp_id,
+          employeeNumber: resolved.employee_number,
+        });
+      } else {
+        if (!existing) {
+          skipped += 1;
+          results.push({
+            input,
+            ok: true,
+            empId: resolved.emp_id,
+            employeeNumber: resolved.employee_number,
+            error: 'Not a member',
+          });
+          continue;
+        }
+        await execute(
+          `DELETE FROM group_members WHERE group_id = ? AND emp_id = ?`,
+          [groupId, resolved.emp_id],
+        );
+        removed += 1;
+        results.push({
+          input,
+          ok: true,
+          empId: resolved.emp_id,
+          employeeNumber: resolved.employee_number,
+        });
+      }
+    } catch (err) {
+      failed += 1;
+      results.push({
+        input,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { added, removed, skipped, failed, results };
+}
+
 // POST /sync — pull groups + members from Google / AD connectors (syncGroups config)
 router.post('/sync', asyncHandler(async (_req: Request, res: Response) => {
   if (!(await isGroupSyncSchemaReady())) {
@@ -137,6 +302,14 @@ router.post('/sync', asyncHandler(async (_req: Request, res: Response) => {
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   const rows = await listGroups();
   res.json({ data: rows, schemaReady: await isGroupSyncSchemaReady() });
+}));
+
+// GET /members/csv-template — downloadable CSV template for bulk add/remove
+router.get('/members/csv-template', asyncHandler(async (_req: Request, res: Response) => {
+  const csv = 'email,employee_id\nuser@example.com,116970\n';
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="group-members-template.csv"');
+  res.send(csv);
 }));
 
 // POST / — create group
@@ -233,8 +406,8 @@ router.post('/:id/members', asyncHandler(async (req: Request, res: Response) => 
   res.status(201).json({ success: true, empId: resolved.emp_id, employeeNumber: resolved.employee_number });
 }));
 
-// POST /:id/members/bulk — add many members to a local group
-// Body: { members: string[] } — each entry is email, employee_number, or emp_id
+// POST /:id/members/bulk — add or remove many members on a local group
+// Body: { members?: string[], csvText?: string, action?: 'add'|'remove' }
 router.post('/:id/members/bulk', asyncHandler(async (req: Request, res: Response) => {
   const groupId = req.params['id']!;
   const exists = await queryOne<{ id: string }>(
@@ -246,76 +419,36 @@ router.post('/:id/members/bulk', asyncHandler(async (req: Request, res: Response
     return;
   }
 
-  const raw = (req.body as { members?: unknown }).members;
-  if (!Array.isArray(raw) || raw.length === 0) {
-    res.status(400).json({ error: 'members array required' });
+  const body = req.body as { members?: unknown; csvText?: unknown; action?: unknown };
+  const action = body.action === 'remove' ? 'remove' : 'add';
+
+  let members: string[] = [];
+  if (typeof body.csvText === 'string' && body.csvText.trim()) {
+    members = parseMemberCsv(body.csvText);
+  } else if (Array.isArray(body.members)) {
+    members = body.members.map((m) => String(m ?? '').trim()).filter(Boolean);
+  }
+
+  if (!members.length) {
+    res.status(400).json({ error: 'members array or csvText required' });
     return;
   }
-  if (raw.length > 500) {
+  if (members.length > 500) {
     res.status(400).json({ error: 'Maximum 500 members per bulk request' });
     return;
   }
 
   const addedBy = (req as unknown as { user?: { empId?: string } }).user?.empId ?? null;
-  const results: Array<{ input: string; ok: boolean; empId?: string; employeeNumber?: string | null; error?: string }> = [];
-  let added = 0;
-  let skipped = 0;
-  let failed = 0;
+  const { added, removed, skipped, failed, results } = await bulkMutateMembers(
+    groupId, members, action, addedBy,
+  );
 
-  for (const entry of raw) {
-    const input = String(entry ?? '').trim();
-    if (!input) {
-      failed += 1;
-      results.push({ input, ok: false, error: 'Empty value' });
-      continue;
-    }
-    try {
-      const resolved = await resolveEmployeeKey(input);
-      if (!resolved) {
-        failed += 1;
-        results.push({ input, ok: false, error: 'Employee not found' });
-        continue;
-      }
-      const existing = await queryOne<{ emp_id: string }>(
-        `SELECT emp_id FROM group_members WHERE group_id = ? AND emp_id = ? LIMIT 1`,
-        [groupId, resolved.emp_id],
-      );
-      if (existing) {
-        skipped += 1;
-        results.push({
-          input,
-          ok: true,
-          empId: resolved.emp_id,
-          employeeNumber: resolved.employee_number,
-          error: 'Already a member',
-        });
-        continue;
-      }
-      await execute(
-        `INSERT IGNORE INTO group_members (group_id, emp_id, added_by) VALUES (?, ?, ?)`,
-        [groupId, resolved.emp_id, addedBy],
-      );
-      added += 1;
-      results.push({
-        input,
-        ok: true,
-        empId: resolved.emp_id,
-        employeeNumber: resolved.employee_number,
-      });
-    } catch (err) {
-      failed += 1;
-      results.push({
-        input,
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  logger.info({ groupId, added, skipped, failed, by: addedBy }, 'Bulk group members add');
+  logger.info({ groupId, action, added, removed, skipped, failed, by: addedBy }, 'Bulk group members mutate');
   res.json({
     success: failed === 0,
+    action,
     added,
+    removed,
     skipped,
     failed,
     processed: results.length,

@@ -114,10 +114,32 @@ export async function viewGroups(content, initialTab = 'directory') {
         <div class="form-group" style="margin-top:1rem">
           <label class="form-label">Bulk add members</label>
           <p class="muted" style="font-size:0.78rem;margin:0 0 0.4rem">Paste emails, Employee IDs, or directory IDs — one per line (or comma-separated). Max 500.</p>
-          <textarea class="form-input" id="gm-bulk" rows="5" placeholder="ravi.verma1@lenskart.in&#10;116970&#10;LOC58DC3A00"></textarea>
+          <textarea class="form-input" id="gm-bulk" rows="4" placeholder="ravi.verma1@lenskart.in&#10;116970&#10;LOC58DC3A00"></textarea>
           <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center;flex-wrap:wrap">
             <button type="button" class="btn btn-primary" id="gm-bulk-add">Bulk add</button>
             <span class="muted" style="font-size:0.78rem" id="gm-bulk-hint"></span>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border,rgba(255,255,255,0.08))">
+          <label class="form-label">CSV upload — add or remove</label>
+          <p class="muted" style="font-size:0.78rem;margin:0 0 0.5rem">Columns: <code>email</code>, <code>employee_id</code> (one identifier per row is enough). Max 500 rows.</p>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-bottom:0.6rem">
+            <a class="btn btn-secondary btn-sm" href="${api.groupMembersCsvTemplateUrl()}" target="_blank" download>Download CSV template</a>
+          </div>
+          <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <label class="form-label" style="font-size:0.78rem">Add from CSV</label>
+              <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0;display:inline-flex">
+                Choose CSV… <input type="file" id="gm-csv-add" accept=".csv,text/csv" hidden>
+              </label>
+            </div>
+            <div>
+              <label class="form-label" style="font-size:0.78rem">Remove from CSV</label>
+              <label class="btn btn-danger btn-sm" style="cursor:pointer;margin:0;display:inline-flex">
+                Choose CSV… <input type="file" id="gm-csv-remove" accept=".csv,text/csv" hidden>
+              </label>
+            </div>
+            <span class="muted" style="font-size:0.78rem" id="gm-csv-hint"></span>
           </div>
         </div>`}
         <div id="gm-err"></div>
@@ -200,6 +222,27 @@ export async function viewGroups(content, initialTab = 'directory') {
         } catch (e) { bd.querySelector('#gm-err').innerHTML = errHtml(e.message); }
       });
 
+      function summarizeBulk(r, action) {
+        const verb = action === 'remove' ? 'Removed' : 'Added';
+        const count = action === 'remove' ? (r.removed || 0) : (r.added || 0);
+        return `${verb} ${count}`
+          + (r.skipped ? `, skipped ${r.skipped}` : '')
+          + (r.failed ? `, failed ${r.failed}` : '');
+      }
+
+      function showBulkResult(r, action, hintEl) {
+        const errEl = bd.querySelector('#gm-err');
+        const msg = summarizeBulk(r, action);
+        if (hintEl) hintEl.textContent = msg;
+        if (r.failed) {
+          const fails = (r.results || []).filter((x) => !x.ok).slice(0, 8)
+            .map((x) => `${esc(x.input)}: ${esc(x.error || 'failed')}`).join('<br>');
+          errEl.innerHTML = `<div class="alert alert-warning">${esc(msg)}<div style="margin-top:0.4rem;font-size:0.8rem">${fails}</div></div>`;
+        } else {
+          errEl.innerHTML = `<div class="alert alert-success">${esc(msg)}</div>`;
+        }
+      }
+
       bd.querySelector('#gm-bulk-add')?.addEventListener('click', async () => {
         const raw = bd.querySelector('#gm-bulk').value || '';
         const members = raw
@@ -218,19 +261,9 @@ export async function viewGroups(content, initialTab = 'directory') {
         btn.textContent = 'Adding…';
         if (hint) hint.textContent = `${members.length} entries…`;
         try {
-          const r = await api.addGroupMembersBulk(groupId, members);
-          const msg = `Added ${r.added || 0}`
-            + (r.skipped ? `, skipped ${r.skipped}` : '')
-            + (r.failed ? `, failed ${r.failed}` : '');
-          if (hint) hint.textContent = msg;
-          if (r.failed) {
-            const fails = (r.results || []).filter((x) => !x.ok).slice(0, 8)
-              .map((x) => `${esc(x.input)}: ${esc(x.error || 'failed')}`).join('<br>');
-            errEl.innerHTML = `<div class="alert alert-warning">${esc(msg)}<div style="margin-top:0.4rem;font-size:0.8rem">${fails}</div></div>`;
-          } else {
-            errEl.innerHTML = `<div class="alert alert-success">${esc(msg)}</div>`;
-            bd.querySelector('#gm-bulk').value = '';
-          }
+          const r = await api.addGroupMembersBulk(groupId, members, 'add');
+          showBulkResult(r, 'add', hint);
+          if (!r.failed) bd.querySelector('#gm-bulk').value = '';
           await loadMembers(); await load();
         } catch (e) {
           errEl.innerHTML = errHtml(e.message || 'Bulk add failed');
@@ -238,6 +271,44 @@ export async function viewGroups(content, initialTab = 'directory') {
           btn.disabled = false;
           btn.textContent = 'Bulk add';
         }
+      });
+
+      async function runCsvBulk(fileInput, action) {
+        const file = fileInput.files?.[0];
+        const errEl = bd.querySelector('#gm-err');
+        const hint = bd.querySelector('#gm-csv-hint');
+        errEl.innerHTML = '';
+        if (!file) return;
+        if (!/\.csv$/i.test(file.name) && file.type && !/csv|text/.test(file.type)) {
+          errEl.innerHTML = errHtml('Please upload a .csv file');
+          fileInput.value = '';
+          return;
+        }
+        if (hint) hint.textContent = action === 'remove' ? 'Removing…' : 'Adding…';
+        try {
+          const csvText = await file.text();
+          if (!csvText.trim()) throw new Error('CSV file is empty');
+          const r = await api.groupMembersCsvBulk(groupId, csvText, action);
+          showBulkResult(r, action, hint);
+          await loadMembers(); await load();
+        } catch (e) {
+          errEl.innerHTML = errHtml(e.message || `CSV ${action} failed`);
+          if (hint) hint.textContent = '';
+        } finally {
+          fileInput.value = '';
+        }
+      }
+
+      bd.querySelector('#gm-csv-add')?.addEventListener('change', (e) => {
+        runCsvBulk(e.target, 'add');
+      });
+      bd.querySelector('#gm-csv-remove')?.addEventListener('change', (e) => {
+        const n = e.target.files?.[0]?.name || 'this file';
+        if (!confirm(`Remove all members listed in ${n} from this group?`)) {
+          e.target.value = '';
+          return;
+        }
+        runCsvBulk(e.target, 'remove');
       });
     }
 

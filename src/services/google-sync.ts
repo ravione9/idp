@@ -145,7 +145,7 @@ async function importGoogleDirectoryUsers(
   directory: admin_directory_v1.Admin,
   scope: GoogleSyncScope,
   errors: string[],
-  opts: { runType?: 'INCREMENTAL' | 'FULL'; disableDeleted?: boolean } = {},
+  opts: { runType?: 'INCREMENTAL' | 'FULL_SYNC'; disableDeleted?: boolean } = {},
 ): Promise<{
   found: number;
   imported: number;
@@ -333,7 +333,7 @@ async function importGoogleDirectoryUsers(
   }
 
   // Optional: disable local Google-linked users missing from this full sync scope
-  if (disableDeleted && (opts.runType === 'FULL' || scope.users.length === 0)) {
+  if (disableDeleted && (opts.runType === 'FULL_SYNC' || scope.users.length === 0)) {
     const linkedRows = await query<{ emp_id: string; external_id: string }>(
       `SELECT emp_id, external_id FROM identity_links
         WHERE \`system\` = 'GOOGLE' AND status = 'ACTIVE'`,
@@ -482,7 +482,7 @@ export async function backfillGoogleIdentityLinkIfMissing(
 // ---------------------------------------------------------------------------
 export async function runGoogleSync(
   connectorId: string,
-  opts: { runType?: 'INCREMENTAL' | 'FULL' } = {},
+  opts: { runType?: 'INCREMENTAL' | 'FULL_SYNC' } = {},
 ): Promise<SyncResult & {
   usersAdded?: number;
   usersUpdated?: number;
@@ -490,7 +490,8 @@ export async function runGoogleSync(
   durationMs?: number;
 }> {
   const runId = uuidv4();
-  const runType = opts.runType ?? 'INCREMENTAL';
+  // connector_runs.run_type ENUM is FULL_SYNC | INCREMENTAL | … (not "FULL")
+  const runType = opts.runType === 'FULL_SYNC' ? 'FULL_SYNC' : 'INCREMENTAL';
   const startedAt = Date.now();
 
   await execute(
@@ -721,7 +722,7 @@ export async function runGoogleSync(
   };
 }
 
-/** Full directory resync — same pipeline with FULL run type + optional disable-deleted. */
+/** Full directory resync — same pipeline with FULL_SYNC run type + optional disable-deleted. */
 export async function runGoogleFullSync(connectorId: string) {
-  return runGoogleSync(connectorId, { runType: 'FULL' });
+  return runGoogleSync(connectorId, { runType: 'FULL_SYNC' });
 }
