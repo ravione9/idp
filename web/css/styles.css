@@ -2785,6 +2785,11 @@ td code, .td-code { font-size: 0.78rem; }
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
 }
+/* Author display:flex overrides the UA [hidden] rule — keep toolbars truly hideable */
+.filter-toolbar[hidden],
+.ud-bulk-bar[hidden] {
+  display: none !important;
+}
 .filter-toolbar .form-select { width: auto; min-width: 118px; max-width: 160px; }
 .filter-toolbar-search {
   flex: 1 1 180px;
@@ -3708,6 +3713,161 @@ body.nav-locked { overflow: hidden; }
   color: var(--text-muted);
   line-height: 1.45;
 }
+
+.mfa-method-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: 1rem;
+}
+.mfa-method-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 1rem 1.1rem;
+  min-height: 148px;
+}
+.mfa-method-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+.mfa-method-card-head strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+.mfa-method-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+.mfa-method-card .muted {
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  flex: 1;
+}
+.mfa-method-card-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+.mfa-policy-methods {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.15rem 1rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.mfa-delivery-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 960px) {
+  .mfa-delivery-split { grid-template-columns: 1fr; }
+}
+.mfa-delivery-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin-bottom: 0.35rem;
+  flex-wrap: wrap;
+}
+.mfa-delivery-head h3 {
+  margin: 0;
+}
+.mfa-delivery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+.form-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+@media (max-width: 640px) {
+  .form-row-2 { grid-template-columns: 1fr; }
+}
+.mfa-transport-pills {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+}
+@media (max-width: 520px) {
+  .mfa-transport-pills { grid-template-columns: 1fr; }
+}
+.mfa-transport-pill {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.mfa-transport-pill:has(input:checked) {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+}
+.mfa-transport-pill input {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+.mfa-transport-pill strong {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin-bottom: 0.1rem;
+}
+.mfa-transport-pill .muted {
+  display: block;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+#mfa-email-smtp-fields.is-hidden,
+#mfa-email-api-fields.is-hidden {
+  display: none;
+}
+
+.mfa-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  margin: 0.35rem 0 0.15rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+.mfa-toggle-row input {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+.mfa-toggle-row strong {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin-bottom: 0.15rem;
+}
+.mfa-toggle-row .muted {
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+.mfa-settings { max-width: 960px; }
 
 .auth-config-row {
   align-items: stretch;

@@ -1,6 +1,6 @@
 /* End-user views: Home (app launcher), My Access, Request Access, My Tasks, Settings. */
 import { api } from './api.js';
-import { el, esc, fmtDate, ilgBadge, initials, persistSearch, syncAppUrl, isPortalAdmin } from './ui.js';
+import { el, esc, fmtDate, ilgBadge, initials, persistSearch, syncAppUrl, isPortalAdmin, prepareWebAuthnRegOptions, webAuthnRegResponseToJson, prepareWebAuthnAuthOptions, webAuthnAuthResponseToJson } from './ui.js';
 import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 
@@ -196,16 +196,22 @@ export function renderLogin() {
     });
   }
 
-  function renderMfaStep(challengeId, email) {
+  function renderMfaStep(challengeId, email, availableMethods = ['totp']) {
+    const methods = new Set(availableMethods || ['totp']);
     const card = el(`
       <div class="auth-card">
         <h2>Two-factor authentication</h2>
-        <p class="muted">Enter the 6-digit code from your authenticator app for ${esc(email)}.</p>
+        <p class="muted">Verify your identity for ${esc(email)}.</p>
         <div id="mfa-error"></div>
         <form id="mfa-form">
           <div class="field"><label>Verification code</label>
             <input name="code" required pattern="[0-9]{6,8}" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
-            <p class="hint">A backup code (8 hex chars) also works.</p></div>
+            <p class="hint">Authenticator code, backup code, or email/SMS OTP.</p></div>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
+            ${methods.has('email_otp') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-send-email">Email me a code</button>' : ''}
+            ${methods.has('sms_otp') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-send-sms">Text me a code</button>' : ''}
+            ${methods.has('webauthn') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-use-passkey">Use passkey</button>' : ''}
+          </div>
           <button type="submit" class="btn btn-primary btn-block btn-lg">Verify</button>
         </form>
       </div>
@@ -217,6 +223,41 @@ export function renderLogin() {
       merr.innerHTML = '';
       try {
         await api.localLoginMfa(challengeId, new FormData(e.target).get('code'));
+        location.href = returnTo;
+      } catch (err) {
+        merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    });
+    card.querySelector('#mfa-send-email')?.addEventListener('click', async () => {
+      merr.innerHTML = '';
+      try {
+        const r = await api.localLoginMfaSendOtp(challengeId, 'email_otp');
+        merr.innerHTML = `<div class="alert alert-info">${r.devCode ? `Dev code: ${esc(r.devCode)}` : 'Code sent to your email.'}</div>`;
+      } catch (err) {
+        merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    });
+    card.querySelector('#mfa-send-sms')?.addEventListener('click', async () => {
+      merr.innerHTML = '';
+      try {
+        const r = await api.localLoginMfaSendOtp(challengeId, 'sms_otp');
+        merr.innerHTML = `<div class="alert alert-info">${r.devCode ? `Dev code: ${esc(r.devCode)}` : 'Code sent via SMS.'}</div>`;
+      } catch (err) {
+        merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    });
+    card.querySelector('#mfa-use-passkey')?.addEventListener('click', async () => {
+      merr.innerHTML = '';
+      if (!window.PublicKeyCredential) {
+        merr.innerHTML = '<div class="alert alert-error">WebAuthn not supported in this browser.</div>';
+        return;
+      }
+      try {
+        const { options, webauthnChallengeId } = await api.localLoginMfaWebAuthnOptions(challengeId);
+        const cred = await navigator.credentials.get({
+          publicKey: prepareWebAuthnAuthOptions(options),
+        });
+        await api.localLoginMfaWebAuthnVerify(challengeId, webauthnChallengeId, webAuthnAuthResponseToJson(cred));
         location.href = returnTo;
       } catch (err) {
         merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
@@ -272,7 +313,7 @@ export function renderLogin() {
           return;
         }
         if (r && r.mfaRequired && r.challengeId) {
-          renderMfaStep(r.challengeId, email);
+          renderMfaStep(r.challengeId, email, r.availableMethods);
           return;
         }
         location.href = returnTo;
@@ -319,7 +360,7 @@ export function renderLogin() {
 
   // Google OIDC may redirect here with an MFA / enroll challenge after passwordless Google auth
   if (pendingMfaChallenge) {
-    renderMfaStep(pendingMfaChallenge, pendingEmail || 'your account');
+    renderMfaStep(pendingMfaChallenge, pendingEmail || 'your account', ['totp', 'backup_codes', 'email_otp', 'sms_otp', 'webauthn']);
     return root;
   }
   if (pendingEnrollChallenge) {
@@ -945,85 +986,184 @@ export async function viewSettings(me, content, initialTab = 'profile') {
     let s;
     try { s = await api.mfaStatus(); }
     catch (err) { target.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; return; }
-    if (s.enabled) {
-      target.innerHTML = `<div class="card" style="max-width:560px">
-        <h2>Two-factor authentication</h2>
-        <p class="subtitle" style="margin-bottom:1rem"><span class="badge badge-success">Enabled</span> Last used ${fmtDate(s.lastUsedAt)} · ${s.remainingBackupCodes} backup codes left</p>
-        <button class="btn btn-secondary" id="mfa-regen">Regenerate backup codes</button>
-        <button class="btn btn-danger" id="mfa-disable" style="margin-left:0.5rem">Disable</button>
-        <div id="mfa-action-result" style="margin-top:1rem"></div>
-      </div>`;
-      function promptMfaStepUp(actionLabel) {
-        const password = prompt(`Enter your password to ${actionLabel} (leave blank if you signed in with Google):`) ?? '';
-        const code = prompt('Enter a current authenticator or backup code:') ?? '';
-        if (!code.trim()) return null;
-        const body = { code: code.trim() };
-        if (password.trim()) body.currentPassword = password.trim();
-        return body;
-      }
-      target.querySelector('#mfa-disable').addEventListener('click', async () => {
-        if (!confirm('Disable two-factor authentication?')) return;
-        const body = promptMfaStepUp('disable MFA');
-        if (!body) return;
-        try { await api.mfaDisable(body); mfa(); }
-        catch (err) { alert(err.message); }
-      });
-      target.querySelector('#mfa-regen').addEventListener('click', async () => {
-        if (!confirm('Replace all backup codes? Old codes will stop working.')) return;
-        const body = promptMfaStepUp('regenerate backup codes');
-        if (!body) return;
-        try {
-          const r = await api.mfaRegenCodes(body);
-          target.querySelector('#mfa-action-result').innerHTML = `<div class="alert alert-warning"><div>
-            <div style="font-weight:600;margin-bottom:0.5rem">Save these backup codes — shown only once</div>
-            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.4rem;font-family:var(--font-mono);font-size:0.9rem">
-              ${r.backupCodes.map((c) => `<div>${esc(c)}</div>`).join('')}
-            </div></div></div>`;
-        } catch (err) { alert(err.message); }
-      });
-      return;
+
+    const allowed = new Set(s.allowedMethods || ['totp', 'backup_codes']);
+    const enrolled = new Set(s.methods || []);
+    const defs = [
+      { key: 'totp', label: 'Authenticator App (TOTP)', desc: 'Google Authenticator, Authy, 1Password.' },
+      { key: 'backup_codes', label: 'Backup Codes', desc: 'Single-use recovery codes (issued with TOTP).' },
+      { key: 'webauthn', label: 'WebAuthn / Passkeys', desc: 'Hardware keys, Touch ID, Windows Hello.' },
+      { key: 'email_otp', label: 'Email OTP', desc: 'One-time code sent to your corporate email.' },
+      { key: 'sms_otp', label: 'SMS OTP', desc: 'One-time code sent to your registered mobile.' },
+    ].filter((d) => allowed.has(d.key) && d.key !== 'backup_codes');
+
+    function promptMfaStepUp(actionLabel) {
+      const password = prompt(`Enter your password to ${actionLabel} (leave blank if you signed in with Google):`) ?? '';
+      const code = prompt('Enter a current verification or backup code:') ?? '';
+      if (!code.trim()) return null;
+      const body = { code: code.trim() };
+      if (password.trim()) body.currentPassword = password.trim();
+      return body;
     }
-    target.innerHTML = `<div class="card" style="max-width:560px">
-      <h2>Two-factor authentication</h2>
-      <p class="subtitle" style="margin-bottom:1rem"><span class="badge badge-warning">Disabled</span> Adds a 6-digit code on every sign-in.</p>
-      <button class="btn btn-primary" id="mfa-start">Enable two-factor</button>
-      <div id="mfa-enroll"></div>
+
+    const cards = defs.map((d) => {
+      const isOn = enrolled.has(d.key) || (d.key === 'totp' && s.methodDetails?.totp?.enabled);
+      const statusBadge = isOn
+        ? '<span class="badge badge-success">Enrolled</span>'
+        : '<span class="badge badge-neutral">Not enrolled</span>';
+      const policyBadge = '<span class="badge badge-info">Live</span>';
+      let action = '';
+      if (d.key === 'totp' && !isOn) action = '<button class="btn btn-primary btn-sm" data-enroll="totp">Set up TOTP</button>';
+      if (d.key === 'email_otp' && !isOn) action = '<button class="btn btn-primary btn-sm" data-enroll="email">Send email code</button>';
+      if (d.key === 'sms_otp' && !isOn) action = '<button class="btn btn-primary btn-sm" data-enroll="sms">Send SMS code</button>';
+      if (d.key === 'webauthn') action = '<button class="btn btn-primary btn-sm" data-enroll="webauthn">Register passkey</button>';
+      if (isOn && d.key === 'email_otp') action = '<button class="btn btn-secondary btn-sm" data-disable="email">Disable</button>';
+      if (isOn && d.key === 'sms_otp') action = '<button class="btn btn-secondary btn-sm" data-disable="sms">Disable</button>';
+      return `<div class="mfa-method-card card">
+        <div class="mfa-method-card-head">
+          <strong>${esc(d.label)}</strong>
+          <div class="mfa-method-card-badges">${policyBadge}${statusBadge}</div>
+        </div>
+        <p class="muted">${esc(d.desc)}</p>
+        <div class="mfa-method-card-actions">${action}</div>
+        <div class="mfa-method-msg" data-method="${esc(d.key)}"></div>
+      </div>`;
+    }).join('');
+
+    target.innerHTML = `<div class="mfa-settings">
+      <div class="card" style="margin-bottom:1rem">
+        <h2>Multi-factor authentication</h2>
+        <p class="subtitle" style="margin-bottom:0.75rem">
+          ${s.enabled
+            ? `<span class="badge badge-success">Active</span> Last used ${s.lastUsedAt ? fmtDate(s.lastUsedAt) : '—'}`
+            : '<span class="badge badge-warning">Not active</span> Enroll at least one method below.'}
+          ${s.remainingBackupCodes ? ` · ${s.remainingBackupCodes} backup codes left` : ''}
+        </p>
+        ${s.enabled ? `<div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" id="mfa-regen">Regenerate backup codes</button>
+          <button class="btn btn-danger btn-sm" id="mfa-disable-all">Disable all MFA</button>
+        </div><div id="mfa-action-result" style="margin-top:0.75rem"></div>` : ''}
+      </div>
+      <div class="section-title">Available Methods</div>
+      <div class="mfa-method-grid">${cards}</div>
+      <div id="mfa-enroll-panel"></div>
     </div>`;
-    target.querySelector('#mfa-start').addEventListener('click', async () => {
-      const area = target.querySelector('#mfa-enroll');
+
+    target.querySelector('#mfa-disable-all')?.addEventListener('click', async () => {
+      if (!confirm('Disable all MFA methods?')) return;
+      const body = promptMfaStepUp('disable MFA');
+      if (!body) return;
+      try { await api.mfaDisable(body); mfa(); } catch (err) { alert(err.message); }
+    });
+    target.querySelector('#mfa-regen')?.addEventListener('click', async () => {
+      if (!confirm('Replace all backup codes?')) return;
+      const body = promptMfaStepUp('regenerate backup codes');
+      if (!body) return;
+      try {
+        const r = await api.mfaRegenCodes(body);
+        target.querySelector('#mfa-action-result').innerHTML = `<div class="alert alert-warning"><div>
+          <div style="font-weight:600;margin-bottom:0.5rem">Save these backup codes — shown only once</div>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.4rem;font-family:var(--font-mono);font-size:0.9rem">
+            ${r.backupCodes.map((c) => `<div>${esc(c)}</div>`).join('')}
+          </div></div></div>`;
+      } catch (err) { alert(err.message); }
+    });
+
+    target.querySelector('[data-enroll="totp"]')?.addEventListener('click', async () => {
+      const panel = target.querySelector('#mfa-enroll-panel');
       try {
         const r = await api.mfaEnroll();
-        area.innerHTML = `<div style="margin-top:1.25rem;padding-top:1.25rem;border-top:1px solid var(--border)">
-          <p class="subtitle" style="margin-bottom:0.75rem">Scan with Google Authenticator, Authy, 1Password.</p>
-          <img src="${esc(r.qrDataUrl)}" alt="" style="background:white;padding:0.5rem;border-radius:8px" />
-          <p class="subtitle" style="margin-top:0.75rem">Or enter this secret: <code>${esc(r.secret)}</code></p>
+        panel.innerHTML = `<div class="card" style="margin-top:1rem;max-width:560px">
+          <h3>Set up authenticator app</h3>
+          <p class="subtitle">Scan the QR code or enter the secret manually.</p>
+          <img src="${esc(r.qrDataUrl)}" alt="" style="background:white;padding:0.5rem;border-radius:8px;max-width:220px" />
+          <p class="subtitle" style="margin-top:0.75rem">Secret: <code>${esc(r.secret)}</code></p>
           <form id="mfa-confirm" style="margin-top:1rem">
             <div class="field"><label>6-digit code</label><input name="code" required pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" /></div>
             <button class="btn btn-primary" type="submit">Verify and enable</button>
           </form>
           <div id="mfa-confirm-result"></div>
         </div>`;
-        area.querySelector('#mfa-confirm').addEventListener('submit', async (e) => {
+        panel.querySelector('#mfa-confirm').addEventListener('submit', async (e) => {
           e.preventDefault();
-          const out = area.querySelector('#mfa-confirm-result');
-          out.innerHTML = '';
+          const out = panel.querySelector('#mfa-confirm-result');
           try {
             const code = new FormData(e.target).get('code');
             const r2 = await api.mfaConfirm(code);
-            out.innerHTML = `<div class="alert alert-success" style="margin-top:1rem">Two-factor enabled.</div>
-              <div class="alert alert-warning" style="margin-top:0.5rem"><div>
-                <div style="font-weight:600;margin-bottom:0.5rem">Save these backup codes — shown only once</div>
-                <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.4rem;font-family:var(--font-mono);font-size:0.9rem">
-                  ${r2.backupCodes.map((c) => `<div>${esc(c)}</div>`).join('')}
-                </div></div></div>
+            out.innerHTML = `<div class="alert alert-success">TOTP enabled.</div>
+              <div class="alert alert-warning" style="margin-top:0.5rem"><div style="font-weight:600;margin-bottom:0.5rem">Backup codes — save now</div>
+              <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.4rem;font-family:var(--font-mono);font-size:0.9rem">
+                ${r2.backupCodes.map((c) => `<div>${esc(c)}</div>`).join('')}
+              </div></div>
               <button class="btn btn-secondary" id="mfa-done" style="margin-top:0.75rem">Done</button>`;
             out.querySelector('#mfa-done').addEventListener('click', () => mfa());
           } catch (err) {
-            out.innerHTML = `<div class="alert alert-error" style="margin-top:1rem">${esc(err.message)}</div>`;
+            out.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
           }
         });
       } catch (err) {
-        area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+        panel.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    });
+
+    async function otpEnroll(channel, sendFn, confirmFn) {
+      const msgEl = target.querySelector(`.mfa-method-msg[data-method="${channel === 'email' ? 'email_otp' : 'sms_otp'}"]`);
+      try {
+        const r = await sendFn();
+        msgEl.innerHTML = `<form class="mfa-otp-confirm" style="margin-top:0.65rem">
+          <div class="field"><label>Enter 6-digit code</label>
+            <input name="code" required pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" />
+          </div>
+          ${r.devCode ? `<p class="form-hint">Dev code: <code>${esc(r.devCode)}</code></p>` : ''}
+          <button class="btn btn-primary btn-sm" type="submit">Confirm</button>
+        </form>`;
+        msgEl.querySelector('form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const code = new FormData(e.target).get('code');
+          try {
+            await confirmFn(code);
+            mfa();
+          } catch (err) {
+            msgEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+          }
+        });
+      } catch (err) {
+        msgEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+      }
+    }
+
+    target.querySelector('[data-enroll="email"]')?.addEventListener('click', () =>
+      otpEnroll('email', () => api.mfaEmailSend(), (code) => api.mfaEmailConfirm(code)));
+    target.querySelector('[data-enroll="sms"]')?.addEventListener('click', () =>
+      otpEnroll('sms', () => api.mfaSmsSend(), (code) => api.mfaSmsConfirm(code)));
+
+    target.querySelector('[data-disable="email"]')?.addEventListener('click', async () => {
+      const body = promptMfaStepUp('disable Email OTP');
+      if (!body) return;
+      try { await api.mfaEmailDisable(body); mfa(); } catch (err) { alert(err.message); }
+    });
+    target.querySelector('[data-disable="sms"]')?.addEventListener('click', async () => {
+      const body = promptMfaStepUp('disable SMS OTP');
+      if (!body) return;
+      try { await api.mfaSmsDisable(body); mfa(); } catch (err) { alert(err.message); }
+    });
+
+    target.querySelector('[data-enroll="webauthn"]')?.addEventListener('click', async () => {
+      const msgEl = target.querySelector('.mfa-method-msg[data-method="webauthn"]');
+      if (!window.PublicKeyCredential) {
+        msgEl.innerHTML = '<div class="alert alert-error">WebAuthn is not supported in this browser.</div>';
+        return;
+      }
+      const name = prompt('Name this passkey (e.g. MacBook Touch ID):') || 'Passkey';
+      try {
+        const { options, challengeId } = await api.mfaWebAuthnOptions();
+        const cred = await navigator.credentials.create({
+          publicKey: prepareWebAuthnRegOptions(options),
+        });
+        await api.mfaWebAuthnVerify(challengeId, webAuthnRegResponseToJson(cred), name);
+        mfa();
+      } catch (err) {
+        msgEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }
     });
   }

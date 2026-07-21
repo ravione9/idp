@@ -87,13 +87,18 @@ export function requireRole(...allowedRoles: Role[]) {
 
 /** Attach + enforce per-module portal permissions (PAM modules are never granted). */
 export function requirePortalModule(moduleKey: string) {
+  return requireAnyPortalModule(moduleKey);
+}
+
+/** Allow access when the operator has any of the listed modules. */
+export function requireAnyPortalModule(...moduleKeys: string[]) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const user = req.user;
     if (!user) {
       res.status(401).json({ error: 'Unauthenticated' });
       return;
     }
-    if (moduleKey === 'pam' || moduleKey.startsWith('pam')) {
+    if (moduleKeys.some((k) => k === 'pam' || k.startsWith('pam'))) {
       res.status(501).json({
         error: 'Privileged Access (PAM) is not available yet',
         code: 'PAM_NOT_AVAILABLE',
@@ -108,11 +113,12 @@ export function requirePortalModule(moduleKey: string) {
       }
       const access = reqExt.portalAccess;
       const level = ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? 'read' : 'write';
-      if (!hasModuleAccess(access, moduleKey, level)) {
+      const allowed = moduleKeys.some((k) => hasModuleAccess(access, k, level));
+      if (!allowed) {
         res.status(403).json({
           error: 'Forbidden',
           code: 'INSUFFICIENT_MODULE',
-          module: moduleKey,
+          module: moduleKeys.join('|'),
           required: level,
         });
         return;

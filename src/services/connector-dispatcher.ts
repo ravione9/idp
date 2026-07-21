@@ -8,6 +8,7 @@
 import { queryOne } from '../db/connection.js';
 import { runAdSync } from './ad-sync.js';
 import { runGoogleSync } from './google-sync.js';
+import { isConnectorSyncEligible } from './connector-health.js';
 import type { SyncResult } from './ad-sync.js';
 import logger from '../utils/logger.js';
 
@@ -46,8 +47,8 @@ export async function triggerConnectorSync(
     throw new Error('Connector not found');
   }
 
-  if (connector.status !== 'ACTIVE') {
-    throw new Error('Connector is not active');
+  if (!isConnectorSyncEligible(connector.status)) {
+    throw new Error('Connector is not connected — run Test Connection successfully first');
   }
 
   logger.info(

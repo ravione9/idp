@@ -777,25 +777,50 @@ export async function viewMfaMethods(content) {
   </div>`));
   const wrap = content.firstChild;
 
-  const methods = [
-    { key: 'totp',         label: 'Authenticator App (TOTP)', badge: 'badge-success', badgeText: '● Live',   desc: 'Time-based one-time passwords via Google Authenticator, Authy, etc.' },
-    { key: 'backup_codes', label: 'Backup Codes',             badge: 'badge-success', badgeText: '● Live',   desc: 'Single-use emergency recovery codes.' },
-    { key: 'webauthn',     label: 'WebAuthn / Passkeys',      badge: 'badge-warning', badgeText: '○ Planned', desc: 'Hardware security keys and biometric passkeys (schema only today).' },
-    { key: 'email_otp',    label: 'Email OTP',                badge: 'badge-warning', badgeText: '○ Planned',desc: 'One-time code sent to registered email address.' },
-    { key: 'sms_otp',      label: 'SMS OTP',                  badge: 'badge-warning', badgeText: '○ Planned',desc: 'One-time code sent via SMS.' },
+  const methodDefs = [
+    { key: 'totp',         label: 'Authenticator App (TOTP)', desc: 'Time-based one-time passwords via Google Authenticator, Authy, etc.' },
+    { key: 'backup_codes', label: 'Backup Codes',             desc: 'Single-use emergency recovery codes (bundled with TOTP).' },
+    { key: 'webauthn',     label: 'WebAuthn / Passkeys',      desc: 'Hardware security keys and biometric passkeys.' },
+    { key: 'email_otp',    label: 'Email OTP',                desc: 'One-time code sent to registered email address.' },
+    { key: 'sms_otp',      label: 'SMS OTP',                  desc: 'One-time code sent via SMS to employee mobile.' },
   ];
+
+  function deliveryModeLabel(mode) {
+    if (mode === 'smtp') return 'Ready · SMTP';
+    if (mode === 'api') return 'Ready · API';
+    if (mode === 'gateway') return 'Ready';
+    if (mode === 'dev') return 'Dev mode';
+    return 'Not configured';
+  }
+
+  function deliveryBadge(mode) {
+    if (mode === 'smtp' || mode === 'api' || mode === 'gateway') return 'badge-success';
+    if (mode === 'dev') return 'badge-warning';
+    return 'badge-danger';
+  }
+
+  function sourceBadge(source) {
+    if (source === 'db') return '<span class="badge badge-info">Admin GUI</span>';
+    if (source === 'env') return '<span class="badge badge-neutral">.env fallback</span>';
+    return '<span class="badge badge-neutral">—</span>';
+  }
 
   async function loadMfaPage() {
     try {
-      const [status, policyRes, groupsRes] = await Promise.all([
+      const [status, policyRes, groupsRes, deliveryRes] = await Promise.all([
         api.mfaStatus().catch(() => ({})),
         api.getMfaPolicy().catch(() => ({ data: {} })),
         api.listGroups().catch(() => ({ data: [] })),
+        api.getMfaDeliveryStatus().catch(() => ({ data: {} })),
       ]);
       const policy = policyRes?.data || {};
       const groups = norm(groupsRes);
       const enrolled = status?.methods || [];
-      const liveOrSchemaCount = methods.filter(m => m.badge === 'badge-success').length;
+      const allowedMethods = Array.isArray(policy.allowed_methods)
+        ? policy.allowed_methods
+        : ['totp', 'backup_codes', 'webauthn', 'email_otp', 'sms_otp'];
+      const allowedSet = new Set(allowedMethods);
+      const liveCount = methodDefs.filter((m) => allowedSet.has(m.key)).length;
       const enrolledCount = enrolled.length;
       const globalEnforce = !!policy['global_enforce'];
       const enforceAdmins = policy['enforce_for_admins'] !== false;
@@ -823,30 +848,194 @@ export async function viewMfaMethods(content) {
           </label>`).join('')
         : `<div class="muted" style="padding:0.55rem;font-size:0.82rem">No groups found. Create/sync groups first in Identity → Groups.</div>`;
 
-      const cards = methods.map(m => `
-        <div class="card" style="position:relative">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+      const cards = methodDefs.map((m) => {
+        const isAllowed = allowedSet.has(m.key);
+        const isEnrolled = enrolled.includes(m.key);
+        return `<div class="mfa-method-card card">
+          <div class="mfa-method-card-head">
             <strong>${esc(m.label)}</strong>
-            <span class="badge ${m.badge}">${m.badgeText}</span>
+            <div class="mfa-method-card-badges">
+              <span class="badge ${isAllowed ? 'badge-success' : 'badge-neutral'}">${isAllowed ? 'Live' : 'Disabled'}</span>
+              ${isEnrolled ? '<span class="badge badge-info">Your enrollment</span>' : '<span class="badge badge-neutral">Not enrolled</span>'}
+            </div>
           </div>
-          <p class="muted" style="font-size:0.875rem;margin-bottom:0.75rem">${esc(m.desc)}</p>
-          ${enrolled.includes(m.key)
-            ? '<span class="badge badge-success">● Enrolled</span>'
-            : '<span class="badge badge-neutral">Not enrolled</span>'}
-        </div>`).join('');
+          <p class="muted">${esc(m.desc)}</p>
+        </div>`;
+      }).join('');
+
+      const methodPolicyRows = methodDefs.map((m) => `
+        <label class="mfa-policy-method" style="display:flex;align-items:center;gap:0.55rem;padding:0.4rem 0;cursor:pointer">
+          <input type="checkbox" class="policy-method" value="${esc(m.key)}" ${allowedSet.has(m.key) ? 'checked' : ''}>
+          <span style="font-size:0.875rem">${esc(m.label)}</span>
+        </label>`).join('');
+
+      const delivery = deliveryRes?.data || {};
+      const emailDelivery = delivery.emailOtp || {};
+      const smsDelivery = delivery.smsOtp || {};
+      const emailMode = emailDelivery.mode || 'none';
+      const smsMode = smsDelivery.mode || 'none';
 
       wrap.querySelector('#mfa-area').innerHTML = `
         <!-- ── Stats ── -->
         <div class="stat-grid" style="margin-bottom:1.5rem">
-          ${statCard('shieldCheck', 'Methods Enrolled',   enrolledCount,      status?.enabled ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Not active</span>', 'primary')}
-          ${statCard('check',       'Live / Schema',      liveOrSchemaCount,  'available now',            'success')}
-          ${statCard('bolt',        'Planned',            3,                  'arriving in next milestone','warning')}
-          ${statCard('shield',      'Global Enforce',     globalEnforce ? 'ON' : 'OFF', globalEnforce ? '<span class="badge badge-danger">MFA required for all</span>' : '<span class="badge badge-neutral">Off</span>', globalEnforce ? 'danger' : 'primary')}
+          ${statCard('shieldCheck', 'Methods Enrolled',   enrolledCount,      status?.enabled ? 'Active' : 'Not active', 'primary')}
+          ${statCard('check',       'Live Methods',     liveCount,          `${liveCount} of ${methodDefs.length} enabled`, 'success')}
+          ${statCard('shield',      'Your Methods',     enrolledCount,      enrolledCount ? 'you have MFA methods' : 'enroll in Settings', enrolledCount ? 'accent' : 'warning')}
+          ${statCard('shield',      'Global Enforce',     globalEnforce ? 'ON' : 'OFF', globalEnforce ? 'MFA required for all' : 'Off', globalEnforce ? 'danger' : 'primary')}
         </div>
 
         <!-- ── Method cards ── -->
         <div class="section-title">Available Methods</div>
-        <div class="grid-3" style="margin-bottom:1.5rem">${cards}</div>
+        <div class="mfa-method-grid" style="margin-bottom:1.5rem">${cards}</div>
+
+        <!-- ── OTP delivery (Admin GUI) ── -->
+        <div class="ent-panel mfa-delivery-panel" style="margin-bottom:0.25rem">
+          <div class="ent-panel-head">
+            <div class="panel-meta">
+              <h2>OTP delivery channels</h2>
+              <p class="subtitle">Configure SMTP, HTTP email API, or SMS gateway for OTP. Changes apply immediately — no API restart.</p>
+            </div>
+          </div>
+          <div class="ent-panel-body">
+            <div class="mfa-delivery-split">
+              <div class="config-form-panel">
+                <div class="mfa-delivery-head">
+                  <h3>Email OTP</h3>
+                  <div style="display:flex;gap:0.35rem;align-items:center;flex-wrap:wrap">
+                    <span class="badge ${deliveryBadge(emailMode)}">${esc(deliveryModeLabel(emailMode))}</span>
+                    ${sourceBadge(emailDelivery.source)}
+                  </div>
+                </div>
+                <p class="form-hint" style="margin-top:0">Codes are emailed to each user&apos;s corporate address (<code>email_corp</code>). Choose SMTP or an HTTP email API.</p>
+                <form id="mfa-smtp-form">
+                  <div class="form-group">
+                    <label class="form-label">Delivery method</label>
+                    <div class="mfa-transport-pills" role="radiogroup" aria-label="Email delivery method">
+                      <label class="mfa-transport-pill">
+                        <input type="radio" name="mfa-email-transport" value="smtp" ${(emailDelivery.transport || 'smtp') !== 'api' ? 'checked' : ''}>
+                        <span>
+                          <strong>SMTP</strong>
+                          <span class="muted">Host, port, username &amp; password</span>
+                        </span>
+                      </label>
+                      <label class="mfa-transport-pill">
+                        <input type="radio" name="mfa-email-transport" value="api" ${emailDelivery.transport === 'api' ? 'checked' : ''}>
+                        <span>
+                          <strong>HTTP API</strong>
+                          <span class="muted">POST to your email gateway</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div id="mfa-email-smtp-fields" class="${emailDelivery.transport === 'api' ? 'is-hidden' : ''}">
+                    <div class="form-row-2">
+                      <div class="form-group">
+                        <label class="form-label">SMTP host</label>
+                        <input class="form-input" id="mfa-smtp-host" value="${esc(emailDelivery.smtpHost || '')}" placeholder="smtp.office365.com" autocomplete="off">
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Port</label>
+                        <input class="form-input" id="mfa-smtp-port" type="number" min="1" max="65535" value="${esc(String(emailDelivery.smtpPort || 587))}">
+                      </div>
+                    </div>
+                    <div class="form-row-2">
+                      <div class="form-group">
+                        <label class="form-label">Username</label>
+                        <input class="form-input" id="mfa-smtp-user" value="${esc(emailDelivery.smtpUser || '')}" placeholder="noreply@lenskart.com" autocomplete="off">
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Password</label>
+                        <input class="form-input" id="mfa-smtp-pass" type="password" placeholder="${emailDelivery.hasSmtpPass ? 'Saved — leave blank to keep' : 'SMTP password'}" autocomplete="new-password">
+                      </div>
+                    </div>
+                    <div class="form-row-2">
+                      <div class="form-group">
+                        <label class="form-label">From address</label>
+                        <input class="form-input" id="mfa-smtp-from" value="${esc(emailDelivery.smtpFrom || '')}" placeholder="noreply@lenskart.com">
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Connection security</label>
+                        <select class="form-select" id="mfa-smtp-secure">
+                          <option value="0" ${!emailDelivery.smtpSecure ? 'selected' : ''}>STARTTLS (port 587)</option>
+                          <option value="1" ${emailDelivery.smtpSecure ? 'selected' : ''}>TLS / SSL (port 465)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div id="mfa-email-api-fields" class="${emailDelivery.transport === 'api' ? '' : 'is-hidden'}">
+                    <div class="form-group">
+                      <label class="form-label">Email API URL</label>
+                      <input class="form-input" id="mfa-email-api-url" value="${esc(emailDelivery.emailApiUrl || '')}" placeholder="https://mail.example.com/v1/send" autocomplete="off">
+                      <p class="form-hint">POST JSON: <code>{ "to", "subject", "body", "from" }</code> with optional Bearer auth</p>
+                    </div>
+                    <div class="form-row-2">
+                      <div class="form-group">
+                        <label class="form-label">From address</label>
+                        <input class="form-input" id="mfa-email-api-from" value="${esc(emailDelivery.smtpFrom || '')}" placeholder="noreply@lenskart.com">
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">API key <span class="muted">(optional)</span></label>
+                        <input class="form-input" id="mfa-email-api-key" type="password" placeholder="${emailDelivery.hasEmailApiKey ? 'Saved — leave blank to keep' : 'Optional Bearer token'}" autocomplete="new-password">
+                      </div>
+                    </div>
+                  </div>
+
+                  <label class="mfa-toggle-row">
+                    <input type="checkbox" id="mfa-otp-dev-log" ${emailDelivery.otpDevLog || smsDelivery.otpDevLog ? 'checked' : ''}>
+                    <span>
+                      <strong>Development mode</strong>
+                      <span class="muted">Return OTP codes in API responses and logs (never enable in production)</span>
+                    </span>
+                  </label>
+                  <div id="mfa-smtp-msg" style="margin:0.65rem 0"></div>
+                  <div class="mfa-delivery-actions">
+                    <button type="submit" class="btn btn-primary" id="mfa-smtp-save">Save email delivery</button>
+                    <button type="button" class="btn btn-secondary" id="mfa-smtp-clear">Clear email settings</button>
+                  </div>
+                </form>
+              </div>
+
+              <div class="config-form-panel">
+                <div class="mfa-delivery-head">
+                  <h3>SMS OTP (gateway)</h3>
+                  <div style="display:flex;gap:0.35rem;align-items:center;flex-wrap:wrap">
+                    <span class="badge ${deliveryBadge(smsMode)}">${esc(deliveryModeLabel(smsMode))}</span>
+                    ${sourceBadge(smsDelivery.source)}
+                  </div>
+                </div>
+                <p class="form-hint" style="margin-top:0">Codes are sent to the mobile number on each employee profile via HTTP POST.</p>
+                <form id="mfa-sms-form">
+                  <div class="form-group">
+                    <label class="form-label">Gateway URL</label>
+                    <input class="form-input" id="mfa-sms-url" value="${esc(smsDelivery.smsApiUrl || '')}" placeholder="https://sms.example.com/v1/send" autocomplete="off">
+                    <p class="form-hint">POST JSON body: <code>{ "to": "+91…", "message": "…" }</code></p>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">API key <span class="muted">(optional Bearer token)</span></label>
+                    <input class="form-input" id="mfa-sms-key" type="password" placeholder="${smsDelivery.hasSmsApiKey ? 'Saved — leave blank to keep' : 'Optional API key'}" autocomplete="new-password">
+                  </div>
+                  <label class="mfa-toggle-row">
+                    <input type="checkbox" id="mfa-sms-dev-log" ${smsDelivery.smsDevLog ? 'checked' : ''}>
+                    <span>
+                      <strong>SMS development log</strong>
+                      <span class="muted">Log SMS body when gateway URL is empty (dev only)</span>
+                    </span>
+                  </label>
+                  <div id="mfa-sms-msg" style="margin:0.65rem 0"></div>
+                  <div class="mfa-delivery-actions">
+                    <button type="submit" class="btn btn-primary" id="mfa-sms-save">Save SMS delivery</button>
+                    <button type="button" class="btn btn-secondary" id="mfa-sms-clear">Clear SMS</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+            <p class="card-footnote">
+              After delivery is Ready, enable <em>Email OTP</em> / <em>SMS OTP</em> under Allowed MFA Methods below, then users enroll at Settings → MFA.
+            </p>
+          </div>
+        </div>
 
         <!-- ── Enforce Policy ── -->
         <div class="card" style="margin-bottom:1.25rem;border-left:3px solid var(--primary)">
@@ -879,6 +1068,11 @@ export async function viewMfaMethods(content) {
               <label class="form-label" style="font-weight:600">Grace Period (hours)</label>
               <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Allow login without MFA for this many hours after enforcement begins.</p>
               <input class="form-input" type="number" id="policy-grace" value="${esc(String(gracePeriod))}" min="0" max="168" />
+            </div>
+            <div class="form-group" style="grid-column:1/-1">
+              <label class="form-label" style="font-weight:600">Allowed MFA Methods</label>
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.45rem">Users can enroll only the methods enabled here.</p>
+              <div class="mfa-policy-methods">${methodPolicyRows}</div>
             </div>
             <div class="form-group" style="grid-column:1/-1">
               <label class="form-label" style="font-weight:600">Exclude Groups from Policy MFA</label>
@@ -941,6 +1135,118 @@ export async function viewMfaMethods(content) {
       });
       updateExcludeCount();
 
+      // ── Save SMTP / Email API / SMS delivery ───────────────────────────────
+      function syncEmailTransportUi() {
+        const transport = wrap.querySelector('input[name="mfa-email-transport"]:checked')?.value || 'smtp';
+        const smtpFields = wrap.querySelector('#mfa-email-smtp-fields');
+        const apiFields = wrap.querySelector('#mfa-email-api-fields');
+        smtpFields?.classList.toggle('is-hidden', transport !== 'smtp');
+        apiFields?.classList.toggle('is-hidden', transport !== 'api');
+      }
+      wrap.querySelectorAll('input[name="mfa-email-transport"]').forEach((el) => {
+        el.addEventListener('change', syncEmailTransportUi);
+      });
+      syncEmailTransportUi();
+
+      const smtpForm = wrap.querySelector('#mfa-smtp-form');
+      smtpForm?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const msg = wrap.querySelector('#mfa-smtp-msg');
+        const btn = wrap.querySelector('#mfa-smtp-save');
+        const transport = wrap.querySelector('input[name="mfa-email-transport"]:checked')?.value || 'smtp';
+        const payload = {
+          emailTransport: transport,
+          otpDevLog: !!wrap.querySelector('#mfa-otp-dev-log')?.checked,
+          smsDevLog: !!wrap.querySelector('#mfa-sms-dev-log')?.checked,
+        };
+
+        if (transport === 'api') {
+          payload.emailApiUrl = wrap.querySelector('#mfa-email-api-url').value.trim();
+          payload.smtpFrom = wrap.querySelector('#mfa-email-api-from').value.trim();
+          const apiKey = wrap.querySelector('#mfa-email-api-key').value;
+          if (apiKey) payload.emailApiKey = apiKey;
+          if (payload.emailApiUrl && !payload.smtpFrom) {
+            msg.innerHTML = '<div class="alert alert-error">From address is required when Email API URL is set.</div>';
+            return;
+          }
+        } else {
+          payload.smtpHost = wrap.querySelector('#mfa-smtp-host').value.trim();
+          payload.smtpPort = Number(wrap.querySelector('#mfa-smtp-port').value) || 587;
+          payload.smtpUser = wrap.querySelector('#mfa-smtp-user').value.trim();
+          payload.smtpFrom = wrap.querySelector('#mfa-smtp-from').value.trim();
+          payload.smtpSecure = wrap.querySelector('#mfa-smtp-secure').value === '1';
+          const pass = wrap.querySelector('#mfa-smtp-pass').value;
+          if (pass) payload.smtpPass = pass;
+          if (payload.smtpHost && !payload.smtpFrom) {
+            msg.innerHTML = '<div class="alert alert-error">From address is required when SMTP host is set.</div>';
+            return;
+          }
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+        msg.innerHTML = '';
+        try {
+          await api.saveMfaDelivery(payload);
+          msg.innerHTML = '<div class="alert alert-success">Email delivery settings saved.</div>';
+          await loadMfaPage();
+        } catch (err) {
+          msg.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to save')}</div>`;
+          btn.disabled = false;
+          btn.textContent = 'Save email delivery';
+        }
+      });
+
+      wrap.querySelector('#mfa-smtp-clear')?.addEventListener('click', async () => {
+        if (!confirm('Clear email delivery settings (SMTP and Email API) stored in the Admin GUI?')) return;
+        const msg = wrap.querySelector('#mfa-smtp-msg');
+        try {
+          await api.saveMfaDelivery({ clearSmtp: true, clearEmailApi: true, emailTransport: 'smtp' });
+          msg.innerHTML = '<div class="alert alert-success">Email delivery settings cleared.</div>';
+          await loadMfaPage();
+        } catch (err) {
+          msg.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to clear')}</div>`;
+        }
+      });
+
+      const smsForm = wrap.querySelector('#mfa-sms-form');
+      smsForm?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const msg = wrap.querySelector('#mfa-sms-msg');
+        const btn = wrap.querySelector('#mfa-sms-save');
+        const payload = {
+          smsApiUrl: wrap.querySelector('#mfa-sms-url').value.trim(),
+          otpDevLog: !!wrap.querySelector('#mfa-otp-dev-log')?.checked,
+          smsDevLog: !!wrap.querySelector('#mfa-sms-dev-log')?.checked,
+        };
+        const key = wrap.querySelector('#mfa-sms-key').value;
+        if (key) payload.smsApiKey = key;
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+        msg.innerHTML = '';
+        try {
+          await api.saveMfaDelivery(payload);
+          msg.innerHTML = '<div class="alert alert-success">SMS delivery settings saved.</div>';
+          await loadMfaPage();
+        } catch (err) {
+          msg.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to save')}</div>`;
+          btn.disabled = false;
+          btn.textContent = 'Save SMS delivery';
+        }
+      });
+
+      wrap.querySelector('#mfa-sms-clear')?.addEventListener('click', async () => {
+        if (!confirm('Clear SMS gateway settings stored in the Admin GUI?')) return;
+        const msg = wrap.querySelector('#mfa-sms-msg');
+        try {
+          await api.saveMfaDelivery({ clearSms: true });
+          msg.innerHTML = '<div class="alert alert-success">SMS settings cleared.</div>';
+          await loadMfaPage();
+        } catch (err) {
+          msg.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to clear')}</div>`;
+        }
+      });
+
       // ── Save policy ────────────────────────────────────────────────────────
       wrap.querySelector('#save-policy-btn').addEventListener('click', async () => {
         const msg = wrap.querySelector('#policy-msg');
@@ -948,12 +1254,16 @@ export async function viewMfaMethods(content) {
         const excludedGroups = Array
           .from(wrap.querySelectorAll('.mfa-exclude-group:checked'))
           .map((n) => n.value);
+        const allowed_methods = Array
+          .from(wrap.querySelectorAll('.policy-method:checked'))
+          .map((n) => n.value);
         try {
           await api.updateMfaPolicy({
             global_enforce:     parseInt(wrap.querySelector('#policy-global').value) === 1,
             enforce_for_admins: parseInt(wrap.querySelector('#policy-admins').value) === 1,
             grace_period_hours: parseInt(wrap.querySelector('#policy-grace').value) || 24,
             excluded_group_ids: excludedGroups,
+            allowed_methods,
           });
           msg.innerHTML = `<div class="alert alert-success">Policy saved successfully.</div>`;
           await loadMfaPage();
@@ -2851,27 +3161,43 @@ const FIELD_LABELS = {
 };
 
 function connectorStatusBadge(status) {
-  const map = { CONNECTED:'badge-success', ACTIVE:'badge-success', CONFIGURED:'badge-info', ERROR:'badge-danger', DISABLED:'badge-neutral' };
-  return `<span class="badge ${map[status]||'badge-neutral'}">${esc(status||'—')}</span>`;
+  const map = {
+    CONNECTED: { badge: 'badge-success', label: 'Connected' },
+    ACTIVE:    { badge: 'badge-success', label: 'Connected' }, // legacy
+    CONFIGURED:{ badge: 'badge-info',    label: 'Configured' },
+    ERROR:     { badge: 'badge-danger',  label: 'Error' },
+    DISABLED:  { badge: 'badge-neutral', label: 'Disabled' },
+  };
+  const m = map[status] || { badge: 'badge-neutral', label: status || '—' };
+  return `<span class="badge ${m.badge}">${esc(m.label)}</span>`;
 }
 
 export async function viewDirectorySync(content, initialTab = 'sources', me = null) {
-  const validTab = initialTab === 'users' ? 'users' : 'sources';
+  const allowed = new Set(['sources', 'users', 'mapping', 'sync']);
+  const validTab = allowed.has(initialTab) ? initialTab : 'sources';
   content.replaceChildren(el(`<div class="admin-page">
     ${header('Universal Directory', 'Identity sources and hybrid users across AD, Google, and local directories', `<button class="btn btn-primary btn-sm" id="ds-add-header-btn">+ Add Source</button>`)}
     <div class="tabs tabs--compact">
       <button class="tab${validTab === 'sources' ? ' active' : ''}" data-tab="sources">Directory Sources</button>
       <button class="tab${validTab === 'users' ? ' active' : ''}" data-tab="users">Users</button>
+      <button class="tab${validTab === 'mapping' ? ' active' : ''}" data-tab="mapping">Attribute Mapping</button>
+      <button class="tab${validTab === 'sync' ? ' active' : ''}" data-tab="sync">Sync Settings</button>
     </div>
     <div id="tab-sources"></div>
     <div id="tab-users" style="display:none"></div>
+    <div id="tab-mapping" style="display:none"></div>
+    <div id="tab-sync" style="display:none"></div>
   </div>`));
   const wrap = content.firstChild;
 
   function showTab(name) {
     wrap.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
-    wrap.querySelector('#tab-sources').style.display = name === 'sources' ? '' : 'none';
-    wrap.querySelector('#tab-users').style.display = name === 'users' ? '' : 'none';
+    ['sources', 'users', 'mapping', 'sync'].forEach((t) => {
+      const elTab = wrap.querySelector('#tab-' + t);
+      if (elTab) elTab.style.display = name === t ? '' : 'none';
+    });
+    const addBtn = wrap.querySelector('#ds-add-header-btn');
+    if (addBtn) addBtn.style.display = name === 'sources' ? '' : 'none';
     syncAppUrl('directorySync', name, 'sources');
   }
   wrap.querySelectorAll('.tab').forEach(t => {
@@ -2881,6 +3207,8 @@ export async function viewDirectorySync(content, initialTab = 'sources', me = nu
   // ── initialise both tabs ─────────────────────────────────────────────────────
   initSourcesTab(wrap.querySelector('#tab-sources'));
   initUsersTab(wrap.querySelector('#tab-users'), me);
+  initAttrMappingTab(wrap.querySelector('#tab-mapping'));
+  initSyncSettingsTab(wrap.querySelector('#tab-sync'));
   showTab(validTab);
 }
 
@@ -2897,6 +3225,7 @@ function initSourcesTab(panel) {
   function renderSourceStats(connectors) {
     const total = connectors.length;
     const active = connectors.filter((c) => ['CONNECTED', 'ACTIVE'].includes(c.status)).length;
+    const configured = connectors.filter((c) => c.status === 'CONFIGURED').length;
     const errors = connectors.filter((c) => c.status === 'ERROR').length;
     const lastSync = connectors.reduce((best, c) => {
       if (!c.last_sync_at) return best;
@@ -2907,6 +3236,7 @@ function initSourcesTab(panel) {
     panel.querySelector('#ds-stats').innerHTML = kpiStrip([
       [total, 'Sources', 'accent'],
       [active, 'Connected', 'success'],
+      [configured, 'Not tested', 'info'],
       [errors, 'Errors', errors ? 'danger' : 'neutral'],
       [lastSync ? fmtDate(lastSync) : '—', 'Last sync', 'neutral'],
     ]);
@@ -2931,7 +3261,9 @@ function initSourcesTab(panel) {
         <td><span class="badge badge-neutral">${esc(c.direction || '—')}</span></td>
         <td class="muted">${c.sync_schedule ? esc(c.sync_schedule) : 'Manual'}</td>
         <td class="muted">${c.last_sync_at ? fmtDate(c.last_sync_at) : 'Never'}</td>
-        <td>${connectorStatusBadge(c.status)}${errHint}</td>
+        <td>${connectorStatusBadge(c.status)}${errHint}
+          ${c.last_health_check_at ? `<div class="muted" style="font-size:0.72rem;margin-top:0.2rem">Checked ${fmtDate(c.last_health_check_at)}</div>` : ''}
+        </td>
         <td class="actions">
           <div class="row-actions">
             <button class="btn btn-sm btn-primary ds-sync" data-id="${esc(String(c.id))}">Sync</button>
@@ -2995,18 +3327,20 @@ function initSourcesTab(panel) {
       });
     });
 
-    // Test Connection
+    // Test Connection — Connected only after success; list reloads
     panel.querySelectorAll('.ds-test').forEach(btn => {
       btn.addEventListener('click', async () => {
-        btn.disabled = true; btn.textContent = '⟳ Testing…';
+        btn.disabled = true; btn.textContent = 'Testing…';
         try {
           const r = await api.testConnector(btn.dataset.id);
-          showToast(r.message || (r.success ? '✓ Connection successful' : '✗ Test failed'));
+          showToast(r.message || (r.success ? 'Connection successful — status set to Connected' : 'Test failed'));
+          await load();
         } catch(e) {
           const detail = e.body && e.body.detail ? `\n${e.body.detail}` : '';
-          showToast('✗ ' + e.message + detail, true);
+          showToast((e.message || 'Test failed') + detail, true);
+          await load();
         }
-        btn.disabled = false; btn.textContent = '✓ Test Connection';
+        btn.disabled = false; btn.textContent = 'Test';
       });
     });
 
@@ -3459,6 +3793,342 @@ function initSourcesTab(panel) {
 }
 
 // ╔══════════════════════════════════════════════════════════════╗
+// ║  Attribute Mapping + Sync Settings (Google Directory)       ║
+// ╚══════════════════════════════════════════════════════════════╝
+function initAttrMappingTab(panel) {
+  const DEFAULT_SOURCE = [
+    'employeeId', 'organizations.department', 'organizations.title', 'organizations.costCenter',
+    'organizations.location', 'manager', 'phones', 'addresses', 'thumbnailPhotoUrl',
+    'name.givenName', 'name.familyName', 'primaryEmail',
+  ];
+  const DEFAULT_LOCAL = [
+    { value: 'employee_number', label: 'Employee ID' },
+    { value: 'dept_id', label: 'Department' },
+    { value: 'role', label: 'Designation' },
+    { value: 'cost_center', label: 'Cost Center' },
+    { value: 'location', label: 'Location' },
+    { value: 'manager_emp_id', label: 'Manager' },
+    { value: 'mobile', label: 'Mobile Number' },
+    { value: 'office_address', label: 'Office Address' },
+    { value: 'photo_url', label: 'Profile Photo' },
+    { value: 'first_name', label: 'First Name' },
+    { value: 'last_name', label: 'Last Name' },
+    { value: 'email_corp', label: 'Email' },
+  ];
+  const DEFAULT_MAPS = [
+    { source_attr: 'employeeId', local_attr: 'employee_number', enabled: 1 },
+    { source_attr: 'organizations.department', local_attr: 'dept_id', enabled: 1 },
+    { source_attr: 'organizations.title', local_attr: 'role', enabled: 1 },
+    { source_attr: 'organizations.costCenter', local_attr: 'cost_center', enabled: 1 },
+    { source_attr: 'organizations.location', local_attr: 'location', enabled: 1 },
+    { source_attr: 'manager', local_attr: 'manager_emp_id', enabled: 1 },
+    { source_attr: 'phones', local_attr: 'mobile', enabled: 1 },
+    { source_attr: 'addresses', local_attr: 'office_address', enabled: 1 },
+    { source_attr: 'thumbnailPhotoUrl', local_attr: 'photo_url', enabled: 1 },
+    { source_attr: 'name.givenName', local_attr: 'first_name', enabled: 1 },
+    { source_attr: 'name.familyName', local_attr: 'last_name', enabled: 1 },
+    { source_attr: 'primaryEmail', local_attr: 'email_corp', enabled: 1 },
+  ];
+
+  panel.innerHTML = `
+    <div class="ent-panel">
+      <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
+        <div>
+          <h2 style="margin:0;font-size:1.05rem">Google Attribute Mapping</h2>
+          <p class="muted" style="margin:0.35rem 0 0;font-size:0.85rem">Map Google Workspace attributes to local directory fields. Changes apply on the next sync.</p>
+        </div>
+        <button class="btn btn-primary btn-sm" id="am-save">Save Mapping</button>
+      </div>
+      <div id="am-banner"></div>
+      <div class="card-body" id="am-body">${loading()}</div>
+      <div id="am-msg"></div>
+    </div>`;
+
+  let sourceOptions = DEFAULT_SOURCE.slice();
+  let localOptions = DEFAULT_LOCAL.slice();
+  let maps = DEFAULT_MAPS.map((m) => ({ ...m }));
+  let apiReady = false;
+
+  async function load() {
+    try {
+      const r = await api.getGoogleAttrMaps();
+      maps = (r.data && r.data.length) ? r.data : DEFAULT_MAPS.map((m) => ({ ...m }));
+      sourceOptions = r.sourceOptions?.length ? r.sourceOptions : DEFAULT_SOURCE.slice();
+      localOptions = r.localOptions?.length ? r.localOptions : DEFAULT_LOCAL.slice();
+      apiReady = true;
+      panel.querySelector('#am-banner').innerHTML = '';
+      render();
+    } catch (e) {
+      apiReady = false;
+      const status = e.status || 0;
+      panel.querySelector('#am-banner').innerHTML = status === 404
+        ? `<div class="alert alert-info" style="margin:0.75rem 1rem 0">Directory API is not available on this server build yet. Showing default mappings — rebuild <code>lilg-api</code> to save changes.</div>`
+        : `<div class="alert alert-warning" style="margin:0.75rem 1rem 0">${esc(e.message || 'Could not load mappings')}. Showing defaults.</div>`;
+      maps = DEFAULT_MAPS.map((m) => ({ ...m }));
+      render();
+    }
+  }
+
+  function render() {
+    const rows = maps.map((m, i) => `
+      <tr data-i="${i}">
+        <td>
+          <select class="form-select am-src">
+            ${sourceOptions.map((s) => `<option value="${esc(s)}" ${m.source_attr === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}
+          </select>
+        </td>
+        <td class="muted" style="text-align:center">→</td>
+        <td>
+          <select class="form-select am-local">
+            ${localOptions.map((o) => `<option value="${esc(o.value)}" ${m.local_attr === o.value ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}
+          </select>
+        </td>
+        <td style="text-align:center"><input type="checkbox" class="am-en" ${m.enabled ? 'checked' : ''}></td>
+        <td><button class="btn btn-sm btn-secondary am-up" title="Move up">↑</button>
+            <button class="btn btn-sm btn-secondary am-dn" title="Move down">↓</button></td>
+      </tr>`).join('');
+    panel.querySelector('#am-body').innerHTML = `
+      <div class="table-wrap"><table class="dense-table">
+        <thead><tr><th>Google Attribute</th><th></th><th>Local Attribute</th><th>On</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <button class="btn btn-secondary btn-sm" id="am-add" style="margin-top:0.75rem">+ Add mapping</button>`;
+
+    panel.querySelector('#am-add')?.addEventListener('click', () => {
+      maps.push({ source_attr: sourceOptions[0] || 'employeeId', local_attr: 'employee_number', enabled: 1 });
+      render();
+    });
+    panel.querySelectorAll('tr[data-i]').forEach((tr) => {
+      const i = Number(tr.dataset.i);
+      tr.querySelector('.am-up')?.addEventListener('click', () => {
+        if (i <= 0) return;
+        [maps[i - 1], maps[i]] = [maps[i], maps[i - 1]];
+        render();
+      });
+      tr.querySelector('.am-dn')?.addEventListener('click', () => {
+        if (i >= maps.length - 1) return;
+        [maps[i + 1], maps[i]] = [maps[i], maps[i + 1]];
+        render();
+      });
+    });
+  }
+
+  panel.querySelector('#am-save').addEventListener('click', async () => {
+    const rows = [...panel.querySelectorAll('tr[data-i]')];
+    const payload = rows.map((tr, idx) => ({
+      source_attr: tr.querySelector('.am-src').value,
+      local_attr: tr.querySelector('.am-local').value,
+      enabled: tr.querySelector('.am-en').checked,
+      sort_order: (idx + 1) * 10,
+    }));
+    if (!apiReady) {
+      panel.querySelector('#am-msg').innerHTML = `<div class="alert alert-warning">Cannot save until the API is rebuilt with directory endpoints.</div>`;
+      return;
+    }
+    try {
+      const r = await api.saveGoogleAttrMaps(payload);
+      maps = r.data || payload;
+      panel.querySelector('#am-msg').innerHTML = `<div class="alert alert-success">Attribute mapping saved.</div>`;
+      render();
+    } catch (e) {
+      panel.querySelector('#am-msg').innerHTML = errHtml(e.message);
+    }
+  });
+
+  load();
+}
+
+function initSyncSettingsTab(panel) {
+  panel.innerHTML = `
+    <div class="ent-panel" style="margin-bottom:1rem">
+      <div class="card-head"><h2 style="margin:0;font-size:1.05rem">Google Sync Settings</h2></div>
+      <div class="card-body" id="ss-body">${loading()}</div>
+      <div id="ss-msg"></div>
+    </div>
+    <div class="ent-panel">
+      <div class="card-head" style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0;font-size:1.05rem">Sync Logs</h2>
+        <button class="btn btn-secondary btn-sm" id="ss-refresh-logs">Refresh</button>
+      </div>
+      <div class="card-body" id="ss-logs">${loading()}</div>
+    </div>`;
+
+  async function loadSettings() {
+    const defaults = {
+      sync_employee_id: 1, sync_department: 1, sync_designation: 1, sync_manager: 1,
+      sync_cost_center: 1, sync_mobile: 1, sync_location: 1, sync_profile_photo: 1,
+      sync_office_address: 1, disable_deleted: 0, frequency: 'manual',
+    };
+    let s = defaults;
+    let apiReady = true;
+    try {
+      const r = await api.getGoogleSyncSettings();
+      s = { ...defaults, ...(r.data || {}) };
+    } catch (e) {
+      apiReady = false;
+      panel.querySelector('#ss-msg').innerHTML = (e.status === 404)
+        ? `<div class="alert alert-info">Directory API is not available on this server build yet. Showing default settings — rebuild <code>lilg-api</code> to enable Save / Sync.</div>`
+        : `<div class="alert alert-warning">${esc(e.message || 'Could not load sync settings')}. Showing defaults.</div>`;
+    }
+    try {
+      const labels = {
+        ss_sync_employee_id: 'Sync Employee ID',
+        ss_sync_department: 'Sync Department',
+        ss_sync_designation: 'Sync Designation',
+        ss_sync_manager: 'Sync Manager',
+        ss_sync_cost_center: 'Sync Cost Center',
+        ss_sync_mobile: 'Sync Mobile',
+        ss_sync_location: 'Sync Location',
+        ss_sync_profile_photo: 'Sync Profile Photo',
+        ss_sync_office_address: 'Sync Office Address',
+        ss_disable_deleted: 'Disable deleted Google users',
+      };
+      const chk = (id, on) => `<label class="form-check-row"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}> ${labels[id] || id}</label>`;
+      panel.querySelector('#ss-body').innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem 1.5rem">
+          ${chk('ss_sync_employee_id', s.sync_employee_id)}
+          ${chk('ss_sync_department', s.sync_department)}
+          ${chk('ss_sync_designation', s.sync_designation)}
+          ${chk('ss_sync_manager', s.sync_manager)}
+          ${chk('ss_sync_cost_center', s.sync_cost_center)}
+          ${chk('ss_sync_mobile', s.sync_mobile)}
+          ${chk('ss_sync_location', s.sync_location)}
+          ${chk('ss_sync_profile_photo', s.sync_profile_photo)}
+          ${chk('ss_sync_office_address', s.sync_office_address)}
+          ${chk('ss_disable_deleted', s.disable_deleted)}
+        </div>
+        <div class="form-group" style="margin-top:1rem;max-width:240px">
+          <label class="form-label">Sync Frequency</label>
+          <select class="form-select" id="ss_frequency">
+            <option value="15m" ${s.frequency === '15m' ? 'selected' : ''}>15 Minutes</option>
+            <option value="30m" ${s.frequency === '30m' ? 'selected' : ''}>30 Minutes</option>
+            <option value="1h" ${s.frequency === '1h' ? 'selected' : ''}>1 Hour</option>
+            <option value="manual" ${!s.frequency || s.frequency === 'manual' ? 'selected' : ''}>Manual</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:1rem">
+          <button class="btn btn-primary" id="ss-save">Save</button>
+          <button class="btn btn-secondary" id="ss-sync-now">Sync Now</button>
+          <button class="btn btn-secondary" id="ss-full-sync">Run Full Sync</button>
+        </div>
+        <div id="ss-sync-progress" hidden style="margin-top:1rem">
+          <div class="muted" style="font-size:0.8rem;margin-bottom:0.35rem" id="ss-prog-label">Syncing…</div>
+          <div style="height:8px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden">
+            <div id="ss-prog-bar" style="height:100%;width:15%;background:var(--accent,#4c8bf5)"></div>
+          </div>
+        </div>`;
+
+      if (!apiReady) {
+        panel.querySelector('#ss-save').disabled = true;
+        panel.querySelector('#ss-sync-now').disabled = true;
+        panel.querySelector('#ss-full-sync').disabled = true;
+      }
+
+      panel.querySelector('#ss-save').addEventListener('click', async () => {
+        if (!apiReady) {
+          panel.querySelector('#ss-msg').innerHTML = `<div class="alert alert-warning">Cannot save until the API is rebuilt with directory endpoints.</div>`;
+          return;
+        }
+        const payload = {
+          sync_employee_id: panel.querySelector('#ss_sync_employee_id').checked,
+          sync_department: panel.querySelector('#ss_sync_department').checked,
+          sync_designation: panel.querySelector('#ss_sync_designation').checked,
+          sync_manager: panel.querySelector('#ss_sync_manager').checked,
+          sync_cost_center: panel.querySelector('#ss_sync_cost_center').checked,
+          sync_mobile: panel.querySelector('#ss_sync_mobile').checked,
+          sync_location: panel.querySelector('#ss_sync_location').checked,
+          sync_profile_photo: panel.querySelector('#ss_sync_profile_photo').checked,
+          sync_office_address: panel.querySelector('#ss_sync_office_address').checked,
+          disable_deleted: panel.querySelector('#ss_disable_deleted').checked,
+          frequency: panel.querySelector('#ss_frequency').value,
+        };
+        try {
+          await api.saveGoogleSyncSettings(payload);
+          panel.querySelector('#ss-msg').innerHTML = `<div class="alert alert-success">Sync settings saved.</div>`;
+        } catch (e) {
+          panel.querySelector('#ss-msg').innerHTML = errHtml(e.message);
+        }
+      });
+
+      const runSync = async (fn, label) => {
+        if (!apiReady) {
+          panel.querySelector('#ss-msg').innerHTML = `<div class="alert alert-warning">Cannot sync until the API is rebuilt with directory endpoints.</div>`;
+          return;
+        }
+        const prog = panel.querySelector('#ss-sync-progress');
+        prog.hidden = false;
+        panel.querySelector('#ss-prog-label').textContent = label;
+        panel.querySelector('#ss-prog-bar').style.width = '35%';
+        try {
+          const r = await fn();
+          panel.querySelector('#ss-prog-bar').style.width = '100%';
+          panel.querySelector('#ss-msg').innerHTML = `<div class="alert alert-success">
+            ${esc(label)} complete — Added ${r.usersAdded ?? 0}, Updated ${r.usersUpdated ?? 0},
+            Disabled ${r.usersDisabled ?? 0}, Failed ${r.usersFailed ?? 0}
+            ${r.durationMs != null ? ' · ' + Math.round(r.durationMs / 1000) + 's' : ''}
+          </div>`;
+          loadLogs();
+        } catch (e) {
+          panel.querySelector('#ss-msg').innerHTML = errHtml(e.message);
+        } finally {
+          setTimeout(() => { prog.hidden = true; }, 800);
+        }
+      };
+
+      panel.querySelector('#ss-sync-now').addEventListener('click', () => runSync(() => api.googleSyncNow(), 'Sync Now'));
+      panel.querySelector('#ss-full-sync').addEventListener('click', () => {
+        if (!confirm('Run a full Google directory resync? This may take several minutes.')) return;
+        runSync(() => api.googleFullSync(), 'Full Sync');
+      });
+    } catch (e) {
+      panel.querySelector('#ss-body').innerHTML = errHtml(e.message);
+    }
+  }
+
+  async function loadLogs() {
+    try {
+      const r = await api.googleSyncLogs(30);
+      const runs = r.data?.runs || [];
+      const audit = r.data?.audit || [];
+      panel.querySelector('#ss-logs').innerHTML = `
+        <p class="pp-section-title">Connector runs</p>
+        <div class="table-wrap" style="margin-bottom:1rem"><table class="dense-table">
+          <thead><tr><th>Type</th><th>Status</th><th>Processed</th><th>OK</th><th>Failed</th><th>Started</th></tr></thead>
+          <tbody>${runs.length ? runs.map((x) => `<tr>
+            <td>${esc(x.run_type || '')}</td>
+            <td><span class="badge ${x.status === 'SUCCESS' ? 'badge-success' : x.status === 'FAILED' ? 'badge-danger' : 'badge-warning'}">${esc(x.status || '')}</span></td>
+            <td>${esc(String(x.items_processed ?? ''))}</td>
+            <td>${esc(String(x.items_succeeded ?? ''))}</td>
+            <td>${esc(String(x.items_failed ?? ''))}</td>
+            <td class="muted" style="font-size:0.78rem">${x.started_at ? fmtDate(x.started_at) : '—'}</td>
+          </tr>`).join('') : '<tr><td colspan="6" class="muted">No runs yet</td></tr>'}
+          </tbody>
+        </table></div>
+        <p class="pp-section-title">Directory audit</p>
+        <div class="table-wrap"><table class="dense-table">
+          <thead><tr><th>Action</th><th>User</th><th>Admin</th><th>When</th></tr></thead>
+          <tbody>${audit.length ? audit.map((a) => `<tr>
+            <td>${esc(a.action || '')}</td>
+            <td>${esc(a.emp_id || '—')}</td>
+            <td>${esc(a.admin_emp_id || '—')}</td>
+            <td class="muted" style="font-size:0.78rem">${a.created_at ? fmtDate(a.created_at) : '—'}</td>
+          </tr>`).join('') : '<tr><td colspan="4" class="muted">No audit entries</td></tr>'}
+          </tbody>
+        </table></div>`;
+    } catch (e) {
+      const msg = e.status === 404
+        ? 'Sync logs will appear here after the API is rebuilt and a sync has run.'
+        : (e.message || 'Could not load logs');
+      panel.querySelector('#ss-logs').innerHTML = `<p class="muted" style="margin:0;font-size:0.9rem">${esc(msg)}</p>`;
+    }
+  }
+
+  panel.querySelector('#ss-refresh-logs')?.addEventListener('click', loadLogs);
+  loadSettings();
+  loadLogs();
+}
+
+// ╔══════════════════════════════════════════════════════════════╗
 // ║  TAB 2: Universal Directory — Hybrid Identity Users         ║
 // ╚══════════════════════════════════════════════════════════════╝
 function initUsersTab(panel, me = null) {
@@ -3491,33 +4161,71 @@ function initUsersTab(panel, me = null) {
 
   // ── Build shell ──────────────────────────────────────────────────────────────
   panel.innerHTML = `
-    <div class="filter-toolbar">
+    <div class="filter-toolbar" style="flex-wrap:wrap;gap:0.5rem">
       <input class="form-input filter-toolbar-search" id="ud-search" placeholder="Search name, email, ID…">
       <select class="form-select" id="ud-src-filter">
         <option value="">All Sources</option>
         <option value="AD">Active Directory</option>
         <option value="GOOGLE">Google Workspace</option>
         <option value="LOCAL">Local Only</option>
-        <option value="ZOHO">Zoho</option>
-        <option value="SLACK">Slack</option>
-        <option value="GITHUB">GitHub</option>
-        <option value="HRMS">HRMS</option>
-        <option value="AWS_IDC">AWS IDC</option>
       </select>
       <select class="form-select" id="ud-state-filter">
         <option value="">Available</option>
         <option value="SUSPENDED">Suspended</option>
         <option value="__all__">All states</option>
       </select>
+      <input class="form-input" id="ud-dept-filter" placeholder="Department" style="max-width:140px">
+      <input class="form-input" id="ud-mgr-filter" placeholder="Manager" style="max-width:140px">
+      <input class="form-input" id="ud-loc-filter" placeholder="Location" style="max-width:120px">
+      <select class="form-select" id="ud-type-filter">
+        <option value="">All types</option>
+        <option value="CORPORATE">Corporate</option>
+        <option value="STORE">Store</option>
+        <option value="PLANT">Plant</option>
+        <option value="DC">DC</option>
+      </select>
       <div class="filter-toolbar-spacer"></div>
       <button class="btn btn-secondary btn-sm" id="ud-refresh-btn">Refresh</button>
+      <button class="btn btn-secondary btn-sm" id="ud-bulk-upload-btn">Bulk Upload</button>
       <button class="btn btn-primary btn-sm" id="ud-create-btn">+ Local User</button>
     </div>
+    <div id="ud-bulk-bar" class="filter-toolbar ud-bulk-bar" hidden style="display:none;margin-top:0.35rem;background:var(--surface-2,rgba(255,255,255,0.03));padding:0.5rem 0.75rem;border-radius:8px">
+      <span class="muted" style="font-size:0.85rem"><span id="ud-sel-count">0</span> selected</span>
+      <select class="form-select" id="ud-bulk-action" style="max-width:200px">
+        <option value="">Bulk actions…</option>
+        <option value="enable">Bulk Enable</option>
+        <option value="disable">Bulk Disable</option>
+        <option value="delete">Bulk Delete</option>
+        <option value="reset_password">Bulk Reset Password</option>
+        <option value="send_welcome">Bulk Send Welcome Email</option>
+        <option value="export">Bulk Export</option>
+      </select>
+      <button class="btn btn-sm btn-primary" id="ud-bulk-run">Apply</button>
+      <button class="btn btn-sm btn-secondary" id="ud-bulk-clear">Clear</button>
+    </div>
+    <div id="ud-toast" style="margin:0.5rem 0"></div>
     <div id="ud-stats" class="kpi-strip kpi-strip--spaced" hidden></div>
     <div id="ud-table-area">${loading()}</div>`;
 
   let allUsers = [];
   let searchTimer = null;
+  const selected = new Set();
+
+  function toast(msg, type = 'success') {
+    const el = panel.querySelector('#ud-toast');
+    if (!el) return;
+    el.innerHTML = `<div class="alert alert-${type === 'error' ? 'error' : type === 'info' ? 'info' : 'success'}" style="margin:0">${esc(msg)}</div>`;
+    setTimeout(() => { if (el) el.innerHTML = ''; }, 4500);
+  }
+
+  function currentFilters() {
+    return {
+      department: panel.querySelector('#ud-dept-filter')?.value?.trim() || '',
+      manager: panel.querySelector('#ud-mgr-filter')?.value?.trim() || '',
+      location: panel.querySelector('#ud-loc-filter')?.value?.trim() || '',
+      employeeType: panel.querySelector('#ud-type-filter')?.value || '',
+    };
+  }
 
   // ── Load & render user list ──────────────────────────────────────────────────
   async function loadUsers(q = '', state = '', source = '') {
@@ -3525,8 +4233,10 @@ function initUsersTab(panel, me = null) {
     try {
       const includeInactive = state === '__all__';
       const apiState = includeInactive ? '' : state;
-      const r = await api.listUsersUnified(q, apiState, source, 200, 0, includeInactive);
+      const r = await api.listUsersUnified(q, apiState, source, 200, 0, includeInactive, currentFilters());
       allUsers = Array.isArray(r) ? r : (r?.data ?? []);
+      selected.clear();
+      updateBulkBar();
       renderStats(allUsers);
       renderTable(allUsers);
     } catch(e) {
@@ -3549,6 +4259,17 @@ function initUsersTab(panel, me = null) {
     ]);
   }
 
+  function updateBulkBar() {
+    const bar = panel.querySelector('#ud-bulk-bar');
+    const count = selected.size;
+    if (bar) {
+      bar.hidden = count === 0;
+      bar.style.display = count === 0 ? 'none' : '';
+      const c = panel.querySelector('#ud-sel-count');
+      if (c) c.textContent = String(count);
+    }
+  }
+
   function renderTable(users) {
     if (!users.length) {
       panel.querySelector('#ud-table-area').innerHTML = `
@@ -3562,19 +4283,25 @@ function initUsersTab(panel, me = null) {
     const rows = users.map(u => {
       const sources = (u.identity_sources || '').split(',').filter(Boolean);
       const badges  = sources.length ? sources.map(srcBadge).join('') : srcBadge('LOCAL');
+      const displayId = u.employee_number || u.emp_id;
       const init = (u.full_name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+      const checked = selected.has(u.emp_id) ? 'checked' : '';
       return `<tr style="cursor:pointer" class="ud-row" data-empid="${esc(u.emp_id)}">
+        <td onclick="event.stopPropagation()"><input type="checkbox" class="ud-check" data-empid="${esc(u.emp_id)}" ${checked}></td>
         <td>
           <div class="user-cell">
-            <div class="user-cell-avatar">${esc(init)}</div>
+            ${u.photo_url
+              ? `<img class="user-cell-avatar" src="${esc(u.photo_url)}" alt="" style="object-fit:cover;width:32px;height:32px;border-radius:50%">`
+              : `<div class="user-cell-avatar">${esc(init)}</div>`}
             <div>
               <div class="user-cell-name">${esc(u.full_name||'—')}</div>
-              <div class="user-cell-meta">${esc(u.emp_id)}</div>
+              <div class="user-cell-meta">${esc(displayId)}</div>
             </div>
           </div>
         </td>
         <td class="muted">${esc(u.email_corp||'—')}</td>
         <td class="muted">${esc(u.dept_id||'—')}</td>
+        <td class="muted">${esc(u.designation || u.role || '—')}</td>
         <td>${stateBadge(u.ilg_state)}</td>
         <td>${badges}</td>
         <td class="actions">
@@ -3586,16 +4313,34 @@ function initUsersTab(panel, me = null) {
     panel.querySelector('#ud-table-area').innerHTML = `
       <div class="table-wrap table-wrap--flat">
         <table class="dense-table">
-          <thead><tr><th>User</th><th>Email</th><th>Department</th><th>State</th><th>Sources</th><th></th></tr></thead>
+          <thead><tr>
+            <th style="width:28px"><input type="checkbox" id="ud-check-all" title="Select all"></th>
+            <th>User</th><th>Email</th><th>Department</th><th>Designation</th><th>State</th><th>Sources</th><th></th>
+          </tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`;
 
+    panel.querySelector('#ud-check-all')?.addEventListener('change', (e) => {
+      const on = e.target.checked;
+      users.forEach((u) => { if (on) selected.add(u.emp_id); else selected.delete(u.emp_id); });
+      panel.querySelectorAll('.ud-check').forEach((c) => { c.checked = on; });
+      updateBulkBar();
+    });
+    panel.querySelectorAll('.ud-check').forEach((c) => {
+      c.addEventListener('change', () => {
+        if (c.checked) selected.add(c.dataset.empid);
+        else selected.delete(c.dataset.empid);
+        updateBulkBar();
+      });
+    });
+
     panel.querySelectorAll('.ud-row, .ud-profile-btn').forEach(el2 => {
       el2.addEventListener('click', (e) => {
+        if (e.target.closest('.ud-check')) return;
         e.stopPropagation();
         const empId = el2.dataset.empid || el2.closest('tr')?.dataset?.empid;
-        if (empId) openProfilePanel(empId);
+        if (empId) openProfileDrawer(empId);
       });
     });
   }
@@ -3775,21 +4520,30 @@ function initUsersTab(panel, me = null) {
       // ── Overview tab ─────────────────────────────────────────────────────────
       if (tab === 'overview') {
         const attrs = [
-          ['Employee ID',      esc(emp.emp_id     || '—')],
+          ['Employee ID',      esc(emp.employee_number || emp.emp_id || '—')],
+          ['Username',         esc(emp.username || '—')],
           ['Corporate Email',  esc(emp.email_corp || '—')],
           ['Department',       esc(emp.dept_id    || '—')],
-          ['Employment Type',  esc(emp.employment_type || '—')],
-          ['State',            stateBadge(emp.ilg_state)],
           ['Designation',      emp.role ? esc(emp.role) : '<span class="muted">—</span>'],
-          ['Portal Administrator', emp.portal_role
-            ? `<span class="badge badge-primary">${esc(emp.portal_role)}</span>`
-            : '<span class="muted">None — assign from Identity → Administrators</span>'],
-          ['Hire Date',        emp.hire_date ? fmtDate(emp.hire_date) : '—'],
-          ['Last Login',       emp.last_login_at ? fmtDate(emp.last_login_at) : '—'],
           ['Manager',          emp.manager_name
             ? `${esc(emp.manager_name)} <span class="muted" style="font-size:0.8rem">&lt;${esc(emp.manager_email||'')}&gt;</span>`
             : '—'],
-          ['Manager ID',       esc(emp.manager_emp_id || '—')],
+          ['Location',         esc(emp.location || emp.city || '—')],
+          ['Cost Center',      esc(emp.cost_center || '—')],
+          ['Phone',            esc(emp.mobile || '—')],
+          ['Joining Date',     emp.hire_date ? fmtDate(emp.hire_date) : '—'],
+          ['Employment Type',  esc(emp.employment_type || '—')],
+          ['State',            stateBadge(emp.ilg_state)],
+          ['Source',           activeSources.length ? activeSources.map(srcBadge).join('') : srcBadge('LOCAL')],
+          ['Last Sync Time',   emp.attrs_synced_at ? fmtDate(emp.attrs_synced_at)
+            : (links.find(l => l.last_synced_at)?.last_synced_at ? fmtDate(links.find(l => l.last_synced_at).last_synced_at) : '—')],
+          ['Sync Status',      emp.sync_status
+            ? `<span class="badge ${emp.sync_status==='SYNCED'?'badge-success':'badge-neutral'}">${esc(emp.sync_status)}</span>`
+            : '—'],
+          ['Portal Administrator', emp.portal_role
+            ? `<span class="badge badge-primary">${esc(emp.portal_role)}</span>`
+            : '<span class="muted">None</span>'],
+          ['Last Login',       emp.last_login_at ? fmtDate(emp.last_login_at) : '—'],
         ];
 
         body.innerHTML = `
@@ -4234,24 +4988,60 @@ function initUsersTab(panel, me = null) {
 
   // ── Create Local User modal ──────────────────────────────────────────────────
   function openCreateUserModal() {
-    const bd = openModal(`<div class="modal" style="width:580px;max-width:96vw">
+    const bd = openModal(`<div class="modal" style="width:720px;max-width:96vw">
       <div class="modal-header"><h2>Create Local User</h2></div>
       <div class="modal-body">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">
-          <div class="form-group">
-            <label class="form-label">Full Name <span style="color:var(--danger)">*</span></label>
-            <input class="form-input" id="cu-name" placeholder="Jane Doe">
+          <div class="form-group"><label class="form-label">Employee ID *</label>
+            <input class="form-input" id="cu-empid" placeholder="E12345"></div>
+          <div class="form-group"><label class="form-label">Username *</label>
+            <input class="form-input" id="cu-user" placeholder="jane.doe"></div>
+          <div class="form-group"><label class="form-label">First Name *</label>
+            <input class="form-input" id="cu-first"></div>
+          <div class="form-group"><label class="form-label">Last Name *</label>
+            <input class="form-input" id="cu-last"></div>
+          <div class="form-group"><label class="form-label">Display Name</label>
+            <input class="form-input" id="cu-display"></div>
+          <div class="form-group"><label class="form-label">Email *</label>
+            <input class="form-input" id="cu-email" type="email"></div>
+          <div class="form-group"><label class="form-label">Department</label>
+            <input class="form-input" id="cu-dept"></div>
+          <div class="form-group"><label class="form-label">Designation</label>
+            <input class="form-input" id="cu-desig"></div>
+          <div class="form-group"><label class="form-label">Manager (emp ID)</label>
+            <input class="form-input" id="cu-mgr"></div>
+          <div class="form-group"><label class="form-label">Mobile Number</label>
+            <input class="form-input" id="cu-mobile"></div>
+          <div class="form-group"><label class="form-label">Location</label>
+            <input class="form-input" id="cu-loc"></div>
+          <div class="form-group"><label class="form-label">Country</label>
+            <input class="form-input" id="cu-country"></div>
+          <div class="form-group"><label class="form-label">Cost Center</label>
+            <input class="form-input" id="cu-cc"></div>
+          <div class="form-group"><label class="form-label">Employee Type</label>
+            <select class="form-select" id="cu-emptype">
+              <option value="CORPORATE">Corporate</option>
+              <option value="STORE">Store</option>
+              <option value="PLANT">Plant</option>
+              <option value="DC">DC</option>
+            </select></div>
+          <div class="form-group"><label class="form-label">Joining Date</label>
+            <input class="form-input" id="cu-join" type="date"></div>
+          <div class="form-group"><label class="form-label">Status</label>
+            <select class="form-select" id="cu-status">
+              <option value="ACTIVE">Active</option>
+              <option value="INACTIVE">Inactive</option>
+            </select></div>
+        </div>
+        <hr style="border:0;border-top:1px solid var(--border);margin:1rem 0">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">
+          <div class="form-group"><label class="form-label">Password</label>
+            <div class="form-check-row" style="margin-bottom:0.5rem">
+              <input type="checkbox" id="cu-genpwd" checked> <label for="cu-genpwd">Generate automatically</label>
+            </div>
+            <input class="form-input" id="cu-pwd" type="password" placeholder="Manual password" disabled autocomplete="new-password">
           </div>
-          <div class="form-group">
-            <label class="form-label">Corporate Email <span style="color:var(--danger)">*</span></label>
-            <input class="form-input" id="cu-email" type="email" placeholder="jane.doe@company.com">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Password <span style="color:var(--danger)">*</span></label>
-            <input class="form-input" id="cu-pwd" type="password" placeholder="Min. 10 characters" autocomplete="new-password">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Role</label>
+          <div class="form-group"><label class="form-label">Portal role</label>
             <select class="form-select" id="cu-role">
               <option value="USER">User</option>
               <option value="MANAGER">Manager</option>
@@ -4259,69 +5049,279 @@ function initUsersTab(panel, me = null) {
               <option value="ADMIN">Admin</option>
               <option value="SUPER_ADMIN">Super Admin</option>
             </select>
+            <div class="form-check-row" style="margin-top:0.75rem">
+              <input type="checkbox" id="cu-welcome"> <label for="cu-welcome">Send welcome email</label>
+            </div>
           </div>
-          <div class="form-group">
-            <label class="form-label">Department ID</label>
-            <input class="form-input" id="cu-dept" placeholder="e.g. DEPT-ENG">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Employment Type</label>
-            <select class="form-select" id="cu-emptype">
-              <option value="CORPORATE">Corporate</option>
-              <option value="STORE">Store</option>
-              <option value="PLANT">Plant</option>
-              <option value="DC">Distribution Center</option>
-            </select>
-          </div>
-          <div class="form-group" style="grid-column:1/-1">
-            <label class="form-label">Manager Employee ID</label>
-            <input class="form-input" id="cu-mgr" placeholder="e.g. EMP-00042">
-          </div>
+          <div class="form-group" style="grid-column:1/-1"><label class="form-label">Groups (comma-separated IDs)</label>
+            <input class="form-input" id="cu-groups" placeholder="Optional local group UUIDs"></div>
         </div>
         <div id="cu-err"></div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-primary"   id="cu-save">Create User</button>
         <button class="btn btn-secondary" id="cu-cancel">Cancel</button>
+        <button class="btn btn-primary" id="cu-save">Create User</button>
       </div>
     </div>`);
+    const syncPwd = () => {
+      const gen = bd.querySelector('#cu-genpwd').checked;
+      bd.querySelector('#cu-pwd').disabled = gen;
+    };
+    bd.querySelector('#cu-genpwd').addEventListener('change', syncPwd);
     bd.querySelector('#cu-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#cu-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#cu-save');
-      const name  = bd.querySelector('#cu-name').value.trim();
+      const first = bd.querySelector('#cu-first').value.trim();
+      const last = bd.querySelector('#cu-last').value.trim();
       const email = bd.querySelector('#cu-email').value.trim();
-      const pwd   = bd.querySelector('#cu-pwd').value;
-      const role  = bd.querySelector('#cu-role').value;
-      const dept  = bd.querySelector('#cu-dept').value.trim();
-      const etype = bd.querySelector('#cu-emptype').value;
-      const mgr   = bd.querySelector('#cu-mgr').value.trim();
-      if (!name || !email || !pwd) {
-        bd.querySelector('#cu-err').innerHTML = errHtml('Name, email, and password are required.'); return;
+      const employeeId = bd.querySelector('#cu-empid').value.trim();
+      const username = bd.querySelector('#cu-user').value.trim();
+      const gen = bd.querySelector('#cu-genpwd').checked;
+      const pwd = bd.querySelector('#cu-pwd').value;
+      if (!employeeId || !username || !first || !last || !email) {
+        bd.querySelector('#cu-err').innerHTML = errHtml('Employee ID, Username, First Name, Last Name, and Email are required.');
+        return;
       }
-      if (pwd.length < 10) {
-        bd.querySelector('#cu-err').innerHTML = errHtml('Password must be at least 10 characters.'); return;
+      if (!gen && (!pwd || pwd.length < 10)) {
+        bd.querySelector('#cu-err').innerHTML = errHtml('Password must be at least 10 characters.');
+        return;
       }
+      const groupsRaw = bd.querySelector('#cu-groups').value.trim();
       saveBtn.disabled = true; saveBtn.textContent = 'Creating…';
       try {
         const res = await api.createLocalUser({
-          fullName: name, email, password: pwd, role,
-          deptId:  dept  || undefined,
-          empType: etype,
-          managerId: mgr || undefined,
+          employeeId, username, firstName: first, lastName: last,
+          displayName: bd.querySelector('#cu-display').value.trim() || undefined,
+          email,
+          department: bd.querySelector('#cu-dept').value.trim() || undefined,
+          designation: bd.querySelector('#cu-desig').value.trim() || undefined,
+          managerId: bd.querySelector('#cu-mgr').value.trim() || undefined,
+          mobile: bd.querySelector('#cu-mobile').value.trim() || undefined,
+          location: bd.querySelector('#cu-loc').value.trim() || undefined,
+          country: bd.querySelector('#cu-country').value.trim() || undefined,
+          costCenter: bd.querySelector('#cu-cc').value.trim() || undefined,
+          empType: bd.querySelector('#cu-emptype').value,
+          joiningDate: bd.querySelector('#cu-join').value || undefined,
+          status: bd.querySelector('#cu-status').value,
+          portalRole: bd.querySelector('#cu-role').value,
+          generatePassword: gen,
+          password: gen ? undefined : pwd,
+          sendWelcomeEmail: bd.querySelector('#cu-welcome').checked,
+          groupIds: groupsRaw ? groupsRaw.split(/[,;\s]+/).filter(Boolean) : undefined,
         });
         bd.remove();
-        // refresh table
-        const q      = panel.querySelector('#ud-search').value.trim();
-        const src    = panel.querySelector('#ud-src-filter').value;
-        const state  = panel.querySelector('#ud-state-filter').value;
-        loadUsers(q, state, src);
-        // Auto-open the new user's profile
-        if (res.empId) openProfilePanel(res.empId);
-      } catch(e) {
+        toast(res.generatedPassword
+          ? `User created. Temporary password: ${res.generatedPassword}`
+          : 'User created successfully.');
+        const f = getFilters();
+        loadUsers(f.q, f.state, f.source);
+        if (res.empId) openProfileDrawer(res.empId);
+      } catch (e) {
         bd.querySelector('#cu-err').innerHTML = errHtml(e.message);
         saveBtn.disabled = false; saveBtn.textContent = 'Create User';
       }
     });
+  }
+
+  function openBulkUploadModal() {
+    const bd = openModal(`<div class="modal" style="width:760px;max-width:96vw">
+      <div class="modal-header"><h2>Bulk Upload</h2></div>
+      <div class="modal-body">
+        <ol class="muted" style="font-size:0.85rem;margin:0 0 1rem;padding-left:1.2rem;line-height:1.6">
+          <li>Download the CSV template</li>
+          <li>Fill employee rows (Excel .xlsx can be saved as CSV)</li>
+          <li>Upload, validate, preview, then import</li>
+        </ol>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem">
+          <a class="btn btn-secondary btn-sm" href="${api.bulkUsersTemplateUrl('csv')}" target="_blank">Download CSV Template</a>
+          <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
+            Choose file <input type="file" id="bu-file" accept=".csv,.xlsx,.xls,text/csv" hidden>
+          </label>
+        </div>
+        <div id="bu-progress" hidden>
+          <div class="muted" style="font-size:0.8rem;margin-bottom:0.35rem" id="bu-progress-label">Working…</div>
+          <div style="height:8px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden">
+            <div id="bu-progress-bar" style="height:100%;width:0%;background:var(--accent,#4c8bf5);transition:width 0.2s"></div>
+          </div>
+        </div>
+        <div id="bu-preview" style="margin-top:1rem"></div>
+        <div id="bu-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="bu-cancel">Cancel</button>
+        <button class="btn btn-secondary" id="bu-validate" disabled>Validate</button>
+        <button class="btn btn-primary" id="bu-import" disabled>Import Users</button>
+      </div>
+    </div>`);
+
+    let parsedRows = [];
+    const setProgress = (pct, label) => {
+      const wrap = bd.querySelector('#bu-progress');
+      wrap.hidden = false;
+      bd.querySelector('#bu-progress-bar').style.width = pct + '%';
+      bd.querySelector('#bu-progress-label').textContent = label || '';
+    };
+
+    function parseCsvText(text) {
+      const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length < 2) return [];
+      const headers = lines[0].split(',').map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
+      const idx = (names) => {
+        for (const n of names) {
+          const i = headers.indexOf(n);
+          if (i >= 0) return i;
+        }
+        return -1;
+      };
+      const col = {
+        employeeId: idx(['employee_id', 'employeeid', 'emp_id', 'empid']),
+        firstName: idx(['first_name', 'firstname', 'first']),
+        lastName: idx(['last_name', 'lastname', 'last']),
+        email: idx(['email', 'email_corp', 'corporate_email']),
+        department: idx(['department', 'dept_id', 'dept']),
+        designation: idx(['designation', 'title', 'role']),
+        username: idx(['username', 'user_name', 'login']),
+        status: idx(['status', 'ilg_state', 'state']),
+        manager: idx(['manager', 'manager_emp_id', 'manager_email']),
+        mobile: idx(['mobile', 'phone', 'mobile_number']),
+        location: idx(['location', 'city']),
+        costCenter: idx(['cost_center', 'costcenter', 'cc']),
+        employeeType: idx(['employee_type', 'employment_type', 'emptype']),
+        joiningDate: idx(['joining_date', 'hire_date', 'joindate']),
+        businessRole: idx(['business_role', 'businessrole']),
+        groups: idx(['groups', 'group']),
+      };
+      const cell = (parts, i) => (i >= 0 ? (parts[i] || '').trim().replace(/^"|"$/g, '') : '');
+      const out = [];
+      for (let li = 1; li < lines.length; li++) {
+        const parts = lines[li].match(/("([^"]|"")*"|[^,]*)/g)?.map((p) => p.replace(/^"|"$/g, '').replace(/""/g, '"')) || lines[li].split(',');
+        const email = cell(parts, col.email);
+        if (!email && !cell(parts, col.employeeId)) continue;
+        const groupsRaw = cell(parts, col.groups);
+        out.push({
+          line: li + 1,
+          employeeId: cell(parts, col.employeeId),
+          firstName: cell(parts, col.firstName),
+          lastName: cell(parts, col.lastName),
+          email,
+          department: cell(parts, col.department),
+          designation: cell(parts, col.designation),
+          username: cell(parts, col.username),
+          status: cell(parts, col.status) || 'ACTIVE',
+          manager: cell(parts, col.manager) || undefined,
+          mobile: cell(parts, col.mobile) || undefined,
+          location: cell(parts, col.location) || undefined,
+          costCenter: cell(parts, col.costCenter) || undefined,
+          employeeType: cell(parts, col.employeeType) || undefined,
+          joiningDate: cell(parts, col.joiningDate) || undefined,
+          businessRole: cell(parts, col.businessRole) || undefined,
+          groups: groupsRaw ? groupsRaw.split(/[|;]/).map((g) => g.trim()).filter(Boolean) : undefined,
+        });
+      }
+      return out;
+    }
+
+    bd.querySelector('#bu-file').addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      bd.querySelector('#bu-err').innerHTML = '';
+      setProgress(20, 'Reading file…');
+      try {
+        if (/\.xlsx?$/i.test(file.name)) {
+          // Prefer CSV — ask user to export as CSV for now if SheetJS unavailable
+          const text = await file.text().catch(() => '');
+          if (!text.includes(',')) {
+            throw new Error('Please save the Excel file as CSV and upload again.');
+          }
+          parsedRows = parseCsvText(text);
+        } else {
+          parsedRows = parseCsvText(await file.text());
+        }
+        setProgress(100, `Loaded ${parsedRows.length} rows`);
+        bd.querySelector('#bu-validate').disabled = parsedRows.length === 0;
+        bd.querySelector('#bu-import').disabled = true;
+        bd.querySelector('#bu-preview').innerHTML = `<p class="muted" style="font-size:0.85rem">${parsedRows.length} rows ready. Click Validate.</p>`;
+      } catch (err) {
+        bd.querySelector('#bu-err').innerHTML = errHtml(err.message);
+      }
+    });
+
+    bd.querySelector('#bu-validate').addEventListener('click', async () => {
+      try {
+        setProgress(40, 'Validating…');
+        const r = await api.bulkUsersValidate(parsedRows);
+        setProgress(100, `Valid ${r.valid} · Invalid ${r.invalid}`);
+        const previewRows = (r.preview || []).slice(0, 50).map((p) => `
+          <tr>
+            <td>${esc(String(p.line || ''))}</td>
+            <td>${esc(p.employeeId || '')}</td>
+            <td>${esc(p.email || '')}</td>
+            <td>${esc(p.department || '')}</td>
+            <td>${p.valid ? '<span class="badge badge-success">OK</span>' : '<span class="badge badge-danger">Error</span>'}</td>
+            <td class="muted" style="font-size:0.75rem">${esc((p.errors || []).join('; '))}</td>
+          </tr>`).join('');
+        bd.querySelector('#bu-preview').innerHTML = `
+          <div class="kpi-strip" style="margin-bottom:0.75rem">
+            <div class="kpi"><div class="kpi-val">${r.valid + r.invalid}</div><div class="kpi-label">Total</div></div>
+            <div class="kpi"><div class="kpi-val">${r.valid}</div><div class="kpi-label">Valid</div></div>
+            <div class="kpi"><div class="kpi-val">${r.invalid}</div><div class="kpi-label">Invalid</div></div>
+          </div>
+          <div class="table-wrap"><table class="dense-table">
+            <thead><tr><th>Line</th><th>Emp ID</th><th>Email</th><th>Dept</th><th>Status</th><th>Errors</th></tr></thead>
+            <tbody>${previewRows || '<tr><td colspan="6">No rows</td></tr>'}</tbody>
+          </table></div>`;
+        bd.querySelector('#bu-import').disabled = r.valid === 0;
+      } catch (err) {
+        bd.querySelector('#bu-err').innerHTML = errHtml(err.message);
+      }
+    });
+
+    bd.querySelector('#bu-import').addEventListener('click', async () => {
+      if (!confirm(`Import ${parsedRows.length} users?`)) return;
+      try {
+        setProgress(10, 'Importing…');
+        const chunk = 200;
+        let imported = 0, updated = 0, failed = 0, skipped = 0;
+        let reportCsv = 'line,email,emp_id,action,error,code\n';
+        for (let i = 0; i < parsedRows.length; i += chunk) {
+          const part = parsedRows.slice(i, i + chunk);
+          const r = await api.bulkUsersBatch(part, 'upsert');
+          imported += r.imported ?? r.created ?? 0;
+          updated += r.updated ?? 0;
+          failed += r.failed ?? 0;
+          skipped += r.skipped ?? 0;
+          if (r.reportCsv) {
+            const lines = r.reportCsv.split('\n').slice(1).filter(Boolean);
+            reportCsv += lines.join('\n') + (lines.length ? '\n' : '');
+          }
+          setProgress(Math.round(((i + part.length) / parsedRows.length) * 100), `Imported ${i + part.length}/${parsedRows.length}`);
+        }
+        bd.querySelector('#bu-preview').innerHTML = `
+          <div class="alert alert-success">Import complete</div>
+          <div class="kpi-strip">
+            <div class="kpi"><div class="kpi-val">${parsedRows.length}</div><div class="kpi-label">Total</div></div>
+            <div class="kpi"><div class="kpi-val">${imported}</div><div class="kpi-label">Imported</div></div>
+            <div class="kpi"><div class="kpi-val">${updated}</div><div class="kpi-label">Updated</div></div>
+            <div class="kpi"><div class="kpi-val">${skipped}</div><div class="kpi-label">Skipped</div></div>
+            <div class="kpi"><div class="kpi-val">${failed}</div><div class="kpi-label">Failed</div></div>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="bu-dl-report" style="margin-top:0.75rem">Download error report</button>`;
+        bd.querySelector('#bu-dl-report')?.addEventListener('click', () => {
+          const blob = new Blob([reportCsv], { type: 'text/csv' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'bulk-import-report.csv';
+          a.click();
+        });
+        toast(`Bulk import: ${imported} created, ${updated} updated, ${failed} failed`);
+        const f = getFilters();
+        loadUsers(f.q, f.state, f.source);
+      } catch (err) {
+        bd.querySelector('#bu-err').innerHTML = errHtml(err.message);
+      }
+    });
+
+    bd.querySelector('#bu-cancel').addEventListener('click', () => bd.remove());
   }
 
   // ── Wire up search / filters ─────────────────────────────────────────────────
@@ -4354,7 +5354,60 @@ function initUsersTab(panel, me = null) {
     loadUsers(f.q, f.state, f.source);
   });
 
+  ['#ud-dept-filter', '#ud-mgr-filter', '#ud-loc-filter', '#ud-type-filter'].forEach((sel) => {
+    panel.querySelector(sel)?.addEventListener('change', () => {
+      const f = getFilters();
+      loadUsers(f.q, f.state, f.source);
+    });
+    panel.querySelector(sel)?.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        const f = getFilters();
+        loadUsers(f.q, f.state, f.source);
+      }, 350);
+    });
+  });
+
   panel.querySelector('#ud-create-btn').addEventListener('click', openCreateUserModal);
+  panel.querySelector('#ud-bulk-upload-btn')?.addEventListener('click', openBulkUploadModal);
+
+  panel.querySelector('#ud-bulk-clear')?.addEventListener('click', () => {
+    selected.clear();
+    panel.querySelectorAll('.ud-check').forEach((c) => { c.checked = false; });
+    updateBulkBar();
+  });
+
+  panel.querySelector('#ud-bulk-run')?.addEventListener('click', async () => {
+    const action = panel.querySelector('#ud-bulk-action')?.value;
+    if (!action) { toast('Select a bulk action', 'error'); return; }
+    const empIds = [...selected];
+    if (!empIds.length) return;
+    if (['disable', 'delete', 'reset_password'].includes(action)) {
+      if (!confirm(`Apply "${action}" to ${empIds.length} users?`)) return;
+    }
+    if (action === 'export') {
+      // Client-side CSV of current selection
+      const rows = allUsers.filter((u) => selected.has(u.emp_id));
+      const csv = ['emp_id,employee_number,full_name,email,department,status',
+        ...rows.map((u) => [u.emp_id, u.employee_number, u.full_name, u.email_corp, u.dept_id, u.ilg_state]
+          .map((v) => JSON.stringify(v ?? '')).join(','))].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'selected-users.csv';
+      a.click();
+      toast('Export downloaded');
+      return;
+    }
+    try {
+      const r = await api.bulkUserAction({ action, empIds });
+      toast(`Bulk ${action}: ${r.succeeded} succeeded, ${r.failed} failed`, r.failed ? 'error' : 'success');
+      const f = getFilters();
+      loadUsers(f.q, f.state, f.source);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  });
 
   // ── Initial load ─────────────────────────────────────────────────────────────
   if (!panel.querySelector('#ud-search').value) {
@@ -5493,7 +6546,7 @@ export async function viewGeneralSettings(content) {
             <label class="form-check"><input type="checkbox" id="gs-local" ${chk(s.allow_local_login)}> Allow Local Login</label>
             <label class="form-check"><input type="checkbox" id="gs-google" ${chk(s.allow_google_login !== 0 && s.allow_google_login !== false)}> Allow Google Login</label>
           </div>
-          <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">MFA policy, lockout, and SMTP are configured via Strong Auth / env — not this form.</p>
+          <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">MFA policy and SMTP/SMS delivery are configured under Authentication → Strong Auth Methods → MFA Methods.</p>
           <div class="form-group"><label class="form-label">Password Min Length</label><input class="form-input" id="gs-pwmin" type="number" value="${s.password_min_length??10}"></div>
           <div class="form-group"><label class="form-label">MFA Grace Period (days)</label><input class="form-input" id="gs-mfagrace" type="number" value="${s.mfa_grace_period_days??14}"></div>
           <div class="form-group"><label class="form-label">Audit Retention (days)</label><input class="form-input" id="gs-audit" type="number" value="${s.audit_retention_days??365}"></div>

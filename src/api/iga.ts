@@ -17,17 +17,9 @@ import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { execute, queryOne } from '../db/connection.js';
 import { safeQuery } from '../db/safe-query.js';
 import logger from '../utils/logger.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { triggerConnectorSync } from '../services/connector-dispatcher.js';
-import {
-  buildGoogleJwtAuth,
-  formatGoogleAuthError,
-  listScopedGoogleUsers,
-  resolveGoogleSyncScope,
-} from '../services/google-directory-config.js';
-import { parseGoogleHostedDomains } from '../auth/google-domains.js';
-import { google } from 'googleapis';
+import { runConnectorConnectivityTest } from '../services/connector-health.js';
 import { submitAccessRequest, processDecision } from '../services/access-request-workflow.js';
 import { createCampaign, submitReviewDecision } from '../services/access-review.js';
 import { evaluateSodForGrant } from '../services/sod-evaluator.js';
@@ -200,7 +192,8 @@ router.get(
     const { limit, offset } = paginate(req);
     const rows = await safeQuery<Record<string, unknown>>(
       `SELECT id, name, slug, connector_type, direction, sync_mode, sync_schedule,
-              status, last_sync_at, last_error, created_at, updated_at
+              status, last_sync_at, last_error, last_health_check_at, last_health_ok,
+              created_at, updated_at
          FROM connectors
         ORDER BY name ASC
         LIMIT ? OFFSET ?`,
@@ -236,7 +229,7 @@ router.post(
         `INSERT INTO connectors
            (id, name, slug, connector_type, direction, sync_mode, sync_schedule,
             status, config_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'CONFIGURED', ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())`,
         [
           id,
           parsed.data.name,
@@ -296,7 +289,7 @@ router.post(
         res.status(404).json({ error: msg });
         return;
       }
-      if (msg === 'Connector is not active') {
+      if (msg === 'Connector is not connected — run Test Connection successfully first') {
         res.status(409).json({ error: msg });
         return;
       }
@@ -405,223 +398,28 @@ router.delete(
   }),
 );
 
-// POST /connectors/:id/test — test connectivity
+// POST /connectors/:id/test — test connectivity; Active only after success
 router.post(
   '/connectors/:id/test',
   requireRole('ADMIN', 'SUPER_ADMIN'),
   requirePortalModule('connections'),
   asyncHandler(async (req: Request, res: Response) => {
-    const row = await queryOne<{ connector_type: string; config_json: string }>(
-      `SELECT connector_type, config_json FROM connectors WHERE id = ?`,
-      [req.params['id']],
-    );
-    if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-    const type = row.connector_type;
-
-    // Lightweight connectivity check per type
-    try {
-      // Parse config_json safely — MySQL JSON columns may already be deserialized objects
-      const cfg: Record<string, unknown> = typeof row.config_json === 'string'
-        ? JSON.parse(row.config_json || '{}')
-        : ((row.config_json as Record<string, unknown>) ?? {});
-
-      if (type === 'AD' || type === 'LDAP') {
-        const host     = (cfg['host'] as string | undefined)?.trim();
-        const useSsl   = parseConnectorBoolean(cfg['useSsl'], false);
-        const startTls = parseConnectorBoolean(cfg['startTls'], false);
-        const port     = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-        const bindDn   = (cfg['bindDn'] as string | undefined)?.trim();
-        const bindPass = cfg['bindPassword'] as string | undefined;
-
-        // ── Pre-flight: required fields ──────────────────────────────────────
-        const missing: string[] = [];
-        if (!host)     missing.push('host');
-        if (!bindDn)   missing.push('bindDn');
-        if (!bindPass) missing.push('bindPassword');
-        if (missing.length) {
-          res.status(422).json({
-            success: false,
-            code:    'MISSING_CONFIG',
-            message: `Missing required AD/LDAP config field(s): ${missing.join(', ')}. Save the connector with all fields filled in before testing.`,
-          });
-          return;
-        }
-
-        // ── Pre-flight: detect un-saved redaction placeholder ────────────────
-        if (bindPass === '••••••••') {
-          res.status(422).json({
-            success: false,
-            code:    'REDACTED_PASSWORD',
-            message: 'The bindPassword appears to still be the redaction placeholder. Re-enter the real password and save the connector before testing.',
-          });
-          return;
-        }
-
-        const url = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-        const protocol = useSsl ? 'LDAPS' : startTls ? 'LDAP+StartTLS' : 'LDAP';
-        logger.info({ url, bindDn, protocol }, 'AD/LDAP connection test starting');
-
-        const { Client: LdapClient } = await import('ldapts');
-        // Enterprise AD DCs typically use certificates from an internal CA that is
-        // not in Node's trust store, so we skip cert verification for AD connections.
-        const tlsOpts = { rejectUnauthorized: false };
-        const client = new LdapClient({
-          url,
-          connectTimeout: 5000,
-          tlsOptions: tlsOpts,
-        });
-
-        try {
-          if (startTls) {
-            await client.startTLS(tlsOpts);
-          }
-          await client.bind(bindDn!, bindPass!);
-
-          const baseDn   = (cfg['baseDn'] as string | undefined)?.trim();
-          const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-          const { resolveAdDirectoryConfig } = await import('../adapters/ad-adapter.js');
-          const warnings: string[] = [];
-          const infos: string[] = [];
-          let suggestions: string[] = [];
-
-          if (baseDn) {
-            try {
-              const dir = resolveAdDirectoryConfig(baseDn, targetOuRaw);
-              if (dir.inferredProvisionOu) {
-                infos.push(
-                  `New User OU inferred as ${dir.provisionOuRdn} from Base DN. Recommended: Base DN = ${dir.domainRoot}, New User OU = ${dir.provisionOuRdn}`,
-                );
-              }
-              try {
-                await client.search(dir.provisionOuDn, {
-                  scope: 'base',
-                  filter: '(objectClass=organizationalUnit)',
-                  attributes: ['dn'],
-                });
-              } catch {
-                try {
-                  const ouResult = await client.search(dir.searchBaseDn, {
-                    scope: 'sub',
-                    filter: '(objectClass=organizationalUnit)',
-                    attributes: ['dn'],
-                    sizeLimit: 12,
-                  });
-                  suggestions = (ouResult.searchEntries as Array<{ dn?: string }>)
-                    .map((e) => e.dn ?? '')
-                    .filter(Boolean);
-                } catch { /* ignore */ }
-                const hint = suggestions.length ? ` Existing OUs: ${suggestions.slice(0, 6).join('; ')}` : '';
-                warnings.push(`Target OU not found: ${dir.provisionOuDn} — create it in AD or update connector settings.${hint}`);
-              }
-            } catch (err) {
-              warnings.push(err instanceof Error ? err.message : String(err));
-            }
-          }
-
-          if (!useSsl && !startTls) {
-            warnings.push('Protocol is plain LDAP — user provisioning requires LDAPS or LDAP+StartTLS');
-          }
-
-          await client.unbind();
-          const detail = [...infos, ...warnings].join('; ');
-          const msg = detail
-            ? `${protocol} bind succeeded${warnings.length ? ', but' : ''}: ${detail}`
-            : `${protocol} bind succeeded — connected to ${url} as ${bindDn}`;
-          res.status(warnings.length ? 422 : 200).json({
-            success: warnings.length === 0,
-            message: msg,
-            warnings: warnings.length ? warnings : undefined,
-            info: infos.length ? infos : undefined,
-            ouSuggestions: suggestions.length ? suggestions : undefined,
-          });
-        } catch (ldapErr) {
-          const raw  = ldapErr instanceof Error ? ldapErr.message : String(ldapErr);
-          const code = (ldapErr as Record<string, unknown>)['code'];
-
-          // Map well-known LDAP / network errors to actionable messages
-          let friendly: string;
-          if (typeof code === 'number' && code === 49) {
-            friendly = `Invalid credentials (LDAP error 49) — check bindDn and bindPassword. DN used: ${bindDn}`;
-          } else if (typeof code === 'number' && code === 8) {
-            friendly = `Strong authentication required (LDAP error 8) — this AD server requires encryption. Switch the Protocol to "LDAP + StartTLS (port 389)" or "LDAPS (port 636)" and save before testing.`;
-          } else if (typeof code === 'number' && code === 32) {
-            friendly = `No Such Object (LDAP error 32) — the bindDn DN was not found in the directory. DN used: ${bindDn}`;
-          } else if (raw.includes('ECONNREFUSED')) {
-            friendly = `Connection refused — ${url} is not reachable. Check the host, port, and firewall rules.`;
-          } else if (raw.includes('ETIMEDOUT') || raw.includes('connectTimeout')) {
-            friendly = `Connection timed out reaching ${url}. The host may be unreachable or the port is blocked.`;
-          } else if (raw.includes('ENOTFOUND') || raw.includes('getaddrinfo')) {
-            friendly = `DNS resolution failed for host "${host}". Verify the hostname is correct and resolvable from this server.`;
-          } else if (raw.includes('DEPTH_ZERO_SELF_SIGNED_CERT') || raw.includes('self signed') || raw.includes('unable to verify')) {
-            friendly = `TLS certificate error connecting to ${url}. The server's certificate is self-signed or untrusted. Either install the CA cert or set useSsl to false if using plain LDAP.`;
-          } else if (raw.includes('ECONNRESET')) {
-            friendly = startTls
-              ? `Connection was reset during StartTLS handshake on ${url}. The domain controller may have StartTLS disabled. Try switching Protocol to "LDAPS (port 636)" instead.`
-              : `Connection was reset by ${url}. If the server requires encryption, switch Protocol to "LDAP + StartTLS (port 389)" or "LDAPS (port 636)".`;
-          } else {
-            friendly = `LDAP error (${typeof code !== 'undefined' ? `code ${code}` : 'unknown code'}): ${raw}`;
-          }
-
-          logger.warn({ url, bindDn, code, raw }, 'AD/LDAP connection test failed');
-          res.status(422).json({ success: false, code: `LDAP_${code ?? 'ERROR'}`, message: friendly, detail: raw });
-        }
-      } else if (type === 'GOOGLE' || type === 'GOOGLE_WORKSPACE') {
-        const domains = parseGoogleHostedDomains(cfg['customerDomains'] ?? cfg['customerDomain']);
-        const missing: string[] = [];
-        if (!domains.length) missing.push('customerDomain');
-        if (!String(cfg['adminEmail'] ?? '').trim()) missing.push('adminEmail');
-        if (!String(cfg['serviceAccountKey'] ?? '').trim()) {
-          missing.push('serviceAccountKey');
-        }
-        if (missing.length) {
-          res.status(422).json({
-            success: false,
-            code:    'MISSING_CONFIG',
-            message: `Missing required Google Workspace config field(s): ${missing.join(', ')}`,
-          });
-          return;
-        }
-
-        try {
-          const auth = buildGoogleJwtAuth(cfg);
-          const directory = google.admin({ version: 'directory_v1', auth });
-          await directory.users.list({ customer: 'my_customer', maxResults: 1 });
-
-          const scope = resolveGoogleSyncScope(cfg);
-          const scopedUsers = await listScopedGoogleUsers(directory, scope);
-          const scopeParts: string[] = [];
-          if (scope.orgUnits.length) scopeParts.push(`${scope.orgUnits.length} OU(s)`);
-          if (scope.groups.length) scopeParts.push(`${scope.groups.length} group(s)`);
-          if (scope.users.length) scopeParts.push(`${scope.users.length} explicit user(s)`);
-          const scopeLabel = scopeParts.length ? scopeParts.join(', ') : 'entire directory';
-          const domainLabel = scope.customerDomains.join(', ');
-          const notFoundHint = scopedUsers.notFoundEmails.length
-            ? ` Not found in Google: ${scopedUsers.notFoundEmails.join(', ')}.`
-            : '';
-
-          res.json({
-            success: true,
-            message: `Connected to Google Workspace (${domainLabel}). Sync scope: ${scopeLabel} — ${scopedUsers.users.length} user(s) matched.${notFoundHint} Portal login allows: ${domainLabel}.`,
-          });
-        } catch (googleErr) {
-          const friendly = formatGoogleAuthError(googleErr, cfg);
-          logger.warn({ connectorId: req.params['id'], err: googleErr }, 'Google Workspace connection test failed');
-          res.status(422).json({
-            success: false,
-            code:    'GOOGLE_AUTH_FAILED',
-            message: friendly,
-            detail:  googleErr instanceof Error ? googleErr.message : String(googleErr),
-          });
-        }
-      } else {
-        // Generic: just confirm config is non-empty and connector exists
-        res.json({ success: true, message: `Connector "${type}" configuration saved. Full test on next sync.` });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error({ connectorId: req.params['id'], err }, 'Connector test unexpected error');
-      res.status(422).json({ success: false, code: 'UNEXPECTED_ERROR', message: msg });
+    const result = await runConnectorConnectivityTest(req.params['id']!);
+    if (result.statusCode === 404) {
+      res.status(404).json({ error: result.message, code: result.code });
+      return;
     }
+    const body: Record<string, unknown> = {
+      success: result.success,
+      message: result.message,
+      status: result.connectorStatus,
+    };
+    if (result.code) body['code'] = result.code;
+    if (result.warnings) body['warnings'] = result.warnings;
+    if (result.info) body['info'] = result.info;
+    if (result.ouSuggestions) body['ouSuggestions'] = result.ouSuggestions;
+    if (result.detail) body['detail'] = result.detail;
+    res.status(result.statusCode).json(body);
   }),
 );
 

@@ -19,8 +19,23 @@ import {
   getMfaStatus,
   regenerateBackupCodes,
   startEnrollment,
-  verifyTotp,
+  verifyAnyMfaCode,
 } from '../auth/mfa.js';
+import {
+  confirmEmailOtpEnrollment,
+  confirmSmsOtpEnrollment,
+  disableOtpMethod,
+  sendEmailOtp,
+  sendSmsOtp,
+} from '../auth/mfa-otp.js';
+import {
+  deleteWebAuthnCredential,
+  getWebAuthnRegistrationOptions,
+  listWebAuthnCredentialsForUser,
+  resolveWebAuthnOrigin,
+  verifyWebAuthnRegistration,
+} from '../auth/mfa-webauthn.js';
+import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { enforcePasswordPolicy } from '../services/password-policy.js';
 import logger from '../utils/logger.js';
 
@@ -208,7 +223,7 @@ async function requireMfaStepUp(req: Request, res: Response): Promise<boolean> {
     }
   }
 
-  const totpOk = await verifyTotp(user.empId, parsed.data.code);
+  const totpOk = await verifyAnyMfaCode(user.empId, parsed.data.code);
   if (!totpOk) {
     res.status(401).json({ error: 'Invalid verification code' });
     return false;
@@ -230,6 +245,123 @@ router.post('/mfa/regenerate-codes', async (req: Request, res: Response): Promis
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Failed' });
   }
+});
+
+router.post('/mfa/email/send', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  try {
+    const result = await sendEmailOtp(user.empId, 'enroll');
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Could not send email code' });
+  }
+});
+
+router.post('/mfa/email/confirm', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const parsed = confirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Code must be 6 digits' });
+    return;
+  }
+  try {
+    await confirmEmailOtpEnrollment(user.empId, parsed.data.code);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Verification failed' });
+  }
+});
+
+router.post('/mfa/email/disable', async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireMfaStepUp(req, res))) return;
+  await disableOtpMethod(req.user!.empId, 'email_otp');
+  res.json({ success: true });
+});
+
+router.post('/mfa/sms/send', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  try {
+    const result = await sendSmsOtp(user.empId, 'enroll');
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Could not send SMS code' });
+  }
+});
+
+router.post('/mfa/sms/confirm', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const parsed = confirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Code must be 6 digits' });
+    return;
+  }
+  try {
+    await confirmSmsOtpEnrollment(user.empId, parsed.data.code);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Verification failed' });
+  }
+});
+
+router.post('/mfa/sms/disable', async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireMfaStepUp(req, res))) return;
+  await disableOtpMethod(req.user!.empId, 'sms_otp');
+  res.json({ success: true });
+});
+
+router.post('/mfa/webauthn/register/options', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const origin = resolveWebAuthnOrigin(req);
+  try {
+    const { options, challengeId } = await getWebAuthnRegistrationOptions(user.empId, user.email, origin);
+    res.json({ options, challengeId });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'WebAuthn unavailable' });
+  }
+});
+
+const webauthnRegisterSchema = z.object({
+  challengeId: z.string().uuid(),
+  response:    z.record(z.unknown()),
+  name:        z.string().max(150).optional(),
+});
+
+router.post('/mfa/webauthn/register/verify', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const parsed = webauthnRegisterSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid WebAuthn registration payload' });
+    return;
+  }
+  const origin = resolveWebAuthnOrigin(req);
+  try {
+    await verifyWebAuthnRegistration(
+      user.empId,
+      parsed.data.challengeId,
+      parsed.data.response as unknown as RegistrationResponseJSON,
+      origin,
+      parsed.data.name,
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Registration failed' });
+  }
+});
+
+router.get('/mfa/webauthn/credentials', async (req: Request, res: Response): Promise<void> => {
+  const creds = await listWebAuthnCredentialsForUser(req.user!.empId);
+  res.json({ data: creds });
+});
+
+router.delete('/mfa/webauthn/credentials/:id', async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireMfaStepUp(req, res))) return;
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing credential id' });
+    return;
+  }
+  await deleteWebAuthnCredential(req.user!.empId, id);
+  res.json({ success: true });
 });
 
 export default router;

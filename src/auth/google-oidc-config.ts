@@ -41,7 +41,9 @@ function pickSetting(dbValue: string | null | undefined, envValue: string): { va
 async function loadConnectorHostedDomains(): Promise<string[]> {
   try {
     const row = await queryOne<{ config_json: unknown }>(
-      `SELECT config_json FROM connectors WHERE slug = 'google-workspace' AND status = 'ACTIVE' LIMIT 1`,
+      `SELECT config_json FROM connectors
+        WHERE slug = 'google-workspace' AND status IN ('CONNECTED', 'ACTIVE', 'CONFIGURED')
+        LIMIT 1`,
       [],
     );
     if (!row?.config_json) return [];

@@ -160,9 +160,11 @@ The IdP signing keys used by SAML are stored on named volume `saml-keys` mounted
 |---|---|---|
 | Local password | `POST /auth/local/login` | Live |
 | AD-synced corporate password | `POST /auth/local/login` (LDAP bind fallback when no `local_accounts` row) | Live |
-| Local password + TOTP | `POST /auth/local/login` then `POST /auth/local/login/mfa-verify` | Live |
+| Local password + TOTP / OTP / passkey | `POST /auth/local/login` then verify routes | Live |
+| Email OTP MFA | `/api/me/mfa/email/*`, login `mfa-send-otp` | Live |
+| SMS OTP MFA | `/api/me/mfa/sms/*`, login `mfa-send-otp` | Live (requires `SMS_API_URL` or dev log) |
+| WebAuthn / passkeys | `/api/me/mfa/webauthn/*`, login `mfa-webauthn/*` | Live |
 | Google Workspace OIDC | `GET /auth/google` → `GET /auth/google/callback` | Live (env defaults + optional Admin GUI DB override) |
-| WebAuthn / passkeys | — | Schema staged in migration 003; routes pending |
 | Risk-based MFA step-up | `POST /auth/local/login` (engine in `src/services/adaptive-auth-engine.ts`) | Live |
 
 > **Removed:** Zoho OIDC was an inbound sign-in provider in the original design. It has been removed — Zoho Mail is now consumed as a SAML application (see §6.4). The legacy `/auth/zoho` endpoints respond with HTTP 410 Gone.
@@ -189,26 +191,36 @@ Google OIDC credentials are resolved in this order:
 
 A bootstrap account is provisioned from `MASTER_ADMIN_EMAIL` + `MASTER_ADMIN_PASSWORD` on every startup. Password is synced (re-hashed) when the env value changes.
 
-### 5.4 MFA (TOTP)
+### 5.4 MFA (multi-method)
 
-- Per-user secret in `mfa_secrets` (Base32, 160-bit).
-- 8 single-use **backup codes** (8 hex chars), bcrypt-hashed at rest.
+Supported methods (policy-controlled via `mfa_policy.allowed_methods`):
+
+| Method | Storage | Login verify |
+|--------|---------|--------------|
+| **TOTP** | `mfa_secrets.secret_b32` | 6-digit authenticator code |
+| **Backup codes** | `mfa_secrets.backup_codes` (bcrypt hashes) | 8 hex chars |
+| **Email OTP** | `mfa_method_enrollments` + Redis challenge | 6-digit code emailed at login |
+| **SMS OTP** | `mfa_method_enrollments` + Redis challenge | 6-digit code via `SMS_API_URL` |
+| **WebAuthn / passkeys** | `webauthn_credentials` | Passkey assertion at login |
+
+- Per-user TOTP secret in `mfa_secrets` (Base32, 160-bit).
+- Additional enrollments in `mfa_method_enrollments` (migration `034_mfa_extended_methods.sql`).
+- MFA is **enabled** when the user has any active method (TOTP, OTP enrollment, or passkey).
 - MFA is required when **any** of these conditions match:
   - adaptive engine returns `MFA` / `STEP_UP`
-  - user already has active MFA (`mfa_secrets.enabled = 1`)
+  - user has any active MFA method
   - user-level enforcement (`employees.mfa_enforced = 1`)
   - global policy `mfa_policy.global_enforce = true`
   - admin policy `mfa_policy.enforce_for_admins = true` and role is `ADMIN` / `SUPER_ADMIN`
-- Group exclusions: `mfa_policy.excluded_group_ids` (JSON group-id array) bypasses **global/admin policy MFA** for matching users, but does not bypass adaptive risk MFA or explicit per-user enforcement.
+- Group exclusions: `mfa_policy.excluded_group_ids` bypasses **global/admin policy MFA** only.
 - Login flow when MFA is enabled:
-  1. `POST /auth/local/login {email, password}` → returns `{mfaRequired:true, challengeId}`.
-  2. UI prompts for 6-digit code (or backup code).
-  3. `POST /auth/local/login/mfa-verify {challengeId, code}` → session issued.
-- Login flow when MFA is **required but not yet enrolled**:
-  1. `POST /auth/local/login {email, password}` → returns `{enrollRequired:true, enrollChallengeId, gracePeriodHours, graceActive}` (password verified; no session yet).
-  2. UI shows QR / manual secret via `POST /auth/local/login/mfa-enroll {enrollChallengeId}` (no auth cookie required).
-  3. User confirms TOTP → `POST /auth/local/login/mfa-enroll/confirm {enrollChallengeId, code}` → MFA enabled, backup codes returned, session issued.
-  4. User may defer → `POST /auth/local/login/mfa-enroll/defer {enrollChallengeId}` → returns to sign-in without a session, or issues a session during the policy **grace period** (`mfa_policy.grace_period_hours`, tracked in Redis from first required login).
+  1. `POST /auth/local/login {email, password}` → `{mfaRequired:true, challengeId, availableMethods[]}`.
+  2. User verifies via TOTP/backup (`POST /auth/local/login/mfa-verify`), email/SMS OTP (`POST /auth/local/login/mfa-send-otp` then verify), or passkey (`POST /auth/local/login/mfa-webauthn/*`).
+- Self-service enrollment: `GET/POST /api/me/mfa/*` (TOTP, email, SMS, WebAuthn register).
+- Email/SMS delivery: configure in **Admin → MFA Methods → OTP delivery channels** (`general_settings`). Email supports **SMTP** or **HTTP API** (`POST { to, subject, body, from }`). Optional `.env` fallbacks still work if GUI fields are empty.
+- Dev without SMTP/SMS: enable **Development mode** in the GUI (or `MFA_OTP_DEV_LOG` / `SMS_DEV_LOG` env).
+- WebAuthn RP: `WEBAUTHN_RP_ID` (defaults to request hostname), `WEBAUTHN_RP_NAME` (defaults to `Lenskart IdP`).
+- Login flow when MFA is **required but not yet enrolled** (unchanged grace-period path via TOTP enrollment at login).
 - MFA verify and enroll challenges live in Redis with 5-minute TTL.
 
 ### 5.5 Rate limiting
@@ -503,10 +515,22 @@ To add a new migration:
 | `POST` | `/api/admin/users/:empId/mfa/enforce` | Set/clear per-user MFA enforcement |
 | `GET` | `/api/admin/users/mfa-policy` | Read global MFA policy |
 | `POST` | `/api/admin/users/mfa-policy` | Update global MFA policy (`global_enforce`, `enforce_for_admins`, `grace_period_hours`, `excluded_group_ids`) |
+| `GET` | `/api/admin/users/mfa-delivery-status` | Email/SMS OTP delivery config for Admin GUI (no secrets; `hasSmtpPass` / `hasSmsApiKey`) |
+| `PUT` | `/api/admin/users/mfa-delivery` | Save SMTP + SMS gateway settings into `general_settings` (GUI takes precedence over env) |
 | `POST` | `/api/admin/users/:empId/reset-password` | Admin password reset with AD/Google writeback |
 | `POST` | `/api/admin/users/:empId/link-identity` | Attach an external identity link |
 | `DELETE` | `/api/admin/users/:empId/identity-links/:linkId` | Remove an identity link |
 | `POST` | `/api/admin/bulk-users/batch` | Bulk create/update employees and add to local groups (max 500 rows per request; clients chunk up to 100,000 total) |
+| `GET` | `/api/admin/bulk-users/template` | CSV template for bulk import |
+| `POST` | `/api/admin/bulk-users/validate` | Dry-run validation + preview |
+| `POST` | `/api/admin/bulk-users/import` | Alias of `/batch` with import report CSV |
+| `GET` | `/api/admin/users/export` | CSV export of directory users |
+| `POST` | `/api/admin/users/bulk-action` | Bulk enable/disable/delete/reset/assign/welcome |
+| `GET/PUT` | `/api/admin/directory/google/attr-maps` | Google → local attribute mapping |
+| `GET/PUT` | `/api/admin/directory/google/sync-settings` | Per-attribute sync toggles + frequency |
+| `POST` | `/api/admin/directory/google/sync-now` | Synchronous incremental Google sync |
+| `POST` | `/api/admin/directory/google/full-sync` | Full Google directory resync |
+| `GET` | `/api/admin/directory/google/logs` | Sync runs + directory audit |
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD |
 | `GET`/`POST`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry |
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
@@ -674,6 +698,12 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_HOSTED_DOMAIN` | yes for Google fallback | — | Google Workspace OIDC inbound login defaults (can be overridden by `general_settings.google_oidc_*` from Admin GUI) |
 | `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` / `ZOHO_SCIM_BASE_URL` | optional | empty | **Outbound Zoho People SCIM provisioning only.** Not used for sign-in. Leave blank to disable. |
 | `AWS_REGION`, `AWS_ENDPOINT_URL`, `SQS_*` | yes | — | LocalStack URLs in dev |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | optional fallback | — | Outbound email if Admin GUI SMTP fields are empty |
+| `EMAIL_API_URL` / `EMAIL_API_KEY` | optional fallback | — | HTTP email API if Admin GUI Email API fields are empty |
+| `SMS_API_URL` / `SMS_API_KEY` | optional fallback | — | SMS gateway if Admin GUI SMS fields are empty |
+| `MFA_OTP_DEV_LOG` | no | — | Dev only fallback; prefer Admin GUI “Development mode” toggle |
+| `SMS_DEV_LOG` | no | — | Dev only fallback; prefer Admin GUI “SMS development log” |
+| `WEBAUTHN_RP_ID` / `WEBAUTHN_RP_NAME` | no | request hostname / `Lenskart IdP` | WebAuthn relying party |
 
 ---
 
@@ -843,7 +873,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ### Phase 3 — Modern AM
 
 - ✅ **OIDC / OAuth 2.0 Authorization Server (OP)** — discovery, JWKS, authorize (code + PKCE), token (code + refresh), UserInfo; admin client registry with edit/rotate (`src/oidc/*`, `/api/admin/oidc-clients`)
-- WebAuthn / passkeys — schema staged in `webauthn_credentials`
+- ✅ **WebAuthn / passkeys** — registration + login (`src/auth/mfa-webauthn.ts`, `webauthn_credentials`)
 - WS-Federation, header-based SSO (legacy proxy)
 - Adaptive / risk-based MFA step-up (deny / MFA / allow decision)
 - Account lockout policy (data already in `auth_attempts`)
@@ -882,6 +912,62 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-21 — Email OTP: HTTP API transport + Admin GUI
+
+**Why** — Operators need API-based email (SendGrid-style gateway) in addition to classic SMTP.
+
+**What changed:**
+
+- **Migration `036_email_api_delivery.sql`** — `email_transport`, `email_api_url`, `email_api_key` on `general_settings`.
+- **Dispatch** — `notification.ts` posts `{ to, subject, body, from }` when transport is `api`.
+- **UI** — Email OTP form offers SMTP vs HTTP API pills; status shows Ready · SMTP / Ready · API.
+
+### TBD — 2026-07-21 — MFA OTP delivery configurable from Admin GUI
+
+**Why** — Operators need to configure Email/SMS OTP delivery from the portal (enterprise forms), not by editing `.env`.
+
+**What changed:**
+
+- **Migration `035_mfa_delivery_settings.sql`** — SMTP + SMS columns on `general_settings`.
+- **Resolver** — `src/services/mfa-delivery-config.ts` (DB overrides env); used by `notification.ts` and `mfa-otp.ts`.
+- **API** — `GET /mfa-delivery-status` (masked) + `PUT /mfa-delivery` (save/clear).
+- **UI** — MFA Methods “OTP delivery channels” enterprise panel (SMTP + SMS forms, status badges, clear actions).
+- **Docs** — env vars documented as optional fallbacks.
+
+### TBD — 2026-07-21 — MFA: Email OTP, SMS OTP, WebAuthn
+
+**Why** — Admin MFA Methods listed WebAuthn, Email OTP, and SMS OTP as planned only; operators need enrollment, login verification, and policy toggles.
+
+**What changed:**
+
+- **Migration `034_mfa_extended_methods.sql`** — `mfa_method_enrollments`; default `allowed_methods` includes all five method keys.
+- **Backend** — `mfa-otp.ts`, `mfa-webauthn.ts`, `mfa-methods.ts`; `@simplewebauthn/server`; unified `verifyAnyMfaCode`.
+- **API** — `/api/me/mfa/email|sms|webauthn/*`; login `mfa-send-otp`, `mfa-webauthn/*`.
+- **UI** — Admin MFA Methods live badges + policy checkboxes; Settings MFA grid; login step supports OTP + passkey.
+- **Env** — optional `SMS_API_URL`, `MFA_OTP_DEV_LOG`, `WEBAUTHN_RP_ID`.
+
+### TBD — 2026-07-21 — Connector status = Connected only after test
+
+**Why** — Directory sources showed ACTIVE immediately on save even when never tested/synced.
+
+**What changed:**
+
+- New connectors start as **CONFIGURED**; **CONNECTED** only after a successful Test Connection (or health check).
+- Failed tests set **ERROR**; periodic health scheduler re-checks every 15 minutes.
+- Sync requires CONNECTED (legacy ACTIVE still allowed). Migration 034 backfills never-synced ACTIVE → CONFIGURED.
+
+### TBD — 2026-07-21 — Universal Directory enterprise users module
+
+**Why** — Google-synced users lacked department/employee ID and other org attrs; Operators needed bulk import, richer local user create, attribute mapping, sync controls, and bulk actions in one place.
+
+**What changed:**
+
+- **Migration 033** — `employees` extended attrs (`employee_number`, `first_name`/`last_name`, `username`, `mobile`, `cost_center`, `location`, `office_address`, `photo_url`, `attrs_synced_at`, `sync_status`); `directory_attr_maps`, `directory_sync_settings`, `directory_user_audit`.
+- **Google sync** — maps Admin SDK org/phone/manager/photo fields onto existing + new users; Sync Settings toggles; Full Sync + Sync Now APIs; audit trail.
+- **Bulk import** — mandatory HR fields, validate/preview/report, template download; UI Bulk Upload on Users tab.
+- **Local user** — expanded create form (IDs, contact, org, password generate, welcome, groups).
+- **Users UI** — filters, checkboxes + bulk actions, profile fields (sync status/time), Attribute Mapping + Sync Settings tabs.
 
 ### 363f782 — 2026-07-21 — OIDC Client Registry + OAuth / OIDC Issuer (OP)
 

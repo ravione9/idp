@@ -24,7 +24,13 @@ import { config } from '../config.js';
 import logger from '../utils/logger.js';
 import { createSession, setSessionCookie } from './session.js';
 import { redis } from './session-store.js';
-import { confirmEnrollment, getMfaStatus, startEnrollment, verifyTotp } from './mfa.js';
+import { confirmEnrollment, getMfaStatus, startEnrollment, verifyAnyMfaCode } from './mfa.js';
+import { sendEmailOtp, sendSmsOtp } from './mfa-otp.js';
+import {
+  getWebAuthnAuthenticationOptions,
+  resolveWebAuthnOrigin,
+  verifyWebAuthnAuthentication,
+} from './mfa-webauthn.js';
 import { query, queryOne } from '../db/connection.js';
 import {
   ensureMasterAdminFromEnv,
@@ -400,7 +406,13 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
         MFA_CHALLENGE_TTL_S,
       );
       await logAttempt(email, ip, true, `password-ok-mfa-pending${challenge.stepUp ? '-stepup' : ''}`);
-      res.json({ mfaRequired: true, challengeId, stepUp: challenge.stepUp ?? false });
+      const mfaState = await getMfaStatus(account.emp_id);
+      res.json({
+        mfaRequired: true,
+        challengeId,
+        stepUp: challenge.stepUp ?? false,
+        availableMethods: mfaState.methods ?? ['totp'],
+      });
       return;
     }
 
@@ -427,7 +439,7 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
   }
 
   const challenge = JSON.parse(raw) as MfaChallenge;
-  const ok = await verifyTotp(challenge.empId, parsed.data.code);
+  const ok = await verifyAnyMfaCode(challenge.empId, parsed.data.code);
   if (!ok) {
     await logAttempt(challenge.email, getClientIp(req), false, 'mfa-bad-code');
     res.status(401).json({ error: 'Invalid verification code' });
@@ -587,4 +599,119 @@ export async function localLoginMfaEnrollDeferHandler(req: Request, res: Respons
     session: false,
     message: 'Two-factor setup is required. You can complete it on your next sign-in.',
   });
+}
+
+const mfaSendOtpSchema = z.object({
+  challengeId: z.string().uuid(),
+  channel:     z.enum(['email_otp', 'sms_otp']),
+});
+
+export async function localLoginMfaSendOtpHandler(req: Request, res: Response): Promise<void> {
+  const parsed = mfaSendOtpSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid OTP send request' });
+    return;
+  }
+
+  const raw = await redis.get(`${MFA_CHALLENGE_PREFIX}${parsed.data.challengeId}`);
+  if (!raw) {
+    res.status(401).json({ error: 'Challenge expired — sign in again' });
+    return;
+  }
+  const challenge = JSON.parse(raw) as MfaChallenge;
+
+  try {
+    const result = parsed.data.channel === 'email_otp'
+      ? await sendEmailOtp(challenge.empId, 'login')
+      : await sendSmsOtp(challenge.empId, 'login');
+    res.json({ sent: true, devCode: result.devCode, maskedPhone: 'maskedPhone' in result ? result.maskedPhone : undefined });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Could not send code' });
+  }
+}
+
+const mfaWebAuthnOptionsSchema = z.object({
+  challengeId: z.string().uuid(),
+});
+
+export async function localLoginMfaWebAuthnOptionsHandler(req: Request, res: Response): Promise<void> {
+  const parsed = mfaWebAuthnOptionsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid WebAuthn options request' });
+    return;
+  }
+
+  const raw = await redis.get(`${MFA_CHALLENGE_PREFIX}${parsed.data.challengeId}`);
+  if (!raw) {
+    res.status(401).json({ error: 'Challenge expired — sign in again' });
+    return;
+  }
+  const challenge = JSON.parse(raw) as MfaChallenge;
+  const origin = resolveWebAuthnOrigin(req);
+
+  try {
+    const { options, challengeId: webauthnChallengeId } = await getWebAuthnAuthenticationOptions(
+      challenge.empId,
+      origin,
+    );
+    res.json({ options, webauthnChallengeId });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'WebAuthn unavailable' });
+  }
+}
+
+const mfaWebAuthnVerifySchema = z.object({
+  challengeId:         z.string().uuid(),
+  webauthnChallengeId: z.string().uuid(),
+  response:            z.record(z.unknown()),
+});
+
+export async function localLoginMfaWebAuthnVerifyHandler(req: Request, res: Response): Promise<void> {
+  const parsed = mfaWebAuthnVerifySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid WebAuthn verification request' });
+    return;
+  }
+
+  const key = `${MFA_CHALLENGE_PREFIX}${parsed.data.challengeId}`;
+  const raw = await redis.get(key);
+  if (!raw) {
+    res.status(401).json({ error: 'Challenge expired — sign in again' });
+    return;
+  }
+
+  const challenge = JSON.parse(raw) as MfaChallenge;
+  const origin = resolveWebAuthnOrigin(req);
+
+  try {
+    const ok = await verifyWebAuthnAuthentication(
+      challenge.empId,
+      parsed.data.webauthnChallengeId,
+      parsed.data.response as unknown as Parameters<typeof verifyWebAuthnAuthentication>[2],
+      origin,
+    );
+    if (!ok) {
+      await logAttempt(challenge.email, getClientIp(req), false, 'mfa-webauthn-bad');
+      res.status(401).json({ error: 'Passkey verification failed' });
+      return;
+    }
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Passkey verification failed' });
+    return;
+  }
+
+  await redis.del(key);
+  await logAttempt(challenge.email, getClientIp(req), true, 'mfa-webauthn-ok');
+
+  const sessionOpts: { iss?: 'local' | 'google'; sub?: string; returnTo?: string } = {
+    iss: challenge.iss ?? 'local',
+  };
+  if (challenge.sub) sessionOpts.sub = challenge.sub;
+  if (challenge.returnTo) sessionOpts.returnTo = challenge.returnTo;
+  await issueSessionAndRespond(res, req, {
+    id:     challenge.accountId,
+    emp_id: challenge.empId,
+    email:  challenge.email,
+    role:   challenge.role,
+  }, sessionOpts);
 }

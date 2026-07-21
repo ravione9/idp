@@ -9,6 +9,16 @@ import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { query, queryOne, transaction } from '../db/connection.js';
 import logger from '../utils/logger.js';
+import {
+  buildMfaMethodDetails,
+  clearMethodEnrollments,
+  getAllowedMfaMethods,
+  isAnyMfaEnabled,
+  type MfaMethodDetails,
+  type MfaMethodKey,
+} from './mfa-methods.js';
+import { verifyAnyOtpLogin } from './mfa-otp.js';
+import { deleteWebAuthnCredentials } from './mfa-webauthn.js';
 
 authenticator.options = { window: 1, step: 30 };
 
@@ -29,31 +39,58 @@ export interface MfaStatus {
   enabled:  boolean;
   remainingBackupCodes: number;
   lastUsedAt: string | null;
+  methods?: MfaMethodKey[];
+  allowedMethods?: MfaMethodKey[];
+  methodDetails?: MfaMethodDetails;
 }
 
 export async function getMfaStatus(empId: string): Promise<MfaStatus> {
-  const row = await queryOne<MfaSecretRow>(
-    'SELECT id, emp_id, secret_b32, enabled, enrolled_at, last_used_at, backup_codes FROM mfa_secrets WHERE emp_id = ?',
-    [empId],
-  );
-  if (!row) {
-    return { enrolled: false, enabled: false, remainingBackupCodes: 0, lastUsedAt: null };
-  }
+  const [row, emp, allowedMethods] = await Promise.all([
+    queryOne<MfaSecretRow>(
+      'SELECT id, emp_id, secret_b32, enabled, enrolled_at, last_used_at, backup_codes FROM mfa_secrets WHERE emp_id = ?',
+      [empId],
+    ),
+    queryOne<{ email_corp: string; mobile: string | null }>(
+      'SELECT email_corp, mobile FROM employees WHERE emp_id = ? LIMIT 1',
+      [empId],
+    ),
+    getAllowedMfaMethods(),
+  ]);
+
   let codes: string[] = [];
-  if (row.backup_codes) {
-    try {
-      const raw = typeof row.backup_codes === 'string'
-        ? JSON.parse(row.backup_codes)
-        : row.backup_codes;
-      if (Array.isArray(raw)) codes = raw as string[];
-    } catch { /* ignore */ }
+  let active = false;
+  let lastUsedAt: string | null = null;
+
+  if (row) {
+    if (row.backup_codes) {
+      try {
+        const raw = typeof row.backup_codes === 'string'
+          ? JSON.parse(row.backup_codes)
+          : row.backup_codes;
+        if (Array.isArray(raw)) codes = raw as string[];
+      } catch { /* ignore */ }
+    }
+    active = row.enabled === 1;
+    lastUsedAt = row.last_used_at;
   }
-  const active = row.enabled === 1;
+
+  const { methods, methodDetails } = await buildMfaMethodDetails(
+    empId,
+    active,
+    active ? codes.length : 0,
+    emp?.email_corp,
+    emp?.mobile,
+  );
+  const enabled = await isAnyMfaEnabled(empId, active);
+
   return {
-    enrolled: active,
-    enabled:  active,
+    enrolled: enabled,
+    enabled,
     remainingBackupCodes: active ? codes.length : 0,
-    lastUsedAt: row.last_used_at,
+    lastUsedAt,
+    methods,
+    allowedMethods,
+    methodDetails,
   };
 }
 
@@ -119,7 +156,18 @@ export async function confirmEnrollment(empId: string, code: string): Promise<{ 
 
 export async function disableMfa(empId: string): Promise<void> {
   await query('DELETE FROM mfa_secrets WHERE emp_id = ?', [empId]);
-  logger.info({ empId }, 'MFA disabled');
+  await clearMethodEnrollments(empId);
+  await deleteWebAuthnCredentials(empId);
+  logger.info({ empId }, 'MFA disabled (all methods)');
+}
+
+/**
+ * Verify MFA using TOTP, backup codes, or enrolled OTP methods.
+ */
+export async function verifyAnyMfaCode(empId: string, code: string): Promise<boolean> {
+  if (await verifyTotp(empId, code)) return true;
+  const otpMethod = await verifyAnyOtpLogin(empId, code);
+  return otpMethod !== null;
 }
 
 /**

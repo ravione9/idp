@@ -32,6 +32,7 @@ import adminDashboardRouter from './api/admin-dashboard.js';
 import adminAuditRouter from './api/admin-audit.js';
 import adminUsersRouter from './api/admin-users.js';
 import adminBulkUsersRouter from './api/admin-bulk-users.js';
+import adminDirectoryGoogleRouter from './api/admin-directory-google.js';
 import meActionsRouter from './api/me-actions.js';
 import igaRouter from './api/iga.js';
 import adminLifecycleRouter from './api/admin-lifecycle.js';
@@ -64,8 +65,9 @@ import {
   requireAuth,
 } from './auth/middleware.js';
 import { googleLoginHandler } from './auth/login-routes.js';
-import { localLoginHandler, localLoginMfaEnrollConfirmHandler, localLoginMfaEnrollDeferHandler, localLoginMfaEnrollHandler, localLoginMfaVerifyHandler } from './auth/local-auth.js';
+import { localLoginHandler, localLoginMfaEnrollConfirmHandler, localLoginMfaEnrollDeferHandler, localLoginMfaEnrollHandler, localLoginMfaSendOtpHandler, localLoginMfaVerifyHandler, localLoginMfaWebAuthnOptionsHandler, localLoginMfaWebAuthnVerifyHandler } from './auth/local-auth.js';
 import { startAttendanceIgaScheduler } from './services/attendance-iga/scheduler.js';
+import { startConnectorHealthScheduler } from './services/connector-health.js';
 import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
 const WEB_ROOT = path.join(process.cwd(), 'web');
@@ -157,6 +159,9 @@ const loginRateLimiter = rateLimit({
 });
 app.post('/auth/local/login',                    loginRateLimiter, (req, res) => { void localLoginHandler(req, res); });
 app.post('/auth/local/login/mfa-verify',         loginRateLimiter, (req, res) => { void localLoginMfaVerifyHandler(req, res); });
+app.post('/auth/local/login/mfa-send-otp',      loginRateLimiter, (req, res) => { void localLoginMfaSendOtpHandler(req, res); });
+app.post('/auth/local/login/mfa-webauthn/options', loginRateLimiter, (req, res) => { void localLoginMfaWebAuthnOptionsHandler(req, res); });
+app.post('/auth/local/login/mfa-webauthn/verify', loginRateLimiter, (req, res) => { void localLoginMfaWebAuthnVerifyHandler(req, res); });
 app.post('/auth/local/login/mfa-enroll',         loginRateLimiter, (req, res) => { void localLoginMfaEnrollHandler(req, res); });
 app.post('/auth/local/login/mfa-enroll/confirm', loginRateLimiter, (req, res) => { void localLoginMfaEnrollConfirmHandler(req, res); });
 app.post('/auth/local/login/mfa-enroll/defer',    loginRateLimiter, (req, res) => { void localLoginMfaEnrollDeferHandler(req, res); });
@@ -186,6 +191,7 @@ app.use('/api/admin/dashboard', adminDashboardRouter);
 app.use('/api/admin/audit', adminAuditRouter);
 app.use('/api/admin/users', adminUsersRouter);
 app.use('/api/admin/bulk-users', adminBulkUsersRouter);
+app.use('/api/admin/directory/google', adminDirectoryGoogleRouter);
 app.use('/api/admin/users', adminLifecycleRouter);
 app.use('/api/iga', igaRouter);
 app.use('/api/admin/groups', configGroupsRouter);
@@ -303,6 +309,7 @@ async function main(): Promise<void> {
   }
 
   startAttendanceIgaScheduler();
+  startConnectorHealthScheduler();
 
   const server = app.listen(config.app.port, () => {
     logger.info({ port: config.app.port, env: config.app.nodeEnv }, 'IDP API server started');

@@ -32,6 +32,9 @@ import {
 } from '../auth/mfa.js';
 import { PORTAL_ACCESSIBLE_STATES } from '../fsm/states.js';
 import { enforcePasswordPolicy } from '../services/password-policy.js';
+import { appendAuditLog } from '../utils/audit-log.js';
+import { writeDirectoryUserAudit } from '../services/google-attr-map.js';
+import crypto from 'crypto';
 
 const router = Router();
 router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('identity_users'));
@@ -93,15 +96,40 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   const search = (req.query['q']      as string)?.trim() ?? '';
   const state  = (req.query['state']  as string)?.trim() ?? '';
   const source = (req.query['source'] as string)?.trim() ?? '';   // e.g. 'AD', 'GOOGLE', 'LOCAL'
+  const department = (req.query['department'] as string)?.trim() ?? '';
+  const manager = (req.query['manager'] as string)?.trim() ?? '';
+  const location = (req.query['location'] as string)?.trim() ?? '';
+  const empType = (req.query['employeeType'] as string)?.trim() ?? '';
+  const employeeId = (req.query['employeeId'] as string)?.trim() ?? '';
   const includeInactive = req.query['includeInactive'] === '1';
 
   const where: string[] = [];
   const params: unknown[] = [];
 
   if (search) {
-    where.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR e.emp_id LIKE ?)');
+    where.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR e.emp_id LIKE ? OR e.employee_number LIKE ? OR e.username LIKE ?)');
     const like = `%${search}%`;
-    params.push(like, like, like);
+    params.push(like, like, like, like, like);
+  }
+  if (employeeId) {
+    where.push('(e.emp_id = ? OR e.employee_number = ?)');
+    params.push(employeeId, employeeId);
+  }
+  if (department) {
+    where.push('e.dept_id = ?');
+    params.push(department);
+  }
+  if (manager) {
+    where.push('(e.manager_emp_id = ? OR e.manager_emp_id IN (SELECT emp_id FROM employees WHERE email_corp = ? OR full_name LIKE ?))');
+    params.push(manager, manager.toLowerCase(), `%${manager}%`);
+  }
+  if (location) {
+    where.push('(e.location LIKE ? OR e.city LIKE ?)');
+    params.push(`%${location}%`, `%${location}%`);
+  }
+  if (empType) {
+    where.push('e.employment_type = ?');
+    params.push(empType);
   }
   if (state === 'SUSPENDED') {
     where.push(`e.ilg_state IN ('SUSPENDED_AUTO', 'SUSPENDED_HR')`);
@@ -124,20 +152,25 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
   const rows = await query<Record<string, unknown>>(
-    `SELECT e.emp_id, e.full_name, e.email_corp, e.dept_id, e.employment_type,
+    `SELECT e.emp_id, e.employee_number, e.full_name, e.first_name, e.last_name, e.username,
+            e.email_corp, e.dept_id, e.role AS designation, e.employment_type,
             e.ilg_state, e.ilg_state_since, e.hire_date, e.manager_emp_id,
+            e.mobile, e.location, e.cost_center, e.photo_url, e.attrs_synced_at, e.sync_status,
             CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN','APP_CONTRIBUTOR','USER_GROUP_MANAGER','CUSTOM') THEN la.role ELSE NULL END AS portal_role,
             la.last_login_at, la.active AS local_active,
             COALESCE(
               GROUP_CONCAT(DISTINCT il.\`system\` ORDER BY il.\`system\` SEPARATOR ','), ''
             ) AS identity_sources,
+            MAX(il.last_synced_at) AS last_synced_at,
             COUNT(DISTINCT il.id) AS identity_link_count
        FROM employees e
        LEFT JOIN local_accounts la ON la.emp_id = e.emp_id AND la.active = 1
        LEFT JOIN identity_links il ON il.emp_id = e.emp_id AND il.status = 'ACTIVE'
        ${whereSql}
-       GROUP BY e.emp_id, e.full_name, e.email_corp, e.dept_id, e.employment_type,
+       GROUP BY e.emp_id, e.employee_number, e.full_name, e.first_name, e.last_name, e.username,
+                e.email_corp, e.dept_id, e.role, e.employment_type,
                 e.ilg_state, e.ilg_state_since, e.hire_date, e.manager_emp_id,
+                e.mobile, e.location, e.cost_center, e.photo_url, e.attrs_synced_at, e.sync_status,
                 la.role, la.last_login_at, la.active
        ORDER BY e.full_name ASC
        LIMIT ? OFFSET ?`,
@@ -154,6 +187,125 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 
   res.json({ data: rows, total: total?.n ?? 0, limit, offset });
 });
+
+// ---------------------------------------------------------------------------
+// GET /export  — CSV export of directory users (must be before /:empId)
+// ---------------------------------------------------------------------------
+router.get('/export', asyncHandler(async (req: Request, res: Response) => {
+  const source = (req.query['source'] as string)?.trim() ?? '';
+  const state = (req.query['state'] as string)?.trim() ?? '';
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (state) { where.push('e.ilg_state = ?'); params.push(state); }
+  if (source === 'LOCAL') where.push('la.id IS NOT NULL');
+  else if (source) {
+    where.push(`EXISTS (SELECT 1 FROM identity_links il WHERE il.emp_id = e.emp_id AND il.\`system\` = ? AND il.status = 'ACTIVE')`);
+    params.push(source);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const rows = await query<Record<string, unknown>>(
+    `SELECT e.emp_id, e.employee_number, e.first_name, e.last_name, e.full_name, e.username,
+            e.email_corp, e.dept_id, e.role, e.ilg_state, e.manager_emp_id, e.mobile,
+            e.location, e.cost_center, e.employment_type, e.hire_date, e.sync_status, e.attrs_synced_at
+       FROM employees e
+       LEFT JOIN local_accounts la ON la.emp_id = e.emp_id AND la.active = 1
+       ${whereSql}
+       ORDER BY e.full_name ASC
+       LIMIT 10000`,
+    params,
+  );
+  const headers = [
+    'emp_id', 'employee_number', 'first_name', 'last_name', 'full_name', 'username',
+    'email', 'department', 'designation', 'status', 'manager', 'mobile', 'location',
+    'cost_center', 'employee_type', 'joining_date', 'sync_status', 'last_sync',
+  ];
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    lines.push([
+      r['emp_id'], r['employee_number'], r['first_name'], r['last_name'], r['full_name'], r['username'],
+      r['email_corp'], r['dept_id'], r['role'], r['ilg_state'], r['manager_emp_id'], r['mobile'],
+      r['location'], r['cost_center'], r['employment_type'], r['hire_date'], r['sync_status'], r['attrs_synced_at'],
+    ].map((v) => JSON.stringify(v ?? '')).join(','));
+  }
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="directory-users.csv"');
+  res.send(lines.join('\n'));
+}));
+
+// ---------------------------------------------------------------------------
+// POST /bulk-action  — enable/disable/delete/reset/assign/export/welcome
+// ---------------------------------------------------------------------------
+const bulkActionSchema = z.object({
+  action: z.enum([
+    'enable', 'disable', 'delete', 'reset_password',
+    'assign_groups', 'assign_roles', 'assign_apps',
+    'export', 'send_welcome',
+  ]),
+  empIds: z.array(z.string().min(1).max(20)).min(1).max(500),
+  groupIds: z.array(z.string()).optional(),
+  roleIds: z.array(z.string()).optional(),
+  appIds: z.array(z.string()).optional(),
+  password: z.string().min(10).optional(),
+});
+
+router.post('/bulk-action', asyncHandler(async (req: Request, res: Response) => {
+  const parsed = bulkActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'system';
+  const { action, empIds, groupIds, password } = parsed.data;
+  const results: Array<{ empId: string; ok: boolean; error?: string }> = [];
+
+  for (const empId of empIds) {
+    try {
+      if (action === 'enable') {
+        await execute(`UPDATE employees SET ilg_state = 'ACTIVE', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`, [empId]);
+      } else if (action === 'disable') {
+        await execute(`UPDATE employees SET ilg_state = 'SUSPENDED_HR', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`, [empId]);
+      } else if (action === 'delete') {
+        await execute(`UPDATE employees SET ilg_state = 'DEPROVISIONED', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`, [empId]);
+        await execute(`UPDATE local_accounts SET active = 0 WHERE emp_id = ?`, [empId]);
+      } else if (action === 'reset_password') {
+        const pwd = password || `Tmp!${uuidv4().replace(/-/g, '').slice(0, 10)}`;
+        const policyErr = await enforcePasswordPolicy(pwd);
+        if (policyErr) throw new Error(policyErr);
+        const hash = await bcrypt.hash(pwd, 10);
+        await execute(
+          `UPDATE local_accounts SET password_hash = ? WHERE emp_id = ? AND active = 1`,
+          [hash, empId],
+        );
+      } else if (action === 'assign_groups' && groupIds?.length) {
+        for (const gid of groupIds) {
+          await execute(
+            `INSERT IGNORE INTO group_members (group_id, emp_id, added_by) VALUES (?, ?, ?)`,
+            [gid, empId, adminId],
+          );
+        }
+      } else if (action === 'send_welcome') {
+        logger.info({ empId, adminId }, 'Bulk welcome email requested (delivery pending)');
+      }
+      results.push({ empId, ok: true });
+    } catch (err) {
+      results.push({ empId, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  await appendAuditLog(adminId, `BULK_${action.toUpperCase()}`, 'employees', {
+    count: empIds.length,
+    ok: results.filter((r) => r.ok).length,
+  });
+
+  res.json({
+    success: results.every((r) => r.ok),
+    action,
+    processed: results.length,
+    succeeded: results.filter((r) => r.ok).length,
+    failed: results.filter((r) => !r.ok).length,
+    results,
+  });
+}));
 
 // ---------------------------------------------------------------------------
 // GET /:empId  — full profile: employee + all identity links + recent logins
@@ -440,16 +592,243 @@ router.post('/mfa-policy', async (req: Request, res: Response): Promise<void> =>
 });
 
 // ---------------------------------------------------------------------------
+// GET  /mfa-delivery-status — Email/SMS OTP delivery config (no secrets)
+// PUT  /mfa-delivery        — save SMTP + SMS gateway from Admin GUI
+// ---------------------------------------------------------------------------
+router.get('/mfa-delivery-status', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const { getMfaDeliveryConfig, publicDeliveryStatus } = await import('../services/mfa-delivery-config.js');
+    const cfg = await getMfaDeliveryConfig();
+    res.json({ data: publicDeliveryStatus(cfg) });
+  } catch (err) {
+    logger.warn({ err }, 'mfa-delivery-status failed');
+    res.json({ data: { emailOtp: { ready: false, mode: 'none' }, smsOtp: { ready: false, mode: 'none' } } });
+  }
+});
+
+const mfaDeliverySchema = z.object({
+  emailTransport: z.enum(['smtp', 'api']).optional(),
+  smtpHost:    z.string().max(255).optional(),
+  smtpPort:    z.coerce.number().int().min(1).max(65535).optional(),
+  smtpUser:    z.string().max(255).optional(),
+  smtpPass:    z.string().max(2000).optional(),
+  smtpFrom:    z.string().max(255).optional(),
+  smtpSecure:  z.boolean().optional(),
+  emailApiUrl: z.string().max(1000).optional(),
+  emailApiKey: z.string().max(2000).optional(),
+  smsApiUrl:   z.string().max(1000).optional(),
+  smsApiKey:   z.string().max(2000).optional(),
+  otpDevLog:   z.boolean().optional(),
+  smsDevLog:   z.boolean().optional(),
+  clearSmtp:   z.boolean().optional(),
+  clearEmailApi: z.boolean().optional(),
+  clearSms:    z.boolean().optional(),
+});
+
+function assertHttpUrl(raw: string, label: string): string | null {
+  try {
+    // eslint-disable-next-line no-new
+    new URL(raw);
+    return null;
+  } catch {
+    return `${label} must be a valid URL.`;
+  }
+}
+
+router.put('/mfa-delivery', async (req: Request, res: Response): Promise<void> => {
+  const parsed = mfaDeliverySchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid payload' });
+    return;
+  }
+  const d = parsed.data;
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId
+    ?? (req as unknown as { session?: { emp_id?: string } }).session?.emp_id
+    ?? 'system';
+
+  const { getMfaDeliveryConfig, publicDeliveryStatus } = await import('../services/mfa-delivery-config.js');
+  const existing = await getMfaDeliveryConfig();
+
+  if (d.emailTransport) {
+    await execute(
+      `INSERT INTO general_settings (id, email_transport, updated_by, updated_at)
+       VALUES (1, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         email_transport = VALUES(email_transport),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [d.emailTransport, adminId],
+    );
+  }
+
+  if (d.clearSmtp) {
+    await execute(
+      `UPDATE general_settings SET
+         smtp_host = NULL, smtp_port = 587, smtp_user = NULL, smtp_pass = NULL,
+         smtp_from = NULL, smtp_secure = 0, updated_by = ?, updated_at = UTC_TIMESTAMP()
+       WHERE id = 1`,
+      [adminId],
+    );
+  } else if (d.smtpHost !== undefined || d.smtpFrom !== undefined || d.smtpUser !== undefined
+    || d.smtpPort !== undefined || d.smtpPass !== undefined || d.smtpSecure !== undefined) {
+    const host = (d.smtpHost ?? existing.smtp.host).trim();
+    const port = d.smtpPort ?? existing.smtp.port ?? 587;
+    const user = (d.smtpUser ?? existing.smtp.user).trim();
+    const from = (d.smtpFrom ?? existing.smtp.from).trim();
+    const secure = d.smtpSecure ?? existing.smtp.secure;
+    const pass = d.smtpPass !== undefined && d.smtpPass !== ''
+      ? d.smtpPass
+      : existing.smtp.pass;
+
+    if (host && !from) {
+      res.status(400).json({ error: 'From address is required when SMTP host is set.' });
+      return;
+    }
+
+    await execute(
+      `INSERT INTO general_settings
+         (id, smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, smtp_secure, updated_by, updated_at)
+       VALUES (1, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         smtp_host = VALUES(smtp_host),
+         smtp_port = VALUES(smtp_port),
+         smtp_user = VALUES(smtp_user),
+         smtp_pass = VALUES(smtp_pass),
+         smtp_from = VALUES(smtp_from),
+         smtp_secure = VALUES(smtp_secure),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [host || null, port, user || null, pass || null, from || null, secure ? 1 : 0, adminId],
+    );
+  }
+
+  if (d.clearEmailApi) {
+    await execute(
+      `UPDATE general_settings SET
+         email_api_url = NULL, email_api_key = NULL, updated_by = ?, updated_at = UTC_TIMESTAMP()
+       WHERE id = 1`,
+      [adminId],
+    );
+  } else if (d.emailApiUrl !== undefined || d.emailApiKey !== undefined) {
+    const url = (d.emailApiUrl ?? existing.emailApi.apiUrl).trim();
+    const key = d.emailApiKey !== undefined && d.emailApiKey !== ''
+      ? d.emailApiKey
+      : existing.emailApi.apiKey;
+    const from = (d.smtpFrom ?? existing.smtp.from).trim();
+
+    if (url) {
+      const urlErr = assertHttpUrl(url, 'Email API URL');
+      if (urlErr) {
+        res.status(400).json({ error: urlErr });
+        return;
+      }
+      if (!from) {
+        res.status(400).json({ error: 'From address is required when Email API URL is set.' });
+        return;
+      }
+    }
+
+    await execute(
+      `INSERT INTO general_settings
+         (id, email_api_url, email_api_key, smtp_from, updated_by, updated_at)
+       VALUES (1, ?, ?, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         email_api_url = VALUES(email_api_url),
+         email_api_key = VALUES(email_api_key),
+         smtp_from = VALUES(smtp_from),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [url || null, key || null, from || null, adminId],
+    );
+  }
+
+  if (d.clearSms) {
+    await execute(
+      `UPDATE general_settings SET
+         sms_api_url = NULL, sms_api_key = NULL, updated_by = ?, updated_at = UTC_TIMESTAMP()
+       WHERE id = 1`,
+      [adminId],
+    );
+  } else if (d.smsApiUrl !== undefined || d.smsApiKey !== undefined) {
+    const url = (d.smsApiUrl ?? existing.sms.apiUrl).trim();
+    const key = d.smsApiKey !== undefined && d.smsApiKey !== ''
+      ? d.smsApiKey
+      : existing.sms.apiKey;
+
+    if (url) {
+      const urlErr = assertHttpUrl(url, 'SMS API URL');
+      if (urlErr) {
+        res.status(400).json({ error: urlErr });
+        return;
+      }
+    }
+
+    await execute(
+      `INSERT INTO general_settings
+         (id, sms_api_url, sms_api_key, updated_by, updated_at)
+       VALUES (1, ?, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         sms_api_url = VALUES(sms_api_url),
+         sms_api_key = VALUES(sms_api_key),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [url || null, key || null, adminId],
+    );
+  }
+
+  if (d.otpDevLog !== undefined || d.smsDevLog !== undefined) {
+    const otpDev = d.otpDevLog !== undefined ? (d.otpDevLog ? 1 : 0) : (existing.otpDevLog ? 1 : 0);
+    const smsDev = d.smsDevLog !== undefined ? (d.smsDevLog ? 1 : 0) : (existing.smsDevLog ? 1 : 0);
+    await execute(
+      `INSERT INTO general_settings (id, mfa_otp_dev_log, sms_dev_log, updated_by, updated_at)
+       VALUES (1, ?, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         mfa_otp_dev_log = VALUES(mfa_otp_dev_log),
+         sms_dev_log = VALUES(sms_dev_log),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [otpDev, smsDev, adminId],
+    );
+  }
+
+  logger.info({ by: adminId }, 'Admin updated MFA delivery settings');
+  const cfg = await getMfaDeliveryConfig();
+  res.json({ success: true, data: publicDeliveryStatus(cfg) });
+});
+
+// ---------------------------------------------------------------------------
 // POST /local  — create a brand-new local employee + local account
 // ---------------------------------------------------------------------------
 const createLocalSchema = z.object({
-  fullName:   z.string().min(2).max(200),
-  email:      z.string().email(),
-  password:   z.string().min(10),
-  role:       z.enum(['USER','MANAGER','HRBP','ADMIN','SUPER_ADMIN']).default('USER'),
-  deptId:     z.string().max(50).optional(),
-  empType:    z.enum(['CORPORATE','STORE','PLANT','DC']).default('CORPORATE'),
-  managerId:  z.string().max(20).optional(),
+  employeeId:     z.string().min(1).max(20).optional(),
+  username:       z.string().min(1).max(100).optional(),
+  firstName:      z.string().min(1).max(100).optional(),
+  lastName:       z.string().min(1).max(100).optional(),
+  displayName:    z.string().max(200).optional(),
+  email:          z.string().email(),
+  department:     z.string().max(100).optional(),
+  designation:    z.string().max(200).optional(),
+  managerId:      z.string().max(20).optional(),
+  mobile:         z.string().max(40).optional(),
+  location:       z.string().max(200).optional(),
+  country:        z.string().max(80).optional(),
+  costCenter:     z.string().max(80).optional(),
+  empType:        z.enum(['CORPORATE', 'STORE', 'PLANT', 'DC']).default('CORPORATE'),
+  joiningDate:    z.string().max(32).optional(),
+  status:         z.enum(['ACTIVE', 'SUSPENDED_HR', 'INACTIVE']).default('ACTIVE'),
+  // Legacy aliases
+  fullName:       z.string().min(2).max(200).optional(),
+  password:       z.string().min(10).optional(),
+  generatePassword: z.boolean().optional(),
+  sendWelcomeEmail: z.boolean().optional(),
+  portalRole:     z.enum(['USER', 'MANAGER', 'HRBP', 'ADMIN', 'SUPER_ADMIN']).default('USER'),
+  role:           z.enum(['USER', 'MANAGER', 'HRBP', 'ADMIN', 'SUPER_ADMIN']).optional(),
+  deptId:         z.string().max(50).optional(),
+  groupIds:       z.array(z.string()).optional(),
+  businessRoleIds: z.array(z.string()).optional(),
+  appIds:         z.array(z.string()).optional(),
+}).refine((d) => !!(d.fullName || (d.firstName && d.lastName) || d.displayName), {
+  message: 'Name is required',
 });
 
 router.post('/local', async (req: Request, res: Response): Promise<void> => {
@@ -459,51 +838,100 @@ router.post('/local', async (req: Request, res: Response): Promise<void> => {
     return;
   }
   const d = parsed.data;
+  const portalRole = d.portalRole || d.role || 'USER';
 
-  // Only Super Admins may mint SUPER_ADMIN accounts (prevents operator escalation)
-  if (d.role === 'SUPER_ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
+  if (portalRole === 'SUPER_ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
     res.status(403).json({ error: 'Only Super Admins can create Super Admin accounts', code: 'INSUFFICIENT_ROLE' });
     return;
   }
 
-  const policyErr = await enforcePasswordPolicy(d.password);
+  const password = d.generatePassword || !d.password
+    ? `Lk!${crypto.randomBytes(9).toString('base64url').slice(0, 12)}`
+    : d.password;
+
+  const policyErr = await enforcePasswordPolicy(password);
   if (policyErr) {
     res.status(400).json({ error: policyErr, code: 'PASSWORD_POLICY' });
     return;
   }
 
-  // Check email uniqueness
+  const firstName = d.firstName || (d.fullName || d.displayName || '').trim().split(/\s+/)[0] || 'User';
+  const lastName = d.lastName || (d.fullName || d.displayName || '').trim().split(/\s+/).slice(1).join(' ') || '';
+  const fullName = d.displayName?.trim() || d.fullName?.trim() || `${firstName} ${lastName}`.trim();
+  const empId = d.employeeId || `LOC-${uuidv4().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
+  const username = d.username || d.email.split('@')[0] || empId;
+
   const existing = await queryOne<{ c: number }>(
-    `SELECT COUNT(*) AS c FROM employees WHERE email_corp = ?`, [d.email],
+    `SELECT COUNT(*) AS c FROM employees WHERE email_corp = ? OR emp_id = ? OR employee_number = ?`,
+    [d.email, empId, empId],
   );
   if ((existing?.c ?? 0) > 0) {
-    res.status(409).json({ error: 'An employee with this email already exists' });
+    res.status(409).json({ error: 'An employee with this email or Employee ID already exists' });
     return;
   }
 
-  const empId = `LOC-${uuidv4().replace(/-/g,'').slice(0,12).toUpperCase()}`;
-  const hash  = await bcrypt.hash(d.password, 10);
-  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'system';
+  if (d.managerId) {
+    const mgr = await queryOne<{ emp_id: string }>(`SELECT emp_id FROM employees WHERE emp_id = ?`, [d.managerId]);
+    if (!mgr) {
+      res.status(400).json({ error: 'Manager not found', code: 'INVALID_MANAGER' });
+      return;
+    }
+  }
 
-  // Insert employee row
+  const hash = await bcrypt.hash(password, 10);
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'system';
+  const ilgState = d.status === 'INACTIVE' ? 'SUSPENDED_HR' : d.status;
+  const department = d.department || d.deptId || null;
+
   await execute(
     `INSERT INTO employees
-       (emp_id, full_name, email_corp, role, employment_type, dept_id, manager_emp_id,
+       (emp_id, employee_number, full_name, first_name, last_name, username, email_corp,
+        role, employment_type, dept_id, manager_emp_id, mobile, location, country, cost_center,
         ilg_state, hrms_status, hire_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', 'ACTIVE', UTC_DATE())`,
-    [empId, d.fullName, d.email, d.role, d.empType,
-     d.deptId ?? null, d.managerId ?? null],
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', COALESCE(?, UTC_DATE()))`,
+    [
+      empId, empId, fullName, firstName, lastName || null, username, d.email,
+      d.designation ?? null, d.empType, department, d.managerId ?? null,
+      d.mobile ?? null, d.location ?? null, d.country ?? null, d.costCenter ?? null,
+      ilgState, d.joiningDate ?? null,
+    ],
   );
 
-  // Insert local account (role enum expanded in migration 008)
   await execute(
     `INSERT INTO local_accounts (emp_id, email, password_hash, role, created_by, active)
      VALUES (?, ?, ?, ?, ?, 1)`,
-    [empId, d.email, hash, d.role, adminId],
+    [empId, d.email, hash, portalRole, adminId],
   );
 
+  if (d.groupIds?.length) {
+    for (const gid of d.groupIds) {
+      await execute(
+        `INSERT IGNORE INTO group_members (group_id, emp_id, added_by) VALUES (?, ?, ?)`,
+        [gid, empId, adminId],
+      );
+    }
+  }
+
+  await writeDirectoryUserAudit({
+    empId,
+    action: 'USER_CREATED',
+    adminEmpId: adminId,
+    source: 'LOCAL',
+    newValues: { email: d.email, username, department },
+  });
+  await appendAuditLog(adminId, 'USER_CREATED', empId, { email: d.email, source: 'LOCAL' });
+
+  if (d.sendWelcomeEmail) {
+    logger.info({ empId, email: d.email }, 'Welcome email requested (delivery pending)');
+  }
+
   logger.info({ empId, email: d.email, createdBy: adminId }, 'Local user created');
-  res.status(201).json({ empId, email: d.email });
+  res.status(201).json({
+    empId,
+    email: d.email,
+    username,
+    generatedPassword: d.generatePassword || !d.password ? password : undefined,
+  });
 });
 
 // ---------------------------------------------------------------------------

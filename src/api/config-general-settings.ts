@@ -116,10 +116,19 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
     res.json({ id: 1 });
     return;
   }
-  const { google_oidc_client_secret: _secret, ...safe } = row;
+  const {
+    google_oidc_client_secret: _secret,
+    smtp_pass: _smtpPass,
+    sms_api_key: _smsKey,
+    email_api_key: _emailKey,
+    ...safe
+  } = row;
   res.json({
     ...safe,
     has_google_oidc_client_secret: Boolean(_secret),
+    has_smtp_pass: Boolean(_smtpPass),
+    has_sms_api_key: Boolean(_smsKey),
+    has_email_api_key: Boolean(_emailKey),
   });
 }));
 

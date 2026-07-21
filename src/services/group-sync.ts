@@ -339,7 +339,8 @@ export async function syncAllDirectoryGroups(): Promise<GroupSyncSummary> {
     connector_type: string;
     config_json: string | Record<string, unknown>;
   }>(
-    `SELECT id, connector_type, config_json FROM connectors WHERE status = 'ACTIVE'`,
+    `SELECT id, connector_type, config_json FROM connectors
+      WHERE status IN ('CONNECTED', 'ACTIVE')`,
     [],
   );
 

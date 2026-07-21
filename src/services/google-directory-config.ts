@@ -200,7 +200,7 @@ async function listUsersInGroup(
     for (const m of res.data.members ?? []) {
       if (m.type !== 'USER' || !m.email) continue;
       try {
-        const u = await directory.users.get({ userKey: m.email });
+        const u = await directory.users.get({ userKey: m.email, projection: 'full' });
         if (u.data) members.push(u.data);
       } catch {
         // skip deleted or inaccessible members
@@ -228,7 +228,7 @@ async function fetchGoogleUsersByEmail(
 
   for (const email of emails) {
     try {
-      const res = await directory.users.get({ userKey: email });
+      const res = await directory.users.get({ userKey: email, projection: 'full' });
       if (res.data) users.push(res.data);
     } catch (err) {
       if (isGoogleUserNotFound(err)) {

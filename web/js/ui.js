@@ -232,3 +232,73 @@ export function renderDonut(slices, centerLabel = '') {
       ${slices.map((s) => `<span><span class="swatch" style="background:${s.color}"></span>${esc(s.label)} (${s.value || 0})</span>`).join('')}
     </div>`;
 }
+
+export function b64urlToBuf(b64url) {
+  const pad = '='.repeat((4 - (b64url.length % 4)) % 4);
+  const b64 = (b64url + pad).replace(/-/g, '+').replace(/_/g, '/');
+  const str = atob(b64);
+  const buf = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) buf[i] = str.charCodeAt(i);
+  return buf;
+}
+
+export function bufToB64url(buf) {
+  let str = '';
+  const bytes = buf instanceof ArrayBuffer ? new Uint8Array(buf) : new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
+  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+export function prepareWebAuthnRegOptions(options) {
+  const o = structuredClone(options);
+  o.challenge = b64urlToBuf(o.challenge);
+  o.user.id = b64urlToBuf(o.user.id);
+  if (Array.isArray(o.excludeCredentials)) {
+    o.excludeCredentials = o.excludeCredentials.map((c) => ({
+      ...c,
+      id: b64urlToBuf(c.id),
+    }));
+  }
+  return o;
+}
+
+export function webAuthnRegResponseToJson(cred) {
+  return {
+    id: cred.id,
+    rawId: bufToB64url(cred.rawId),
+    type: cred.type,
+    response: {
+      attestationObject: bufToB64url(cred.response.attestationObject),
+      clientDataJSON: bufToB64url(cred.response.clientDataJSON),
+      transports: cred.response.getTransports?.() ?? [],
+    },
+    clientExtensionResults: cred.getClientExtensionResults?.() ?? {},
+  };
+}
+
+export function prepareWebAuthnAuthOptions(options) {
+  const o = structuredClone(options);
+  o.challenge = b64urlToBuf(o.challenge);
+  if (Array.isArray(o.allowCredentials)) {
+    o.allowCredentials = o.allowCredentials.map((c) => ({
+      ...c,
+      id: b64urlToBuf(c.id),
+    }));
+  }
+  return o;
+}
+
+export function webAuthnAuthResponseToJson(cred) {
+  return {
+    id: cred.id,
+    rawId: bufToB64url(cred.rawId),
+    type: cred.type,
+    response: {
+      authenticatorData: bufToB64url(cred.response.authenticatorData),
+      clientDataJSON: bufToB64url(cred.response.clientDataJSON),
+      signature: bufToB64url(cred.response.signature),
+      userHandle: cred.response.userHandle ? bufToB64url(cred.response.userHandle) : undefined,
+    },
+    clientExtensionResults: cred.getClientExtensionResults?.() ?? {},
+  };
+}

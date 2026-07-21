@@ -70,6 +70,23 @@ Object.assign(api, {
   mfaConfirm:       (code) => f('/api/me/mfa/confirm', { method: 'POST', body: JSON.stringify({ code }) }),
   mfaDisable:       (body) => f('/api/me/mfa/disable', { method: 'POST', body: JSON.stringify(body || {}) }),
   mfaRegenCodes:    (body) => f('/api/me/mfa/regenerate-codes', { method: 'POST', body: JSON.stringify(body || {}) }),
+  mfaEmailSend:     () => f('/api/me/mfa/email/send', { method: 'POST' }),
+  mfaEmailConfirm:  (code) => f('/api/me/mfa/email/confirm', { method: 'POST', body: JSON.stringify({ code }) }),
+  mfaEmailDisable:  (body) => f('/api/me/mfa/email/disable', { method: 'POST', body: JSON.stringify(body || {}) }),
+  mfaSmsSend:       () => f('/api/me/mfa/sms/send', { method: 'POST' }),
+  mfaSmsConfirm:    (code) => f('/api/me/mfa/sms/confirm', { method: 'POST', body: JSON.stringify({ code }) }),
+  mfaSmsDisable:    (body) => f('/api/me/mfa/sms/disable', { method: 'POST', body: JSON.stringify(body || {}) }),
+  mfaWebAuthnOptions: () => f('/api/me/mfa/webauthn/register/options', { method: 'POST' }),
+  mfaWebAuthnVerify:  (challengeId, response, name) =>
+    f('/api/me/mfa/webauthn/register/verify', { method: 'POST', body: JSON.stringify({ challengeId, response, name }) }),
+  mfaWebAuthnList:    () => f('/api/me/mfa/webauthn/credentials'),
+  mfaWebAuthnDelete:  (id, body) => f(`/api/me/mfa/webauthn/credentials/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify(body || {}) }),
+  localLoginMfaSendOtp: (challengeId, channel) =>
+    f('/auth/local/login/mfa-send-otp', { method: 'POST', body: JSON.stringify({ challengeId, channel }) }),
+  localLoginMfaWebAuthnOptions: (challengeId) =>
+    f('/auth/local/login/mfa-webauthn/options', { method: 'POST', body: JSON.stringify({ challengeId }) }),
+  localLoginMfaWebAuthnVerify: (challengeId, webauthnChallengeId, response) =>
+    f('/auth/local/login/mfa-webauthn/verify', { method: 'POST', body: JSON.stringify({ challengeId, webauthnChallengeId, response }) }),
 
   igaApps:          () => f('/api/iga/applications'),
   createIgaApp:     (data) => f('/api/iga/applications', { method: 'POST', body: JSON.stringify(data) }),
@@ -259,10 +276,23 @@ Object.assign(api, {
   userLifecycle: (empId) => f(`/api/admin/users/${empId}/lifecycle`),
 
   // Unified directory — hybrid identity
-  listUsersUnified: (q = '', state = '', source = '', limit = 100, offset = 0, includeInactive = false) =>
-    f(`/api/admin/users?q=${encodeURIComponent(q)}&state=${encodeURIComponent(state)}&source=${encodeURIComponent(source)}&limit=${limit}&offset=${offset}&includeInactive=${includeInactive ? '1' : '0'}`),
+  listUsersUnified: (q = '', state = '', source = '', limit = 100, offset = 0, includeInactive = false, filters = {}) => {
+    const p = new URLSearchParams({
+      q, state, source, limit: String(limit), offset: String(offset),
+      includeInactive: includeInactive ? '1' : '0',
+    });
+    if (filters.department) p.set('department', filters.department);
+    if (filters.manager) p.set('manager', filters.manager);
+    if (filters.location) p.set('location', filters.location);
+    if (filters.employeeType) p.set('employeeType', filters.employeeType);
+    if (filters.employeeId) p.set('employeeId', filters.employeeId);
+    return f(`/api/admin/users?${p}`);
+  },
   getUserProfile:      (empId) => f(`/api/admin/users/${empId}`),
   createLocalUser:     (data) => f('/api/admin/users/local', { method: 'POST', body: JSON.stringify(data) }),
+  exportUsers:         (source = '', state = '') =>
+    f(`/api/admin/users/export?source=${encodeURIComponent(source)}&state=${encodeURIComponent(state)}`),
+  bulkUserAction:      (data) => f('/api/admin/users/bulk-action', { method: 'POST', body: JSON.stringify(data) }),
   adminMfaStatus:      (empId) => f(`/api/admin/users/${empId}/mfa`),
   adminMfaEnroll:      (empId) => f(`/api/admin/users/${empId}/mfa/enroll`, { method: 'POST' }),
   adminMfaConfirm:     (empId, code) => f(`/api/admin/users/${empId}/mfa/confirm`, { method: 'POST', body: JSON.stringify({ code }) }),
@@ -270,6 +300,8 @@ Object.assign(api, {
   adminMfaRegenCodes:  (empId) => f(`/api/admin/users/${empId}/mfa/regenerate-codes`, { method: 'POST' }),
   adminMfaEnforce:     (empId, enforce) => f(`/api/admin/users/${empId}/mfa/enforce`, { method: 'POST', body: JSON.stringify({ enforce }) }),
   getMfaPolicy:        () => f('/api/admin/users/mfa-policy'),
+  getMfaDeliveryStatus: () => f('/api/admin/users/mfa-delivery-status'),
+  saveMfaDelivery:     (data) => f('/api/admin/users/mfa-delivery', { method: 'PUT', body: JSON.stringify(data) }),
   updateMfaPolicy:     (data) => f('/api/admin/users/mfa-policy', { method: 'POST', body: JSON.stringify(data) }),
   adminResetPassword:  (empId, newPassword, notifyUser = false) =>
     f(`/api/admin/users/${empId}/reset-password`, { method: 'POST', body: JSON.stringify({ newPassword, notifyUser }) }),
@@ -280,6 +312,18 @@ Object.assign(api, {
   // Bulk user import (chunked — up to 100k rows total)
   bulkUsersBatch: (rows, mode = 'upsert') =>
     f('/api/admin/bulk-users/batch', { method: 'POST', body: JSON.stringify({ rows, mode }) }),
+  bulkUsersValidate: (rows) =>
+    f('/api/admin/bulk-users/validate', { method: 'POST', body: JSON.stringify({ rows }) }),
+  bulkUsersTemplateUrl: (format = 'csv') => `/api/admin/bulk-users/template?format=${format}`,
+
+  // Google directory attribute map + sync
+  getGoogleAttrMaps: () => f('/api/admin/directory/google/attr-maps'),
+  saveGoogleAttrMaps: (maps) => f('/api/admin/directory/google/attr-maps', { method: 'PUT', body: JSON.stringify({ maps }) }),
+  getGoogleSyncSettings: () => f('/api/admin/directory/google/sync-settings'),
+  saveGoogleSyncSettings: (data) => f('/api/admin/directory/google/sync-settings', { method: 'PUT', body: JSON.stringify(data) }),
+  googleSyncNow: () => f('/api/admin/directory/google/sync-now', { method: 'POST' }),
+  googleFullSync: () => f('/api/admin/directory/google/full-sync', { method: 'POST' }),
+  googleSyncLogs: (limit = 50) => f(`/api/admin/directory/google/logs?limit=${limit}`),
 
   // Access requests
   igaSubmitRequest:  (data) => f('/api/iga/access-requests', { method: 'POST', body: JSON.stringify(data) }),
