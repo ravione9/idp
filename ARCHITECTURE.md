@@ -931,7 +931,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **API** — `PUT /api/admin/users/:empId/profile` (manual attrs, `sync_status=MANUAL`).
 - **Google extract** — richer employeeId/externalIds/customSchemas; department falls back to OU leaf; title/costCenter/location scan all orgs.
 
-### TBD — 2026-07-21 — MFA Policies tab: group-wise allowed methods
+### `e9fb5e4` — 2026-07-21 — MFA Policies tab: group-wise allowed methods
 
 **Why** — Operators need to assign MFA methods per directory group (e.g. store staff TOTP-only), not only org-wide.
 
