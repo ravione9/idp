@@ -550,8 +550,14 @@ To add a new migration:
 | `GET` | `/oauth/authorize` `/oauth/resume/:id` | OIDC authorize + login resume |
 | `POST` | `/oauth/token` | OIDC token endpoint |
 | `GET`/`POST` | `/oauth/userinfo` | OIDC UserInfo |
-| `GET` | `/api/admin/audit/saml` | SAML assertions log |
-| `GET` | `/api/admin/audit/system` | `audit_log` rows |
+| `GET` | `/api/admin/audit/saml` | SSO assertion log (`from`/`to`/`q`/`app`/`binding`/`limit`/`offset`; `export=csv`) |
+| `GET` | `/api/admin/audit/system` | Tamper-evident `audit_log` (`from`/`to`/`q`/`actor`/`action`; `export=csv`) |
+| `GET` | `/api/admin/audit/auth-attempts` | Login forensics from `auth_attempts` (`from`/`to`/`q`/`ip`/`success`/`reason`; `export=csv`) |
+| `GET` | `/api/admin/audit/integrity` | Verify `audit_log` hash chain |
+| `GET` | `/api/admin/audit/summary` | Compliance counters for a date window |
+| `GET` | `/api/admin/sso-reports/*` | Login summary / failed logins / adoption / dormant (`days` or `from`/`to`) |
+| `GET`/`POST` | `/api/iga/reports` | List / generate compliance evidence snapshots |
+| `GET` | `/api/iga/reports/:id` | Fetch snapshot; `export=json` downloads evidence |
 | `GET` | `/api/admin/app-access-policy/summary` | Assignment / workflow / audit counts |
 | `GET` | `/api/admin/app-access-policy/applications` | Assignable apps (IGA catalog + auto-mirrored SAML SPs) |
 | `GET`/`POST` | `/api/admin/app-access-policy/tag-groups[/:id]` | Tag group CRUD |
@@ -666,7 +672,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault — **SUPER_ADMIN only** (portal `ADMIN` excludes PAM) |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
 | **Workflows** | Workflows (tabs: Definitions · Event Triggers · Run History) · Notifications |
-| **Reports** | Audit & SSO Reports (tabs: SSO assertions · System audit · SSO Reports) · Compliance Reports |
+| **Reports** | Audit & SSO Reports (tabs: SSO assertions · System audit · Auth attempts · SSO analytics) with date filters + CSV export · Compliance Reports (generate evidence snapshots) |
 | **Settings** | General · Branding & Login · License · Tickets · System Health |
 
 **Merged / redirected routes** (bookmarks still work): `loginCustomization`→`branding`, `connectors`→`directorySync`, `eventTriggers`→`workflowLibrary?tab=triggers`, `appDiscovery`→`applications?tab=discovery`, `ssoReports`→`audit?tab=sso`. Groups also exposes Tag Groups under `/?v=groups&tab=tags`.
@@ -926,7 +932,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### pending — 2026-07-21 — Fix Google portal OAuth redirect + clearer errors
+### TBD — 2026-07-21 — Audit & compliance reports (filters, export, evidence)
+
+**Why** — Audit & SSO Reports lacked date filters, search, pagination, CSV export, and usable compliance evidence generation.
+
+**What changed:**
+
+- **API** — `/api/admin/audit/{saml,system,auth-attempts}` support `from`/`to`, filters, `offset`, `export=csv`; `/integrity` + `/summary`; SSO reports accept date window; `POST /api/iga/reports` builds evidence payload + JSON download.
+- **UI** — Audit page: filter bar (7/30/90d), Export CSV, pagination, Auth attempts tab, payload viewer, hash-chain verify; SSO analytics date window + enterprise panels; Compliance Reports generate modal + period display fix.
+
+### `529cd47` — 2026-07-21 — Fix Google portal OAuth redirect + clearer errors
 
 **Why** — Directory sync (service account) can succeed while portal “Continue with Google” fails. Token exchange often failed when authorize/callback `redirect_uri` diverged, or DB Client ID was paired with a stale secret. Errors looked like “credentials are correct”.
 
