@@ -4,7 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
-import { requireRole, requirePortalModule } from '../auth/rbac.js';
+import { requireRole, requirePortalModule, requireAnyPortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { queryOne, execute } from '../db/connection.js';
 import { getGoogleOidcConfig, isGoogleOidcConfigured } from '../auth/google-oidc-config.js';
@@ -47,8 +47,16 @@ function parseGoogleOauthClientJson(rawJson: string): { clientId: string; client
   return { clientId, clientSecret };
 }
 
-router.get('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('settings'), asyncHandler(async (_req: Request, res: Response) => {
+// Also allow operators who manage Directory Sync (connections) to read/write portal OAuth
+router.get('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), requireAnyPortalModule('settings', 'connections'), asyncHandler(async (_req: Request, res: Response) => {
   const cfg = await getGoogleOidcConfig();
+  let redirectUri: string | null = null;
+  try {
+    const { getGoogleOAuthRedirectUri } = await import('../auth/google-oauth-redirect.js');
+    redirectUri = getGoogleOAuthRedirectUri();
+  } catch {
+    redirectUri = null;
+  }
   res.json({
     clientId: cfg.clientId,
     hostedDomain: cfg.hostedDomain,
@@ -56,11 +64,12 @@ router.get('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalMod
     hasClientSecret: Boolean(cfg.clientSecret),
     source: cfg.source,
     configured: isGoogleOidcConfigured(cfg),
+    redirectUri,
   });
 }));
 
-// Google OIDC credentials control portal SSO — Super Admin only
-router.put('/google-oidc', requireRole('SUPER_ADMIN'), requirePortalModule('settings'), asyncHandler(async (req: Request, res: Response) => {
+// Google OIDC credentials for portal SSO (ADMIN+ — same as Directory Sync Portal sign-in tab)
+router.put('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), requireAnyPortalModule('settings', 'connections'), asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const oauthJson = readString(body, 'oauthClientJson');
   let jsonCreds: { clientId: string; clientSecret: string } | null = null;

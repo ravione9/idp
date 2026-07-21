@@ -3956,12 +3956,15 @@ function initSourcesTab(panel) {
 
     const adConnFields = (meta.connectionFields || fieldList).map(renderConfigField).join('');
     const adScopeFields = (meta.scopeFields || []).map(renderConfigField).join('');
-    const redirectUri = `${window.location.origin}/auth/google/callback`;
+    const redirectUri = String(defaults.oidcRedirectUri || `${window.location.origin}/auth/google/callback`);
     const oidcClientId = esc(String(defaults.oidcClientId || ''));
     const oidcHasSecret = defaults.oidcHasClientSecret ? true : false;
+    const oidcSource = defaults.oidcSource
+      ? `Credentials source: Client ID from <strong>${esc(defaults.oidcSource.clientId || '—')}</strong>, Secret from <strong>${esc(defaults.oidcSource.clientSecret || '—')}</strong>.`
+      : '';
 
     const googleAuthFields = `
-          <p class="muted" style="font-size:0.82rem;margin:0 0 1rem">OAuth <strong>Web client</strong> for <em>Continue with Google</em> on the login page. The service account on the Connection tab is for directory sync only.</p>
+          <p class="muted" style="font-size:0.82rem;margin:0 0 1rem">OAuth <strong>Web application</strong> client for <em>Continue with Google</em>. Directory sync uses the <em>service account</em> on the Connection tab — a different credential. Sync working does <strong>not</strong> mean portal login is configured.</p>
           <div class="form-group" style="grid-column:1/-1">
             <label class="form-label">OAuth Client ID</label>
             <input class="form-input" id="cfg-oidcClientId" value="${oidcClientId}" placeholder="123456789.apps.googleusercontent.com">
@@ -3969,14 +3972,17 @@ function initSourcesTab(panel) {
           <div class="form-group" style="grid-column:1/-1">
             <label class="form-label">OAuth Client Secret</label>
             <input class="form-input" id="cfg-oidcClientSecret" type="password" placeholder="${oidcHasSecret ? 'Saved (leave blank to keep current)' : 'GOCSPX-...'}">
+            <p class="muted" style="font-size:0.75rem;margin:0.3rem 0 0">After rotating the secret in Google Cloud, paste the new value here and Save — leave blank keeps the old stored secret.</p>
           </div>
           <div class="form-group" style="grid-column:1/-1">
             <label class="form-label">OAuth JSON (optional)</label>
-            <textarea class="form-textarea" id="cfg-oidcOAuthJson" rows="3" placeholder='Paste OAuth Web client JSON from Google Cloud Console'></textarea>
+            <textarea class="form-textarea" id="cfg-oidcOAuthJson" rows="3" placeholder='Paste OAuth Web client JSON from Google Cloud Console (must include "web": { client_id, client_secret })'></textarea>
           </div>
-          <div class="alert alert-info" style="font-size:0.8rem;margin-bottom:0">
-            In Google Cloud Console → Credentials → OAuth Web client, add redirect URI:<br>
-            <code style="font-size:0.75rem">${esc(redirectUri)}</code>
+          <div class="alert alert-info" style="font-size:0.8rem;margin-bottom:0;line-height:1.45">
+            Google Cloud Console → APIs &amp; Services → Credentials → <strong>OAuth 2.0 Client ID</strong> (type <em>Web application</em>):<br>
+            Authorized redirect URI (exact):<br>
+            <code style="font-size:0.78rem;user-select:all">${esc(redirectUri)}</code>
+            ${oidcSource ? `<br><span class="muted" style="font-size:0.75rem">${oidcSource}</span>` : ''}
           </div>`;
 
     const scopedFieldsBlock = useScopeTabs ? `
@@ -4188,6 +4194,8 @@ function initSourcesTab(panel) {
           const oidc = await api.getGoogleOidcSettings();
           defaults.oidcClientId = oidc.clientId || '';
           defaults.oidcHasClientSecret = oidc.hasClientSecret;
+          defaults.oidcRedirectUri = oidc.redirectUri || `${window.location.origin}/auth/google/callback`;
+          defaults.oidcSource = oidc.source || null;
           if (!defaults.customerDomain && oidc.hostedDomains?.length) {
             defaults.customerDomain = oidc.hostedDomains.join('\n');
           }

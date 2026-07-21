@@ -926,6 +926,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### pending — 2026-07-21 — Fix Google portal OAuth redirect + clearer errors
+
+**Why** — Directory sync (service account) can succeed while portal “Continue with Google” fails. Token exchange often failed when authorize/callback `redirect_uri` diverged, or DB Client ID was paired with a stale secret. Errors looked like “credentials are correct”.
+
+**What changed:**
+
+- Canonical redirect URI from `PUBLIC_BASE_URL`; same URI stored in OAuth `state` for token exchange.
+- Login shows Google error detail (`invalid_client`, `invalid_grant`, …).
+- Portal sign-in tab clarifies Web client vs sync SA; shows redirect URI + credential source; ADMIN may save OIDC settings.
+- Case-insensitive employee email match after Google login.
+- Asset cache `ud10`.
+
 ### `5b11c4a` — 2026-07-21 — Universal Directory users: real totals + pagination
 
 **Why** — Users tab requested `limit=200` and showed `users.length` as KPIs, so a ~7700 Google directory looked like only 200 users.

@@ -9,7 +9,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { getClientIp, getPublicOrigin } from '../utils/request-context.js';
+import { getClientIp } from '../utils/request-context.js';
 import { config } from '../config.js';
 import { query, queryOne } from '../db/connection.js';
 import { redis } from './session-store.js';
@@ -17,6 +17,7 @@ import logger from '../utils/logger.js';
 import { parseOAuthState } from './login-routes.js';
 import { redirectLoginAuthError } from './login-redirect.js';
 import { getGoogleOidcConfig, isGoogleOidcConfigured } from './google-oidc-config.js';
+import { getGoogleOAuthRedirectUri } from './google-oauth-redirect.js';
 import { emailAllowedForGoogleDomains } from './google-domains.js';
 import {
   COOKIE_NAME,
@@ -188,15 +189,19 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 // googleCallbackHandler
 // ---------------------------------------------------------------------------
 export async function googleCallbackHandler(req: Request, res: Response): Promise<void> {
-  const { returnTo } = parseOAuthState(req.query['state'] as string | undefined);
+  const { returnTo, redirectUri: stateRedirectUri } = parseOAuthState(
+    req.query['state'] as string | undefined,
+  );
 
   const googleOAuthError = req.query['error'] as string | undefined;
   if (googleOAuthError) {
-    logger.warn({ googleOAuthError, returnTo }, 'Google OAuth returned error to callback');
+    const desc = String(req.query['error_description'] ?? googleOAuthError).slice(0, 80);
+    logger.warn({ googleOAuthError, desc, returnTo }, 'Google OAuth returned error to callback');
     redirectLoginAuthError(
       res,
       googleOAuthError === 'access_denied' ? 'google_access_denied' : 'google_oauth_error',
       returnTo,
+      desc,
     );
     return;
   }
@@ -214,6 +219,9 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       return;
     }
 
+    // Must match authorize redirect_uri exactly (prefer value from OAuth state)
+    const redirectUri = stateRedirectUri || getGoogleOAuthRedirectUri(req);
+
     // Exchange code for tokens
     const tokenRes = await (await import('axios')).default.post<{
       id_token: string;
@@ -225,7 +233,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
         code,
         client_id:     oidc.clientId,
         client_secret: oidc.clientSecret,
-        redirect_uri:  `${getPublicOrigin(req)}/auth/google/callback`,
+        redirect_uri:  redirectUri,
         grant_type:    'authorization_code',
       }).toString(),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 10_000 },
@@ -241,13 +249,13 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
 
     const hd = typeof payload['hd'] === 'string' ? payload['hd'].trim().toLowerCase() : '';
     if (hd && !oidc.hostedDomains.includes(hd)) {
-      redirectLoginAuthError(res, 'wrong_hosted_domain', returnTo);
+      redirectLoginAuthError(res, 'wrong_hosted_domain', returnTo, hd);
       return;
     }
 
-    const email = payload['email'] as string;
+    const email = String(payload['email'] ?? '').trim().toLowerCase();
     if (!emailAllowedForGoogleDomains(email, oidc.hostedDomains)) {
-      redirectLoginAuthError(res, 'domain_not_permitted', returnTo);
+      redirectLoginAuthError(res, 'domain_not_permitted', returnTo, email.split('@')[1]);
       return;
     }
     if (!payload['email_verified']) {
@@ -257,10 +265,10 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
 
     const sub   = payload['sub'] as string;
 
-    // Lookup employee by corporate email
+    // Lookup employee by corporate email (case-insensitive)
     const emp = await queryOne<{ emp_id: string; role: string }>(
       `SELECT emp_id, role FROM employees
-        WHERE email_corp = ? AND ilg_state IN ('ACTIVE', 'REACTIVATED')`,
+        WHERE LOWER(email_corp) = ? AND ilg_state IN ('ACTIVE', 'REACTIVATED')`,
       [email],
     );
 
@@ -386,8 +394,9 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     const axiosData = (err as { response?: { data?: { error?: string; error_description?: string } } })
       ?.response?.data;
     const oauthErr = axiosData?.error;
+    const oauthDesc = axiosData?.error_description;
     logger.error(
-      { err, oauthErr, oauthDesc: axiosData?.error_description, returnTo },
+      { err, oauthErr, oauthDesc, returnTo },
       'Google OIDC callback failed',
     );
     if (
@@ -396,10 +405,10 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       || oauthErr === 'redirect_uri_mismatch'
       || oauthErr === 'invalid_grant'
     ) {
-      redirectLoginAuthError(res, 'google_oauth_error', returnTo);
+      redirectLoginAuthError(res, 'google_oauth_error', returnTo, oauthErr);
       return;
     }
-    redirectLoginAuthError(res, 'auth_failed', returnTo);
+    redirectLoginAuthError(res, 'auth_failed', returnTo, oauthErr || undefined);
   }
 }
 

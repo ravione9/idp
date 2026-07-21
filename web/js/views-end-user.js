@@ -27,7 +27,7 @@ const AUTH_ERROR_MESSAGES = {
   google_access_denied:
     'Google sign-in was cancelled or denied.',
   google_oauth_error:
-    'Google returned an error during sign-in. Verify Client ID/Secret under Directory Sync → Google Workspace → Portal sign-in, and that Authorized redirect URI is https://idp.lenskart.com/auth/google/callback.',
+    'Google returned an error during sign-in. Portal login uses the OAuth Web Client (not the sync service account). Re-paste Client ID + Secret under Directory Sync → Google Workspace → Portal sign-in, and add the redirect URI shown there to Google Cloud Console.',
   wrong_hosted_domain:
     'This Google account is not from an allowed Workspace domain.',
   domain_not_permitted:
@@ -46,9 +46,14 @@ function showAuthErrorFromUrl(errEl) {
   const params = new URLSearchParams(location.search);
   const code = params.get('authError');
   if (!code) return;
-  const msg = AUTH_ERROR_MESSAGES[code] || 'Sign-in failed. Try again or use email and password.';
+  const detail = params.get('authDetail');
+  let msg = AUTH_ERROR_MESSAGES[code] || 'Sign-in failed. Try again or use email and password.';
+  if (detail) {
+    msg += ` (Google: ${detail})`;
+  }
   errEl.innerHTML = `<div class="alert alert-error">${esc(msg)}</div>`;
   params.delete('authError');
+  params.delete('authDetail');
   const qs = params.toString();
   history.replaceState(null, '', `/login${qs ? `?${qs}` : ''}`);
 }
