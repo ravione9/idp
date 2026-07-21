@@ -100,7 +100,7 @@ async function isUserExcludedFromPolicyMfa(empId: string): Promise<boolean> {
 // GET /  — paginated employee list with linked identity sources
 // ---------------------------------------------------------------------------
 router.get('/', async (req: Request, res: Response): Promise<void> => {
-  const limit  = Math.min(parseInt((req.query['limit']  as string) ?? '100', 10), 500);
+  const limit  = Math.min(parseInt((req.query['limit']  as string) ?? '100', 10), 1000);
   const offset = parseInt((req.query['offset'] as string) ?? '0', 10);
   const search = (req.query['q']      as string)?.trim() ?? '';
   const state  = (req.query['state']  as string)?.trim() ?? '';
@@ -194,7 +194,38 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     params,
   );
 
-  res.json({ data: rows, total: total?.n ?? 0, limit, offset });
+  // Aggregate source counts for the same filter (not just the current page)
+  const sourceStats = await queryOne<{ with_ad: number; with_google: number; local_only: number }>(
+    `SELECT
+       COUNT(DISTINCT CASE WHEN EXISTS (
+         SELECT 1 FROM identity_links il2
+          WHERE il2.emp_id = e.emp_id AND il2.\`system\` = 'AD' AND il2.status = 'ACTIVE'
+       ) THEN e.emp_id END) AS with_ad,
+       COUNT(DISTINCT CASE WHEN EXISTS (
+         SELECT 1 FROM identity_links il2
+          WHERE il2.emp_id = e.emp_id AND il2.\`system\` = 'GOOGLE' AND il2.status = 'ACTIVE'
+       ) THEN e.emp_id END) AS with_google,
+       COUNT(DISTINCT CASE WHEN NOT EXISTS (
+         SELECT 1 FROM identity_links il2
+          WHERE il2.emp_id = e.emp_id AND il2.status = 'ACTIVE'
+       ) AND la.id IS NOT NULL THEN e.emp_id END) AS local_only
+       FROM employees e
+       LEFT JOIN local_accounts la ON la.emp_id = e.emp_id AND la.active = 1
+       ${whereSql}`,
+    params,
+  ).catch(() => null);
+
+  res.json({
+    data: rows,
+    total: total?.n ?? 0,
+    limit,
+    offset,
+    stats: {
+      withAd: Number(sourceStats?.with_ad ?? 0),
+      withGoogle: Number(sourceStats?.with_google ?? 0),
+      localOnly: Number(sourceStats?.local_only ?? 0),
+    },
+  });
 });
 
 // ---------------------------------------------------------------------------

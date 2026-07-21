@@ -926,6 +926,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### pending — 2026-07-21 — Universal Directory users: real totals + pagination
+
+**Why** — Users tab requested `limit=200` and showed `users.length` as KPIs, so a ~7700 Google directory looked like only 200 users.
+
+**What changed:**
+
+- **API** — `GET /api/admin/users` returns `stats.withAd` / `withGoogle` / `localOnly` for the full filtered set; max `limit` raised to 1000.
+- **UI** — paginated list (100/page) with “Showing X–Y of Z”; KPIs use API `total` + `stats`.
+- Asset cache `ud9`.
+
 ### `853bf0c` — 2026-07-21 — Harden Google portal sign-in against MFA/OIDC failures
 
 **Why** — `/auth/google/callback` returned generic `auth_failed` when MFA method tables were missing/unavailable, and clearing Google connector Workspace domains could remove the only hosted-domain source for OIDC.

@@ -4654,6 +4654,10 @@ function initUsersTab(panel, me = null) {
   let allUsers = [];
   let searchTimer = null;
   const selected = new Set();
+  const PAGE_SIZE = 100;
+  let listOffset = 0;
+  let listTotal = 0;
+  let listStats = { withAd: 0, withGoogle: 0, localOnly: 0 };
 
   function toast(msg, type = 'success') {
     const el = panel.querySelector('#ud-toast');
@@ -4672,34 +4676,40 @@ function initUsersTab(panel, me = null) {
   }
 
   // ── Load & render user list ──────────────────────────────────────────────────
-  async function loadUsers(q = '', state = '', source = '') {
+  async function loadUsers(q = '', state = '', source = '', opts = {}) {
+    const resetPage = opts.resetPage !== false;
+    if (resetPage) listOffset = 0;
     panel.querySelector('#ud-table-area').innerHTML = loading();
     try {
       const includeInactive = state === '__all__';
       const apiState = includeInactive ? '' : state;
-      const r = await api.listUsersUnified(q, apiState, source, 200, 0, includeInactive, currentFilters());
+      const r = await api.listUsersUnified(
+        q, apiState, source, PAGE_SIZE, listOffset, includeInactive, currentFilters(),
+      );
       allUsers = Array.isArray(r) ? r : (r?.data ?? []);
+      listTotal = Array.isArray(r) ? allUsers.length : Number(r?.total ?? allUsers.length);
+      listStats = {
+        withAd: Number(r?.stats?.withAd ?? 0),
+        withGoogle: Number(r?.stats?.withGoogle ?? 0),
+        localOnly: Number(r?.stats?.localOnly ?? 0),
+      };
       selected.clear();
       updateBulkBar();
-      renderStats(allUsers);
+      renderStats();
       renderTable(allUsers);
     } catch(e) {
       panel.querySelector('#ud-table-area').innerHTML = errHtml(e.message);
     }
   }
 
-  function renderStats(users) {
-    const total   = users.length;
-    const withAD  = users.filter(u => (u.identity_sources||'').includes('AD')).length;
-    const withG   = users.filter(u => (u.identity_sources||'').includes('GOOGLE')).length;
-    const local   = users.filter(u => !(u.identity_sources||'').replace(/^,+|,+$/g,'').length || u.local_active).length;
+  function renderStats() {
     const statsEl = panel.querySelector('#ud-stats');
     statsEl.hidden = false;
     statsEl.innerHTML = kpiStrip([
-      [total, 'Users', 'accent'],
-      [withAD, 'With AD', 'info'],
-      [withG, 'With Google', 'success'],
-      [local, 'Local only', 'neutral'],
+      [listTotal, 'Users', 'accent'],
+      [listStats.withAd, 'With AD', 'info'],
+      [listStats.withGoogle, 'With Google', 'success'],
+      [listStats.localOnly, 'Local only', 'neutral'],
     ]);
   }
 
@@ -4754,15 +4764,30 @@ function initUsersTab(panel, me = null) {
       </tr>`;
     }).join('');
 
+    const from = listTotal === 0 ? 0 : listOffset + 1;
+    const to = Math.min(listOffset + users.length, listTotal);
+    const page = Math.floor(listOffset / PAGE_SIZE) + 1;
+    const pages = Math.max(1, Math.ceil(listTotal / PAGE_SIZE));
+    const canPrev = listOffset > 0;
+    const canNext = listOffset + PAGE_SIZE < listTotal;
+
     panel.querySelector('#ud-table-area').innerHTML = `
       <div class="table-wrap table-wrap--flat">
         <table class="dense-table">
           <thead><tr>
-            <th style="width:28px"><input type="checkbox" id="ud-check-all" title="Select all"></th>
+            <th style="width:28px"><input type="checkbox" id="ud-check-all" title="Select page"></th>
             <th>User</th><th>Email</th><th>Department</th><th>Designation</th><th>State</th><th>Sources</th><th></th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
+      </div>
+      <div class="filter-toolbar" style="margin-top:0.75rem;justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
+        <span class="muted" style="font-size:0.82rem">Showing ${from.toLocaleString()}–${to.toLocaleString()} of ${listTotal.toLocaleString()}</span>
+        <div style="display:flex;gap:0.4rem;align-items:center">
+          <button type="button" class="btn btn-sm btn-secondary" id="ud-page-prev" ${canPrev ? '' : 'disabled'}>← Prev</button>
+          <span class="muted" style="font-size:0.82rem">Page ${page} / ${pages}</span>
+          <button type="button" class="btn btn-sm btn-secondary" id="ud-page-next" ${canNext ? '' : 'disabled'}>Next →</button>
+        </div>
       </div>`;
 
     panel.querySelector('#ud-check-all')?.addEventListener('change', (e) => {
@@ -4786,6 +4811,19 @@ function initUsersTab(panel, me = null) {
         const empId = el2.dataset.empid || el2.closest('tr')?.dataset?.empid;
         if (empId) openProfileDrawer(empId);
       });
+    });
+
+    panel.querySelector('#ud-page-prev')?.addEventListener('click', () => {
+      if (!canPrev) return;
+      listOffset = Math.max(0, listOffset - PAGE_SIZE);
+      const f = getFilters();
+      loadUsers(f.q, f.state, f.source, { resetPage: false });
+    });
+    panel.querySelector('#ud-page-next')?.addEventListener('click', () => {
+      if (!canNext) return;
+      listOffset += PAGE_SIZE;
+      const f = getFilters();
+      loadUsers(f.q, f.state, f.source, { resetPage: false });
     });
   }
 
