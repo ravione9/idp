@@ -926,7 +926,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### pending — 2026-07-21 — Fix Google Full Sync 500 (`FULL` vs `FULL_SYNC`)
+### `f970de8` — 2026-07-21 — Fix Google Full Sync 500 (`FULL` vs `FULL_SYNC`)
 
 **Why** — `POST /api/admin/directory/google/full-sync` returned 500 while incremental sync succeeded. `connector_runs.run_type` ENUM allows `FULL_SYNC`, but the code inserted `FULL`.
 
