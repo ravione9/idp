@@ -913,6 +913,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### TBD — 2026-07-21 — Fix MFA policy GET shadowed by `/:empId`
+
+**Why** — Saving excluded groups appeared to work, then the shuttle reset: `GET /api/admin/users/mfa-policy` was matched as `GET /:empId` (`empId=mfa-policy`) → 404 → UI treated policy as empty.
+
+**What changed:**
+
+- **`src/api/admin-users.ts`** — register `/mfa-policy`, `/mfa-delivery-status`, and `/mfa-delivery` **before** `/:empId`.
+
 ### `07895eb` — 2026-07-21 — Email OTP: HTTP API transport + Admin GUI
 
 **Why** — Operators need API-based email (SendGrid-style gateway) in addition to classic SMTP.

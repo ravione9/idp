@@ -308,6 +308,252 @@ router.post('/bulk-action', asyncHandler(async (req: Request, res: Response) => 
 }));
 
 // ---------------------------------------------------------------------------
+// Static MFA admin routes — MUST be registered before /:empId or Express
+// treats "mfa-policy" / "mfa-delivery-status" as employee IDs (404 on GET).
+// ---------------------------------------------------------------------------
+router.get('/mfa-policy', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const rows = await query<{ policy_key: string; policy_value: string }>(
+      `SELECT policy_key, policy_value FROM mfa_policy`,
+      [],
+    );
+    const policy: Record<string, unknown> = {};
+    for (const r of rows) {
+      try { policy[r.policy_key] = JSON.parse(r.policy_value); } catch { policy[r.policy_key] = r.policy_value; }
+    }
+    res.json({ data: policy });
+  } catch {
+    res.json({ data: {} });
+  }
+});
+
+router.post('/mfa-policy', async (req: Request, res: Response): Promise<void> => {
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId
+    ?? (req as unknown as { session?: { emp_id?: string } }).session?.emp_id
+    ?? 'system';
+  const updates = req.body as Record<string, unknown>;
+  const allowed = new Set([
+    'global_enforce',
+    'enforce_for_admins',
+    'grace_period_hours',
+    'allowed_methods',
+    'excluded_group_ids',
+  ]);
+  for (const [key, val] of Object.entries(updates)) {
+    if (!allowed.has(key)) continue;
+    await execute(
+      `INSERT INTO mfa_policy (policy_key, policy_value, updated_by)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE policy_value = VALUES(policy_value), updated_by = VALUES(updated_by)`,
+      [key, JSON.stringify(val), String(adminId).slice(0, 20)],
+    );
+  }
+  logger.info({ by: adminId, updates }, 'Admin updated MFA global policy');
+  res.json({ success: true });
+});
+
+router.get('/mfa-delivery-status', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const { getMfaDeliveryConfig, publicDeliveryStatus } = await import('../services/mfa-delivery-config.js');
+    const cfg = await getMfaDeliveryConfig();
+    res.json({ data: publicDeliveryStatus(cfg) });
+  } catch (err) {
+    logger.warn({ err }, 'mfa-delivery-status failed');
+    res.json({ data: { emailOtp: { ready: false, mode: 'none' }, smsOtp: { ready: false, mode: 'none' } } });
+  }
+});
+
+const mfaDeliverySchema = z.object({
+  emailTransport: z.enum(['smtp', 'api']).optional(),
+  smtpHost:    z.string().max(255).optional(),
+  smtpPort:    z.coerce.number().int().min(1).max(65535).optional(),
+  smtpUser:    z.string().max(255).optional(),
+  smtpPass:    z.string().max(2000).optional(),
+  smtpFrom:    z.string().max(255).optional(),
+  smtpSecure:  z.boolean().optional(),
+  emailApiUrl: z.string().max(1000).optional(),
+  emailApiKey: z.string().max(2000).optional(),
+  smsApiUrl:   z.string().max(1000).optional(),
+  smsApiKey:   z.string().max(2000).optional(),
+  otpDevLog:   z.boolean().optional(),
+  smsDevLog:   z.boolean().optional(),
+  clearSmtp:   z.boolean().optional(),
+  clearEmailApi: z.boolean().optional(),
+  clearSms:    z.boolean().optional(),
+});
+
+function assertHttpUrl(raw: string, label: string): string | null {
+  try {
+    // eslint-disable-next-line no-new
+    new URL(raw);
+    return null;
+  } catch {
+    return `${label} must be a valid URL.`;
+  }
+}
+
+router.put('/mfa-delivery', async (req: Request, res: Response): Promise<void> => {
+  const parsed = mfaDeliverySchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid payload' });
+    return;
+  }
+  const d = parsed.data;
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId
+    ?? (req as unknown as { session?: { emp_id?: string } }).session?.emp_id
+    ?? 'system';
+
+  const { getMfaDeliveryConfig, publicDeliveryStatus } = await import('../services/mfa-delivery-config.js');
+  const existing = await getMfaDeliveryConfig();
+
+  if (d.emailTransport) {
+    await execute(
+      `INSERT INTO general_settings (id, email_transport, updated_by, updated_at)
+       VALUES (1, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         email_transport = VALUES(email_transport),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [d.emailTransport, adminId],
+    );
+  }
+
+  if (d.clearSmtp) {
+    await execute(
+      `UPDATE general_settings SET
+         smtp_host = NULL, smtp_port = 587, smtp_user = NULL, smtp_pass = NULL,
+         smtp_from = NULL, smtp_secure = 0, updated_by = ?, updated_at = UTC_TIMESTAMP()
+       WHERE id = 1`,
+      [adminId],
+    );
+  } else if (d.smtpHost !== undefined || d.smtpFrom !== undefined || d.smtpUser !== undefined
+    || d.smtpPort !== undefined || d.smtpPass !== undefined || d.smtpSecure !== undefined) {
+    const host = (d.smtpHost ?? existing.smtp.host).trim();
+    const port = d.smtpPort ?? existing.smtp.port ?? 587;
+    const user = (d.smtpUser ?? existing.smtp.user).trim();
+    const from = (d.smtpFrom ?? existing.smtp.from).trim();
+    const secure = d.smtpSecure ?? existing.smtp.secure;
+    const pass = d.smtpPass !== undefined && d.smtpPass !== ''
+      ? d.smtpPass
+      : existing.smtp.pass;
+
+    if (host && !from) {
+      res.status(400).json({ error: 'From address is required when SMTP host is set.' });
+      return;
+    }
+
+    await execute(
+      `INSERT INTO general_settings
+         (id, smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, smtp_secure, updated_by, updated_at)
+       VALUES (1, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         smtp_host = VALUES(smtp_host),
+         smtp_port = VALUES(smtp_port),
+         smtp_user = VALUES(smtp_user),
+         smtp_pass = VALUES(smtp_pass),
+         smtp_from = VALUES(smtp_from),
+         smtp_secure = VALUES(smtp_secure),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [host || null, port, user || null, pass || null, from || null, secure ? 1 : 0, adminId],
+    );
+  }
+
+  if (d.clearEmailApi) {
+    await execute(
+      `UPDATE general_settings SET
+         email_api_url = NULL, email_api_key = NULL, updated_by = ?, updated_at = UTC_TIMESTAMP()
+       WHERE id = 1`,
+      [adminId],
+    );
+  } else if (d.emailApiUrl !== undefined || d.emailApiKey !== undefined) {
+    const url = (d.emailApiUrl ?? existing.emailApi.apiUrl).trim();
+    const key = d.emailApiKey !== undefined && d.emailApiKey !== ''
+      ? d.emailApiKey
+      : existing.emailApi.apiKey;
+    const from = (d.smtpFrom ?? existing.smtp.from).trim();
+
+    if (url) {
+      const urlErr = assertHttpUrl(url, 'Email API URL');
+      if (urlErr) {
+        res.status(400).json({ error: urlErr });
+        return;
+      }
+      if (!from) {
+        res.status(400).json({ error: 'From address is required when Email API URL is set.' });
+        return;
+      }
+    }
+
+    await execute(
+      `INSERT INTO general_settings
+         (id, email_api_url, email_api_key, smtp_from, updated_by, updated_at)
+       VALUES (1, ?, ?, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         email_api_url = VALUES(email_api_url),
+         email_api_key = VALUES(email_api_key),
+         smtp_from = VALUES(smtp_from),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [url || null, key || null, from || null, adminId],
+    );
+  }
+
+  if (d.clearSms) {
+    await execute(
+      `UPDATE general_settings SET
+         sms_api_url = NULL, sms_api_key = NULL, updated_by = ?, updated_at = UTC_TIMESTAMP()
+       WHERE id = 1`,
+      [adminId],
+    );
+  } else if (d.smsApiUrl !== undefined || d.smsApiKey !== undefined) {
+    const url = (d.smsApiUrl ?? existing.sms.apiUrl).trim();
+    const key = d.smsApiKey !== undefined && d.smsApiKey !== ''
+      ? d.smsApiKey
+      : existing.sms.apiKey;
+
+    if (url) {
+      const urlErr = assertHttpUrl(url, 'SMS API URL');
+      if (urlErr) {
+        res.status(400).json({ error: urlErr });
+        return;
+      }
+    }
+
+    await execute(
+      `INSERT INTO general_settings
+         (id, sms_api_url, sms_api_key, updated_by, updated_at)
+       VALUES (1, ?, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         sms_api_url = VALUES(sms_api_url),
+         sms_api_key = VALUES(sms_api_key),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [url || null, key || null, adminId],
+    );
+  }
+
+  if (d.otpDevLog !== undefined || d.smsDevLog !== undefined) {
+    const otpDev = d.otpDevLog !== undefined ? (d.otpDevLog ? 1 : 0) : (existing.otpDevLog ? 1 : 0);
+    const smsDev = d.smsDevLog !== undefined ? (d.smsDevLog ? 1 : 0) : (existing.smsDevLog ? 1 : 0);
+    await execute(
+      `INSERT INTO general_settings (id, mfa_otp_dev_log, sms_dev_log, updated_by, updated_at)
+       VALUES (1, ?, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         mfa_otp_dev_log = VALUES(mfa_otp_dev_log),
+         sms_dev_log = VALUES(sms_dev_log),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [otpDev, smsDev, adminId],
+    );
+  }
+
+  logger.info({ by: adminId }, 'Admin updated MFA delivery settings');
+  const cfg = await getMfaDeliveryConfig();
+  res.json({ success: true, data: publicDeliveryStatus(cfg) });
+});
+
+// ---------------------------------------------------------------------------
 // GET /:empId  — full profile: employee + all identity links + recent logins
 // ---------------------------------------------------------------------------
 router.get('/:empId', async (req: Request, res: Response): Promise<void> => {
@@ -546,254 +792,6 @@ router.post('/:empId/mfa/enforce', async (req: Request, res: Response): Promise<
   }
   logger.info({ empId: emp.emp_id, enforce, by: adminId }, 'Admin set MFA enforcement for user');
   res.json({ success: true, mfa_enforced: enforce });
-});
-
-// ---------------------------------------------------------------------------
-// GET  /mfa-policy   — read global MFA policy settings
-// POST /mfa-policy   — update global MFA policy settings
-// ---------------------------------------------------------------------------
-router.get('/mfa-policy', async (_req: Request, res: Response): Promise<void> => {
-  try {
-    const rows = await query<{ policy_key: string; policy_value: string }>(
-      `SELECT policy_key, policy_value FROM mfa_policy`,
-      [],
-    );
-    const policy: Record<string, unknown> = {};
-    for (const r of rows) {
-      try { policy[r.policy_key] = JSON.parse(r.policy_value); } catch { policy[r.policy_key] = r.policy_value; }
-    }
-    res.json({ data: policy });
-  } catch {
-    res.json({ data: {} });
-  }
-});
-
-router.post('/mfa-policy', async (req: Request, res: Response): Promise<void> => {
-  const adminId = (req as unknown as { session?: { emp_id?: string } }).session?.emp_id ?? 'system';
-  const updates = req.body as Record<string, unknown>;
-  const allowed = new Set([
-    'global_enforce',
-    'enforce_for_admins',
-    'grace_period_hours',
-    'allowed_methods',
-    'excluded_group_ids',
-  ]);
-  for (const [key, val] of Object.entries(updates)) {
-    if (!allowed.has(key)) continue;
-    await query(
-      `INSERT INTO mfa_policy (policy_key, policy_value, updated_by)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE policy_value = VALUES(policy_value), updated_by = VALUES(updated_by)`,
-      [key, JSON.stringify(val), adminId],
-    );
-  }
-  logger.info({ by: adminId, updates }, 'Admin updated MFA global policy');
-  res.json({ success: true });
-});
-
-// ---------------------------------------------------------------------------
-// GET  /mfa-delivery-status — Email/SMS OTP delivery config (no secrets)
-// PUT  /mfa-delivery        — save SMTP + SMS gateway from Admin GUI
-// ---------------------------------------------------------------------------
-router.get('/mfa-delivery-status', async (_req: Request, res: Response): Promise<void> => {
-  try {
-    const { getMfaDeliveryConfig, publicDeliveryStatus } = await import('../services/mfa-delivery-config.js');
-    const cfg = await getMfaDeliveryConfig();
-    res.json({ data: publicDeliveryStatus(cfg) });
-  } catch (err) {
-    logger.warn({ err }, 'mfa-delivery-status failed');
-    res.json({ data: { emailOtp: { ready: false, mode: 'none' }, smsOtp: { ready: false, mode: 'none' } } });
-  }
-});
-
-const mfaDeliverySchema = z.object({
-  emailTransport: z.enum(['smtp', 'api']).optional(),
-  smtpHost:    z.string().max(255).optional(),
-  smtpPort:    z.coerce.number().int().min(1).max(65535).optional(),
-  smtpUser:    z.string().max(255).optional(),
-  smtpPass:    z.string().max(2000).optional(),
-  smtpFrom:    z.string().max(255).optional(),
-  smtpSecure:  z.boolean().optional(),
-  emailApiUrl: z.string().max(1000).optional(),
-  emailApiKey: z.string().max(2000).optional(),
-  smsApiUrl:   z.string().max(1000).optional(),
-  smsApiKey:   z.string().max(2000).optional(),
-  otpDevLog:   z.boolean().optional(),
-  smsDevLog:   z.boolean().optional(),
-  clearSmtp:   z.boolean().optional(),
-  clearEmailApi: z.boolean().optional(),
-  clearSms:    z.boolean().optional(),
-});
-
-function assertHttpUrl(raw: string, label: string): string | null {
-  try {
-    // eslint-disable-next-line no-new
-    new URL(raw);
-    return null;
-  } catch {
-    return `${label} must be a valid URL.`;
-  }
-}
-
-router.put('/mfa-delivery', async (req: Request, res: Response): Promise<void> => {
-  const parsed = mfaDeliverySchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid payload' });
-    return;
-  }
-  const d = parsed.data;
-  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId
-    ?? (req as unknown as { session?: { emp_id?: string } }).session?.emp_id
-    ?? 'system';
-
-  const { getMfaDeliveryConfig, publicDeliveryStatus } = await import('../services/mfa-delivery-config.js');
-  const existing = await getMfaDeliveryConfig();
-
-  if (d.emailTransport) {
-    await execute(
-      `INSERT INTO general_settings (id, email_transport, updated_by, updated_at)
-       VALUES (1, ?, ?, UTC_TIMESTAMP())
-       ON DUPLICATE KEY UPDATE
-         email_transport = VALUES(email_transport),
-         updated_by = VALUES(updated_by),
-         updated_at = UTC_TIMESTAMP()`,
-      [d.emailTransport, adminId],
-    );
-  }
-
-  if (d.clearSmtp) {
-    await execute(
-      `UPDATE general_settings SET
-         smtp_host = NULL, smtp_port = 587, smtp_user = NULL, smtp_pass = NULL,
-         smtp_from = NULL, smtp_secure = 0, updated_by = ?, updated_at = UTC_TIMESTAMP()
-       WHERE id = 1`,
-      [adminId],
-    );
-  } else if (d.smtpHost !== undefined || d.smtpFrom !== undefined || d.smtpUser !== undefined
-    || d.smtpPort !== undefined || d.smtpPass !== undefined || d.smtpSecure !== undefined) {
-    const host = (d.smtpHost ?? existing.smtp.host).trim();
-    const port = d.smtpPort ?? existing.smtp.port ?? 587;
-    const user = (d.smtpUser ?? existing.smtp.user).trim();
-    const from = (d.smtpFrom ?? existing.smtp.from).trim();
-    const secure = d.smtpSecure ?? existing.smtp.secure;
-    const pass = d.smtpPass !== undefined && d.smtpPass !== ''
-      ? d.smtpPass
-      : existing.smtp.pass;
-
-    if (host && !from) {
-      res.status(400).json({ error: 'From address is required when SMTP host is set.' });
-      return;
-    }
-
-    await execute(
-      `INSERT INTO general_settings
-         (id, smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, smtp_secure, updated_by, updated_at)
-       VALUES (1, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())
-       ON DUPLICATE KEY UPDATE
-         smtp_host = VALUES(smtp_host),
-         smtp_port = VALUES(smtp_port),
-         smtp_user = VALUES(smtp_user),
-         smtp_pass = VALUES(smtp_pass),
-         smtp_from = VALUES(smtp_from),
-         smtp_secure = VALUES(smtp_secure),
-         updated_by = VALUES(updated_by),
-         updated_at = UTC_TIMESTAMP()`,
-      [host || null, port, user || null, pass || null, from || null, secure ? 1 : 0, adminId],
-    );
-  }
-
-  if (d.clearEmailApi) {
-    await execute(
-      `UPDATE general_settings SET
-         email_api_url = NULL, email_api_key = NULL, updated_by = ?, updated_at = UTC_TIMESTAMP()
-       WHERE id = 1`,
-      [adminId],
-    );
-  } else if (d.emailApiUrl !== undefined || d.emailApiKey !== undefined) {
-    const url = (d.emailApiUrl ?? existing.emailApi.apiUrl).trim();
-    const key = d.emailApiKey !== undefined && d.emailApiKey !== ''
-      ? d.emailApiKey
-      : existing.emailApi.apiKey;
-    const from = (d.smtpFrom ?? existing.smtp.from).trim();
-
-    if (url) {
-      const urlErr = assertHttpUrl(url, 'Email API URL');
-      if (urlErr) {
-        res.status(400).json({ error: urlErr });
-        return;
-      }
-      if (!from) {
-        res.status(400).json({ error: 'From address is required when Email API URL is set.' });
-        return;
-      }
-    }
-
-    await execute(
-      `INSERT INTO general_settings
-         (id, email_api_url, email_api_key, smtp_from, updated_by, updated_at)
-       VALUES (1, ?, ?, ?, ?, UTC_TIMESTAMP())
-       ON DUPLICATE KEY UPDATE
-         email_api_url = VALUES(email_api_url),
-         email_api_key = VALUES(email_api_key),
-         smtp_from = VALUES(smtp_from),
-         updated_by = VALUES(updated_by),
-         updated_at = UTC_TIMESTAMP()`,
-      [url || null, key || null, from || null, adminId],
-    );
-  }
-
-  if (d.clearSms) {
-    await execute(
-      `UPDATE general_settings SET
-         sms_api_url = NULL, sms_api_key = NULL, updated_by = ?, updated_at = UTC_TIMESTAMP()
-       WHERE id = 1`,
-      [adminId],
-    );
-  } else if (d.smsApiUrl !== undefined || d.smsApiKey !== undefined) {
-    const url = (d.smsApiUrl ?? existing.sms.apiUrl).trim();
-    const key = d.smsApiKey !== undefined && d.smsApiKey !== ''
-      ? d.smsApiKey
-      : existing.sms.apiKey;
-
-    if (url) {
-      const urlErr = assertHttpUrl(url, 'SMS API URL');
-      if (urlErr) {
-        res.status(400).json({ error: urlErr });
-        return;
-      }
-    }
-
-    await execute(
-      `INSERT INTO general_settings
-         (id, sms_api_url, sms_api_key, updated_by, updated_at)
-       VALUES (1, ?, ?, ?, UTC_TIMESTAMP())
-       ON DUPLICATE KEY UPDATE
-         sms_api_url = VALUES(sms_api_url),
-         sms_api_key = VALUES(sms_api_key),
-         updated_by = VALUES(updated_by),
-         updated_at = UTC_TIMESTAMP()`,
-      [url || null, key || null, adminId],
-    );
-  }
-
-  if (d.otpDevLog !== undefined || d.smsDevLog !== undefined) {
-    const otpDev = d.otpDevLog !== undefined ? (d.otpDevLog ? 1 : 0) : (existing.otpDevLog ? 1 : 0);
-    const smsDev = d.smsDevLog !== undefined ? (d.smsDevLog ? 1 : 0) : (existing.smsDevLog ? 1 : 0);
-    await execute(
-      `INSERT INTO general_settings (id, mfa_otp_dev_log, sms_dev_log, updated_by, updated_at)
-       VALUES (1, ?, ?, ?, UTC_TIMESTAMP())
-       ON DUPLICATE KEY UPDATE
-         mfa_otp_dev_log = VALUES(mfa_otp_dev_log),
-         sms_dev_log = VALUES(sms_dev_log),
-         updated_by = VALUES(updated_by),
-         updated_at = UTC_TIMESTAMP()`,
-      [otpDev, smsDev, adminId],
-    );
-  }
-
-  logger.info({ by: adminId }, 'Admin updated MFA delivery settings');
-  const cfg = await getMfaDeliveryConfig();
-  res.json({ success: true, data: publicDeliveryStatus(cfg) });
 });
 
 // ---------------------------------------------------------------------------
