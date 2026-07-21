@@ -926,7 +926,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### pending — 2026-07-21 — Connector Sync Scope clears persist on save
+### `e532d06` — 2026-07-21 — Connector Sync Scope clears persist on save
 
 **Why** — Clearing Sync OUs / Groups / Users and saving reloaded the old values: the UI omitted empty fields, so `PUT /connectors/:id` merge kept prior `config_json` keys.
 
