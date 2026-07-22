@@ -208,9 +208,9 @@ export async function getMfaRequirementContext(empId: string): Promise<MfaRequir
     const placeholders = excludedGroupIds.map(() => '?').join(', ');
     const membership = await queryOne<{ n: number }>(
       `SELECT COUNT(*) AS n
-         FROM group_members
-        WHERE emp_id = ?
-          AND group_id IN (${placeholders})`,
+         FROM group_members gm
+        WHERE gm.emp_id = ?
+          AND gm.group_id IN (${placeholders})`,
       [empId, ...excludedGroupIds],
     ).catch((err) => {
       logger.warn({ empId, err }, 'group exclusion lookup failed');
@@ -237,6 +237,40 @@ export async function getMfaRequirementContext(empId: string): Promise<MfaRequir
     gracePeriodHours,
     rememberDeviceHours,
   };
+}
+
+/**
+ * Decide whether login must present an MFA challenge.
+ *
+ * Excluded groups override global/admin enforcement — including challenges that
+ * would otherwise fire only because the user already enrolled under that policy.
+ * Per-user enforce, group-policy enforce, and adaptive risk still require MFA.
+ */
+export function isMfaChallengeRequired(opts: {
+  mfaEnabled: boolean;
+  riskForcesMfa: boolean;
+  deviceTrusted: boolean;
+  role: string;
+  requirements: MfaRequirementContext;
+}): boolean {
+  const { mfaEnabled, riskForcesMfa, deviceTrusted, role, requirements } = opts;
+  if (riskForcesMfa) return true;
+
+  const adminRole = ADMIN_MFA_ROLES.has((role || '').toUpperCase());
+  const policyRequiresMfa =
+    requirements.userEnforced
+    || requirements.groupEnforce
+    || (
+      !requirements.userInExcludedGroup
+      && (requirements.globalEnforce || (requirements.enforceForAdmins && adminRole))
+    );
+
+  // Excluded from policy MFA: do not challenge solely due to existing enrollment
+  // (often forced earlier by global_enforce). Explicit enforce flags still apply.
+  const challengeBecauseEnrolled = mfaEnabled && !requirements.userInExcludedGroup;
+
+  const enrolledOrPolicy = challengeBecauseEnrolled || policyRequiresMfa;
+  return enrolledOrPolicy && !deviceTrusted;
 }
 
 function mfaGraceKey(empId: string): string {
@@ -384,22 +418,18 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     //   • adaptive engine returned MFA or STEP_UP (always — risk overrides trust), or
     //   • user has MFA enrolled / policy requires MFA, unless this browser still has
     //     a valid remember-device trust cookie (mfa_policy.remember_device_hours).
-    const policyRequiresMfa = mfaRequirements.userEnforced
-      || mfaRequirements.groupEnforce
-      || (
-        !mfaRequirements.userInExcludedGroup
-        && (
-          mfaRequirements.globalEnforce
-          || (mfaRequirements.enforceForAdmins && ADMIN_MFA_ROLES.has((account.role || '').toUpperCase()))
-        )
-      );
-
+    // Excluded groups override global/admin policy (including enrolled-only challenges).
     const riskForcesMfa = adaptive.action === 'MFA' || adaptive.action === 'STEP_UP';
-    const enrolledOrPolicy = mfa.enabled || policyRequiresMfa;
     const deviceTrusted = mfa.enabled
       && mfaRequirements.rememberDeviceHours > 0
       && hasValidMfaDeviceTrust(req, account.emp_id);
-    const mfaRequired = riskForcesMfa || (enrolledOrPolicy && !deviceTrusted);
+    const mfaRequired = isMfaChallengeRequired({
+      mfaEnabled: mfa.enabled,
+      riskForcesMfa,
+      deviceTrusted,
+      role: account.role,
+      requirements: mfaRequirements,
+    });
 
     if (mfaRequired) {
       if (!mfa.enabled) {

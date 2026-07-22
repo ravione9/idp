@@ -32,6 +32,7 @@ import {
   MFA_CHALLENGE_TTL_S,
   MFA_ENROLL_CHALLENGE_PREFIX,
   getMfaRequirementContext,
+  isMfaChallengeRequired,
   type MfaChallenge,
   type MfaEnrollChallenge,
 } from './local-auth.js';
@@ -41,7 +42,6 @@ import {
   setMfaDeviceTrustCookie,
 } from './mfa-device-trust.js';
 import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
-import { PORTAL_OPERATOR_ROLES } from '../services/portal-roles.js';
 import crypto from 'node:crypto';
 
 // ---------------------------------------------------------------------------
@@ -311,22 +311,17 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       return;
     }
 
-    const policyRequiresMfa = mfaRequirements.userEnforced
-      || mfaRequirements.groupEnforce
-      || (
-        !mfaRequirements.userInExcludedGroup
-        && (
-          mfaRequirements.globalEnforce
-          || (mfaRequirements.enforceForAdmins && PORTAL_OPERATOR_ROLES.has(sessionRole))
-        )
-      );
-
     const riskForcesMfa = adaptive.action === 'MFA' || adaptive.action === 'STEP_UP';
-    const enrolledOrPolicy = mfa.enabled || policyRequiresMfa;
     const deviceTrusted = mfa.enabled
       && mfaRequirements.rememberDeviceHours > 0
       && hasValidMfaDeviceTrust(req, emp.emp_id);
-    const mfaRequired = riskForcesMfa || (enrolledOrPolicy && !deviceTrusted);
+    const mfaRequired = isMfaChallengeRequired({
+      mfaEnabled: mfa.enabled,
+      riskForcesMfa,
+      deviceTrusted,
+      role: sessionRole,
+      requirements: mfaRequirements,
+    });
 
     if (mfaRequired) {
       if (!mfa.enabled) {

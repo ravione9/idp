@@ -1234,7 +1234,7 @@ export async function viewMfaMethods(content) {
             </div>
             <div class="form-group" style="grid-column:1/-1">
               <label class="form-label" style="font-weight:600">Exclude Groups from Policy MFA</label>
-              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Drag groups to the right column (or use the arrows) to exclude them from global/admin MFA policy. Per-user enforce still applies.</p>
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Drag groups to the right column (or use the arrows) to bypass global/admin MFA — including login challenges for already-enrolled methods. Per-user Enforce and group Enforce still apply. Adaptive risk can still require MFA.</p>
               <div class="mfa-exclude-shuttle" id="mfa-exclude-shuttle" data-empty="${groups.length ? '0' : '1'}">
                 <div class="mfa-exclude-col">
                   <div class="mfa-exclude-col-head">

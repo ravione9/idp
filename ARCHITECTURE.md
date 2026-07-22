@@ -208,12 +208,12 @@ Supported methods (policy-controlled via `mfa_policy.allowed_methods` + optional
 - MFA is **enabled** when the user has any active method (TOTP, OTP enrollment, or passkey).
 - MFA is required when **any** of these conditions match:
   - adaptive engine returns `MFA` / `STEP_UP`
-  - user has any active MFA method
+  - user has any active MFA method (unless in an excluded group — see below)
   - user-level enforcement (`employees.mfa_enforced = 1`)
   - group policy enforce (`mfa_group_policies.enforce = 1` for a group the user belongs to)
   - global policy `mfa_policy.global_enforce = true`
   - admin policy `mfa_policy.enforce_for_admins = true` and role is `ADMIN` / `SUPER_ADMIN`
-- Group exclusions: `mfa_policy.excluded_group_ids` bypasses **global/admin policy MFA** only (not per-user or group-enforce).
+- Group exclusions: `mfa_policy.excluded_group_ids` **overrides global/admin MFA** — members skip enrollment prompts and skip challenges that would fire only because MFA is already enrolled. Does **not** bypass per-user Enforce, group-policy Enforce, or adaptive `MFA`/`STEP_UP`.
 - **Group method policies** (`mfa_group_policies`, migration `038`): Admin → Strong Auth Methods → **MFA Policies** tab. Global `allowed_methods` is the ceiling; if the user is in any group with an active policy, allowed methods = intersection(global, union(group policies)). Users with no matching group policy use global methods only.
 - Login flow when MFA is enabled:
   1. Password (or Google) succeeds.
@@ -949,6 +949,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-22 — MFA exclude groups override global (incl. enrolled)
+
+**Why** — Putting a group in **Excluded from MFA** skipped new enrollment under global enforce, but users who already had MFA enrolled were still challenged every login — so the exclusion did not effectively override global policy.
+
+**What changed:**
+
+- **`isMfaChallengeRequired`** — excluded-group members skip global/admin MFA and skip enrolled-only challenges; per-user Enforce, group Enforce, and adaptive risk still apply.
+- Applied on local password login and Google SSO callback.
 
 ### `bf49802` — 2026-07-22 — Admin Access Requests queue + override approve
 
