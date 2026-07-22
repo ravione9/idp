@@ -26,8 +26,11 @@ let idpInstance: saml.IdentityProviderInstance | null = null;
  * AttributeStatement is folded into `{AuthnStatement}` so entity-idp's empty
  * attributes[] bake-in cannot leave a bare `<AttributeStatement/>`.
  */
+// `{InResponseToAttr}` is either ` InResponseTo="…"` or empty. Unsolicited
+// (IdP-initiated) responses must omit InResponseTo entirely — an empty
+// InResponseTo="" is rejected by SentinelOne and other WebSSO SPs.
 const LOGIN_RESPONSE_TEMPLATE_CONTEXT =
-  '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{ID}" Version="2.0" IssueInstant="{IssueInstant}" Destination="{Destination}" InResponseTo="{InResponseTo}"><saml:Issuer>{Issuer}</saml:Issuer><samlp:Status><samlp:StatusCode Value="{StatusCode}"/></samlp:Status><saml:Assertion xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{AssertionID}" Version="2.0" IssueInstant="{IssueInstant}"><saml:Issuer>{Issuer}</saml:Issuer><saml:Subject><saml:NameID Format="{NameIDFormat}">{NameID}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData NotOnOrAfter="{SubjectConfirmationDataNotOnOrAfter}" Recipient="{SubjectRecipient}" InResponseTo="{InResponseTo}"/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="{ConditionsNotBefore}" NotOnOrAfter="{ConditionsNotOnOrAfter}"><saml:AudienceRestriction><saml:Audience>{Audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions>{AuthnStatement}</saml:Assertion></samlp:Response>';
+  '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{ID}" Version="2.0" IssueInstant="{IssueInstant}" Destination="{Destination}"{InResponseToAttr}><saml:Issuer>{Issuer}</saml:Issuer><samlp:Status><samlp:StatusCode Value="{StatusCode}"/></samlp:Status><saml:Assertion xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{AssertionID}" Version="2.0" IssueInstant="{IssueInstant}"><saml:Issuer>{Issuer}</saml:Issuer><saml:Subject><saml:NameID Format="{NameIDFormat}">{NameID}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData NotOnOrAfter="{SubjectConfirmationDataNotOnOrAfter}" Recipient="{SubjectRecipient}"{InResponseToAttr}/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="{ConditionsNotBefore}" NotOnOrAfter="{ConditionsNotOnOrAfter}"><saml:AudienceRestriction><saml:Audience>{Audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions>{AuthnStatement}</saml:Assertion></samlp:Response>';
 
 /** Mirror samlify SamlLib.replaceTagsByValue (quote-aware XML escape). */
 function replaceTagsByValue(rawXml: string, tagValues: Record<string, string>): string {
@@ -226,7 +229,11 @@ function createLoginResponseTagReplacement(
     const nowTime = new Date();
     const now = nowTime.toISOString();
     const fiveMinutesLater = new Date(nowTime.getTime() + 5 * 60 * 1000).toISOString();
-    const inResponseTo = requestInfo?.extract?.request?.id ?? '';
+    const inResponseTo = requestInfo?.extract?.request?.id?.trim() ?? '';
+    // Omit attribute for IdP-initiated (unsolicited) responses — do not emit InResponseTo="".
+    const inResponseToAttr = inResponseTo
+      ? ` InResponseTo="${escapeXml(inResponseTo)}"`
+      : '';
 
     const tvalue: Record<string, string> = {
       ID: id,
@@ -244,7 +251,7 @@ function createLoginResponseTagReplacement(
       SubjectConfirmationDataNotOnOrAfter: fiveMinutesLater,
       NameIDFormat: nameIdFormat,
       NameID: userInfo.email || '',
-      InResponseTo: inResponseTo,
+      InResponseToAttr: inResponseToAttr,
       AuthnStatement: buildAuthnStatement(now, sessionIndex) + buildAttributeStatement(userInfo.attributes),
     };
 

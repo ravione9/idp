@@ -308,7 +308,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 **Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which replays the stored request and posts the SAML assertion to the SP ACS.
 
-**Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map`. samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it — required by SentinelOne and similar SPs.
+**Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map`. samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it — required by SentinelOne and similar SPs. **IdP-initiated** (portal tile) responses omit `InResponseTo` entirely; an empty `InResponseTo=""` breaks unsolicited SSO at SPs that reject it.
 
 ### 6.2 Service Provider registry
 
@@ -933,6 +933,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-22 — Omit InResponseTo on IdP-initiated SAML
+
+**Why** — Portal tile launch (IdP-initiated) failed at SentinelOne while SP-initiated SSO worked. Unsolicited responses were sent with `InResponseTo=""`, which WebSSO SPs reject.
+
+**What changed:**
+
+- **`src/saml/idp.ts`** — emit `InResponseTo` only when responding to an AuthnRequest; omit the attribute for IdP-initiated launches.
+- **§6.1** — document unsolicited-response rule.
 
 ### `2ed0d8c` — 2026-07-22 — Fix SamlLib ESM crash on AuthnStatement template
 
