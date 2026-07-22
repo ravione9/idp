@@ -12,7 +12,7 @@ import {
 } from './views-end-user.js';
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewUsers, viewAdmins,
-  viewReviews, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
+  viewReviews, viewAccessRequests, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
 } from './views-admin.js';
 import {
   viewGroups, viewBulkUsers, viewSystemUsers, viewIdentityProfiles,
@@ -77,6 +77,7 @@ const ROUTES = {
 
   /* ── Admin > Identity Governance ── */
   reviews: { primary: 'admin', group: 'Identity Governance', label: 'Certifications',        icon: 'certificate', admin: true, module: 'governance', view: viewReviews },
+  accessRequests: { primary: 'admin', group: 'Identity Governance', label: 'Access Requests', icon: 'check', admin: true, module: 'governance', view: viewAccessRequests },
   sod:     { primary: 'admin', group: 'Identity Governance', label: 'Segregation of Duties', icon: 'split',       admin: true, module: 'governance', view: viewSod },
   risk:    { primary: 'admin', group: 'Identity Governance', label: 'Risk',                  icon: 'alert',       admin: true, module: 'governance', view: viewRisk },
   attendanceIga: { primary: 'admin', group: 'Identity Governance', label: 'Attendance IGA', icon: 'activity', admin: true, module: 'governance', view: viewAttendanceIga },

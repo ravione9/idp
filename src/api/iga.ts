@@ -499,6 +499,7 @@ router.get('/roles', asyncHandler(async (_req: Request, res: Response) => {
 router.get('/access-requests', asyncHandler(async (req: Request, res: Response) => {
   const empId = req.user!.empId;
   const scope = (req.query['scope'] as string) ?? 'mine';
+  const statusFilter = (req.query['status'] as string) || '';
   const { limit, offset } = paginate(req);
 
   let where = '';
@@ -520,13 +521,23 @@ router.get('/access-requests', asyncHandler(async (req: Request, res: Response) 
       res.status(403).json({ error: 'Forbidden' });
       return;
     }
+    where = 'WHERE 1=1';
+  }
+
+  if (statusFilter && ['PENDING', 'APPROVED', 'REJECTED', 'FULFILLED', 'CANCELLED'].includes(statusFilter)) {
+    where += where ? ' AND ar.status = ?' : 'WHERE ar.status = ?';
+    params.push(statusFilter);
   }
 
   const rows = await safeQuery<Record<string, unknown>>(
     `SELECT ar.id, ar.requester_emp_id, ar.target_emp_id, ar.item_type,
             ar.item_ids, ar.justification, ar.status, ar.created_at,
             ar.decided_at, ar.fulfilled_at, ar.sla_due_at,
-            r.full_name AS requester_name, t.full_name AS target_name
+            r.full_name AS requester_name, t.full_name AS target_name,
+            (SELECT GROUP_CONCAT(DISTINCT a.approver_emp_id ORDER BY a.level SEPARATOR ', ')
+               FROM access_request_approvals a
+              WHERE a.request_id = ar.id AND a.decision = 'PENDING'
+            ) AS pending_approvers
        FROM access_requests ar
        LEFT JOIN employees r ON r.emp_id = ar.requester_emp_id
        LEFT JOIN employees t ON t.emp_id = ar.target_emp_id
@@ -594,6 +605,8 @@ router.post(
 const decisionSchema = z.object({
   decision: z.enum(['APPROVE', 'REJECT']),
   comment:  z.string().max(2000).optional(),
+  /** ADMIN / SUPER_ADMIN only — approve/reject without being the assigned approver. */
+  adminOverride: z.boolean().optional(),
 });
 
 router.post(
@@ -605,8 +618,21 @@ router.post(
       res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
       return;
     }
+
+    const adminOverride = parsed.data.adminOverride === true;
+    if (adminOverride && !['ADMIN', 'SUPER_ADMIN'].includes(req.user!.role)) {
+      res.status(403).json({ error: 'Admin override requires ADMIN or SUPER_ADMIN' });
+      return;
+    }
+
     try {
-      await processDecision(requestId, req.user!.empId, parsed.data.decision, parsed.data.comment);
+      await processDecision(
+        requestId,
+        req.user!.empId,
+        parsed.data.decision,
+        parsed.data.comment,
+        { adminOverride },
+      );
       res.json({ success: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

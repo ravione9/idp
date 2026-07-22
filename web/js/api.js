@@ -104,7 +104,8 @@ Object.assign(api, {
   igaConnectors:    () => f('/api/iga/connectors'),
   igaEntitlements:  (appId) => f(`/api/iga/entitlements${appId ? `?appId=${appId}` : ''}`),
   igaMyAccess:      () => f('/api/iga/entitlements/me'),
-  igaAccessReqs:    (scope = 'mine') => f(`/api/iga/access-requests?scope=${scope}`),
+  igaAccessReqs:    (scope = 'mine', status = '') =>
+    f(`/api/iga/access-requests?scope=${encodeURIComponent(scope)}${status ? `&status=${encodeURIComponent(status)}` : ''}`),
   igaMyTasks:       () => f('/api/iga/access-requests?scope=tasks'),
   igaReviews:       () => f('/api/iga/access-reviews'),
   igaMyReviews:     () => f('/api/iga/access-reviews/me'),
@@ -352,7 +353,15 @@ Object.assign(api, {
 
   // Access requests
   igaSubmitRequest:  (data) => f('/api/iga/access-requests', { method: 'POST', body: JSON.stringify(data) }),
-  igaRequestDecision: (id, decision, comment) => f(`/api/iga/access-requests/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision, comment }) }),
+  igaRequestDecision: (id, decision, comment, adminOverride = false) =>
+    f(`/api/iga/access-requests/${id}/decision`, {
+      method: 'POST',
+      body: JSON.stringify({
+        decision,
+        comment,
+        ...(adminOverride ? { adminOverride: true } : {}),
+      }),
+    }),
 
   // Access reviews CRUD
   createAccessReview: (data) => f('/api/iga/access-reviews', { method: 'POST', body: JSON.stringify(data) }),

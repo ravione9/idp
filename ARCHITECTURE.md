@@ -615,9 +615,9 @@ To add a new migration:
 | `GET` | `/api/iga/entitlements[?appId=…]` | Entitlement catalog (any authenticated user — Request Access) |
 | `GET` | `/api/iga/entitlements/me` | My current entitlements |
 | `GET` | `/api/iga/roles` | Active business roles for Request Access catalog |
-| `GET` | `/api/iga/access-requests?scope=mine\|tasks\|all` | List access requests by scope |
+| `GET` | `/api/iga/access-requests?scope=mine\|tasks\|all[&status=…]` | List access requests by scope (`all` = ADMIN+; optional status; includes `pending_approvers`) |
 | `POST` | `/api/iga/access-requests` | Submit access request (SoD pre-check + approval chain) |
-| `POST` | `/api/iga/access-requests/:id/decision` | Approve / reject pending request |
+| `POST` | `/api/iga/access-requests/:id/decision` | Approve / reject; `adminOverride: true` for ADMIN/SUPER_ADMIN emergency decide |
 | `GET` | `/api/iga/access-reviews` | Active certification campaigns |
 | `GET` | `/api/iga/access-reviews/:id/items` | All review items for a campaign (admin) |
 | `GET` | `/api/iga/access-reviews/me` | Review items routed to me |
@@ -949,6 +949,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-22 — Admin Access Requests queue + override approve
+
+**Why** — Admins had no console to see pending access requests or to approve/reject when the assigned approver is unavailable.
+
+**What changed:**
+
+- **Admin → Identity Governance → Access Requests** — list pending/all requests; Approve/Reject with admin override.
+- **`POST /api/iga/access-requests/:id/decision`** — `adminOverride: true` for ADMIN/SUPER_ADMIN clears remaining approval levels and fulfills (or rejects).
+- **`GET /api/iga/access-requests?scope=all`** — optional `status` filter + `pending_approvers`.
 
 ### `4e373c7` — 2026-07-22 — JIT Request Access catalog + requester groups
 

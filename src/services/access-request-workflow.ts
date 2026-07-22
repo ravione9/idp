@@ -6,7 +6,7 @@
  * - Decision: approve/reject → fulfill if all approved → notify requester
  */
 
-import { queryOne, execute } from '../db/connection.js';
+import { query, queryOne, execute } from '../db/connection.js';
 import { v4 as uuidv4 } from 'uuid';
 import { evaluateSodForGrant } from './sod-evaluator.js';
 import { sendNotification } from './notification.js';
@@ -254,9 +254,10 @@ export async function submitAccessRequest(params: AccessRequestParams): Promise<
 // ---------------------------------------------------------------------------
 export async function processDecision(
   requestId: string,
-  approverId: string,
+  actorEmpId: string,
   decision: 'APPROVE' | 'REJECT',
   comment?: string,
+  opts?: { adminOverride?: boolean },
 ): Promise<void> {
   // Fetch request
   const request = await queryOne<RequestRow>(
@@ -273,26 +274,66 @@ export async function processDecision(
     throw new Error(`Request is not in PENDING state (current: ${request.status})`);
   }
 
-  // Fetch the approval row for this approver
+  const adminOverride = opts?.adminOverride === true;
+  const decisionDb = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+
+  // Normal path: actor must be a pending approver on this request
   const approval = await queryOne<ApprovalRow>(
     `SELECT id, request_id, level, approver_emp_id, decision
        FROM access_request_approvals
       WHERE request_id = ? AND approver_emp_id = ? AND decision = 'PENDING'`,
-    [requestId, approverId],
+    [requestId, actorEmpId],
   );
 
-  if (!approval) {
+  if (!approval && !adminOverride) {
     throw new Error('No pending approval found for this approver on this request');
   }
 
-  const decisionDb = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+  if (adminOverride && !approval) {
+    const pendingRows = await query<{ id: number; level: number }>(
+      `SELECT id, level FROM access_request_approvals
+        WHERE request_id = ? AND decision = 'PENDING'`,
+      [requestId],
+    );
+    if (!pendingRows.length) {
+      throw new Error('No pending approval found for this request');
+    }
+    const overrideComment = `[Admin override by ${actorEmpId}]${comment ? ` ${comment}` : ''}`;
+    for (const row of pendingRows) {
+      await execute(
+        `UPDATE access_request_approvals
+            SET decision = ?, comment = ?, decided_at = UTC_TIMESTAMP()
+          WHERE id = ?`,
+        [decisionDb, overrideComment, row.id],
+      );
+    }
+    logger.info(
+      { requestId, actorEmpId, decision, pendingLevels: pendingRows.length },
+      'Access request decided via admin override',
+    );
+  } else if (approval) {
+    const note = adminOverride
+      ? `[Admin override by ${actorEmpId}]${comment ? ` ${comment}` : ''}`
+      : (comment ?? null);
+    await execute(
+      `UPDATE access_request_approvals
+          SET decision = ?, comment = ?, decided_at = UTC_TIMESTAMP()
+        WHERE id = ?`,
+      [decisionDb, note, approval.id],
+    );
 
-  await execute(
-    `UPDATE access_request_approvals
-        SET decision = ?, comment = ?, decided_at = UTC_TIMESTAMP()
-      WHERE id = ?`,
-    [decisionDb, comment ?? null, approval.id],
-  );
+    // Admin override while also being an approver: clear remaining pending levels
+    if (adminOverride) {
+      await execute(
+        `UPDATE access_request_approvals
+            SET decision = ?,
+                comment = COALESCE(comment, ?),
+                decided_at = UTC_TIMESTAMP()
+          WHERE request_id = ? AND decision = 'PENDING'`,
+        [decisionDb, `[Admin override by ${actorEmpId}]`, requestId],
+      );
+    }
+  }
 
   if (request.item_type === 'APP_ACCESS') {
     let itemIds: string[] = [];
@@ -300,11 +341,15 @@ export async function processDecision(
     await logAppAccessAudit({
       appId: itemIds[0] ?? null,
       action: decision === 'REJECT' ? 'REJECT' : 'APPROVE',
-      actorEmpId: approverId,
+      actorEmpId,
       targetEmpId: request.target_emp_id,
       tagGroupId: itemIds[1] ?? null,
       requestId,
-      details: { comment: comment ?? null, level: approval.level },
+      details: {
+        comment: comment ?? null,
+        level: approval?.level ?? null,
+        adminOverride,
+      },
     });
   }
 
@@ -323,19 +368,18 @@ export async function processDecision(
       referenceType:  'ACCESS_REQUEST',
     }).catch((err) => logger.warn({ err, requestId }, 'Failed to notify requester of rejection'));
 
-    logger.info({ requestId, approverId }, 'Access request rejected');
+    logger.info({ requestId, actorEmpId, adminOverride }, 'Access request rejected');
     return;
   }
 
-  // decision === 'APPROVE': check remaining pending approvals
+  // decision === 'APPROVE': check remaining pending approvals (admin override already cleared them)
   const pendingCount = await queryOne<{ cnt: number }>(
     `SELECT COUNT(*) AS cnt FROM access_request_approvals WHERE request_id = ? AND decision = 'PENDING'`,
     [requestId],
   );
 
   if ((pendingCount?.cnt ?? 0) > 0) {
-    // More approvals needed — keep in PENDING_APPROVAL state
-    logger.info({ requestId, approverId, pendingCount: pendingCount?.cnt }, 'Access request approved at this level, awaiting further approvals');
+    logger.info({ requestId, actorEmpId, pendingCount: pendingCount?.cnt }, 'Access request approved at this level, awaiting further approvals');
     return;
   }
 
@@ -358,7 +402,7 @@ export async function processDecision(
         `INSERT IGNORE INTO user_entitlements
            (id, emp_id, entitlement_id, source, granted_by, granted_at)
          VALUES (?, ?, ?, 'REQUEST', ?, UTC_TIMESTAMP())`,
-        [uuidv4(), request.target_emp_id, itemId, approverId],
+        [uuidv4(), request.target_emp_id, itemId, actorEmpId],
       ).catch((err) => logger.warn({ err, requestId, itemId }, 'Failed to grant entitlement'));
     }
   }
@@ -370,7 +414,7 @@ export async function processDecision(
     await fulfillAppAccessRequest({
       targetEmpId:   request.target_emp_id,
       itemIds,
-      grantedBy:     approverId,
+      grantedBy:     actorEmpId,
       requestId,
       autoProvision: workflow ? workflow.auto_provision === 1 : true,
     });
@@ -385,10 +429,12 @@ export async function processDecision(
     recipientEmpId: request.requester_emp_id,
     channel:        'IN_APP',
     subject:        'Access Request Approved & Fulfilled',
-    body:           `Your access request (${requestId}) has been approved and fulfilled.`,
+    body:           adminOverride
+      ? `Your access request (${requestId}) was approved by an administrator and fulfilled.`
+      : `Your access request (${requestId}) has been approved and fulfilled.`,
     referenceId:    requestId,
     referenceType:  'ACCESS_REQUEST',
   }).catch((err) => logger.warn({ err, requestId }, 'Failed to notify requester of fulfillment'));
 
-  logger.info({ requestId, approverId }, 'Access request approved and fulfilled');
+  logger.info({ requestId, actorEmpId, adminOverride }, 'Access request approved and fulfilled');
 }

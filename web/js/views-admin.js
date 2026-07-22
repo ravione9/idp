@@ -2611,3 +2611,115 @@ export async function viewReports(content) {
 
   await load();
 }
+
+/* ---------- Access Requests (admin queue + override) ---------- */
+export async function viewAccessRequests(content) {
+  const statusBadge = (s) => ({
+    PENDING:   '<span class="badge badge-warning">Pending</span>',
+    APPROVED:  '<span class="badge badge-success">Approved</span>',
+    FULFILLED: '<span class="badge badge-success">Fulfilled</span>',
+    REJECTED:  '<span class="badge badge-danger">Rejected</span>',
+    CANCELLED: '<span class="badge badge-neutral">Cancelled</span>',
+  })[s] || `<span class="badge badge-neutral">${esc(s || '—')}</span>`;
+
+  content.replaceChildren(el(`<div>
+    ${header(
+      'Access Requests',
+      'Pending approval queue — admins can approve or reject in critical situations (bypasses assigned approvers)',
+      `<select class="form-input" id="ar-status" style="width:auto;min-width:140px">
+        <option value="PENDING" selected>Pending</option>
+        <option value="">All statuses</option>
+        <option value="APPROVED">Approved</option>
+        <option value="FULFILLED">Fulfilled</option>
+        <option value="REJECTED">Rejected</option>
+        <option value="CANCELLED">Cancelled</option>
+      </select>`,
+    )}
+    <div id="ar-msg" style="margin-bottom:0.75rem"></div>
+    <div id="ar-list"><div class="loading-row"><span class="spinner"></span></div></div>
+  </div>`));
+  const wrap = content.firstChild;
+
+  async function load() {
+    const status = wrap.querySelector('#ar-status').value;
+    try {
+      const r = await api.igaAccessReqs('all', status);
+      const rows = r.data || [];
+      if (!rows.length) {
+        wrap.querySelector('#ar-list').innerHTML = `<div class="empty-state"><div class="empty-icon">✓</div><p>No access requests${status === 'PENDING' ? ' pending approval' : ''}.</p></div>`;
+        return;
+      }
+      wrap.querySelector('#ar-list').innerHTML = `<div class="table-wrap"><table>
+        <thead><tr>
+          <th>Request</th><th>Requester</th><th>For</th><th>Type</th>
+          <th>Justification</th><th>Pending approvers</th><th>Submitted</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody>${rows.map((row) => {
+          const id = String(row.id);
+          const short = id.slice(0, 8);
+          const canDecide = row.status === 'PENDING';
+          return `<tr data-rid="${esc(id)}">
+            <td><code style="font-size:0.8rem">${esc(short)}…</code></td>
+            <td class="cell-strong">${esc(row.requester_name || row.requester_emp_id || '—')}</td>
+            <td class="muted">${esc(row.target_name || row.target_emp_id || 'Self')}</td>
+            <td><span class="badge badge-info">${esc(row.item_type || '—')}</span></td>
+            <td class="muted" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(row.justification || '')}">${esc(row.justification || '—')}</td>
+            <td class="muted" style="font-size:0.85rem">${esc(row.pending_approvers || '—')}</td>
+            <td class="muted">${fmtDate(row.created_at)}</td>
+            <td>${statusBadge(row.status)}</td>
+            <td style="white-space:nowrap">${canDecide ? `
+              <button class="btn btn-sm btn-success approve-btn" data-id="${esc(id)}">✓ Approve</button>
+              <button class="btn btn-sm btn-danger reject-btn" style="margin-left:0.25rem" data-id="${esc(id)}">✗ Reject</button>
+            ` : ''}</td>
+          </tr>`;
+        }).join('')}</tbody></table></div>`;
+
+      function decisionRow(id, decision) {
+        const row = wrap.querySelector(`tr[data-rid="${id}"]`);
+        if (!row) return;
+        const existing = wrap.querySelector('#ar-reason-row-' + id.slice(0, 8));
+        if (existing) { existing.remove(); return; }
+        const reasonRow = document.createElement('tr');
+        reasonRow.id = 'ar-reason-row-' + id.slice(0, 8);
+        reasonRow.innerHTML = `<td colspan="9" style="background:var(--bg);padding:0.75rem 1rem">
+          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+            <span class="badge badge-warning">Admin override</span>
+            <input class="form-input" id="ar-reason-${esc(id.slice(0, 8))}"
+              placeholder="${decision === 'APPROVE' ? 'Optional comment (recorded as admin override)' : 'Reason for rejection (required)'}"
+              style="flex:1;min-width:200px">
+            <button class="btn btn-sm ${decision === 'APPROVE' ? 'btn-success' : 'btn-danger'} confirm-decision"
+              data-id="${esc(id)}" data-decision="${decision}">Confirm ${decision === 'APPROVE' ? 'Approval' : 'Rejection'}</button>
+            <button class="btn btn-sm btn-secondary cancel-reason" data-id="${esc(id)}">Cancel</button>
+          </div>
+        </td>`;
+        row.after(reasonRow);
+        wrap.querySelector(`.cancel-reason[data-id="${id}"]`).addEventListener('click', () => reasonRow.remove());
+        wrap.querySelector(`.confirm-decision[data-id="${id}"]`).addEventListener('click', async () => {
+          const comment = wrap.querySelector('#ar-reason-' + id.slice(0, 8)).value.trim();
+          if (decision === 'REJECT' && !comment) {
+            wrap.querySelector('#ar-msg').innerHTML = `<div class="alert alert-error">Rejection reason is required.</div>`;
+            return;
+          }
+          if (!confirm(`${decision === 'APPROVE' ? 'Approve and fulfill' : 'Reject'} this request as admin override?`)) return;
+          try {
+            await api.igaRequestDecision(id, decision, comment || undefined, true);
+            wrap.querySelector('#ar-msg').innerHTML = `<div class="alert alert-success">Decision recorded (admin override).</div>`;
+            setTimeout(() => load(), 800);
+          } catch (e) {
+            wrap.querySelector('#ar-msg').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+          }
+        });
+      }
+
+      wrap.querySelectorAll('.approve-btn').forEach((btn) =>
+        btn.addEventListener('click', () => decisionRow(btn.dataset.id, 'APPROVE')));
+      wrap.querySelectorAll('.reject-btn').forEach((btn) =>
+        btn.addEventListener('click', () => decisionRow(btn.dataset.id, 'REJECT')));
+    } catch (e) {
+      wrap.querySelector('#ar-list').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+    }
+  }
+
+  wrap.querySelector('#ar-status').addEventListener('change', load);
+  await load();
+}
