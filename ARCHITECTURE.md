@@ -934,7 +934,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-22 — Harden SAML Response for SentinelOne XSD validation
+### `1ac0837` — 2026-07-22 — Harden SAML Response for SentinelOne XSD validation
 
 **Why** — SentinelOne still returned `Not match the saml-schema-protocol-2.0.xsd` after the prior AttributeStatement fix.
 
