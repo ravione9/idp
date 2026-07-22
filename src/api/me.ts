@@ -15,7 +15,7 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
   const user = req.user!;
 
   const emp = await queryOne<Record<string, unknown>>(
-    `SELECT emp_id, full_name, email_corp, dept_id, role, employment_type,
+    `SELECT emp_id, employee_number, full_name, email_corp, dept_id, role, employment_type,
             hrms_status, ilg_state, ilg_state_since, manager_emp_id
        FROM employees WHERE emp_id = ?`,
     [user.empId],
