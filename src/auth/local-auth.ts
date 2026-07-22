@@ -24,7 +24,7 @@ import { config } from '../config.js';
 import logger from '../utils/logger.js';
 import { createSession, setSessionCookie } from './session.js';
 import { redis } from './session-store.js';
-import { confirmEnrollment, getMfaStatus, startEnrollment, verifyAnyMfaCode } from './mfa.js';
+import { confirmEnrollment, challengeMethodsFromStatus, getMfaStatus, startEnrollment, verifyAnyMfaCode } from './mfa.js';
 import { sendEmailOtp, sendSmsOtp } from './mfa-otp.js';
 import {
   hasValidMfaDeviceTrust,
@@ -450,7 +450,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
         mfaRequired: true,
         challengeId,
         stepUp: challenge.stepUp ?? false,
-        availableMethods: mfaState.methods ?? ['totp'],
+        availableMethods: challengeMethodsFromStatus(mfaState),
       });
       return;
     }

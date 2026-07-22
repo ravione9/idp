@@ -949,6 +949,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `pending` — 2026-07-22 — Hide disabled MFA methods from users
+
+**Why** — Unchecking methods under MFA Enforcement Policy still left Email OTP / SMS / Passkey options on the login challenge (hardcoded Google path) and accepted codes for disabled methods.
+
+**What changed:**
+
+- Login challenge UI only shows **enrolled ∩ allowed** methods; Google redirect passes `mfa_methods`.
+- `verifyAnyMfaCode` / TOTP enrollment respect `allowed_methods`.
+- Settings already filtered by `allowedMethods` — unchanged.
+
 ### `4671c4e` — 2026-07-22 — Reuse portal session for SAML SSO (no MFA re-prompt)
 
 **Why** — Users already signed into the IdP portal were challenged for MFA again when launching apps. `/saml/sso` never loaded the session cookie, so SP-initiated SSO always treated them as logged out.

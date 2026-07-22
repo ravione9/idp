@@ -14,6 +14,7 @@ import {
   clearMethodEnrollments,
   getAllowedMfaMethods,
   isAnyMfaEnabled,
+  isMethodAllowed,
   type MfaMethodDetails,
   type MfaMethodKey,
 } from './mfa-methods.js';
@@ -94,6 +95,14 @@ export async function getMfaStatus(empId: string): Promise<MfaStatus> {
   };
 }
 
+/** Enrolled methods that are still allowed by policy — used for login challenge UI. */
+export function challengeMethodsFromStatus(status: MfaStatus): MfaMethodKey[] {
+  const allowed = new Set(status.allowedMethods ?? []);
+  const enrolled = status.methods ?? [];
+  const filtered = enrolled.filter((m) => allowed.has(m));
+  return filtered.length ? filtered : (allowed.has('totp') ? ['totp'] : [...allowed].slice(0, 1));
+}
+
 export interface EnrollResult {
   secret:    string;
   otpauthUrl: string;
@@ -105,6 +114,9 @@ export interface EnrollResult {
  * to enable.
  */
 export async function startEnrollment(empId: string, accountLabel: string): Promise<EnrollResult> {
+  if (!(await isMethodAllowed('totp', empId))) {
+    throw new Error('Authenticator app (TOTP) is not allowed by MFA policy');
+  }
   const secret = authenticator.generateSecret();
   await query(
     `INSERT INTO mfa_secrets (emp_id, secret_b32, enabled)
@@ -163,18 +175,40 @@ export async function disableMfa(empId: string): Promise<void> {
 
 /**
  * Verify MFA using TOTP, backup codes, or enrolled OTP methods.
+ * Respects mfa_policy.allowed_methods (disabled methods cannot satisfy a challenge).
  */
 export async function verifyAnyMfaCode(empId: string, code: string): Promise<boolean> {
-  if (await verifyTotp(empId, code)) return true;
-  const otpMethod = await verifyAnyOtpLogin(empId, code);
-  return otpMethod !== null;
+  const allowed = new Set(await getAllowedMfaMethods(empId));
+
+  if (allowed.has('totp') || allowed.has('backup_codes')) {
+    if (await verifyTotp(empId, code, {
+      allowTotp: allowed.has('totp'),
+      allowBackup: allowed.has('backup_codes'),
+    })) {
+      return true;
+    }
+  }
+
+  if (allowed.has('email_otp') || allowed.has('sms_otp')) {
+    const otpMethod = await verifyAnyOtpLogin(empId, code);
+    if (otpMethod && allowed.has(otpMethod)) return true;
+  }
+
+  return false;
 }
 
 /**
  * Verify a 6-digit TOTP code OR consume a backup code.
  * Returns true on success, false on failure.
  */
-export async function verifyTotp(empId: string, code: string): Promise<boolean> {
+export async function verifyTotp(
+  empId: string,
+  code: string,
+  opts?: { allowTotp?: boolean; allowBackup?: boolean },
+): Promise<boolean> {
+  const allowTotp = opts?.allowTotp !== false;
+  const allowBackup = opts?.allowBackup !== false;
+
   const row = await queryOne<MfaSecretRow>(
     'SELECT id, secret_b32, enabled, backup_codes FROM mfa_secrets WHERE emp_id = ?',
     [empId],
@@ -182,7 +216,7 @@ export async function verifyTotp(empId: string, code: string): Promise<boolean> 
   if (!row || row.enabled !== 1) return false;
 
   // Try TOTP first
-  if (authenticator.check(code, row.secret_b32)) {
+  if (allowTotp && authenticator.check(code, row.secret_b32)) {
     await query(
       'UPDATE mfa_secrets SET last_used_at = UTC_TIMESTAMP() WHERE id = ?',
       [row.id],
@@ -191,7 +225,7 @@ export async function verifyTotp(empId: string, code: string): Promise<boolean> 
   }
 
   // Try backup codes
-  if (row.backup_codes) {
+  if (allowBackup && row.backup_codes) {
     let codes: string[] = [];
     try {
       const raw = typeof row.backup_codes === 'string'

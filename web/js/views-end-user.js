@@ -221,6 +221,13 @@ export function renderLogin() {
 
   function renderMfaStep(challengeId, email, availableMethods = ['totp']) {
     const methods = new Set(availableMethods || ['totp']);
+    const hintParts = [];
+    if (methods.has('totp')) hintParts.push('Authenticator code');
+    if (methods.has('backup_codes')) hintParts.push('backup code');
+    if (methods.has('email_otp') || methods.has('sms_otp')) hintParts.push('email/SMS OTP');
+    const hint = hintParts.length
+      ? `${hintParts.join(', ').replace(/^./, (c) => c.toUpperCase())}.`
+      : 'Enter your verification code.';
     const card = el(`
       <div class="auth-card">
         <h2>Two-factor authentication</h2>
@@ -229,7 +236,7 @@ export function renderLogin() {
         <form id="mfa-form">
           <div class="field"><label>Verification code</label>
             <input name="code" type="password" required pattern="[0-9]{6,8}" inputmode="numeric" autocomplete="one-time-code" placeholder="••••••" />
-            <p class="hint">Authenticator code, backup code, or email/SMS OTP.</p></div>
+            <p class="hint">${esc(hint)}</p></div>
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
             ${methods.has('email_otp') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-send-email">Email me a code</button>' : ''}
             ${methods.has('sms_otp') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-send-sms">Text me a code</button>' : ''}
@@ -383,7 +390,9 @@ export function renderLogin() {
 
   // Google OIDC may redirect here with an MFA / enroll challenge after passwordless Google auth
   if (pendingMfaChallenge) {
-    renderMfaStep(pendingMfaChallenge, pendingEmail || 'your account', ['totp', 'backup_codes', 'email_otp', 'sms_otp', 'webauthn']);
+    const methodsRaw = loginParams.get('mfa_methods') || 'totp';
+    const methods = methodsRaw.split(',').map((m) => m.trim()).filter(Boolean);
+    renderMfaStep(pendingMfaChallenge, pendingEmail || 'your account', methods.length ? methods : ['totp']);
     return root;
   }
   if (pendingEnrollChallenge) {

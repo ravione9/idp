@@ -35,7 +35,7 @@ import {
   type MfaChallenge,
   type MfaEnrollChallenge,
 } from './local-auth.js';
-import { getMfaStatus } from './mfa.js';
+import { getMfaStatus, challengeMethodsFromStatus } from './mfa.js';
 import {
   hasValidMfaDeviceTrust,
   setMfaDeviceTrustCookie,
@@ -374,10 +374,12 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
         'EX',
         MFA_CHALLENGE_TTL_S,
       );
+      const availableMethods = challengeMethodsFromStatus(mfa);
       const params = new URLSearchParams({
         mfa_challenge: challengeId,
         email,
         return_to: returnTo,
+        mfa_methods: availableMethods.join(','),
       });
       res.redirect(`/login?${params.toString()}`);
       return;
