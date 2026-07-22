@@ -950,7 +950,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-22 — JIT Request Access catalog + requester groups
+### `4e373c7` — 2026-07-22 — JIT Request Access catalog + requester groups
 
 **Why** — Request Access listed every app (including ones already assigned via Access Policy). There was no admin control to mark apps as JIT-requestable or to limit which identity groups may submit requests.
 
