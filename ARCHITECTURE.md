@@ -950,7 +950,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-22 — Admin Access Requests queue + override approve
+### `bf49802` — 2026-07-22 — Admin Access Requests queue + override approve
 
 **Why** — Admins had no console to see pending access requests or to approve/reject when the assigned approver is unavailable.
 
