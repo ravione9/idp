@@ -943,7 +943,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-22 — SAML signing options + admin attribute mapping
+### `1f1c78f` — 2026-07-22 — SAML signing options + admin attribute mapping
 
 **Why** — Operators needed per-app control of signed Assertion/Response and IdP→SP attribute maps (NameID source + AttributeStatement) without SQL/internal API.
 
