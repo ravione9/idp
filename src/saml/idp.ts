@@ -32,15 +32,22 @@ let idpInstance: saml.IdentityProviderInstance | null = null;
 const LOGIN_RESPONSE_TEMPLATE_CONTEXT =
   '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{ID}" Version="2.0" IssueInstant="{IssueInstant}" Destination="{Destination}"{InResponseToAttr}><saml:Issuer>{Issuer}</saml:Issuer><samlp:Status><samlp:StatusCode Value="{StatusCode}"/></samlp:Status><saml:Assertion xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{AssertionID}" Version="2.0" IssueInstant="{IssueInstant}"><saml:Issuer>{Issuer}</saml:Issuer><saml:Subject><saml:NameID Format="{NameIDFormat}">{NameID}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData NotOnOrAfter="{SubjectConfirmationDataNotOnOrAfter}" Recipient="{SubjectRecipient}"{InResponseToAttr}/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="{ConditionsNotBefore}" NotOnOrAfter="{ConditionsNotOnOrAfter}"><saml:AudienceRestriction><saml:Audience>{Audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions>{AuthnStatement}</saml:Assertion></samlp:Response>';
 
-/** Mirror samlify SamlLib.replaceTagsByValue (quote-aware XML escape). */
+/** Mirror samlify SamlLib.replaceTagsByValue (quote-aware XML escape). Longest tags first avoids NameID vs NameIDFormat collisions. */
 function replaceTagsByValue(rawXml: string, tagValues: Record<string, string>): string {
   let out = rawXml;
-  for (const [tag, value] of Object.entries(tagValues)) {
+  const tags = Object.keys(tagValues).sort((a, b) => b.length - a.length);
+  for (const tag of tags) {
+    const value = tagValues[tag] ?? '';
     out = out.replace(new RegExp(`("?)\\{${tag}\\}`, 'g'), (_m, quote: string) =>
-      quote ? `${quote}${escapeXml(value ?? '')}` : (value ?? ''),
+      quote ? `${quote}${escapeXml(value)}` : value,
     );
   }
   return out;
+}
+
+function toSamlDateTime(d: Date): string {
+  // Some SP XSD validators are picky about fractional seconds.
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function getIdp(): saml.IdentityProviderInstance {
@@ -55,9 +62,10 @@ function getIdp(): saml.IdentityProviderInstance {
       signingCert:  s.certPem,
       isAssertionEncrypted: false,
       wantAuthnRequestsSigned: false,
+      // Do not pass attributes: [] — samlify would bake an empty AttributeStatement
+      // into the template (schema-invalid). Attributes are injected via customTagReplacement.
       loginResponseTemplate: {
-        context:    LOGIN_RESPONSE_TEMPLATE_CONTEXT,
-        attributes: [],
+        context: LOGIN_RESPONSE_TEMPLATE_CONTEXT,
       },
       singleSignOnService: [
         {
@@ -104,10 +112,20 @@ function buildUserInfo(emp: EmployeeSamlContext, sp: SamlServiceProviderRow): {
   const attributes: Record<string, string> = {};
 
   for (const [samlName, empField] of Object.entries(map)) {
+    if (!samlName || !empField) continue;
     const val = emp[empField as keyof EmployeeSamlContext];
     if (val !== null && val !== undefined && String(val).length > 0) {
       attributes[samlName] = String(val);
     }
+  }
+
+  // Always release mail + displayName for auto-provisioning SPs (e.g. SentinelOne).
+  if (emp.email_corp) {
+    attributes['email'] ??= emp.email_corp;
+    attributes['mail'] ??= emp.email_corp;
+  }
+  if (emp.full_name) {
+    attributes['displayName'] ??= emp.full_name;
   }
 
   return {
@@ -190,13 +208,16 @@ function buildAuthnStatement(authnInstant: string, sessionIndex: string): string
 }
 
 function buildAttributeStatement(attributes: Record<string, string>): string {
-  const entries = Object.entries(attributes);
+  const entries = Object.entries(attributes).filter(
+    ([name, value]) => name.length > 0 && value.length > 0,
+  );
+  // Never emit an empty AttributeStatement — SAML XSD requires ≥1 Attribute child.
   if (entries.length === 0) return '';
   const attrs = entries
     .map(
       ([name, value]) =>
-        `<saml:Attribute Name="${escapeXml(name)}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic">` +
-        `<saml:AttributeValue xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="xs:string">${escapeXml(value)}</saml:AttributeValue>` +
+        `<saml:Attribute Name="${escapeXml(name)}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:unspecified">` +
+        `<saml:AttributeValue>${escapeXml(value)}</saml:AttributeValue>` +
         `</saml:Attribute>`,
     )
     .join('');
@@ -227,13 +248,14 @@ function createLoginResponseTagReplacement(
     const spEntityID = asMetaString(spInstance.entityMeta.getEntityID());
     const issuer = asMetaString(idp.entityMeta.getEntityID());
     const nowTime = new Date();
-    const now = nowTime.toISOString();
-    const fiveMinutesLater = new Date(nowTime.getTime() + 5 * 60 * 1000).toISOString();
+    const now = toSamlDateTime(nowTime);
+    const fiveMinutesLater = toSamlDateTime(new Date(nowTime.getTime() + 5 * 60 * 1000));
     const inResponseTo = requestInfo?.extract?.request?.id?.trim() ?? '';
     // Omit attribute for IdP-initiated (unsolicited) responses — do not emit InResponseTo="".
     const inResponseToAttr = inResponseTo
       ? ` InResponseTo="${escapeXml(inResponseTo)}"`
       : '';
+    const attributeStatement = buildAttributeStatement(userInfo.attributes);
 
     const tvalue: Record<string, string> = {
       ID: id,
@@ -252,7 +274,7 @@ function createLoginResponseTagReplacement(
       NameIDFormat: nameIdFormat,
       NameID: userInfo.email || '',
       InResponseToAttr: inResponseToAttr,
-      AuthnStatement: buildAuthnStatement(now, sessionIndex) + buildAttributeStatement(userInfo.attributes),
+      AuthnStatement: buildAuthnStatement(now, sessionIndex) + attributeStatement,
     };
 
     return {

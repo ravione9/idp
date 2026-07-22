@@ -40,8 +40,14 @@ export interface EmployeeSamlContext {
   ilg_state:       string;
 }
 
+/**
+ * Default SAML Attribute Name → employee field.
+ * Include both `email`/`mail` and `displayName` — SentinelOne auto-provisioning
+ * reads Mail + Display name from the assertion AttributeStatement.
+ */
 export const DEFAULT_ATTRIBUTE_MAP: Record<string, string> = {
   email:       'email_corp',
+  mail:        'email_corp',
   employeeId:  'emp_id',
   displayName: 'full_name',
   department:  'dept_id',

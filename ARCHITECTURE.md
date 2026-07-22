@@ -308,7 +308,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 **Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which replays the stored request and posts the SAML assertion to the SP ACS.
 
-**Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map`. samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it — required by SentinelOne and similar SPs. **IdP-initiated** (portal tile) responses omit `InResponseTo` entirely; an empty `InResponseTo=""` breaks unsolicited SSO at SPs that reject it.
+**Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map` (never an empty `AttributeStatement` — that fails `saml-schema-protocol-2.0.xsd`). Default attributes include `email`/`mail` and `displayName` for auto-provisioning SPs (e.g. SentinelOne). samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it. **IdP-initiated** (portal tile) responses omit `InResponseTo` entirely.
 
 ### 6.2 Service Provider registry
 
@@ -933,6 +933,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-22 — SAML AttributeStatement schema + SentinelOne auto-provision attrs
+
+**Why** — SentinelOne rejected responses with `Invalid SAML Response. Not match the saml-schema-protocol-2.0.xsd` (empty AttributeStatement). Auto-provisioning also needs Mail + Display name attributes.
+
+**What changed:**
+
+- **`src/saml/idp.ts`** — never bake/emit empty AttributeStatement; simplify AttributeValue; always release mail/email/displayName; safer tag replacement + timestamps.
+- **`src/saml/types.ts`** — default map includes `mail`.
+- **§6.1** — document AttributeStatement / auto-provision rules.
 
 ### `2a4c8a6` — 2026-07-22 — Omit InResponseTo on IdP-initiated SAML
 
