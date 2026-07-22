@@ -946,7 +946,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-22 — Edit Application Access Policy assignments
+### `43b41a4` — 2026-07-22 — Edit Application Access Policy assignments
 
 **Why** — Active Assignments only offered Revoke; admins need to change app / type / target without revoke+recreate.
 
