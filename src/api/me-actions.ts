@@ -21,6 +21,7 @@ import {
   startEnrollment,
   verifyAnyMfaCode,
 } from '../auth/mfa.js';
+import { clearMfaDeviceTrustCookie } from '../auth/mfa-device-trust.js';
 import {
   confirmEmailOtpEnrollment,
   confirmSmsOtpEnrollment,
@@ -234,6 +235,7 @@ async function requireMfaStepUp(req: Request, res: Response): Promise<boolean> {
 router.post('/mfa/disable', async (req: Request, res: Response): Promise<void> => {
   if (!(await requireMfaStepUp(req, res))) return;
   await disableMfa(req.user!.empId);
+  clearMfaDeviceTrustCookie(res);
   res.json({ success: true });
 });
 

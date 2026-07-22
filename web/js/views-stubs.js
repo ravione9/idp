@@ -961,6 +961,7 @@ export async function viewMfaMethods(content) {
       const globalEnforce = !!policy['global_enforce'];
       const enforceAdmins = policy['enforce_for_admins'] !== false;
       const gracePeriod   = policy['grace_period_hours'] ?? 24;
+      const rememberDevice = policy['remember_device_hours'] ?? 24;
       const parseExcludedGroupIds = (raw) => {
         if (Array.isArray(raw)) return raw.map((v) => String(v)).filter(Boolean);
         if (typeof raw !== 'string') return [];
@@ -1218,8 +1219,13 @@ export async function viewMfaMethods(content) {
             </div>
             <div class="form-group">
               <label class="form-label" style="font-weight:600">Grace Period (hours)</label>
-              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Allow login without MFA for this many hours after enforcement begins.</p>
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Allow login without MFA for this many hours after enforcement begins (first-time enrollment only).</p>
               <input class="form-input" type="number" id="policy-grace" value="${esc(String(gracePeriod))}" min="0" max="168" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" style="font-weight:600">Remember MFA on this browser (hours)</label>
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">After a successful MFA challenge, do not ask again on the same browser for this many hours. Set 0 to always prompt. Adaptive risk (STEP_UP / MFA) still forces a challenge.</p>
+              <input class="form-input" type="number" id="policy-remember" value="${esc(String(rememberDevice))}" min="0" max="8760" />
             </div>
             <div class="form-group" style="grid-column:1/-1">
               <label class="form-label" style="font-weight:600">Allowed MFA Methods</label>
@@ -1567,6 +1573,7 @@ export async function viewMfaMethods(content) {
             global_enforce:     parseInt(wrap.querySelector('#policy-global').value) === 1,
             enforce_for_admins: parseInt(wrap.querySelector('#policy-admins').value) === 1,
             grace_period_hours: parseInt(wrap.querySelector('#policy-grace').value) || 24,
+            remember_device_hours: Math.max(0, parseInt(wrap.querySelector('#policy-remember').value, 10) || 0),
             excluded_group_ids: excludedGroups,
             allowed_methods,
           });

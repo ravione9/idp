@@ -36,6 +36,10 @@ import {
   type MfaEnrollChallenge,
 } from './local-auth.js';
 import { getMfaStatus } from './mfa.js';
+import {
+  hasValidMfaDeviceTrust,
+  setMfaDeviceTrustCookie,
+} from './mfa-device-trust.js';
 import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
 import { PORTAL_OPERATOR_ROLES } from '../services/portal-roles.js';
 import crypto from 'node:crypto';
@@ -317,10 +321,12 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
         )
       );
 
-    const mfaRequired = adaptive.action === 'MFA'
-      || adaptive.action === 'STEP_UP'
-      || mfa.enabled
-      || policyRequiresMfa;
+    const riskForcesMfa = adaptive.action === 'MFA' || adaptive.action === 'STEP_UP';
+    const enrolledOrPolicy = mfa.enabled || policyRequiresMfa;
+    const deviceTrusted = mfa.enabled
+      && mfaRequirements.rememberDeviceHours > 0
+      && hasValidMfaDeviceTrust(req, emp.emp_id);
+    const mfaRequired = riskForcesMfa || (enrolledOrPolicy && !deviceTrusted);
 
     if (mfaRequired) {
       if (!mfa.enabled) {
@@ -389,6 +395,9 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     });
 
     setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
+    if (deviceTrusted && mfaRequirements.rememberDeviceHours > 0) {
+      setMfaDeviceTrustCookie(res, emp.emp_id, mfaRequirements.rememberDeviceHours, userAgent);
+    }
     res.redirect(returnTo);
   } catch (err) {
     const axiosData = (err as { response?: { data?: { error?: string; error_description?: string } } })

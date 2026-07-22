@@ -216,8 +216,11 @@ Supported methods (policy-controlled via `mfa_policy.allowed_methods` + optional
 - Group exclusions: `mfa_policy.excluded_group_ids` bypasses **global/admin policy MFA** only (not per-user or group-enforce).
 - **Group method policies** (`mfa_group_policies`, migration `038`): Admin → Strong Auth Methods → **MFA Policies** tab. Global `allowed_methods` is the ceiling; if the user is in any group with an active policy, allowed methods = intersection(global, union(group policies)). Users with no matching group policy use global methods only.
 - Login flow when MFA is enabled:
-  1. `POST /auth/local/login {email, password}` → `{mfaRequired:true, challengeId, availableMethods[]}`.
-  2. User verifies via TOTP/backup (`POST /auth/local/login/mfa-verify`), email/SMS OTP (`POST /auth/local/login/mfa-send-otp` then verify), or passkey (`POST /auth/local/login/mfa-webauthn/*`).
+  1. Password (or Google) succeeds.
+  2. If Adaptive Auth returns `MFA` / `STEP_UP` → always challenge (risk overrides trust).
+  3. Else if MFA enrolled and this browser has a valid **remember-device** cookie (`mfa_policy.remember_device_hours`, default 24) → skip MFA and issue session.
+  4. Else → MFA challenge via TOTP/backup (`POST /auth/local/login/mfa-verify`), email/SMS OTP (`mfa-send-otp` then verify), or passkey (`mfa-webauthn/*`).
+- **Remember device** — after successful MFA (or enrollment confirm), sets httpOnly cookie `idp_mfa_trust` (HMAC-signed, bound to empId + User-Agent). Configure under **Admin → MFA Methods → Remember MFA on this browser (hours)**. `0` = always prompt. Cleared on self-service MFA disable.
 - Self-service enrollment: `GET/POST /api/me/mfa/*` (TOTP, email, SMS, WebAuthn register).
 - Email/SMS delivery: configure in **Admin → MFA Methods → OTP delivery channels** (`general_settings`). Email supports **SMTP** or **HTTP API** (`POST { to, subject, body, from }`). Optional `.env` fallbacks still work if GUI fields are empty.
 - Dev without SMTP/SMS: enable **Development mode** in the GUI (or `MFA_OTP_DEV_LOG` / `SMS_DEV_LOG` env).
@@ -531,7 +534,7 @@ To add a new migration:
 | `POST` | `/api/admin/users/:empId/mfa/regenerate-codes` | Regenerate user MFA backup codes |
 | `POST` | `/api/admin/users/:empId/mfa/enforce` | Set/clear per-user MFA enforcement |
 | `GET` | `/api/admin/users/mfa-policy` | Read global MFA policy |
-| `POST` | `/api/admin/users/mfa-policy` | Update global MFA policy (`global_enforce`, `enforce_for_admins`, `grace_period_hours`, `excluded_group_ids`, `allowed_methods`) |
+| `POST` | `/api/admin/users/mfa-policy` | Update global MFA policy (`global_enforce`, `enforce_for_admins`, `grace_period_hours`, `remember_device_hours`, `excluded_group_ids`, `allowed_methods`) |
 | `GET` | `/api/admin/users/mfa-group-policies` | List per-group MFA method policies |
 | `POST` | `/api/admin/users/mfa-group-policies` | Create group MFA policy (`groupId`, `allowedMethods`, `enforce`, `active`) |
 | `PUT` | `/api/admin/users/mfa-group-policies/:id` | Update group MFA policy |
@@ -945,6 +948,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-22 — Remember MFA on trusted browser
+
+**Why** — After MFA once in a browser, users were challenged again on every password/Google login. Admins expected a policy-controlled skip window (distinct from enrollment grace).
+
+**What changed:**
+
+- **`mfa_policy.remember_device_hours`** (migration `041`, default 24) + Admin MFA Methods UI field.
+- **`idp_mfa_trust` cookie** — set after successful MFA / enrollment; bound to empId + User-Agent; skipped on next login unless Adaptive Auth forces MFA/STEP_UP.
+- **§5.4** — document remember-device flow.
 
 ### `43b41a4` — 2026-07-22 — Edit Application Access Policy assignments
 

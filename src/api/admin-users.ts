@@ -376,6 +376,7 @@ router.post('/mfa-policy', async (req: Request, res: Response): Promise<void> =>
     'global_enforce',
     'enforce_for_admins',
     'grace_period_hours',
+    'remember_device_hours',
     'allowed_methods',
     'excluded_group_ids',
   ]);

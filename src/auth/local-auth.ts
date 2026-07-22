@@ -27,6 +27,10 @@ import { redis } from './session-store.js';
 import { confirmEnrollment, getMfaStatus, startEnrollment, verifyAnyMfaCode } from './mfa.js';
 import { sendEmailOtp, sendSmsOtp } from './mfa-otp.js';
 import {
+  hasValidMfaDeviceTrust,
+  setMfaDeviceTrustCookie,
+} from './mfa-device-trust.js';
+import {
   getWebAuthnAuthenticationOptions,
   resolveWebAuthnOrigin,
   verifyWebAuthnAuthentication,
@@ -107,6 +111,8 @@ interface MfaRequirementContext {
   userInExcludedGroup: boolean;
   groupEnforce: boolean;
   gracePeriodHours: number;
+  /** Skip MFA on this browser after a successful challenge (0 = always prompt). */
+  rememberDeviceHours: number;
 }
 
 /** Any console operator role is subject to enforce_for_admins MFA policy. */
@@ -175,7 +181,10 @@ export async function getMfaRequirementContext(empId: string): Promise<MfaRequir
   const policyRowsPromise = query<MfaPolicyRow>(
     `SELECT policy_key, policy_value
        FROM mfa_policy
-      WHERE policy_key IN ('global_enforce', 'enforce_for_admins', 'excluded_group_ids', 'grace_period_hours')`,
+      WHERE policy_key IN (
+        'global_enforce', 'enforce_for_admins', 'excluded_group_ids',
+        'grace_period_hours', 'remember_device_hours'
+      )`,
     [],
   ).catch((err) => {
     logger.warn({ empId, err }, 'mfa_policy query failed');
@@ -214,6 +223,10 @@ export async function getMfaRequirementContext(empId: string): Promise<MfaRequir
     0,
     parsePolicyNumber(policyMap.get('grace_period_hours'), 24),
   );
+  const rememberDeviceHours = Math.max(
+    0,
+    Math.min(8760, parsePolicyNumber(policyMap.get('remember_device_hours'), 24)),
+  );
 
   return {
     userEnforced,
@@ -222,6 +235,7 @@ export async function getMfaRequirementContext(empId: string): Promise<MfaRequir
     userInExcludedGroup,
     groupEnforce,
     gracePeriodHours,
+    rememberDeviceHours,
   };
 }
 
@@ -264,10 +278,17 @@ async function issueSessionAndRespond(
   res:     Response,
   req:     Request,
   account: { id: number; emp_id: string; email: string; role: string },
-  opts?: { iss?: 'local' | 'google'; sub?: string; returnTo?: string },
+  opts?: {
+    iss?: 'local' | 'google';
+    sub?: string;
+    returnTo?: string;
+    /** Set/refresh MFA remember-device cookie when hours > 0. */
+    rememberDeviceHours?: number;
+  },
 ): Promise<void> {
   const iss = opts?.iss ?? 'local';
   const sub = opts?.sub ?? `local:${account.id}`;
+  const userAgent = req.get('user-agent') ?? '';
   const sessionId = await createSession({
     empId:     account.emp_id,
     email:     account.email,
@@ -276,13 +297,16 @@ async function issueSessionAndRespond(
     sub,
     ttlHours:  config.session.ttlCorporateHours,
     ip:        getClientIp(req),
-    userAgent: req.get('user-agent') ?? '',
+    userAgent,
   });
 
   if (iss === 'local' && account.id > 0) {
     await touchLocalLogin(account.id);
   }
   setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
+  if ((opts?.rememberDeviceHours ?? 0) > 0) {
+    setMfaDeviceTrustCookie(res, account.emp_id, opts!.rememberDeviceHours!, userAgent);
+  }
   logger.info({ empId: account.emp_id, email: account.email, iss }, 'Login session issued');
   res.json({ success: true, redirect: opts?.returnTo || '/' });
 }
@@ -357,10 +381,9 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     }
 
     // MFA is required when:
-    //   • adaptive engine returned MFA or STEP_UP (risk signal), or
-    //   • user already has TOTP enrolled (existing behaviour preserved), or
-    //   • policy requires MFA. Group exclusions only bypass global/admin policy;
-    //     explicit per-user / per-group enforce still takes precedence.
+    //   • adaptive engine returned MFA or STEP_UP (always — risk overrides trust), or
+    //   • user has MFA enrolled / policy requires MFA, unless this browser still has
+    //     a valid remember-device trust cookie (mfa_policy.remember_device_hours).
     const policyRequiresMfa = mfaRequirements.userEnforced
       || mfaRequirements.groupEnforce
       || (
@@ -371,10 +394,12 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
         )
       );
 
-    const mfaRequired = adaptive.action === 'MFA'
-      || adaptive.action === 'STEP_UP'
-      || mfa.enabled
-      || policyRequiresMfa;
+    const riskForcesMfa = adaptive.action === 'MFA' || adaptive.action === 'STEP_UP';
+    const enrolledOrPolicy = mfa.enabled || policyRequiresMfa;
+    const deviceTrusted = mfa.enabled
+      && mfaRequirements.rememberDeviceHours > 0
+      && hasValidMfaDeviceTrust(req, account.emp_id);
+    const mfaRequired = riskForcesMfa || (enrolledOrPolicy && !deviceTrusted);
 
     if (mfaRequired) {
       if (!mfa.enabled) {
@@ -430,8 +455,10 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
       return;
     }
 
-    await logAttempt(email, ip, true);
-    await issueSessionAndRespond(res, req, account);
+    await logAttempt(email, ip, true, deviceTrusted ? 'password-ok-mfa-trusted-device' : undefined);
+    await issueSessionAndRespond(res, req, account, {
+      rememberDeviceHours: deviceTrusted ? mfaRequirements.rememberDeviceHours : 0,
+    });
   } catch (err) {
     logger.error({ err }, 'Local login failed');
     res.status(500).json({ error: 'Login failed' });
@@ -463,8 +490,15 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
   await redis.del(key);
   await logAttempt(challenge.email, getClientIp(req), true, 'mfa-ok');
 
-  const sessionOpts: { iss?: 'local' | 'google'; sub?: string; returnTo?: string } = {
+  const mfaRequirements = await getMfaRequirementContext(challenge.empId);
+  const sessionOpts: {
+    iss?: 'local' | 'google';
+    sub?: string;
+    returnTo?: string;
+    rememberDeviceHours?: number;
+  } = {
     iss: challenge.iss ?? 'local',
+    rememberDeviceHours: mfaRequirements.rememberDeviceHours,
   };
   if (challenge.sub) sessionOpts.sub = challenge.sub;
   if (challenge.returnTo) sessionOpts.returnTo = challenge.returnTo;
@@ -531,6 +565,7 @@ export async function localLoginMfaEnrollConfirmHandler(req: Request, res: Respo
 
     const iss = challenge.iss ?? 'local';
     const sub = challenge.sub ?? `local:${challenge.accountId}`;
+    const userAgent = req.get('user-agent') ?? '';
     const sessionId = await createSession({
       empId:     challenge.empId,
       email:     challenge.email,
@@ -539,13 +574,17 @@ export async function localLoginMfaEnrollConfirmHandler(req: Request, res: Respo
       sub,
       ttlHours:  config.session.ttlCorporateHours,
       ip:        getClientIp(req),
-      userAgent: req.get('user-agent') ?? '',
+      userAgent,
     });
 
     if (iss === 'local' && challenge.accountId > 0) {
       await touchLocalLogin(challenge.accountId);
     }
     setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
+    const mfaRequirements = await getMfaRequirementContext(challenge.empId);
+    if (mfaRequirements.rememberDeviceHours > 0) {
+      setMfaDeviceTrustCookie(res, challenge.empId, mfaRequirements.rememberDeviceHours, userAgent);
+    }
     logger.info({ empId: challenge.empId, email: challenge.email, iss }, 'Login after MFA enrollment');
     res.json({ success: true, redirect: challenge.returnTo || '/', backupCodes });
   } catch (err) {
@@ -717,8 +756,15 @@ export async function localLoginMfaWebAuthnVerifyHandler(req: Request, res: Resp
   await redis.del(key);
   await logAttempt(challenge.email, getClientIp(req), true, 'mfa-webauthn-ok');
 
-  const sessionOpts: { iss?: 'local' | 'google'; sub?: string; returnTo?: string } = {
+  const mfaRequirements = await getMfaRequirementContext(challenge.empId);
+  const sessionOpts: {
+    iss?: 'local' | 'google';
+    sub?: string;
+    returnTo?: string;
+    rememberDeviceHours?: number;
+  } = {
     iss: challenge.iss ?? 'local',
+    rememberDeviceHours: mfaRequirements.rememberDeviceHours,
   };
   if (challenge.sub) sessionOpts.sub = challenge.sub;
   if (challenge.returnTo) sessionOpts.returnTo = challenge.returnTo;
