@@ -19,14 +19,26 @@ let idpInstance: saml.IdentityProviderInstance | null = null;
 /**
  * samlify's default login response leaves `{AuthnStatement}` empty. WebSSO SPs
  * (SentinelOne, Shibboleth, etc.) reject assertions without AuthnStatement.
- * Fold AttributeStatement into the same tag so entity-idp's empty attributes[]
- * bake-in cannot leave a bare `<AttributeStatement/>` in the template.
+ *
+ * Hardcode the template (same as samlify's defaultLoginResponseTemplate) rather
+ * than reading `saml.SamlLib` at module load — under Node ESM interop in Docker,
+ * `import * as saml` often has SamlLib undefined on the namespace object.
+ * AttributeStatement is folded into `{AuthnStatement}` so entity-idp's empty
+ * attributes[] bake-in cannot leave a bare `<AttributeStatement/>`.
  */
 const LOGIN_RESPONSE_TEMPLATE_CONTEXT =
-  saml.SamlLib.defaultLoginResponseTemplate.context.replace(
-    '{AuthnStatement}{AttributeStatement}',
-    '{AuthnStatement}',
-  );
+  '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{ID}" Version="2.0" IssueInstant="{IssueInstant}" Destination="{Destination}" InResponseTo="{InResponseTo}"><saml:Issuer>{Issuer}</saml:Issuer><samlp:Status><samlp:StatusCode Value="{StatusCode}"/></samlp:Status><saml:Assertion xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{AssertionID}" Version="2.0" IssueInstant="{IssueInstant}"><saml:Issuer>{Issuer}</saml:Issuer><saml:Subject><saml:NameID Format="{NameIDFormat}">{NameID}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData NotOnOrAfter="{SubjectConfirmationDataNotOnOrAfter}" Recipient="{SubjectRecipient}" InResponseTo="{InResponseTo}"/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="{ConditionsNotBefore}" NotOnOrAfter="{ConditionsNotOnOrAfter}"><saml:AudienceRestriction><saml:Audience>{Audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions>{AuthnStatement}</saml:Assertion></samlp:Response>';
+
+/** Mirror samlify SamlLib.replaceTagsByValue (quote-aware XML escape). */
+function replaceTagsByValue(rawXml: string, tagValues: Record<string, string>): string {
+  let out = rawXml;
+  for (const [tag, value] of Object.entries(tagValues)) {
+    out = out.replace(new RegExp(`("?)\\{${tag}\\}`, 'g'), (_m, quote: string) =>
+      quote ? `${quote}${escapeXml(value ?? '')}` : (value ?? ''),
+    );
+  }
+  return out;
+}
 
 function getIdp(): saml.IdentityProviderInstance {
   if (!isSamlEnabled()) {
@@ -226,7 +238,7 @@ function createLoginResponseTagReplacement(
       Issuer: issuer,
       IssueInstant: now,
       AssertionConsumerServiceURL: acs,
-      StatusCode: saml.Constants.StatusCode.Success,
+      StatusCode: 'urn:oasis:names:tc:SAML:2.0:status:Success',
       ConditionsNotBefore: now,
       ConditionsNotOnOrAfter: fiveMinutesLater,
       SubjectConfirmationDataNotOnOrAfter: fiveMinutesLater,
@@ -238,7 +250,7 @@ function createLoginResponseTagReplacement(
 
     return {
       id,
-      context: saml.SamlLib.replaceTagsByValue(template, tvalue),
+      context: replaceTagsByValue(template, tvalue),
     };
   };
 }

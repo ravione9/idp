@@ -934,6 +934,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### TBD — 2026-07-22 — Fix SamlLib ESM crash on AuthnStatement template
+
+**Why** — Deploy failed: `Cannot read properties of undefined (reading 'defaultLoginResponseTemplate')` because `import * as saml` does not expose `SamlLib` under Node ESM interop in Docker.
+
+**What changed:**
+
+- **`src/saml/idp.ts`** — hardcode login-response template XML; local `replaceTagsByValue` (no module-load `saml.SamlLib` access).
+
 ### `7ab7b5b` — 2026-07-22 — SAML AuthnStatement for WebSSO SPs (SentinelOne)
 
 **Why** — SentinelOne SSO Test failed with `The Assertion must include an AuthnStatement element`. samlify's default IdP response omits `AuthnStatement`.
