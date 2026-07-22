@@ -581,7 +581,7 @@ To add a new migration:
 | `GET` | `/api/admin/groups/members/csv-template` | CSV template for bulk add/remove (`email,employee_id`) |
 | `POST` | `/api/admin/groups/:id/members/bulk` | Bulk add/remove on a **local** group (`{ members[] }` or `{ csvText }`, `action: add\|remove`, max 500) |
 | `POST` | `/api/admin/groups/sync` | Pull groups/members from Google / AD connectors |
-| `GET`/`POST`/`DELETE` | `/api/admin/app-access-policy/assignments[/:id]` | User, identity-group, or tag-group application grants |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/app-access-policy/assignments[/:id]` | User, identity-group, or tag-group application grants |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/app-access-policy/workflows[/:id]` | Group access approval workflows |
 | `GET` | `/api/admin/app-access-policy/audit` | Application access policy audit log |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/workflows/definitions[/:id]` | Workflow library CRUD (trigger event + ordered steps) |
@@ -945,6 +945,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-22 — Edit Application Access Policy assignments
+
+**Why** — Active Assignments only offered Revoke; admins need to change app / type / target without revoke+recreate.
+
+**What changed:**
+
+- **`PUT /api/admin/app-access-policy/assignments/:id`** — update grant fields; conflict if another row owns the same app+type+target.
+- **`updateAppAccess()`** in `src/services/app-access-policy.ts` — validate target, audit previous values.
+- **Admin UI** — Edit button next to Revoke; modal prefills and saves via PUT.
+- **§7 API table** — assignments documented as GET/POST/PUT/DELETE.
 
 ### `fc3b8b3` — 2026-07-22 — Fix migration 039 comment split + enforce SAML access policy
 

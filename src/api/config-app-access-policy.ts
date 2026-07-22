@@ -12,6 +12,7 @@ import { query, queryOne, execute } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import {
   grantAppAccess,
+  updateAppAccess,
   revokeAppAccess,
   parseApprovalLevels,
   listAssignableApplications,
@@ -243,6 +244,37 @@ router.post('/assignments', asyncHandler(async (req: Request, res: Response) => 
     source:         'ADMIN',
   });
   res.status(201).json({ id });
+}));
+
+router.put('/assignments/:id', asyncHandler(async (req: Request, res: Response) => {
+  const parsed = assignmentSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+  const updatedBy = actorEmpId(req);
+  if (!updatedBy) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+  try {
+    await updateAppAccess(req.params['id']!, {
+      appId:          parsed.data.appId,
+      assignmentType: parsed.data.assignmentType,
+      targetId:       parsed.data.targetId,
+      updatedBy,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('not found')) {
+      res.status(404).json({ error: msg });
+      return;
+    }
+    if (msg.includes('already exists')) {
+      res.status(409).json({ error: msg });
+      return;
+    }
+    throw err;
+  }
 }));
 
 router.delete('/assignments/:id', asyncHandler(async (req: Request, res: Response) => {

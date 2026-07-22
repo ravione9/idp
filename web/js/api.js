@@ -273,6 +273,7 @@ Object.assign(api, {
   removeTagGroupMember: (id, empId) => f(`/api/admin/app-access-policy/tag-groups/${id}/members/${empId}`, { method: 'DELETE' }),
   listAppAssignments:   (appId = '') => f(`/api/admin/app-access-policy/assignments${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`),
   createAppAssignment:  (data) => f('/api/admin/app-access-policy/assignments', { method: 'POST', body: JSON.stringify(data) }),
+  updateAppAssignment:  (id, data) => f(`/api/admin/app-access-policy/assignments/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   revokeAppAssignment:  (id) => f(`/api/admin/app-access-policy/assignments/${id}`, { method: 'DELETE' }),
   listAppAccessWorkflows: (appId = '') => f(`/api/admin/app-access-policy/workflows${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`),
   createAppAccessWorkflow: (data) => f('/api/admin/app-access-policy/workflows', { method: 'POST', body: JSON.stringify(data) }),

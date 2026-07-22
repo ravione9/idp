@@ -367,6 +367,73 @@ export async function grantAppAccess(params: {
   return id;
 }
 
+export async function updateAppAccess(
+  assignmentId: string,
+  params: {
+    appId: string;
+    assignmentType: AssignmentType;
+    targetId: string;
+    updatedBy: string;
+  },
+): Promise<void> {
+  const row = await queryOne<{
+    app_id: string;
+    assignment_type: AssignmentType;
+    target_id: string;
+    active: number;
+  }>(
+    `SELECT app_id, assignment_type, target_id, active
+       FROM app_access_assignments WHERE id = ?`,
+    [assignmentId],
+  );
+  if (!row || !row.active) throw new Error('Assignment not found');
+
+  await assertAssignmentTarget(params.assignmentType, params.targetId);
+
+  const conflict = await queryOne<{ id: string }>(
+    `SELECT id FROM app_access_assignments
+      WHERE app_id = ? AND assignment_type = ? AND target_id = ? AND id <> ?`,
+    [params.appId, params.assignmentType, params.targetId, assignmentId],
+  );
+  if (conflict) {
+    throw new Error('An assignment for this application and target already exists');
+  }
+
+  const unchanged =
+    row.app_id === params.appId &&
+    row.assignment_type === params.assignmentType &&
+    row.target_id === params.targetId;
+  if (unchanged) return;
+
+  await execute(
+    `UPDATE app_access_assignments
+        SET app_id = ?, assignment_type = ?, target_id = ?,
+            granted_by = ?, granted_at = UTC_TIMESTAMP(),
+            revoked_at = NULL, revoked_by = NULL, active = 1
+      WHERE id = ?`,
+    [params.appId, params.assignmentType, params.targetId, params.updatedBy, assignmentId],
+  );
+
+  await logAppAccessAudit({
+    appId: params.appId,
+    action: params.assignmentType === 'USER' ? 'ASSIGN_USER' : 'ASSIGN_GROUP',
+    actorEmpId: params.updatedBy,
+    targetEmpId: params.assignmentType === 'USER' ? params.targetId : null,
+    tagGroupId: params.assignmentType === 'TAG_GROUP' ? params.targetId : null,
+    details: {
+      source: 'ADMIN',
+      assignmentId,
+      assignmentType: params.assignmentType,
+      groupId: params.assignmentType === 'GROUP' ? params.targetId : undefined,
+      previous: {
+        appId: row.app_id,
+        assignmentType: row.assignment_type,
+        targetId: row.target_id,
+      },
+    },
+  });
+}
+
 export async function revokeAppAccess(
   assignmentId: string,
   revokedBy: string,
