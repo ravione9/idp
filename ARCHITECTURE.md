@@ -934,7 +934,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-22 — Fix SamlLib ESM crash on AuthnStatement template
+### `2ed0d8c` — 2026-07-22 — Fix SamlLib ESM crash on AuthnStatement template
 
 **Why** — Deploy failed: `Cannot read properties of undefined (reading 'defaultLoginResponseTemplate')` because `import * as saml` does not expose `SamlLib` under Node ESM interop in Docker.
 
