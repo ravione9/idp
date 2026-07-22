@@ -5401,7 +5401,7 @@ function initUsersTab(panel, me = null) {
                     <code style="display:block;padding:0.5rem;border-radius:6px;background:rgba(0,0,0,0.05);word-break:break-all">${esc(r.secret)}</code>
                     <div style="margin-top:0.85rem">
                       <label class="form-label">Verification code (6 digits)</label>
-                      <input class="form-input" id="pp-mfa-code" maxlength="6" placeholder="123456">
+                      <input class="form-input" id="pp-mfa-code" type="password" maxlength="8" inputmode="numeric" autocomplete="one-time-code" placeholder="••••••">
                       <button class="btn btn-primary btn-sm" id="pp-mfa-confirm" style="margin-top:0.5rem">Confirm MFA Setup</button>
                     </div>
                     <div id="pp-mfa-confirm-msg" style="margin-top:0.75rem"></div>
