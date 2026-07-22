@@ -950,7 +950,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-22 — MFA exclude groups override global (incl. enrolled)
+### `5768b42` — 2026-07-22 — MFA exclude groups override global (incl. enrolled)
 
 **Why** — Putting a group in **Excluded from MFA** skipped new enrollment under global enforce, but users who already had MFA enrolled were still challenged every login — so the exclusion did not effectively override global policy.
 
