@@ -309,7 +309,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 | `GET  /saml/resume/:pendingId` | Resume SP-initiated SSO after portal sign-in (pending `AuthnRequest` in Redis) |
 | `GET  /saml/launch/:slug` | IdP-initiated launch (browser → app tile click) |
 
-**Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which replays the stored request and posts the SAML assertion to the SP ACS.
+**Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which replays the stored request and posts the SAML assertion to the SP ACS. **If a portal session cookie is already present**, `/saml/sso` and `/saml/launch/:slug` reuse it (no second MFA). The login page also short-circuits to `returnTo` when `/api/me` succeeds.
 
 **Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map` (never an empty `AttributeStatement` — that fails `saml-schema-protocol-2.0.xsd`). Default attributes include `email`/`mail` and `displayName` for auto-provisioning SPs (e.g. SentinelOne). samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it. **IdP-initiated** (portal tile) responses omit `InResponseTo` entirely. Template tag replacement matches `="{Tag}"` for attributes and treats `{InResponseToAttr}` / statement blocks as raw XML — samlify’s optional-leading-quote replacer must not be used here (it turns SP-initiated `InResponseTo` into `&quot;…&quot;` and fails XSD).
 
@@ -948,6 +948,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-22 — Reuse portal session for SAML SSO (no MFA re-prompt)
+
+**Why** — Users already signed into the IdP portal were challenged for MFA again when launching apps. `/saml/sso` never loaded the session cookie, so SP-initiated SSO always treated them as logged out.
+
+**What changed:**
+
+- **`/saml/sso`** — `resolveSession()` before requiring login.
+- **`/saml/launch` / `/saml/resume`** — redirect to login with `returnTo` instead of JSON 401 when unauthenticated.
+- **Login page** — if `/api/me` succeeds, continue to `returnTo` (skip password/MFA).
+- **§6** — document session reuse for SSO.
 
 ### `ecced9e` — 2026-07-22 — Remember MFA on trusted browser
 

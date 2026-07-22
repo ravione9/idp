@@ -62,10 +62,28 @@ function showAuthErrorFromUrl(errEl) {
 export function renderLogin() {
   const loginParams = new URLSearchParams(location.search);
   const returnTo = loginParams.get('return_to') || loginReturnTo();
-  const ssoResume = returnTo.startsWith('/saml/resume/');
+  const ssoResume = returnTo.startsWith('/saml/resume/') || returnTo.startsWith('/saml/launch/');
   const pendingMfaChallenge = loginParams.get('mfa_challenge');
   const pendingEnrollChallenge = loginParams.get('enroll_challenge');
   const pendingEmail = loginParams.get('email') || '';
+
+  // If the portal session is already valid, never re-prompt password/MFA —
+  // continue straight to the SSO resume/launch (or home).
+  const shell = el(`
+    <div class="auth-shell">
+      <main class="auth-panel" style="display:flex;align-items:center;justify-content:center;width:100%">
+        <div class="auth-card"><p class="muted" style="text-align:center">Checking session…</p></div>
+      </main>
+    </div>`);
+  void api.me().then(() => {
+    location.replace(returnTo);
+  }).catch(() => {
+    const root = document.getElementById('app');
+    if (root) root.replaceChildren(renderLoginForm());
+  });
+  return shell;
+
+  function renderLoginForm() {
   const root = el(`
     <div class="auth-shell">
       <aside class="auth-hero">
@@ -411,6 +429,7 @@ export function renderLogin() {
   }).catch(() => {});
 
   return root;
+  }
 }
 
 /* ---------- Home: app launcher (JumpCloud-style with favorites + search) ---------- */

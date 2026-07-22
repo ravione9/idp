@@ -9,7 +9,7 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { isSamlEnabled } from '../config.js';
-import { requireAuth } from '../auth/middleware.js';
+import { requireAuth, resolveSession } from '../auth/middleware.js';
 import { requireRole } from '../auth/rbac.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
@@ -36,6 +36,26 @@ import {
 const router = Router();
 const PENDING_SSO_PREFIX = 'lilg:saml:pending:';
 const PENDING_SSO_TTL_S  = 300;
+
+function safeReturnPath(path: string): string {
+  if (!path.startsWith('/') || path.startsWith('//')) return '/';
+  return path;
+}
+
+/** Browser navigations should redirect to login, not return JSON 401. */
+async function requireSessionOrLogin(
+  req: Request,
+  res: Response,
+  returnPath: string,
+): Promise<boolean> {
+  const user = await resolveSession(req);
+  if (user) {
+    req.user = user;
+    return true;
+  }
+  res.redirect(`/login?returnTo=${encodeURIComponent(safeReturnPath(returnPath))}`);
+  return false;
+}
 
 function samlUnavailable(res: Response): void {
   res.status(503).json({
@@ -106,6 +126,13 @@ async function issueAssertion(
   if (!isSamlEnabled()) {
     samlUnavailable(res);
     return;
+  }
+
+  // /saml/sso is public (SP-initiated) — attach portal session when present so
+  // an already-signed-in user is not forced through login/MFA again.
+  if (!req.user) {
+    const sessionUser = await resolveSession(req);
+    if (sessionUser) req.user = sessionUser;
   }
 
   const user = req.user;
@@ -214,9 +241,13 @@ router.post('/sso', (req, res) => { void issueAssertion(req, res, 'post'); });
 // ---------------------------------------------------------------------------
 // Resume SSO after portal login (pending AuthnRequest in Redis)
 // ---------------------------------------------------------------------------
-router.get('/resume/:pendingId', requireAuth, async (req: Request, res: Response): Promise<void> => {
+router.get('/resume/:pendingId', async (req: Request, res: Response): Promise<void> => {
   if (!isSamlEnabled()) {
     samlUnavailable(res);
+    return;
+  }
+
+  if (!(await requireSessionOrLogin(req, res, `/saml/resume/${req.params['pendingId']}`))) {
     return;
   }
 
@@ -249,14 +280,19 @@ router.get('/resume/:pendingId', requireAuth, async (req: Request, res: Response
 // ---------------------------------------------------------------------------
 // IdP-initiated SSO (user clicks app tile in portal)
 // ---------------------------------------------------------------------------
-router.get('/launch/:slug', requireAuth, async (req: Request, res: Response): Promise<void> => {
+router.get('/launch/:slug', async (req: Request, res: Response): Promise<void> => {
   if (!isSamlEnabled()) {
     samlUnavailable(res);
     return;
   }
 
+  const slug = req.params['slug'] ?? '';
+  if (!(await requireSessionOrLogin(req, res, `/saml/launch/${slug}`))) {
+    return;
+  }
+
   const user = req.user!;
-  const sp = await getServiceProviderBySlug(req.params['slug'] ?? '');
+  const sp = await getServiceProviderBySlug(slug);
   if (!sp) {
     res.status(404).json({ error: 'Application not found' });
     return;
