@@ -949,7 +949,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-22 — Hide disabled MFA methods from users
+### `1cfb039` — 2026-07-22 — Hide disabled MFA methods from users
 
 **Why** — Unchecking methods under MFA Enforcement Policy still left Email OTP / SMS / Passkey options on the login challenge (hardcoded Google path) and accepted codes for disabled methods.
 
