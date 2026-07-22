@@ -934,7 +934,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-22 — SAML AuthnStatement for WebSSO SPs (SentinelOne)
+### `7ab7b5b` — 2026-07-22 — SAML AuthnStatement for WebSSO SPs (SentinelOne)
 
 **Why** — SentinelOne SSO Test failed with `The Assertion must include an AuthnStatement element`. samlify's default IdP response omits `AuthnStatement`.
 
