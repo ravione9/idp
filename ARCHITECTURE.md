@@ -949,7 +949,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-22 — Reuse portal session for SAML SSO (no MFA re-prompt)
+### `4671c4e` — 2026-07-22 — Reuse portal session for SAML SSO (no MFA re-prompt)
 
 **Why** — Users already signed into the IdP portal were challenged for MFA again when launching apps. `/saml/sso` never loaded the session cookie, so SP-initiated SSO always treated them as logged out.
 
