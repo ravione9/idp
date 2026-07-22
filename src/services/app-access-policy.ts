@@ -25,6 +25,7 @@ export interface WorkflowRow {
   tag_group_id: string | null;
   name: string;
   approval_levels: string;
+  requester_group_ids?: string | unknown | null;
   auto_provision: number;
   active: number;
 }
@@ -478,7 +479,8 @@ export async function resolveWorkflowForRequest(
 ): Promise<WorkflowRow | null> {
   if (tagGroupId) {
     const specific = await queryOne<WorkflowRow>(
-      `SELECT id, app_id, tag_group_id, name, approval_levels, auto_provision, active
+      `SELECT id, app_id, tag_group_id, name, approval_levels, requester_group_ids,
+              auto_provision, active
          FROM app_group_access_workflows
         WHERE app_id = ? AND tag_group_id = ? AND active = 1
         ORDER BY updated_at DESC LIMIT 1`,
@@ -488,11 +490,121 @@ export async function resolveWorkflowForRequest(
   }
 
   return queryOne<WorkflowRow>(
-    `SELECT id, app_id, tag_group_id, name, approval_levels, auto_provision, active
+    `SELECT id, app_id, tag_group_id, name, approval_levels, requester_group_ids,
+            auto_provision, active
        FROM app_group_access_workflows
       WHERE app_id = ? AND tag_group_id IS NULL AND active = 1
       ORDER BY updated_at DESC LIMIT 1`,
     [appId],
+  );
+}
+
+export function parseRequesterGroupIds(raw: unknown): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((v) => String(v ?? '').trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** True when requester may submit a JIT request for this app under active workflows. */
+export async function canUserRequestApp(
+  empId: string,
+  appId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const app = await queryOne<{ id: string; slug: string; requestable: number; active: number }>(
+    `SELECT id, slug, requestable, active FROM applications WHERE id = ? LIMIT 1`,
+    [appId],
+  );
+  if (!app || !app.active) {
+    return { ok: false, reason: 'Application not found or inactive' };
+  }
+  if (!app.requestable) {
+    return { ok: false, reason: 'Application is not enabled for Request Access (JIT)' };
+  }
+
+  if (await hasPolicyAppAccess(empId, app.slug)) {
+    return { ok: false, reason: 'You already have access to this application' };
+  }
+
+  const workflows = await query<WorkflowRow>(
+    `SELECT id, app_id, tag_group_id, name, approval_levels, requester_group_ids,
+            auto_provision, active
+       FROM app_group_access_workflows
+      WHERE app_id = ? AND active = 1`,
+    [appId],
+  );
+  if (!workflows.length) {
+    return { ok: false, reason: 'No active access request workflow configured for this application' };
+  }
+
+  // Eligible if any active workflow allows this user (empty requester groups = open).
+  for (const wf of workflows) {
+    const groupIds = parseRequesterGroupIds(wf.requester_group_ids);
+    if (groupIds.length === 0) return { ok: true };
+    const placeholders = groupIds.map(() => '?').join(', ');
+    const membership = await queryOne<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM group_members
+        WHERE emp_id = ? AND group_id IN (${placeholders})`,
+      [empId, ...groupIds],
+    );
+    if ((membership?.n ?? 0) > 0) return { ok: true };
+  }
+
+  return { ok: false, reason: 'Your groups are not permitted to request this application' };
+}
+
+/**
+ * JIT Request Access catalog for the signed-in user:
+ * requestable apps with an active workflow, that the user does not already hold,
+ * and that their identity groups are allowed to request.
+ */
+export async function listJitRequestableAppsForUser(empId: string): Promise<{
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  icon_url: string | null;
+  category: string | null;
+}[]> {
+  const rows = await query<{
+    id: string;
+    slug: string;
+    name: string;
+    description: string | null;
+    icon_url: string | null;
+    category: string | null;
+  }>(
+    `SELECT a.id, a.slug, a.name, a.description, a.icon_url, a.category
+       FROM applications a
+      WHERE a.active = 1
+        AND a.requestable = 1
+        AND EXISTS (
+          SELECT 1 FROM app_group_access_workflows w
+           WHERE w.app_id = a.id AND w.active = 1
+        )
+      ORDER BY a.name`,
+    [],
+  );
+
+  const out: typeof rows = [];
+  for (const app of rows) {
+    const check = await canUserRequestApp(empId, app.id);
+    if (check.ok) out.push(app);
+  }
+  return out;
+}
+
+export async function setApplicationRequestable(
+  appId: string,
+  requestable: boolean,
+): Promise<void> {
+  await execute(
+    `UPDATE applications SET requestable = ? WHERE id = ?`,
+    [requestable ? 1 : 0, appId],
   );
 }
 

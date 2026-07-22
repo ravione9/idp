@@ -16,6 +16,7 @@ import {
   resolveApproversFromWorkflow,
   fulfillAppAccessRequest,
   logAppAccessAudit,
+  canUserRequestApp,
 } from './app-access-policy.js';
 import { emitPlatformEvent } from './event-dispatcher.js';
 import logger from '../utils/logger.js';
@@ -65,6 +66,22 @@ export async function submitAccessRequest(params: AccessRequestParams): Promise<
   }
   if (target.ilg_state !== 'ACTIVE') {
     throw new Error(`Target employee is not active (state: ${target.ilg_state})`);
+  }
+
+  // JIT / Request Access eligibility for applications
+  if (params.itemType === 'APP_ACCESS' && params.itemIds.length > 0) {
+    const appId = params.itemIds[0]!;
+    const eligibility = await canUserRequestApp(params.requesterEmpId, appId);
+    if (!eligibility.ok) {
+      throw new Error(eligibility.reason || 'You are not eligible to request this application');
+    }
+    // When requesting for someone else, also ensure target does not already have access
+    if (params.targetEmpId !== params.requesterEmpId) {
+      const targetElig = await canUserRequestApp(params.targetEmpId, appId);
+      if (targetElig.reason === 'You already have access to this application') {
+        throw new Error('Target employee already has access to this application');
+      }
+    }
   }
 
   // SoD pre-check for ENTITLEMENT type

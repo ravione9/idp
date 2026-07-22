@@ -597,7 +597,7 @@ export async function viewRequestAccess(content) {
   const wrap = el(`
     <div class="enduser-page enduser-request">
       <div class="page-header page-header--compact">
-        <div><h1>Request Access</h1><p class="subtitle">Browse the application catalog and request access with business justification</p></div>
+        <div><h1>Request Access</h1><p class="subtitle">Request Just-In-Time access to applications your admin has made requestable — apps you already have are hidden</p></div>
       </div>
 
       <!-- search + filter bar -->
@@ -750,19 +750,19 @@ export async function viewRequestAccess(content) {
     });
   }
 
-  // Load catalog — apps + entitlements + roles, excluding already-assigned items
+  // Load catalog — JIT apps the user may request (+ entitlements/roles, excluding held items)
   try {
     const [appsR, entsR, rolesR, myAccessR] = await Promise.all([
-      api.igaApps().catch(() => ({ data: [] })),
+      api.igaRequestableApps().catch(() => ({ data: [] })),
       api.igaEntitlements().catch(() => ({ data: [] })),
       api.listRequestableRoles().catch(() => ({ data: [] })),
       api.igaMyAccess().catch(() => ({ data: [] })),
     ]);
     const myAccess = myAccessR.data || [];
-    const assignedAppSlugs = new Set(myAccess.map(r => r.app_slug).filter(Boolean));
     const assignedEntitlementIds = new Set(myAccess.map(r => String(r.entitlement_id)));
 
-    const apps = (appsR.data || []).filter(a => a.active && !assignedAppSlugs.has(a.slug));
+    // Apps already filtered server-side (JIT + not assigned + group-eligible)
+    const apps = appsR.data || [];
     const ents = (entsR.data || []).filter(e => !assignedEntitlementIds.has(String(e.id)));
     const roles = (rolesR.data || []).filter(r => r.active);
     allItems = [
@@ -774,7 +774,7 @@ export async function viewRequestAccess(content) {
     wrap.querySelector('#ra-type').addEventListener('change', renderCatalog);
     persistSearch(wrap.querySelector('#ra-search'), 'request-access');
     if (!allItems.length) {
-      wrap.querySelector('#ra-catalog').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div><p>No items in the catalog yet. Ask an admin to onboard applications.</p></div>`;
+      wrap.querySelector('#ra-catalog').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div><p>No requestable items. Applications appear here only when an admin enables Request Access (JIT) under Application Access Policy → Group Access Workflow, and you are in an allowed requester group.</p></div>`;
     } else if (!wrap.querySelector('#ra-search').value) {
       renderCatalog();
     }
@@ -928,7 +928,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
       <div class="card"><h2>Profile</h2><div class="kv-list" style="margin-top:1rem">
         <div class="kv"><div class="k">Full name</div><div class="v">${esc(me.employee?.full_name || '—')}</div></div>
         <div class="kv"><div class="k">Email</div><div class="v">${esc(me.session?.email || '—')}</div></div>
-        <div class="kv"><div class="k">Employee ID</div><div class="v"><code>${esc(me.employee?.emp_id || '—')}</code></div></div>
+        <div class="kv"><div class="k">Employee ID</div><div class="v"><code>${esc(me.employee?.employee_number || me.employee?.emp_id || '—')}</code></div></div>
         <div class="kv"><div class="k">Designation</div><div class="v"><span class="badge badge-info">${esc(me.employee?.role || '—')}</span></div></div>
         <div class="kv"><div class="k">Department</div><div class="v">${esc(me.employee?.dept_id || '—')}</div></div>
         <div class="kv"><div class="k">ILG state</div><div class="v">${ilgBadge(me.employee?.ilg_state)}</div></div>

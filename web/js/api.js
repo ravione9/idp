@@ -97,6 +97,7 @@ Object.assign(api, {
     f('/auth/local/login/mfa-webauthn/verify', { method: 'POST', body: JSON.stringify({ challengeId, webauthnChallengeId, response }) }),
 
   igaApps:          () => f('/api/iga/applications'),
+  igaRequestableApps: () => f('/api/iga/requestable-applications'),
   createIgaApp:     (data) => f('/api/iga/applications', { method: 'POST', body: JSON.stringify(data) }),
   updateIgaApp:     (id, data) => f(`/api/iga/applications/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteIgaApp:     (id) => f(`/api/iga/applications/${id}`, { method: 'DELETE' }),

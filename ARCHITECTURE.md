@@ -585,7 +585,8 @@ To add a new migration:
 | `POST` | `/api/admin/groups/:id/members/bulk` | Bulk add/remove on a **local** group (`{ members[] }` or `{ csvText }`, `action: add\|remove`, max 500) |
 | `POST` | `/api/admin/groups/sync` | Pull groups/members from Google / AD connectors |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/app-access-policy/assignments[/:id]` | User, identity-group, or tag-group application grants |
-| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/app-access-policy/workflows[/:id]` | Group access approval workflows |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/app-access-policy/workflows[/:id]` | JIT / Request Access workflows (approval chain, requester groups, `requestable`) |
+| `GET` | `/api/iga/requestable-applications` | JIT catalog for the signed-in user (requestable + eligible + not already granted) |
 | `GET` | `/api/admin/app-access-policy/audit` | Application access policy audit log |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/workflows/definitions[/:id]` | Workflow library CRUD (trigger event + ordered steps) |
 | `GET` | `/api/admin/workflows/runs` | Workflow execution history |
@@ -948,6 +949,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-22 — JIT Request Access catalog + requester groups
+
+**Why** — Request Access listed every app (including ones already assigned via Access Policy). There was no admin control to mark apps as JIT-requestable or to limit which identity groups may submit requests.
+
+**What changed:**
+
+- **Migration `042`** — `applications.requestable`; `app_group_access_workflows.requester_group_ids`.
+- **Admin → Application Access Policy → JIT / Request Workflow** — enable Request Access (JIT), select requester identity groups, approval levels.
+- **`GET /api/iga/requestable-applications`** — only JIT apps the user may request; hides already-assigned apps.
+- **Submit validation** — rejects non-requestable / ineligible / already-granted apps.
 
 ### `1cfb039` — 2026-07-22 — Hide disabled MFA methods from users
 

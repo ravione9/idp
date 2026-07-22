@@ -21,6 +21,7 @@ import { asyncHandler } from '../utils/async-handler.js';
 import { triggerConnectorSync } from '../services/connector-dispatcher.js';
 import { runConnectorConnectivityTest } from '../services/connector-health.js';
 import { submitAccessRequest, processDecision } from '../services/access-request-workflow.js';
+import { listJitRequestableAppsForUser } from '../services/app-access-policy.js';
 import { createCampaign, submitReviewDecision } from '../services/access-review.js';
 import { evaluateSodForGrant } from '../services/sod-evaluator.js';
 
@@ -67,6 +68,12 @@ router.get('/applications', asyncHandler(async (req: Request, res: Response) => 
     [limit, offset],
   );
   res.json({ data: rows, total: rows.length, limit, offset });
+}));
+
+/** JIT Request Access catalog — only requestable apps the caller may request. */
+router.get('/requestable-applications', asyncHandler(async (req: Request, res: Response) => {
+  const apps = await listJitRequestableAppsForUser(req.user!.empId);
+  res.json({ data: apps });
 }));
 
 router.post(
@@ -567,6 +574,16 @@ router.post(
       }
       if (msg.includes('SoD')) {
         res.status(422).json({ error: msg, code: 'SOD_VIOLATION' });
+        return;
+      }
+      if (
+        msg.includes('not eligible')
+        || msg.includes('not enabled for Request Access')
+        || msg.includes('already have access')
+        || msg.includes('not permitted to request')
+        || msg.includes('No active access request workflow')
+      ) {
+        res.status(403).json({ error: msg, code: 'REQUEST_NOT_ALLOWED' });
         return;
       }
       throw err;

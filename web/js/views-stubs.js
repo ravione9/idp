@@ -6197,7 +6197,7 @@ export async function viewAppAccessPolicy(content) {
     <div id="aap-stats" class="stat-grid aap-stats">${loading()}</div>
     <div class="cfg-tab-bar inline-tabs aap-tabs">
       <button type="button" class="cfg-tab inline-tab active" data-tab="assign">Application Assignment</button>
-      <button type="button" class="cfg-tab inline-tab" data-tab="workflow">Group Access Workflow</button>
+      <button type="button" class="cfg-tab inline-tab" data-tab="workflow">JIT / Request Workflow</button>
       <button type="button" class="cfg-tab inline-tab" data-tab="audit">Audit Log</button>
     </div>
     <div id="tab-assign"></div>
@@ -6466,36 +6466,47 @@ export async function viewAppAccessPolicy(content) {
     await loadMembers();
   }
 
-  // ── Tab: Group Access Workflow ──
+  // ── Tab: Group Access Workflow (JIT request + approval chains) ──
   async function loadWorkflowTab() {
     const area = wrap.querySelector('#tab-workflow');
     area.innerHTML = loading();
     try {
       await loadAppsAndGroups();
       const workflows = norm(await api.listAppAccessWorkflows());
+      const groupNameById = new Map(identityGroupsCache.map(g => [String(g.id), g.name]));
       const rows = workflows.length ? workflows.map(w => {
         let levels = '—';
         try {
           const arr = typeof w.approval_levels === 'string' ? JSON.parse(w.approval_levels) : w.approval_levels;
           levels = Array.isArray(arr) ? arr.map(l => `L${l.level}:${l.approverType}`).join(' → ') : '—';
         } catch {}
+        const reqGroups = Array.isArray(w.requester_group_ids) ? w.requester_group_ids : [];
+        const reqLabel = reqGroups.length
+          ? reqGroups.map(id => groupNameById.get(String(id)) || id).join(', ')
+          : 'Any user';
+        const jitBadge = w.app_requestable
+          ? '<span class="badge badge-success">JIT</span>'
+          : '<span class="badge badge-neutral">Off</span>';
         return `<tr>
           <td class="cell-strong">${esc(w.name)}</td>
           <td>${esc(w.app_name || '—')}</td>
-          <td>${esc(w.tag_group_name || 'Any group')}</td>
+          <td>${jitBadge}</td>
+          <td class="muted" style="font-size:0.8rem">${esc(reqLabel)}</td>
           <td class="muted" style="font-size:0.8rem">${esc(levels)}</td>
           <td>${w.auto_provision ? '<span class="badge badge-success">Auto</span>' : '<span class="badge badge-neutral">Manual</span>'}</td>
           <td><button class="btn btn-sm btn-danger del-wf" data-id="${esc(String(w.id))}">Delete</button></td>
         </tr>`;
-      }).join('') : `<tr><td colspan="6"><div class="empty-state"><p>No workflows configured.</p></div></td></tr>`;
+      }).join('') : `<tr><td colspan="7"><div class="empty-state"><p>No workflows configured.</p></div></td></tr>`;
 
       area.innerHTML = `
         <p class="muted aap-note">
-          Users requesting access to application tag groups are routed through these approval chains before access is provisioned.
+          <strong>JIT / Request Access workflows</strong> — enable an app for the Request Access catalog,
+          choose which identity groups may submit a request, and define the approval chain.
+          Apps already assigned to a user never appear in their Request Access list.
         </p>
-        <button class="btn btn-primary" id="wf-new" style="margin-bottom:1rem">+ New Workflow</button>
+        <button class="btn btn-primary" id="wf-new" style="margin-bottom:1rem">+ New JIT Workflow</button>
         <div class="table-wrap"><table>
-          <thead><tr><th>Name</th><th>Application</th><th>Tag Group</th><th>Approval Levels</th><th>Provisioning</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Application</th><th>Request Access</th><th>Who can request</th><th>Approval Levels</th><th>Provisioning</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>`;
 
@@ -6513,13 +6524,32 @@ export async function viewAppAccessPolicy(content) {
     const appOpts = appsCache.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');
     const tgOpts = `<option value="">— Any / app-wide —</option>`
       + tagGroupsCache.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
-    const bd = openModal(`<div class="modal modal-wide"><div class="modal-header"><h2>New Group Access Workflow</h2></div><div class="modal-body">
+    const groupChecks = identityGroupsCache.length
+      ? identityGroupsCache.map(g => `
+          <label style="display:flex;align-items:center;gap:0.45rem;padding:0.25rem 0;cursor:pointer">
+            <input type="checkbox" class="wf-req-group" value="${esc(g.id)}">
+            <span style="font-size:0.85rem">${esc(g.name)}</span>
+          </label>`).join('')
+      : '<p class="muted" style="font-size:0.85rem">No identity groups yet — leave unchecked so any authenticated user can request. Create groups under Identity → Groups.</p>';
+
+    const bd = openModal(`<div class="modal modal-wide"><div class="modal-header"><h2>New JIT Access Workflow</h2></div><div class="modal-body">
       <div class="form-2col">
-        <div class="form-group"><label class="form-label">Workflow Name</label><input class="form-input" id="wf-name"></div>
+        <div class="form-group"><label class="form-label">Workflow Name</label><input class="form-input" id="wf-name" placeholder="e.g. SentinelOne JIT"></div>
         <div class="form-group"><label class="form-label">Application</label><select class="form-select" id="wf-app">${appOpts}</select></div>
-        <div class="form-group"><label class="form-label">Tag Group (optional)</label><select class="form-select" id="wf-tg">${tgOpts}</select></div>
+        <div class="form-group"><label class="form-label">Tag Group scope (optional)</label><select class="form-select" id="wf-tg">${tgOpts}</select></div>
         <div class="form-group"><label class="form-label">Auto-provision on approval</label>
           <select class="form-select" id="wf-auto"><option value="1">Yes</option><option value="0">No</option></select></div>
+      </div>
+      <div class="form-group" style="margin-top:0.75rem">
+        <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+          <input type="checkbox" id="wf-jit" checked>
+          <span><strong>Show in Request Access (JIT)</strong> — users can request this app from the portal</span>
+        </label>
+      </div>
+      <div class="form-group" style="margin-top:0.75rem">
+        <label class="form-label">Who can request (identity groups)</label>
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.4rem">Leave all unchecked = any authenticated user. Check groups to limit who may submit a request.</p>
+        <div style="max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:var(--radius);padding:0.5rem 0.75rem;background:var(--surface-2)">${groupChecks}</div>
       </div>
       <h3 style="font-size:0.9rem;margin:1rem 0 0.5rem">Approval Levels</h3>
       <div id="wf-levels">
@@ -6559,6 +6589,7 @@ export async function viewAppAccessPolicy(content) {
       const name = bd.querySelector('#wf-name').value.trim();
       const appId = bd.querySelector('#wf-app').value;
       const tagGroupId = bd.querySelector('#wf-tg').value || null;
+      const requesterGroupIds = [...bd.querySelectorAll('.wf-req-group:checked')].map(n => n.value);
       const approvalLevels = [...bd.querySelectorAll('.wf-level')].map(row => {
         const level = parseInt(row.querySelector('[data-f="level"]').value, 10) || 1;
         const approverType = row.querySelector('[data-f="type"]').value;
@@ -6575,6 +6606,8 @@ export async function viewAppAccessPolicy(content) {
         await api.createAppAccessWorkflow({
           appId, tagGroupId, name, approvalLevels,
           autoProvision: bd.querySelector('#wf-auto').value === '1',
+          requestable: bd.querySelector('#wf-jit').checked,
+          requesterGroupIds,
         });
         bd.remove(); await loadWorkflowTab(); await loadStats();
       } catch (e) { bd.querySelector('#wf-err').innerHTML = errHtml(e.message); }

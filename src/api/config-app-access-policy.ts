@@ -15,7 +15,9 @@ import {
   updateAppAccess,
   revokeAppAccess,
   parseApprovalLevels,
+  parseRequesterGroupIds,
   listAssignableApplications,
+  setApplicationRequestable,
   type ApprovalLevel,
 } from '../services/app-access-policy.js';
 
@@ -304,10 +306,11 @@ router.get('/workflows', asyncHandler(async (req: Request, res: Response) => {
     where += ' AND w.app_id = ?';
     params.push(appId);
   }
-  const rows = await query(
+  const rows = await query<Record<string, unknown>>(
     `SELECT w.id, w.app_id, w.tag_group_id, w.name, w.approval_levels,
-            w.auto_provision, w.active, w.created_at,
-            a.name AS app_name, tg.name AS tag_group_name
+            w.requester_group_ids, w.auto_provision, w.active, w.created_at,
+            a.name AS app_name, a.requestable AS app_requestable,
+            tg.name AS tag_group_name
        FROM app_group_access_workflows w
        JOIN applications a ON a.id = w.app_id
        LEFT JOIN tag_groups tg ON tg.id = w.tag_group_id
@@ -315,15 +318,24 @@ router.get('/workflows', asyncHandler(async (req: Request, res: Response) => {
        ORDER BY a.name, w.name`,
     params,
   );
-  res.json({ data: rows });
+  res.json({
+    data: rows.map((r) => ({
+      ...r,
+      requester_group_ids: parseRequesterGroupIds(r['requester_group_ids']),
+    })),
+  });
 }));
 
 const workflowSchema = z.object({
-  appId:          z.string().uuid(),
-  tagGroupId:     z.string().uuid().nullable().optional(),
-  name:           z.string().min(1).max(150),
-  approvalLevels: z.array(approvalLevelSchema).min(1),
-  autoProvision:  z.boolean().optional(),
+  appId:             z.string().uuid(),
+  tagGroupId:        z.string().uuid().nullable().optional(),
+  name:              z.string().min(1).max(150),
+  approvalLevels:    z.array(approvalLevelSchema).min(1),
+  autoProvision:     z.boolean().optional(),
+  /** Show this application in end-user Request Access (JIT). */
+  requestable:       z.boolean().optional(),
+  /** Identity group IDs allowed to submit requests; empty = any authenticated user. */
+  requesterGroupIds: z.array(z.string().uuid()).optional(),
 });
 
 router.post('/workflows', asyncHandler(async (req: Request, res: Response) => {
@@ -333,20 +345,28 @@ router.post('/workflows', asyncHandler(async (req: Request, res: Response) => {
     return;
   }
   const id = uuidv4();
+  const requesterGroupIds = parsed.data.requesterGroupIds ?? [];
   await execute(
     `INSERT INTO app_group_access_workflows
-       (id, app_id, tag_group_id, name, approval_levels, auto_provision, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (id, app_id, tag_group_id, name, approval_levels, requester_group_ids, auto_provision, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       parsed.data.appId,
       parsed.data.tagGroupId ?? null,
       parsed.data.name,
       JSON.stringify(parsed.data.approvalLevels),
+      JSON.stringify(requesterGroupIds),
       parsed.data.autoProvision !== false ? 1 : 0,
       actorEmpId(req),
     ],
   );
+  if (parsed.data.requestable !== undefined) {
+    await setApplicationRequestable(parsed.data.appId, parsed.data.requestable);
+  } else {
+    // Creating a request workflow implies JIT unless explicitly opted out.
+    await setApplicationRequestable(parsed.data.appId, true);
+  }
   res.status(201).json({ id });
 }));
 
@@ -357,13 +377,29 @@ router.put('/workflows/:id', asyncHandler(async (req: Request, res: Response) =>
     autoProvision?: boolean;
     active?: number;
     tagGroupId?: string | null;
+    requesterGroupIds?: string[];
+    requestable?: boolean;
   };
   const levelsJson = body.approvalLevels ? JSON.stringify(body.approvalLevels) : null;
+  const requesterJson = body.requesterGroupIds !== undefined
+    ? JSON.stringify(body.requesterGroupIds)
+    : null;
+
+  const existing = await queryOne<{ app_id: string }>(
+    `SELECT app_id FROM app_group_access_workflows WHERE id = ?`,
+    [req.params['id']],
+  );
+  if (!existing) {
+    res.status(404).json({ error: 'Workflow not found' });
+    return;
+  }
+
   await execute(
     `UPDATE app_group_access_workflows SET
        name = COALESCE(?, name),
        tag_group_id = COALESCE(?, tag_group_id),
        approval_levels = COALESCE(?, approval_levels),
+       requester_group_ids = COALESCE(?, requester_group_ids),
        auto_provision = COALESCE(?, auto_provision),
        active = COALESCE(?, active),
        updated_at = UTC_TIMESTAMP()
@@ -372,11 +408,15 @@ router.put('/workflows/:id', asyncHandler(async (req: Request, res: Response) =>
       body.name ?? null,
       body.tagGroupId !== undefined ? body.tagGroupId : null,
       levelsJson,
+      requesterJson,
       body.autoProvision !== undefined ? (body.autoProvision ? 1 : 0) : null,
       body.active ?? null,
       req.params['id'],
     ],
   );
+  if (body.requestable !== undefined) {
+    await setApplicationRequestable(existing.app_id, body.requestable);
+  }
   res.json({ success: true });
 }));
 
