@@ -10,6 +10,7 @@ import { config } from '../config.js';
 import { execute, query } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { timingSafeEqualString } from '../utils/timing-safe.js';
+import { ensureSamlAppMirrored } from '../services/app-access-policy.js';
 
 const router = Router();
 
@@ -71,10 +72,14 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       d.sloUrl ?? null,
       d.nameidFormat ?? 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
       d.attributeMap ? JSON.stringify(d.attributeMap) : null,
-      JSON.stringify(d.entitlementRule ?? { all_active: true }),
+      JSON.stringify(d.entitlementRule ?? { all_active: false }),
       d.iconUrl ?? null,
       d.sortOrder ?? 0,
     ],
+  );
+
+  await ensureSamlAppMirrored(d.slug).catch((err) =>
+    logger.warn({ err, slug: d.slug }, 'Failed to mirror new SAML SP into applications catalog'),
   );
 
   logger.info({ id, slug: d.slug, entityId: d.entityId }, 'SAML SP registered');

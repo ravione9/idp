@@ -332,12 +332,15 @@ Each SAML application is registered in `saml_service_providers`:
 | `merge_default_attrs` | Merge IdP default attribute map (default true) |
 | `entitlement_rule` | JSON ABAC rule (`all_active`, `roles`, `dept_ids`, `deny_ilg_states`) |
 
-**Launch entitlement** (`canUserLaunchApp` in `src/services/app-access-policy.ts`) is evaluated for `GET /api/apps`, `/saml/launch/:slug`, and SP-initiated SSO:
+**Launch entitlement** (`canUserLaunchApp` in `src/services/app-access-policy.ts`) is evaluated for `GET /api/apps`, `/saml/launch/:slug`, and SP-initiated SSO (including `/saml/resume`):
 
 | Condition | Who may launch |
 |---|---|
-| `applications.visibility = RESTRICTED` **or** any active `app_access_assignments` for the app | Only users with an explicit Application Access Policy grant (user, identity group, or tag group) |
-| Otherwise | SAML `entitlement_rule` **or** an Application Access Policy grant |
+| **Active SAML SP** (any slug in `saml_service_providers`) | **Only** users with an explicit Application Access Policy grant (USER / GROUP / TAG_GROUP). Birthright via `entitlement_rule.all_active` is **not** enough. On check, the SP is auto-mirrored into `applications` as `RESTRICTED` if missing. |
+| Non-SAML catalog app with `visibility = RESTRICTED` **or** any active assignment | Explicit grant only |
+| Other non-SAML catalog apps | Grant **or** `entitlement_rule` birthright |
+
+Policy-check errors **deny** access (fail closed). New SAML apps default to `entitlement_rule.all_active = false` and are mirrored as `RESTRICTED` on create (migration `040` backfills existing rows).
 
 Apps can be registered:
 - Via UI: **Admin Central → SAML Applications → Register new SAML application** (super admin only)
@@ -942,6 +945,28 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-22 — Fix migration 039 comment split + enforce SAML access policy
+
+**Why** — `039_saml_sp_signing_and_nameid.sql` crashed API startup: migrator compatibility mode split on `;` inside a `--` comment, then executed `NameID = email_corp).…` as SQL. Also ship Access Policy enforcement so SAML SSO requires group/user grants.
+
+**What changed:**
+
+- **`migrations/039_…sql`** — remove `;` from comment (file never successfully applied).
+- **`src/db/migrate.ts`** — statement splitter ignores `--` / `/* */` comments.
+- **`src/services/app-access-policy.ts`** — SAML slugs always require a policy grant; auto-mirror as `RESTRICTED`; fail closed.
+- **`migrations/040_saml_apps_require_access_policy.sql`** — backfill RESTRICTED + `all_active: false`.
+- **`admin-saml-apps` / `internal-saml`** — default `all_active: false`; mirror on create.
+- **§6.2** — document grant-required SAML launch rules.
+
+**Why** — Users could SSO to SAML apps (SP- or IdP-initiated) whenever they existed in the IdP, even with no group/user assignment. Open path: unmirrored / `PUBLIC` catalog rows plus `entitlement_rule.all_active = true`, and policy errors fell back to birthright.
+
+**What changed:**
+
+- **`src/services/app-access-policy.ts`** — SAML slugs always require a policy grant; auto-mirror as `RESTRICTED`; fail closed on errors.
+- **`migrations/040_saml_apps_require_access_policy.sql`** — mirror missing SPs, force `RESTRICTED`, set `all_active: false`.
+- **`admin-saml-apps` / `internal-saml`** — default `all_active: false`; mirror on create.
+- **§6.2** — document grant-required SAML launch rules.
 
 ### `1f1c78f` — 2026-07-22 — SAML signing options + admin attribute mapping
 

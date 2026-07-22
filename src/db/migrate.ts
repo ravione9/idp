@@ -27,9 +27,43 @@ function splitSqlStatements(sql: string): string[] {
   let inSingle = false;
   let inDouble = false;
   let inBacktick = false;
+  let inLineComment = false;
+  let inBlockComment = false;
   let prev = '';
 
-  for (const ch of sql) {
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i]!;
+    const next = sql[i + 1] ?? '';
+
+    if (inLineComment) {
+      current += ch;
+      if (ch === '\n') inLineComment = false;
+      prev = ch;
+      continue;
+    }
+
+    if (inBlockComment) {
+      current += ch;
+      if (prev === '*' && ch === '/') inBlockComment = false;
+      prev = ch;
+      continue;
+    }
+
+    if (!inSingle && !inDouble && !inBacktick) {
+      if (ch === '-' && next === '-') {
+        inLineComment = true;
+        current += ch;
+        prev = ch;
+        continue;
+      }
+      if (ch === '/' && next === '*') {
+        inBlockComment = true;
+        current += ch;
+        prev = ch;
+        continue;
+      }
+    }
+
     if (ch === '\'' && !inDouble && !inBacktick && prev !== '\\') {
       inSingle = !inSingle;
     } else if (ch === '"' && !inSingle && !inBacktick && prev !== '\\') {

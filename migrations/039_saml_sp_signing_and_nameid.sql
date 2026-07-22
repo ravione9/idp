@@ -1,5 +1,5 @@
 -- 039: Per-SP SAML signing toggles + NameID source attribute
--- Defaults preserve current behaviour (sign assertion + response; NameID = email_corp).
+-- Defaults: sign assertion and response, NameID from email_corp
 
 ALTER TABLE saml_service_providers
   ADD COLUMN IF NOT EXISTS sign_assertions   TINYINT(1)   NOT NULL DEFAULT 1 AFTER attribute_map,

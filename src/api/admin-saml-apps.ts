@@ -16,6 +16,7 @@ import {
   SAML_MAPPABLE_FIELD_OPTIONS,
   SAML_MAPPABLE_FIELD_SET,
 } from '../saml/types.js';
+import { ensureSamlAppMirrored } from '../services/app-access-policy.js';
 
 const router = Router();
 
@@ -215,10 +216,14 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
         d.signResponse === false ? 0 : 1,
         d.nameidAttribute ?? null,
         d.mergeDefaultAttrs === false ? 0 : 1,
-        JSON.stringify(d.entitlementRule ?? { all_active: true }),
+        JSON.stringify(d.entitlementRule ?? { all_active: false }),
         d.iconUrl ?? null,
         d.sortOrder ?? 0,
       ],
+    );
+
+    await ensureSamlAppMirrored(d.slug).catch((err) =>
+      logger.warn({ err, slug: d.slug }, 'Failed to mirror new SAML SP into applications catalog'),
     );
 
     logger.info({ id, slug: d.slug }, 'SAML SP registered via Admin Central');

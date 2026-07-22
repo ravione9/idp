@@ -32,6 +32,50 @@ export interface WorkflowRow {
 // ---------------------------------------------------------------------------
 // Assignable application catalog (mirrors SAML SPs into applications)
 // ---------------------------------------------------------------------------
+/**
+ * Ensure a SAML SP exists in `applications` as RESTRICTED so Access Policy grants
+ * are required. Called on SSO / launch so new SPs cannot fall open before an admin
+ * opens the Assignments UI.
+ */
+export async function ensureSamlAppMirrored(slug: string): Promise<void> {
+  const sp = await queryOne<{
+    slug: string;
+    name: string;
+    icon_url: string | null;
+    sort_order: number;
+    active: number;
+  }>(
+    `SELECT slug, name, icon_url, sort_order, active
+       FROM saml_service_providers WHERE slug = ? LIMIT 1`,
+    [slug],
+  );
+  if (!sp) return;
+
+  const existing = await queryOne<{ id: string; visibility: string }>(
+    `SELECT id, visibility FROM applications WHERE slug = ? LIMIT 1`,
+    [slug],
+  );
+  if (!existing) {
+    await execute(
+      `INSERT INTO applications
+         (id, slug, name, icon_url, category, visibility, sso_enabled, provisioning, sort_order, active)
+       VALUES (?, ?, ?, ?, 'SSO', 'RESTRICTED', 1, 0, ?, ?)`,
+      [uuidv4(), sp.slug, sp.name, sp.icon_url, sp.sort_order ?? 0, sp.active ? 1 : 0],
+    );
+    logger.info({ slug }, 'Mirrored SAML SP into applications catalog as RESTRICTED');
+    return;
+  }
+
+  // SAML apps must stay grant-gated — PUBLIC + all_active was bypassing group assignments.
+  if (existing.visibility !== 'RESTRICTED') {
+    await execute(
+      `UPDATE applications SET visibility = 'RESTRICTED' WHERE id = ?`,
+      [existing.id],
+    );
+    logger.info({ slug }, 'Forced SAML-linked application visibility to RESTRICTED');
+  }
+}
+
 export async function syncSamlAppsToCatalog(): Promise<number> {
   const sps = await query<{
     slug: string;
@@ -45,27 +89,24 @@ export async function syncSamlAppsToCatalog(): Promise<number> {
     [],
   );
 
-  let inserted = 0;
+  let touched = 0;
   for (const sp of sps) {
-    const existing = await queryOne<{ id: string }>(
-      `SELECT id FROM applications WHERE slug = ?`,
+    const before = await queryOne<{ id: string; visibility: string }>(
+      `SELECT id, visibility FROM applications WHERE slug = ?`,
       [sp.slug],
     );
-    if (existing) continue;
-
-    await execute(
-      `INSERT INTO applications
-         (id, slug, name, icon_url, category, visibility, sso_enabled, provisioning, sort_order, active)
-       VALUES (?, ?, ?, ?, 'SSO', 'RESTRICTED', 1, 0, ?, ?)`,
-      [uuidv4(), sp.slug, sp.name, sp.icon_url, sp.sort_order ?? 0, sp.active ? 1 : 0],
+    await ensureSamlAppMirrored(sp.slug);
+    const after = await queryOne<{ id: string; visibility: string }>(
+      `SELECT id, visibility FROM applications WHERE slug = ?`,
+      [sp.slug],
     );
-    inserted += 1;
+    if (!before || before.visibility !== after?.visibility) touched += 1;
   }
 
-  if (inserted > 0) {
-    logger.info({ inserted }, 'Mirrored SAML service providers into applications catalog');
+  if (touched > 0) {
+    logger.info({ touched }, 'Synced SAML service providers into applications catalog');
   }
-  return inserted;
+  return touched;
 }
 
 export async function listAssignableApplications(): Promise<Record<string, unknown>[]> {
@@ -115,6 +156,17 @@ export async function logAppAccessAudit(params: {
 // ---------------------------------------------------------------------------
 /** True when launch requires an explicit Application Access Policy grant. */
 export async function appRequiresExplicitGrant(appSlug: string): Promise<boolean> {
+  // Active SAML SPs always require a USER / GROUP / TAG_GROUP assignment.
+  // Entitlement-rule birthright alone must not grant SSO (that bypassed Access Policy).
+  const saml = await queryOne<{ ok: number }>(
+    `SELECT 1 AS ok FROM saml_service_providers WHERE slug = ? AND active = 1 LIMIT 1`,
+    [appSlug],
+  );
+  if (saml) {
+    await ensureSamlAppMirrored(appSlug);
+    return true;
+  }
+
   const row = await queryOne<{ visibility: string; has_assignments: number }>(
     `SELECT a.visibility,
             EXISTS (
@@ -139,15 +191,23 @@ export async function canUserLaunchApp(
   if (!canReceiveSamlAssertion(emp)) return false;
 
   try {
-    const policyAccess = await hasPolicyAppAccess(emp.emp_id, slug);
     const requiresGrant = await appRequiresExplicitGrant(slug);
+    const policyAccess = await hasPolicyAppAccess(emp.emp_id, slug);
     if (requiresGrant) {
+      if (!policyAccess) {
+        logger.info(
+          { empId: emp.emp_id, slug },
+          'SSO denied — no Application Access Policy grant',
+        );
+      }
       return policyAccess;
     }
+    // Non-SAML catalog apps only: optional birthright via entitlement_rule.
     return policyAccess || evaluateEntitlement(emp, rule);
-  } catch {
-    /* If the policy tables aren't ready yet, fall back to entitlement rule only */
-    return evaluateEntitlement(emp, rule);
+  } catch (err) {
+    // Fail closed — never fall back to open entitlement on policy errors.
+    logger.warn({ err, empId: emp.emp_id, slug }, 'App access policy check failed; denying launch');
+    return false;
   }
 }
 
