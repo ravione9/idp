@@ -949,7 +949,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-22 — Remember MFA on trusted browser
+### `ecced9e` — 2026-07-22 — Remember MFA on trusted browser
 
 **Why** — After MFA once in a browser, users were challenged again on every password/Google login. Admins expected a policy-controlled skip window (distinct from enrollment grace).
 
