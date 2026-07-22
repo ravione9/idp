@@ -946,7 +946,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-22 — Fix migration 039 comment split + enforce SAML access policy
+### `fc3b8b3` — 2026-07-22 — Fix migration 039 comment split + enforce SAML access policy
 
 **Why** — `039_saml_sp_signing_and_nameid.sql` crashed API startup: migrator compatibility mode split on `;` inside a `--` comment, then executed `NameID = email_corp).…` as SQL. Also ship Access Policy enforcement so SAML SSO requires group/user grants.
 
