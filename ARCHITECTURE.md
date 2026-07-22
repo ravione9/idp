@@ -308,7 +308,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 **Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which replays the stored request and posts the SAML assertion to the SP ACS.
 
-**Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map` (never an empty `AttributeStatement` — that fails `saml-schema-protocol-2.0.xsd`). Default attributes include `email`/`mail` and `displayName` for auto-provisioning SPs (e.g. SentinelOne). samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it. **IdP-initiated** (portal tile) responses omit `InResponseTo` entirely.
+**Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map` (never an empty `AttributeStatement` — that fails `saml-schema-protocol-2.0.xsd`). Default attributes include `email`/`mail` and `displayName` for auto-provisioning SPs (e.g. SentinelOne). samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it. **IdP-initiated** (portal tile) responses omit `InResponseTo` entirely. Template tag replacement matches `="{Tag}"` for attributes and treats `{InResponseToAttr}` / statement blocks as raw XML — samlify’s optional-leading-quote replacer must not be used here (it turns SP-initiated `InResponseTo` into `&quot;…&quot;` and fails XSD).
 
 ### 6.2 Service Provider registry
 
@@ -933,6 +933,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-22 — Fix SAML InResponseTo double-escaping (SentinelOne XSD)
+
+**Why** — SentinelOne SSO Test failed with `Invalid SAML Response. Not match the saml-schema-protocol-2.0.xsd`. Root cause: template tag replacement treated the closing quote of `Destination="…"` as the opener for adjacent `{InResponseToAttr}`, emitting `InResponseTo="&quot;request-id&quot;"`.
+
+**What changed:**
+
+- **`src/saml/idp.ts`** — replace `="{Tag}"` / bare `{Tag}` correctly; keep `InResponseToAttr` and statement blocks as raw XML; simplify AttributeValue (drop `xsi:type`).
+- **§6.1** — document the tag-replacement rule.
 
 ### `1ac0837` — 2026-07-22 — Harden SAML Response for SentinelOne XSD validation
 

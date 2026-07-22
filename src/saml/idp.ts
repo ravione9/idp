@@ -28,7 +28,7 @@ const LOGIN_RESPONSE_TEMPLATE_CONTEXT =
   '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{ID}" Version="2.0" IssueInstant="{IssueInstant}" Destination="{Destination}"{InResponseToAttr}>' +
   '<saml:Issuer>{Issuer}</saml:Issuer>' +
   '<samlp:Status><samlp:StatusCode Value="{StatusCode}"></samlp:StatusCode></samlp:Status>' +
-  '<saml:Assertion xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{AssertionID}" Version="2.0" IssueInstant="{IssueInstant}">' +
+  '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{AssertionID}" Version="2.0" IssueInstant="{IssueInstant}">' +
   '<saml:Issuer>{Issuer}</saml:Issuer>' +
   '<saml:Subject>' +
   '<saml:NameID Format="{NameIDFormat}">{NameID}</saml:NameID>' +
@@ -43,15 +43,34 @@ const LOGIN_RESPONSE_TEMPLATE_CONTEXT =
   '</saml:Assertion>' +
   '</samlp:Response>';
 
-/** Mirror samlify SamlLib.replaceTagsByValue (quote-aware XML escape). Longest tags first avoids NameID vs NameIDFormat collisions. */
+/**
+ * Fill login-response template tags.
+ *
+ * Do NOT use samlify's optional-leading-quote regex (`("?){Tag}`): when a raw
+ * fragment placeholder sits immediately after a quoted attribute —
+ * `Destination="{Destination}"{InResponseToAttr}` — the Destination closing
+ * quote is mistaken for an attribute opener and the fragment's quotes become
+ * `&quot;…&quot;`, which fails saml-schema-protocol-2.0.xsd (SentinelOne SSO Test).
+ *
+ * Match `="{Tag}"` for attribute values; bare `{Tag}` for element text or raw XML.
+ */
+const RAW_XML_TEMPLATE_TAGS = new Set([
+  'AttributeStatement',
+  'AuthnStatement',
+  'InResponseToAttr',
+]);
+
 function replaceTagsByValue(rawXml: string, tagValues: Record<string, string>): string {
   let out = rawXml;
   const tags = Object.keys(tagValues).sort((a, b) => b.length - a.length);
   for (const tag of tags) {
     const value = tagValues[tag] ?? '';
-    out = out.replace(new RegExp(`("?)\\{${tag}\\}`, 'g'), (_m, quote: string) =>
-      quote ? `${quote}${escapeXml(value)}` : value,
-    );
+    out = out.split(`="{${tag}}"`).join(`="${escapeXml(value)}"`);
+    if (RAW_XML_TEMPLATE_TAGS.has(tag)) {
+      out = out.split(`{${tag}}`).join(value);
+    } else {
+      out = out.split(`{${tag}}`).join(escapeXml(value));
+    }
   }
   return out;
 }
@@ -231,15 +250,11 @@ function buildAttributeStatement(attributes: Record<string, string>): string {
     .map(
       ([name, value]) =>
         `<saml:Attribute Name="${escapeXml(name)}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic">` +
-        `<saml:AttributeValue xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="xs:string">${escapeXml(value)}</saml:AttributeValue>` +
+        `<saml:AttributeValue>${escapeXml(value)}</saml:AttributeValue>` +
         `</saml:Attribute>`,
     )
     .join('');
-  return (
-    `<saml:AttributeStatement xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
-    attrs +
-    `</saml:AttributeStatement>`
-  );
+  return `<saml:AttributeStatement>${attrs}</saml:AttributeStatement>`;
 }
 
 /** Remove schema-invalid empty AttributeStatement nodes if any slip in. */
