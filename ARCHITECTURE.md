@@ -934,6 +934,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### TBD — 2026-07-22 — Harden SAML Response for SentinelOne XSD validation
+
+**Why** — SentinelOne still returned `Not match the saml-schema-protocol-2.0.xsd` after the prior AttributeStatement fix.
+
+**What changed:**
+
+- **`src/saml/idp.ts`** — separate AttributeStatement/AuthnStatement tags; Okta-style attribute XML; sign Assertion + Response; use registry ACS/entity ID; NCName-safe InResponseTo; strip empty AttributeStatement; emit build diagnostics in logs.
+
 ### `2cb7d8d` — 2026-07-22 — SAML AttributeStatement schema + SentinelOne auto-provision attrs
 
 **Why** — SentinelOne rejected responses with `Invalid SAML Response. Not match the saml-schema-protocol-2.0.xsd` (empty AttributeStatement). Auto-provisioning also needs Mail + Display name attributes.

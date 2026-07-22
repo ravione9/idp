@@ -17,20 +17,31 @@ import { DEFAULT_ATTRIBUTE_MAP } from './types.js';
 let idpInstance: saml.IdentityProviderInstance | null = null;
 
 /**
- * samlify's default login response leaves `{AuthnStatement}` empty. WebSSO SPs
- * (SentinelOne, Shibboleth, etc.) reject assertions without AuthnStatement.
+ * Custom login-response template (do not use saml.SamlLib at module load — ESM interop).
  *
- * Hardcode the template (same as samlify's defaultLoginResponseTemplate) rather
- * than reading `saml.SamlLib` at module load — under Node ESM interop in Docker,
- * `import * as saml` often has SamlLib undefined on the namespace object.
- * AttributeStatement is folded into `{AuthnStatement}` so entity-idp's empty
- * attributes[] bake-in cannot leave a bare `<AttributeStatement/>`.
+ * - `{InResponseToAttr}` → ` InResponseTo="…"` or empty (never InResponseTo="").
+ * - `{AttributeStatement}` / `{AuthnStatement}` filled in customTagReplacement.
+ * - Do NOT pass `attributes: []` to IdentityProvider — that bakes an empty
+ *   `<AttributeStatement/>` into the template and fails saml-schema-protocol-2.0.xsd.
  */
-// `{InResponseToAttr}` is either ` InResponseTo="…"` or empty. Unsolicited
-// (IdP-initiated) responses must omit InResponseTo entirely — an empty
-// InResponseTo="" is rejected by SentinelOne and other WebSSO SPs.
 const LOGIN_RESPONSE_TEMPLATE_CONTEXT =
-  '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{ID}" Version="2.0" IssueInstant="{IssueInstant}" Destination="{Destination}"{InResponseToAttr}><saml:Issuer>{Issuer}</saml:Issuer><samlp:Status><samlp:StatusCode Value="{StatusCode}"/></samlp:Status><saml:Assertion xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{AssertionID}" Version="2.0" IssueInstant="{IssueInstant}"><saml:Issuer>{Issuer}</saml:Issuer><saml:Subject><saml:NameID Format="{NameIDFormat}">{NameID}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData NotOnOrAfter="{SubjectConfirmationDataNotOnOrAfter}" Recipient="{SubjectRecipient}"{InResponseToAttr}/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="{ConditionsNotBefore}" NotOnOrAfter="{ConditionsNotOnOrAfter}"><saml:AudienceRestriction><saml:Audience>{Audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions>{AuthnStatement}</saml:Assertion></samlp:Response>';
+  '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{ID}" Version="2.0" IssueInstant="{IssueInstant}" Destination="{Destination}"{InResponseToAttr}>' +
+  '<saml:Issuer>{Issuer}</saml:Issuer>' +
+  '<samlp:Status><samlp:StatusCode Value="{StatusCode}"></samlp:StatusCode></samlp:Status>' +
+  '<saml:Assertion xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{AssertionID}" Version="2.0" IssueInstant="{IssueInstant}">' +
+  '<saml:Issuer>{Issuer}</saml:Issuer>' +
+  '<saml:Subject>' +
+  '<saml:NameID Format="{NameIDFormat}">{NameID}</saml:NameID>' +
+  '<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">' +
+  '<saml:SubjectConfirmationData NotOnOrAfter="{SubjectConfirmationDataNotOnOrAfter}" Recipient="{SubjectRecipient}"{InResponseToAttr}></saml:SubjectConfirmationData>' +
+  '</saml:SubjectConfirmation>' +
+  '</saml:Subject>' +
+  '<saml:Conditions NotBefore="{ConditionsNotBefore}" NotOnOrAfter="{ConditionsNotOnOrAfter}">' +
+  '<saml:AudienceRestriction><saml:Audience>{Audience}</saml:Audience></saml:AudienceRestriction>' +
+  '</saml:Conditions>' +
+  '{AttributeStatement}{AuthnStatement}' +
+  '</saml:Assertion>' +
+  '</samlp:Response>';
 
 /** Mirror samlify SamlLib.replaceTagsByValue (quote-aware XML escape). Longest tags first avoids NameID vs NameIDFormat collisions. */
 function replaceTagsByValue(rawXml: string, tagValues: Record<string, string>): string {
@@ -101,6 +112,9 @@ function buildSp(sp: SamlServiceProviderRow): saml.ServiceProviderInstance {
     ],
     singleLogoutService: slo,
     nameIDFormat: [sp.nameid_format],
+    // Enterprise SPs (SentinelOne) expect a signed Assertion; also sign the Response.
+    wantAssertionsSigned: true,
+    wantMessageSigned: true,
   });
 }
 
@@ -216,12 +230,34 @@ function buildAttributeStatement(attributes: Record<string, string>): string {
   const attrs = entries
     .map(
       ([name, value]) =>
-        `<saml:Attribute Name="${escapeXml(name)}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:unspecified">` +
-        `<saml:AttributeValue>${escapeXml(value)}</saml:AttributeValue>` +
+        `<saml:Attribute Name="${escapeXml(name)}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic">` +
+        `<saml:AttributeValue xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="xs:string">${escapeXml(value)}</saml:AttributeValue>` +
         `</saml:Attribute>`,
     )
     .join('');
-  return `<saml:AttributeStatement>${attrs}</saml:AttributeStatement>`;
+  return (
+    `<saml:AttributeStatement xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
+    attrs +
+    `</saml:AttributeStatement>`
+  );
+}
+
+/** Remove schema-invalid empty AttributeStatement nodes if any slip in. */
+function stripEmptyAttributeStatements(xml: string): string {
+  return xml
+    .replace(/<saml:AttributeStatement\s*\/>/g, '')
+    .replace(/<saml:AttributeStatement[^>]*>\s*<\/saml:AttributeStatement>/g, '');
+}
+
+/** xs:NCName — InResponseTo must match or the SP XSD validator rejects the Response. */
+function toInResponseToAttr(requestId: string): string {
+  const id = requestId.trim();
+  if (!id) return '';
+  if (!/^[A-Za-z_][\w.-]*$/.test(id)) {
+    logger.warn({ requestId: id }, 'AuthnRequest ID is not a valid NCName; omitting InResponseTo');
+    return '';
+  }
+  return ` InResponseTo="${escapeXml(id)}"`;
 }
 
 interface SamlRequestInfo {
@@ -229,33 +265,44 @@ interface SamlRequestInfo {
 }
 
 /**
- * samlify customTagReplacement: fill AuthnStatement (+ attributes) for WebSSO SPs.
+ * samlify customTagReplacement: fill AuthnStatement + AttributeStatement.
  * Must return `{ id, context }` when loginResponseTemplate is set.
  */
 function createLoginResponseTagReplacement(
   idp: saml.IdentityProviderInstance,
-  spInstance: saml.ServiceProviderInstance,
+  sp: SamlServiceProviderRow,
   userInfo: { email: string; attributes: Record<string, string> },
   requestInfo: SamlRequestInfo | null,
-  nameIdFormat: string,
 ): (template: string) => { id: string; context: string } {
   return (template: string) => {
     const idpSetting = idp.entitySetting as { generateID: () => string };
     const id = idpSetting.generateID();
     const assertionId = idpSetting.generateID();
     const sessionIndex = idpSetting.generateID();
-    const acs = asMetaString(spInstance.entityMeta.getAssertionConsumerService('post'));
-    const spEntityID = asMetaString(spInstance.entityMeta.getEntityID());
+    // Prefer registry values — metadata getters can return undefined for binding keys.
+    const acs = sp.acs_url?.trim() || '';
+    const spEntityID = sp.entity_id?.trim() || '';
     const issuer = asMetaString(idp.entityMeta.getEntityID());
+    if (!acs || !spEntityID) {
+      throw new Error('SAML SP is missing acs_url or entity_id');
+    }
     const nowTime = new Date();
     const now = toSamlDateTime(nowTime);
     const fiveMinutesLater = toSamlDateTime(new Date(nowTime.getTime() + 5 * 60 * 1000));
-    const inResponseTo = requestInfo?.extract?.request?.id?.trim() ?? '';
-    // Omit attribute for IdP-initiated (unsolicited) responses — do not emit InResponseTo="".
-    const inResponseToAttr = inResponseTo
-      ? ` InResponseTo="${escapeXml(inResponseTo)}"`
-      : '';
+    const inResponseToAttr = toInResponseToAttr(requestInfo?.extract?.request?.id ?? '');
     const attributeStatement = buildAttributeStatement(userInfo.attributes);
+    const authnStatement = buildAuthnStatement(now, sessionIndex);
+
+    logger.info(
+      {
+        sp: sp.slug,
+        attrCount: Object.keys(userInfo.attributes).length,
+        hasAttributeStatement: attributeStatement.length > 0,
+        hasInResponseTo: inResponseToAttr.length > 0,
+        acsHost: (() => { try { return new URL(acs).host; } catch { return 'invalid'; } })(),
+      },
+      'Building SAML login response',
+    );
 
     const tvalue: Record<string, string> = {
       ID: id,
@@ -271,15 +318,16 @@ function createLoginResponseTagReplacement(
       ConditionsNotBefore: now,
       ConditionsNotOnOrAfter: fiveMinutesLater,
       SubjectConfirmationDataNotOnOrAfter: fiveMinutesLater,
-      NameIDFormat: nameIdFormat,
+      NameIDFormat: sp.nameid_format,
       NameID: userInfo.email || '',
       InResponseToAttr: inResponseToAttr,
-      AuthnStatement: buildAuthnStatement(now, sessionIndex) + attributeStatement,
+      AttributeStatement: attributeStatement,
+      AuthnStatement: authnStatement,
     };
 
     return {
       id,
-      context: replaceTagsByValue(template, tvalue),
+      context: stripEmptyAttributeStatements(replaceTagsByValue(template, tvalue)),
     };
   };
 }
@@ -304,13 +352,7 @@ export async function createSpInitiatedLoginResponse(input: SamlLoginInput): Pro
     flowResult,
     'post',
     userInfo,
-    createLoginResponseTagReplacement(
-      idp,
-      spInstance,
-      userInfo,
-      flowResult as SamlRequestInfo,
-      input.sp.nameid_format,
-    ),
+    createLoginResponseTagReplacement(idp, input.sp, userInfo, flowResult as SamlRequestInfo),
     false,
     input.relayState ?? '',
   ) as SamlPostResult;
@@ -330,12 +372,13 @@ export async function createIdpInitiatedLoginResponse(
   const spInstance = buildSp(sp);
   const userInfo = buildUserInfo(emp, sp);
 
+  // Pass {} not null — samlify default params do not apply when null is explicit.
   const result = await idp.createLoginResponse(
     spInstance,
-    null as unknown as Record<string, unknown>,
+    {},
     'post',
     userInfo,
-    createLoginResponseTagReplacement(idp, spInstance, userInfo, null, sp.nameid_format),
+    createLoginResponseTagReplacement(idp, sp, userInfo, null),
     false,
     relayState,
   ) as SamlPostResult;
