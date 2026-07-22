@@ -11,19 +11,31 @@ import { config, isSamlEnabled } from '../config.js';
 import { execute, query } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { parseSpMetadataXml } from '../saml/parse-sp-metadata.js';
+import {
+  DEFAULT_ATTRIBUTE_MAP,
+  SAML_MAPPABLE_FIELD_OPTIONS,
+  SAML_MAPPABLE_FIELD_SET,
+} from '../saml/types.js';
 
 const router = Router();
 
 router.use(requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('applications'));
+
+const attributeMapSchema = z.record(z.string().min(1).max(120), z.string().min(1).max(80)).optional().nullable();
 
 const registerSpSchema = z.object({
   name:            z.string().min(1).max(100),
   slug:            z.string().min(1).max(50).regex(/^[a-z0-9-]+$/),
   entityId:        z.string().min(1).max(512),
   acsUrl:          z.string().url(),
-  sloUrl:          z.string().url().optional(),
-  nameidFormat:    z.string().optional(),
-  iconUrl:         z.string().url().optional(),
+  sloUrl:          z.string().url().optional().nullable(),
+  nameidFormat:    z.string().min(1).max(120).optional(),
+  nameidAttribute: z.string().min(1).max(80).optional().nullable(),
+  attributeMap:    attributeMapSchema,
+  signAssertions:  z.boolean().optional(),
+  signResponse:    z.boolean().optional(),
+  mergeDefaultAttrs: z.boolean().optional(),
+  iconUrl:         z.string().url().optional().nullable(),
   sortOrder:       z.number().int().optional(),
   entitlementRule: z.object({
     all_active:       z.boolean().optional(),
@@ -34,6 +46,76 @@ const registerSpSchema = z.object({
   }).optional(),
 });
 
+const updateSpSchema = z.object({
+  name:            z.string().min(1).max(100).optional(),
+  slug:            z.string().min(1).max(50).regex(/^[a-z0-9-]+$/).optional(),
+  entityId:        z.string().min(1).max(512).optional(),
+  acsUrl:          z.string().url().optional(),
+  sloUrl:          z.string().url().optional().nullable(),
+  nameidFormat:    z.string().min(1).max(120).optional(),
+  nameidAttribute: z.string().min(1).max(80).optional().nullable(),
+  attributeMap:    attributeMapSchema,
+  signAssertions:  z.boolean().optional(),
+  signResponse:    z.boolean().optional(),
+  mergeDefaultAttrs: z.boolean().optional(),
+  iconUrl:         z.string().url().optional().nullable(),
+  active:          z.boolean().optional(),
+});
+
+function validateAttributeMap(map: Record<string, string> | null | undefined): string | null {
+  if (!map) return null;
+  for (const [samlName, empField] of Object.entries(map)) {
+    if (!samlName.trim()) return 'Attribute map keys must be non-empty SAML attribute names';
+    if (!SAML_MAPPABLE_FIELD_SET.has(empField)) {
+      return `Unknown employee field "${empField}" for SAML attribute "${samlName}"`;
+    }
+  }
+  return null;
+}
+
+function validateNameidAttribute(field: string | null | undefined): string | null {
+  if (field === null || field === undefined || field === '') return null;
+  if (!SAML_MAPPABLE_FIELD_SET.has(field)) {
+    return `Unknown NameID attribute field "${field}"`;
+  }
+  return null;
+}
+
+function parseJsonObject(raw: unknown): Record<string, string> | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, string>;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, string>;
+      }
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
+function mapAdminRow(row: Record<string, unknown>) {
+  return {
+    id:                row['id'],
+    name:              row['name'],
+    slug:              row['slug'],
+    entity_id:         row['entity_id'],
+    acs_url:           row['acs_url'],
+    slo_url:           row['slo_url'] ?? null,
+    nameid_format:     row['nameid_format'],
+    nameid_attribute:  row['nameid_attribute'] ?? null,
+    attribute_map:     parseJsonObject(row['attribute_map']),
+    sign_assertions:   row['sign_assertions'] === undefined ? true : Number(row['sign_assertions']) === 1,
+    sign_response:     row['sign_response'] === undefined ? true : Number(row['sign_response']) === 1,
+    merge_default_attrs: row['merge_default_attrs'] === undefined ? true : Number(row['merge_default_attrs']) === 1,
+    icon_url:          row['icon_url'] ?? null,
+    active:            Number(row['active']) === 1,
+    sort_order:        Number(row['sort_order'] ?? 0),
+    created_at:        row['created_at'],
+  };
+}
+
 // GET /status — IdP configuration summary for Admin Central
 router.get('/status', (_req: Request, res: Response): void => {
   const base = config.app.publicBaseUrl ?? config.saml?.baseUrl;
@@ -42,6 +124,14 @@ router.get('/status', (_req: Request, res: Response): void => {
     publicBaseUrl: base ?? null,
     metadataUrl:  base ? `${base}/saml/metadata` : null,
     entityId:     config.saml?.entityId ?? (base ? `${base}/saml/metadata` : null),
+  });
+});
+
+// GET /attribute-fields — mappable employee fields + default attribute map
+router.get('/attribute-fields', (_req: Request, res: Response): void => {
+  res.json({
+    fields: SAML_MAPPABLE_FIELD_OPTIONS,
+    defaultAttributeMap: DEFAULT_ATTRIBUTE_MAP,
   });
 });
 
@@ -70,12 +160,14 @@ router.post('/parse-metadata', async (req: Request, res: Response): Promise<void
 // GET / — list all registered SAML applications
 router.get('/', async (_req: Request, res: Response): Promise<void> => {
   const rows = await query<Record<string, unknown>>(
-    `SELECT id, name, slug, entity_id, acs_url, slo_url, active, sort_order, icon_url, created_at
+    `SELECT id, name, slug, entity_id, acs_url, slo_url, nameid_format,
+            nameid_attribute, attribute_map, sign_assertions, sign_response,
+            merge_default_attrs, active, sort_order, icon_url, created_at
        FROM saml_service_providers
       ORDER BY sort_order ASC, name ASC`,
     [],
   );
-  res.json({ data: rows });
+  res.json({ data: rows.map(mapAdminRow) });
 });
 
 // POST / — register a SAML Service Provider
@@ -87,14 +179,29 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   }
 
   const d = parsed.data;
+  const mapErr = validateAttributeMap(d.attributeMap);
+  if (mapErr) {
+    res.status(400).json({ error: mapErr });
+    return;
+  }
+  const nameidErr = validateNameidAttribute(d.nameidAttribute);
+  if (nameidErr) {
+    res.status(400).json({ error: nameidErr });
+    return;
+  }
+
   const id = uuidv4();
+  const attributeMapJson = d.attributeMap && Object.keys(d.attributeMap).length > 0
+    ? JSON.stringify(d.attributeMap)
+    : null;
 
   try {
     await execute(
       `INSERT INTO saml_service_providers
          (id, name, slug, entity_id, acs_url, slo_url, nameid_format,
-          attribute_map, entitlement_rule, icon_url, sort_order, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+          attribute_map, sign_assertions, sign_response, nameid_attribute, merge_default_attrs,
+          entitlement_rule, icon_url, sort_order, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         id,
         d.name,
@@ -103,7 +210,11 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
         d.acsUrl,
         d.sloUrl ?? null,
         d.nameidFormat ?? 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
-        null,
+        attributeMapJson,
+        d.signAssertions === false ? 0 : 1,
+        d.signResponse === false ? 0 : 1,
+        d.nameidAttribute ?? null,
+        d.mergeDefaultAttrs === false ? 0 : 1,
         JSON.stringify(d.entitlementRule ?? { all_active: true }),
         d.iconUrl ?? null,
         d.sortOrder ?? 0,
@@ -130,34 +241,50 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const updateSchema = z.object({
-    name:     z.string().min(1).max(100).optional(),
-    slug:     z.string().min(1).max(50).regex(/^[a-z0-9-]+$/).optional(),
-    entityId: z.string().min(1).max(512).optional(),
-    acsUrl:   z.string().url().optional(),
-    sloUrl:   z.string().url().optional().nullable(),
-    iconUrl:  z.string().url().optional().nullable(),
-    active:   z.boolean().optional(),
-  });
-
-  const parsed = updateSchema.safeParse(req.body);
+  const parsed = updateSpSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     return;
   }
 
   const d = parsed.data;
+  if (d.attributeMap !== undefined) {
+    const mapErr = validateAttributeMap(d.attributeMap);
+    if (mapErr) {
+      res.status(400).json({ error: mapErr });
+      return;
+    }
+  }
+  if (d.nameidAttribute !== undefined) {
+    const nameidErr = validateNameidAttribute(d.nameidAttribute);
+    if (nameidErr) {
+      res.status(400).json({ error: nameidErr });
+      return;
+    }
+  }
+
+  const attributeMapJson = d.attributeMap === undefined
+    ? undefined
+    : (d.attributeMap && Object.keys(d.attributeMap).length > 0
+      ? JSON.stringify(d.attributeMap)
+      : null);
 
   try {
     const result = await execute(
       `UPDATE saml_service_providers SET
-         name       = COALESCE(?, name),
-         slug       = COALESCE(?, slug),
-         entity_id  = COALESCE(?, entity_id),
-         acs_url    = COALESCE(?, acs_url),
-         slo_url    = COALESCE(?, slo_url),
-         icon_url   = COALESCE(?, icon_url),
-         active     = COALESCE(?, active)
+         name                = COALESCE(?, name),
+         slug                = COALESCE(?, slug),
+         entity_id           = COALESCE(?, entity_id),
+         acs_url             = COALESCE(?, acs_url),
+         slo_url             = COALESCE(?, slo_url),
+         nameid_format       = COALESCE(?, nameid_format),
+         nameid_attribute    = COALESCE(?, nameid_attribute),
+         attribute_map       = COALESCE(?, attribute_map),
+         sign_assertions     = COALESCE(?, sign_assertions),
+         sign_response       = COALESCE(?, sign_response),
+         merge_default_attrs = COALESCE(?, merge_default_attrs),
+         icon_url            = COALESCE(?, icon_url),
+         active              = COALESCE(?, active)
        WHERE id = ?`,
       [
         d.name     ?? null,
@@ -165,6 +292,12 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
         d.entityId ?? null,
         d.acsUrl   ?? null,
         d.sloUrl   !== undefined ? d.sloUrl : null,
+        d.nameidFormat ?? null,
+        d.nameidAttribute !== undefined ? d.nameidAttribute : null,
+        attributeMapJson !== undefined ? attributeMapJson : null,
+        d.signAssertions !== undefined ? (d.signAssertions ? 1 : 0) : null,
+        d.signResponse !== undefined ? (d.signResponse ? 1 : 0) : null,
+        d.mergeDefaultAttrs !== undefined ? (d.mergeDefaultAttrs ? 1 : 0) : null,
         d.iconUrl  !== undefined ? d.iconUrl : null,
         d.active   !== undefined ? (d.active ? 1 : 0) : null,
         id,
@@ -174,6 +307,14 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
     if (result.affectedRows === 0) {
       res.status(404).json({ error: 'Application not found' });
       return;
+    }
+
+    // Allow clearing nameid_attribute / attribute_map when explicitly null.
+    if (d.nameidAttribute === null) {
+      await execute('UPDATE saml_service_providers SET nameid_attribute = NULL WHERE id = ?', [id]);
+    }
+    if (d.attributeMap === null || (d.attributeMap && Object.keys(d.attributeMap).length === 0)) {
+      await execute('UPDATE saml_service_providers SET attribute_map = NULL WHERE id = ?', [id]);
     }
 
     logger.info({ id }, 'SAML SP updated via Admin Central');

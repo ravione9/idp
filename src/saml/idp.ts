@@ -8,7 +8,7 @@ import * as saml from 'samlify';
 import { config, isSamlEnabled } from '../config.js';
 import logger from '../utils/logger.js';
 import type { EmployeeSamlContext, SamlServiceProviderRow } from './types.js';
-import { DEFAULT_ATTRIBUTE_MAP } from './types.js';
+import { DEFAULT_ATTRIBUTE_MAP, SAML_MAPPABLE_FIELD_SET } from './types.js';
 
 // Relax XML schema validation (SP metadata varies widely across vendors)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -116,10 +116,26 @@ function getIdp(): saml.IdentityProviderInstance {
   return idpInstance;
 }
 
+function empFieldValue(emp: EmployeeSamlContext, field: string): string {
+  if (!SAML_MAPPABLE_FIELD_SET.has(field)) return '';
+  const val = emp[field as keyof EmployeeSamlContext];
+  if (val === null || val === undefined) return '';
+  const s = String(val).trim();
+  return s;
+}
+
 function buildSp(sp: SamlServiceProviderRow): saml.ServiceProviderInstance {
   const slo = sp.slo_url
     ? [{ Binding: saml.Constants.namespace.binding.redirect, Location: sp.slo_url }]
     : [];
+
+  // Never emit an unsigned Response — if both toggles are off, keep Assertion signed.
+  let wantAssertionsSigned = sp.sign_assertions !== false;
+  let wantMessageSigned = sp.sign_response !== false;
+  if (!wantAssertionsSigned && !wantMessageSigned) {
+    logger.warn({ slug: sp.slug }, 'SAML SP disabled both signatures; forcing Assertion signing');
+    wantAssertionsSigned = true;
+  }
 
   return saml.ServiceProvider({
     entityID: sp.entity_id,
@@ -131,9 +147,16 @@ function buildSp(sp: SamlServiceProviderRow): saml.ServiceProviderInstance {
     ],
     singleLogoutService: slo,
     nameIDFormat: [sp.nameid_format],
-    // Enterprise SPs (SentinelOne) expect a signed Assertion; also sign the Response.
-    wantAssertionsSigned: true,
-    wantMessageSigned: true,
+    wantAssertionsSigned,
+    wantMessageSigned,
+    // Explicit signature placement (Issuer → Signature) for strict SP validators.
+    signatureConfig: {
+      prefix: 'ds',
+      location: {
+        reference: "/*[local-name(.)='Response']/*[local-name(.)='Issuer']",
+        action: 'after',
+      },
+    },
   });
 }
 
@@ -141,28 +164,40 @@ function buildUserInfo(emp: EmployeeSamlContext, sp: SamlServiceProviderRow): {
   email: string;
   attributes: Record<string, string>;
 } {
-  const map = { ...DEFAULT_ATTRIBUTE_MAP, ...(sp.attribute_map ?? {}) };
+  const map: Record<string, string> = sp.merge_default_attrs !== false
+    ? { ...DEFAULT_ATTRIBUTE_MAP, ...(sp.attribute_map ?? {}) }
+    : { ...(sp.attribute_map ?? {}) };
   const attributes: Record<string, string> = {};
 
   for (const [samlName, empField] of Object.entries(map)) {
-    if (!samlName || !empField) continue;
-    const val = emp[empField as keyof EmployeeSamlContext];
-    if (val !== null && val !== undefined && String(val).length > 0) {
-      attributes[samlName] = String(val);
+    if (!samlName?.trim() || !empField?.trim()) continue;
+    if (!SAML_MAPPABLE_FIELD_SET.has(empField)) {
+      logger.warn({ slug: sp.slug, samlName, empField }, 'Skipping unknown SAML attribute map field');
+      continue;
+    }
+    const val = empFieldValue(emp, empField);
+    if (val) attributes[samlName.trim()] = val;
+  }
+
+  // Soft-fill common auto-provision attrs when defaults are merged.
+  if (sp.merge_default_attrs !== false) {
+    if (emp.email_corp) {
+      attributes['email'] ??= emp.email_corp;
+      attributes['mail'] ??= emp.email_corp;
+    }
+    if (emp.full_name) {
+      attributes['displayName'] ??= emp.full_name;
     }
   }
 
-  // Always release mail + displayName for auto-provisioning SPs (e.g. SentinelOne).
-  if (emp.email_corp) {
-    attributes['email'] ??= emp.email_corp;
-    attributes['mail'] ??= emp.email_corp;
-  }
-  if (emp.full_name) {
-    attributes['displayName'] ??= emp.full_name;
-  }
+  const nameidField =
+    sp.nameid_attribute && SAML_MAPPABLE_FIELD_SET.has(sp.nameid_attribute)
+      ? sp.nameid_attribute
+      : 'email_corp';
+  const nameId = empFieldValue(emp, nameidField) || emp.email_corp;
 
   return {
-    email: emp.email_corp,
+    email: nameId,
     attributes,
   };
 }

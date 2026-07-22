@@ -42,6 +42,7 @@ Object.assign(api, {
   deletePortalRole: (id) => f(`/api/admin/portal-roles/${id}`, { method: 'DELETE' }),
   idpStatus:        () => f('/api/admin/saml-apps/status'),
   listSamlApps:     () => f('/api/admin/saml-apps'),
+  samlAttributeFields: () => f('/api/admin/saml-apps/attribute-fields'),
   createSamlApp:    (data) => f('/api/admin/saml-apps', { method: 'POST', body: JSON.stringify(data) }),
   parseSamlMetadata:(metadata) => f('/api/admin/saml-apps/parse-metadata', { method: 'POST', body: JSON.stringify({ metadata }) }),
   deactivateSamlApp:(id) => f(`/api/admin/saml-apps/${id}`, { method: 'DELETE' }),

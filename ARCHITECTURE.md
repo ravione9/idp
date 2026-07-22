@@ -310,6 +310,10 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 **Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map` (never an empty `AttributeStatement` — that fails `saml-schema-protocol-2.0.xsd`). Default attributes include `email`/`mail` and `displayName` for auto-provisioning SPs (e.g. SentinelOne). samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it. **IdP-initiated** (portal tile) responses omit `InResponseTo` entirely. Template tag replacement matches `="{Tag}"` for attributes and treats `{InResponseToAttr}` / statement blocks as raw XML — samlify’s optional-leading-quote replacer must not be used here (it turns SP-initiated `InResponseTo` into `&quot;…&quot;` and fails XSD).
 
+**Signing** (per SP, migration `039`): `sign_assertions` / `sign_response` (default both true). Response signature uses explicit `signatureConfig` (Issuer → Signature). If both toggles are off, Assertion signing is forced. Algorithm: RSA-SHA256 (samlify default).
+
+**Attribute mapping:** Admin UI + API edit `attribute_map` (SAML attribute name → employee field). NameID **value** comes from `nameid_attribute` (default `email_corp`). When `merge_default_attrs` is true (default), `DEFAULT_ATTRIBUTE_MAP` is merged under the SP map. Mappable employee fields are listed at `GET /api/admin/saml-apps/attribute-fields`.
+
 ### 6.2 Service Provider registry
 
 Each SAML application is registered in `saml_service_providers`:
@@ -321,7 +325,11 @@ Each SAML application is registered in `saml_service_providers`:
 | `acs_url` | SP's Assertion Consumer Service URL |
 | `slo_url` | (optional) Single Logout URL |
 | `nameid_format` | Default: `urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress` |
+| `nameid_attribute` | Employee field used as NameID value (default `email_corp`) |
 | `attribute_map` | JSON map of SAML attribute → employee field |
+| `sign_assertions` | Sign Assertion (default true) |
+| `sign_response` | Sign Response message (default true) |
+| `merge_default_attrs` | Merge IdP default attribute map (default true) |
 | `entitlement_rule` | JSON ABAC rule (`all_active`, `roles`, `dept_ids`, `deny_ilg_states`) |
 
 **Launch entitlement** (`canUserLaunchApp` in `src/services/app-access-policy.ts`) is evaluated for `GET /api/apps`, `/saml/launch/:slug`, and SP-initiated SSO:
@@ -542,7 +550,8 @@ To add a new migration:
 | `POST` | `/api/admin/directory/google/full-sync` | Full Google directory resync |
 | `GET` | `/api/admin/directory/google/logs` | Sync runs + directory audit |
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD |
-| `GET`/`POST`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles) |
+| `GET` | `/api/admin/saml-apps/attribute-fields` | Mappable employee fields + default attribute map |
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
 | `GET`/`PUT` | `/api/admin/general-settings/google-oidc` | Read/update Google inbound OIDC credentials (SUPER_ADMIN) |
@@ -933,6 +942,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-22 — SAML signing options + admin attribute mapping
+
+**Why** — Operators needed per-app control of signed Assertion/Response and IdP→SP attribute maps (NameID source + AttributeStatement) without SQL/internal API.
+
+**What changed:**
+
+- **`migrations/039_saml_sp_signing_and_nameid.sql`** — `sign_assertions`, `sign_response`, `nameid_attribute`, `merge_default_attrs`.
+- **`src/saml/types.ts` / `sp-registry.ts` / `idp.ts`** — richer employee context; per-SP signing; NameID from mapped field; explicit Response `signatureConfig`.
+- **`src/api/admin-saml-apps.ts`** — create/update/list expose maps + signing; `GET …/attribute-fields`.
+- **`web/js/views-admin.js`** — attribute-map editor + signing toggles on SAML register/edit modals.
+- **§6.1 / §6.2** — document signing and mapping.
 
 ### `e833a8d` — 2026-07-22 — Fix SAML InResponseTo double-escaping (SentinelOne XSD)
 

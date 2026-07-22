@@ -14,6 +14,132 @@ function openModal(html) {
 }
 function errHtml(msg) { return `<div class="alert alert-error">${esc(msg)}</div>`; }
 
+let _samlAttrFieldsCache = null;
+async function loadSamlAttributeFields() {
+  if (_samlAttrFieldsCache) return _samlAttrFieldsCache;
+  try {
+    const res = await api.samlAttributeFields();
+    _samlAttrFieldsCache = {
+      fields: res.fields || [],
+      defaultAttributeMap: res.defaultAttributeMap || {},
+    };
+  } catch {
+    _samlAttrFieldsCache = {
+      fields: [
+        { field: 'email_corp', label: 'Corporate email' },
+        { field: 'full_name', label: 'Full name' },
+        { field: 'emp_id', label: 'Employee ID (emp_id)' },
+        { field: 'dept_id', label: 'Department' },
+        { field: 'role', label: 'Title / designation' },
+      ],
+      defaultAttributeMap: {},
+    };
+  }
+  return _samlAttrFieldsCache;
+}
+
+function empFieldOptionsHtml(fields, selected) {
+  return fields.map((f) =>
+    `<option value="${esc(f.field)}" ${selected === f.field ? 'selected' : ''}>${esc(f.label)}</option>`,
+  ).join('');
+}
+
+function samlAttrMapRowsFromSp(sp, defaults) {
+  const map = sp?.attribute_map && typeof sp.attribute_map === 'object' && Object.keys(sp.attribute_map).length
+    ? sp.attribute_map
+    : (defaults || {});
+  const entries = Object.entries(map);
+  return entries.length ? entries : [['', 'email_corp']];
+}
+
+function samlAttrMapEditorHtml(pfx, rows, fields) {
+  const fieldOpts = empFieldOptionsHtml(fields, '');
+  const body = rows.map(([samlName, empField], i) => `
+    <div class="saml-attr-row" data-i="${i}" style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:center">
+      <input class="form-input saml-attr-name" placeholder="SAML attribute (e.g. mail)" value="${esc(samlName || '')}">
+      <select class="form-select saml-attr-field">${empFieldOptionsHtml(fields, empField || 'email_corp')}</select>
+      <button type="button" class="btn btn-secondary btn-sm saml-attr-del" title="Remove">✕</button>
+    </div>`).join('');
+  return `
+    <div class="form-group span2 saml-attr-editor">
+      <label class="form-label">Attribute mapping</label>
+      <p class="muted" style="font-size:0.82rem;margin:0 0 8px">
+        Map assertion attributes to IdP employee fields. Leave empty rows out — defaults merge unless disabled below.
+      </p>
+      <div id="${pfx}-attr-rows">${body}</div>
+      <button type="button" class="btn btn-secondary btn-sm" id="${pfx}-attr-add">+ Add attribute</button>
+      <template id="${pfx}-attr-tpl">
+        <div class="saml-attr-row" style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:center">
+          <input class="form-input saml-attr-name" placeholder="SAML attribute (e.g. mail)" value="">
+          <select class="form-select saml-attr-field">${fieldOpts.replace('selected', '')}</select>
+          <button type="button" class="btn btn-secondary btn-sm saml-attr-del" title="Remove">✕</button>
+        </div>
+      </template>
+    </div>`;
+}
+
+function samlSigningHtml(pfx, sp) {
+  const signA = sp?.sign_assertions !== false && sp?.sign_assertions !== 0;
+  const signR = sp?.sign_response !== false && sp?.sign_response !== 0;
+  const mergeD = sp?.merge_default_attrs !== false && sp?.merge_default_attrs !== 0;
+  return `
+    <div class="form-group span2">
+      <label class="form-label">Signed response</label>
+      <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.9rem">
+          <input type="checkbox" id="${pfx}-sign-assert" ${signA ? 'checked' : ''}> Sign Assertion
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.9rem">
+          <input type="checkbox" id="${pfx}-sign-resp" ${signR ? 'checked' : ''}> Sign Response
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.9rem">
+          <input type="checkbox" id="${pfx}-merge-defaults" ${mergeD ? 'checked' : ''}> Merge default attributes
+        </label>
+      </div>
+      <p class="muted" style="font-size:0.78rem;margin:6px 0 0">
+        Enterprise SPs (e.g. SentinelOne) typically need both signatures. At least Assertion signing is enforced.
+      </p>
+    </div>`;
+}
+
+function bindSamlAttrEditor(bd, pfx) {
+  const rowsEl = bd.querySelector(`#${pfx}-attr-rows`);
+  const tpl = bd.querySelector(`#${pfx}-attr-tpl`);
+  bd.querySelector(`#${pfx}-attr-add`)?.addEventListener('click', () => {
+    if (!tpl || !rowsEl) return;
+    rowsEl.appendChild(tpl.content.cloneNode(true));
+  });
+  rowsEl?.addEventListener('click', (ev) => {
+    const btn = ev.target.closest?.('.saml-attr-del');
+    if (!btn) return;
+    const row = btn.closest('.saml-attr-row');
+    if (row && rowsEl.querySelectorAll('.saml-attr-row').length > 1) row.remove();
+    else if (row) {
+      row.querySelector('.saml-attr-name').value = '';
+    }
+  });
+}
+
+function collectSamlAttrMap(bd, pfx) {
+  const map = {};
+  bd.querySelectorAll(`#${pfx}-attr-rows .saml-attr-row`).forEach((row) => {
+    const name = row.querySelector('.saml-attr-name')?.value?.trim();
+    const field = row.querySelector('.saml-attr-field')?.value?.trim();
+    if (name && field) map[name] = field;
+  });
+  return map;
+}
+
+function collectSamlSpExtras(bd, pfx) {
+  return {
+    attributeMap: collectSamlAttrMap(bd, pfx),
+    nameidAttribute: bd.querySelector(`#${pfx}-nameid-attr`)?.value || 'email_corp',
+    signAssertions: !!bd.querySelector(`#${pfx}-sign-assert`)?.checked,
+    signResponse: !!bd.querySelector(`#${pfx}-sign-resp`)?.checked,
+    mergeDefaultAttrs: !!bd.querySelector(`#${pfx}-merge-defaults`)?.checked,
+  };
+}
+
 async function parseSamlMetadataClient(metadata) {
   if (typeof api.parseSamlMetadata === 'function') {
     return api.parseSamlMetadata(metadata);
@@ -502,7 +628,7 @@ export async function viewIgaApps(content, opts = {}) {
   }
 
   // ── SAML edit modal (for use within catalog) ───────────────────────────────
-  function openSpModal(sp = null) {
+  async function openSpModal(sp = null) {
     const isEdit = !!sp;
     const NAMEID_OPTIONS = [
       ['urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',    'Email Address'],
@@ -511,7 +637,10 @@ export async function viewIgaApps(content, opts = {}) {
       ['urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified',     'Unspecified'],
       ['urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName', 'X.509 Subject'],
     ];
+    const { fields, defaultAttributeMap } = await loadSamlAttributeFields();
     const curFormat = sp?.nameid_format || 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
+    const curNameidAttr = sp?.nameid_attribute || 'email_corp';
+    const attrRows = samlAttrMapRowsFromSp(sp, defaultAttributeMap);
     const bd = openModal(`<div class="modal modal-saml-reg">
       <div class="modal-header"><h2>${isEdit ? 'Edit SAML Application' : 'Register SAML Application'}</h2></div>
       <div class="modal-body" style="max-height:78vh;overflow-y:auto;overflow-x:hidden">
@@ -539,12 +668,20 @@ export async function viewIgaApps(content, opts = {}) {
             <label class="form-label">SLO URL <span class="muted" style="font-weight:400">(optional)</span></label>
             <input class="form-input" id="csp-slo" type="url" value="${esc(sp?.slo_url||'')}" placeholder="https://app.example.com/saml/slo">
           </div>
-          <div class="form-group span2">
+          <div class="form-group">
             <label class="form-label">NameID Format</label>
             <select class="form-select" id="csp-nameid">
               ${NAMEID_OPTIONS.map(([v, l]) => `<option value="${esc(v)}" ${curFormat===v?'selected':''}>${esc(l)}</option>`).join('')}
             </select>
           </div>
+          <div class="form-group">
+            <label class="form-label">NameID value (employee field)</label>
+            <select class="form-select" id="csp-nameid-attr">
+              ${empFieldOptionsHtml(fields, curNameidAttr)}
+            </select>
+          </div>
+          ${samlAttrMapEditorHtml('csp', attrRows, fields)}
+          ${samlSigningHtml('csp', sp)}
           <div class="form-group span2">
             <label class="form-label">Icon URL <span class="muted" style="font-weight:400">(optional)</span></label>
             <input class="form-input" id="csp-icon" type="url" value="${esc(sp?.icon_url||'')}" placeholder="https://…/logo.png">
@@ -559,6 +696,7 @@ export async function viewIgaApps(content, opts = {}) {
     </div>`);
 
     bindSpMetadataUpload(bd, 'csp', { errId: 'csp-err', nameId: 'csp-name', slugId: 'csp-slug', isEdit });
+    bindSamlAttrEditor(bd, 'csp');
     bd.querySelector('#csp-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#csp-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#csp-save');
@@ -570,6 +708,7 @@ export async function viewIgaApps(content, opts = {}) {
       const sloUrl   = bd.querySelector('#csp-slo').value.trim();
       const nameidFormat = bd.querySelector('#csp-nameid').value;
       const iconUrl  = bd.querySelector('#csp-icon').value.trim();
+      const extras = collectSamlSpExtras(bd, 'csp');
 
       if (!name)     { bd.querySelector('#csp-err').innerHTML = errHtml('Name is required.'); return; }
       if (!isEdit) {
@@ -581,7 +720,7 @@ export async function viewIgaApps(content, opts = {}) {
 
       saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
       const data = { name, entityId, acsUrl, nameidFormat,
-        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined };
+        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined, ...extras };
       if (!isEdit) data.slug = slug;
 
       try {
@@ -857,9 +996,12 @@ export async function viewSamlApps(me, content, opts = {}) {
     ['urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName',    'X.509 Subject'],
   ];
 
-  function openSpModal(sp = null) {
+  async function openSpModal(sp = null) {
     const isEdit = !!sp;
+    const { fields, defaultAttributeMap } = await loadSamlAttributeFields();
     const curFormat = sp?.nameid_format || 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
+    const curNameidAttr = sp?.nameid_attribute || 'email_corp';
+    const attrRows = samlAttrMapRowsFromSp(sp, defaultAttributeMap);
     const bd = openModal(`<div class="modal modal-saml-reg">
       <div class="modal-header"><h2>${isEdit ? 'Edit SAML Application' : 'Register SAML Application'}</h2></div>
       <div class="modal-body" style="max-height:78vh;overflow-y:auto;overflow-x:hidden">
@@ -887,12 +1029,20 @@ export async function viewSamlApps(me, content, opts = {}) {
             <label class="form-label">SLO URL <span class="muted" style="font-weight:400">(optional)</span></label>
             <input class="form-input" id="sp-slo" type="url" value="${esc(sp?.slo_url||'')}" placeholder="https://app.example.com/saml/slo">
           </div>
-          <div class="form-group span2">
+          <div class="form-group">
             <label class="form-label">NameID Format</label>
             <select class="form-select" id="sp-nameid">
               ${NAMEID_OPTIONS.map(([v, l]) => `<option value="${esc(v)}" ${curFormat===v?'selected':''}>${esc(l)}</option>`).join('')}
             </select>
           </div>
+          <div class="form-group">
+            <label class="form-label">NameID value (employee field)</label>
+            <select class="form-select" id="sp-nameid-attr">
+              ${empFieldOptionsHtml(fields, curNameidAttr)}
+            </select>
+          </div>
+          ${samlAttrMapEditorHtml('sp', attrRows, fields)}
+          ${samlSigningHtml('sp', sp)}
           <div class="form-group span2">
             <label class="form-label">Icon URL <span class="muted" style="font-weight:400">(optional)</span></label>
             <input class="form-input" id="sp-icon" type="url" value="${esc(sp?.icon_url||'')}" placeholder="https://…/logo.png">
@@ -907,6 +1057,7 @@ export async function viewSamlApps(me, content, opts = {}) {
     </div>`);
 
     bindSpMetadataUpload(bd, 'sp', { errId: 'sp-err', nameId: 'sp-name', slugId: 'sp-slug', isEdit });
+    bindSamlAttrEditor(bd, 'sp');
     bd.querySelector('#sp-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#sp-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#sp-save');
@@ -918,6 +1069,7 @@ export async function viewSamlApps(me, content, opts = {}) {
       const sloUrl   = bd.querySelector('#sp-slo').value.trim();
       const nameidFormat = bd.querySelector('#sp-nameid').value;
       const iconUrl  = bd.querySelector('#sp-icon').value.trim();
+      const extras = collectSamlSpExtras(bd, 'sp');
 
       if (!name)     { bd.querySelector('#sp-err').innerHTML = errHtml('Name is required.'); return; }
       if (!isEdit) {
@@ -929,7 +1081,7 @@ export async function viewSamlApps(me, content, opts = {}) {
 
       saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
       const data = { name, entityId, acsUrl, nameidFormat,
-        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined };
+        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined, ...extras };
       if (!isEdit) data.slug = slug;
 
       try {
