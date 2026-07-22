@@ -934,7 +934,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-22 — Omit InResponseTo on IdP-initiated SAML
+### `2a4c8a6` — 2026-07-22 — Omit InResponseTo on IdP-initiated SAML
 
 **Why** — Portal tile launch (IdP-initiated) failed at SentinelOne while SP-initiated SSO worked. Unsolicited responses were sent with `InResponseTo=""`, which WebSSO SPs reject.
 
