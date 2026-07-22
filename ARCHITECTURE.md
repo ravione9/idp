@@ -308,6 +308,8 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 **Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which replays the stored request and posts the SAML assertion to the SP ACS.
 
+**Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map`. samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it — required by SentinelOne and similar SPs.
+
 ### 6.2 Service Provider registry
 
 Each SAML application is registered in `saml_service_providers`:
@@ -931,6 +933,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-22 — SAML AuthnStatement for WebSSO SPs (SentinelOne)
+
+**Why** — SentinelOne SSO Test failed with `The Assertion must include an AuthnStatement element`. samlify's default IdP response omits `AuthnStatement`.
+
+**What changed:**
+
+- **`src/saml/idp.ts`** — set `loginResponseTemplate` and `customTagReplacement` so SP- and IdP-initiated assertions include `AuthnStatement` + mapped `AttributeStatement`.
+- **§6.1** — document assertion shape.
 
 ### `0e77701` — 2026-07-21 — OAuth / OIDC app integration visibility
 

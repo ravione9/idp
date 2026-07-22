@@ -16,6 +16,18 @@ import { DEFAULT_ATTRIBUTE_MAP } from './types.js';
 
 let idpInstance: saml.IdentityProviderInstance | null = null;
 
+/**
+ * samlify's default login response leaves `{AuthnStatement}` empty. WebSSO SPs
+ * (SentinelOne, Shibboleth, etc.) reject assertions without AuthnStatement.
+ * Fold AttributeStatement into the same tag so entity-idp's empty attributes[]
+ * bake-in cannot leave a bare `<AttributeStatement/>` in the template.
+ */
+const LOGIN_RESPONSE_TEMPLATE_CONTEXT =
+  saml.SamlLib.defaultLoginResponseTemplate.context.replace(
+    '{AuthnStatement}{AttributeStatement}',
+    '{AuthnStatement}',
+  );
+
 function getIdp(): saml.IdentityProviderInstance {
   if (!isSamlEnabled()) {
     throw new Error('SAML IdP is not configured');
@@ -28,6 +40,10 @@ function getIdp(): saml.IdentityProviderInstance {
       signingCert:  s.certPem,
       isAssertionEncrypted: false,
       wantAuthnRequestsSigned: false,
+      loginResponseTemplate: {
+        context:    LOGIN_RESPONSE_TEMPLATE_CONTEXT,
+        attributes: [],
+      },
       singleSignOnService: [
         {
           Binding:  saml.Constants.namespace.binding.redirect,
@@ -139,6 +155,94 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;');
 }
 
+function escapeXml(s: string): string {
+  return escapeHtml(s);
+}
+
+/** samlify metadata getters are typed as `string | string[]`. */
+function asMetaString(value: string | string[]): string {
+  return Array.isArray(value) ? (value[0] ?? '') : value;
+}
+
+function buildAuthnStatement(authnInstant: string, sessionIndex: string): string {
+  return (
+    `<saml:AuthnStatement AuthnInstant="${escapeXml(authnInstant)}" SessionIndex="${escapeXml(sessionIndex)}">` +
+    `<saml:AuthnContext>` +
+    `<saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport</saml:AuthnContextClassRef>` +
+    `</saml:AuthnContext>` +
+    `</saml:AuthnStatement>`
+  );
+}
+
+function buildAttributeStatement(attributes: Record<string, string>): string {
+  const entries = Object.entries(attributes);
+  if (entries.length === 0) return '';
+  const attrs = entries
+    .map(
+      ([name, value]) =>
+        `<saml:Attribute Name="${escapeXml(name)}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic">` +
+        `<saml:AttributeValue xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="xs:string">${escapeXml(value)}</saml:AttributeValue>` +
+        `</saml:Attribute>`,
+    )
+    .join('');
+  return `<saml:AttributeStatement>${attrs}</saml:AttributeStatement>`;
+}
+
+interface SamlRequestInfo {
+  extract?: { request?: { id?: string } };
+}
+
+/**
+ * samlify customTagReplacement: fill AuthnStatement (+ attributes) for WebSSO SPs.
+ * Must return `{ id, context }` when loginResponseTemplate is set.
+ */
+function createLoginResponseTagReplacement(
+  idp: saml.IdentityProviderInstance,
+  spInstance: saml.ServiceProviderInstance,
+  userInfo: { email: string; attributes: Record<string, string> },
+  requestInfo: SamlRequestInfo | null,
+  nameIdFormat: string,
+): (template: string) => { id: string; context: string } {
+  return (template: string) => {
+    const idpSetting = idp.entitySetting as { generateID: () => string };
+    const id = idpSetting.generateID();
+    const assertionId = idpSetting.generateID();
+    const sessionIndex = idpSetting.generateID();
+    const acs = asMetaString(spInstance.entityMeta.getAssertionConsumerService('post'));
+    const spEntityID = asMetaString(spInstance.entityMeta.getEntityID());
+    const issuer = asMetaString(idp.entityMeta.getEntityID());
+    const nowTime = new Date();
+    const now = nowTime.toISOString();
+    const fiveMinutesLater = new Date(nowTime.getTime() + 5 * 60 * 1000).toISOString();
+    const inResponseTo = requestInfo?.extract?.request?.id ?? '';
+
+    const tvalue: Record<string, string> = {
+      ID: id,
+      AssertionID: assertionId,
+      Destination: acs,
+      Audience: spEntityID,
+      EntityID: spEntityID,
+      SubjectRecipient: acs,
+      Issuer: issuer,
+      IssueInstant: now,
+      AssertionConsumerServiceURL: acs,
+      StatusCode: saml.Constants.StatusCode.Success,
+      ConditionsNotBefore: now,
+      ConditionsNotOnOrAfter: fiveMinutesLater,
+      SubjectConfirmationDataNotOnOrAfter: fiveMinutesLater,
+      NameIDFormat: nameIdFormat,
+      NameID: userInfo.email || '',
+      InResponseTo: inResponseTo,
+      AuthnStatement: buildAuthnStatement(now, sessionIndex) + buildAttributeStatement(userInfo.attributes),
+    };
+
+    return {
+      id,
+      context: saml.SamlLib.replaceTagsByValue(template, tvalue),
+    };
+  };
+}
+
 /**
  * SP-initiated SSO: parse AuthnRequest and return HTML auto-post form to ACS.
  */
@@ -159,7 +263,13 @@ export async function createSpInitiatedLoginResponse(input: SamlLoginInput): Pro
     flowResult,
     'post',
     userInfo,
-    undefined,
+    createLoginResponseTagReplacement(
+      idp,
+      spInstance,
+      userInfo,
+      flowResult as SamlRequestInfo,
+      input.sp.nameid_format,
+    ),
     false,
     input.relayState ?? '',
   ) as SamlPostResult;
@@ -184,7 +294,7 @@ export async function createIdpInitiatedLoginResponse(
     null as unknown as Record<string, unknown>,
     'post',
     userInfo,
-    undefined,
+    createLoginResponseTagReplacement(idp, spInstance, userInfo, null, sp.nameid_format),
     false,
     relayState,
   ) as SamlPostResult;
