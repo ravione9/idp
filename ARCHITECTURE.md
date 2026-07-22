@@ -934,7 +934,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-22 — Fix SAML InResponseTo double-escaping (SentinelOne XSD)
+### `e833a8d` — 2026-07-22 — Fix SAML InResponseTo double-escaping (SentinelOne XSD)
 
 **Why** — SentinelOne SSO Test failed with `Invalid SAML Response. Not match the saml-schema-protocol-2.0.xsd`. Root cause: template tag replacement treated the closing quote of `Destination="…"` as the opener for adjacent `{InResponseToAttr}`, emitting `InResponseTo="&quot;request-id&quot;"`.
 
