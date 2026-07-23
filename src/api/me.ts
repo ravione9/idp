@@ -8,8 +8,14 @@ import { queryOne } from '../db/connection.js';
 import { config, isSamlEnabled } from '../config.js';
 import { ROLES } from '../auth/rbac.js';
 import { PORTAL_OPERATOR_ROLES, resolvePortalAccess } from '../services/portal-roles.js';
+import { getClientIpDebug } from '../utils/request-context.js';
 
 const router = Router();
+
+/** Diagnoses endpoint vs origin IP (for IP allowlist setup). */
+router.get('/client-ip', requireAuth, (req: Request, res: Response): void => {
+  res.json({ data: getClientIpDebug(req) });
+});
 
 router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;

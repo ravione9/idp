@@ -292,6 +292,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const { warmServerPublicIp } = await import('./utils/server-public-ip.js');
+  await warmServerPublicIp();
+
   await sessionRedis.connect();
   logger.info('Redis connected');
 

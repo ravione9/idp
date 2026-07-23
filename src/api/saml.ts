@@ -32,7 +32,8 @@ import {
   logSamlAssertion,
   samlBindingFromFlow,
 } from '../saml/assertion-log.js';
-import { getClientIp } from '../utils/request-context.js';
+import { getClientIp, getClientIpDebug } from '../utils/request-context.js';
+import { getCachedServerPublicIp } from '../utils/server-public-ip.js';
 
 const router = Router();
 const PENDING_SSO_PREFIX = 'lilg:saml:pending:';
@@ -114,18 +115,40 @@ function escHtml(s: string): string {
 }
 
 function respondLaunchDenied(
+  req: Request,
   res: Response,
   reason: string | undefined,
   clientIp: string,
   appName?: string,
 ): void {
   if (reason === 'IP_DENIED') {
+    const dbg = getClientIpDebug(req);
+    const serverIp = getCachedServerPublicIp();
+    const missingCf = !dbg.cfConnectingIp;
+    const looksLikeOrigin =
+      !!serverIp && (clientIp === serverIp || dbg.xForwardedFor === serverIp);
+    logger.warn(
+      { appName, reason, ...dbg },
+      'SSO launch denied by IP allowlist — check proxy client-IP headers',
+    );
+
+    let detail =
+      `This application can only be opened from allowed network locations.`
+      + (appName ? ` (${appName})` : '')
+      + (clientIp && clientIp !== 'unknown'
+        ? ` Your endpoint public IP: ${clientIp}.`
+        : ' Could not determine your endpoint public IP.');
+    if (missingCf || looksLikeOrigin) {
+      detail +=
+        ' Note: Cloudflare CF-Connecting-IP was not seen by the IdP'
+        + (looksLikeOrigin ? ' (resolved IP matched the server/origin IP)' : '')
+        + '. Proxy headers may be missing — ask an admin to verify TRUST_PROXY and origin forwarding.';
+    }
+
     sendSsoDeniedPage(res, {
       title: 'Application access denied',
       message: 'Unrestricted IP — application access denied.',
-      detail: `This application can only be opened from allowed network locations.`
-        + (appName ? ` (${appName})` : '')
-        + (clientIp && clientIp !== 'unknown' ? ` Your public IP: ${clientIp}.` : ''),
+      detail,
       code: 'IP_DENIED',
     });
     return;
@@ -253,7 +276,7 @@ async function issueAssertion(
       { clientIp, enforceIp: true },
     );
     if (!decision.allowed) {
-      respondLaunchDenied(res, decision.reason, clientIp, resolved.sp.name);
+      respondLaunchDenied(req, res, decision.reason, clientIp, resolved.sp.name);
       return;
     }
   }
@@ -395,7 +418,7 @@ router.get('/launch/:slug', async (req: Request, res: Response): Promise<void> =
       { clientIp, enforceIp: true },
     );
     if (!decision.allowed) {
-      respondLaunchDenied(res, decision.reason, clientIp, sp.name);
+      respondLaunchDenied(req, res, decision.reason, clientIp, sp.name);
       return;
     }
   }

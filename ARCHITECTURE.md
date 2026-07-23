@@ -183,7 +183,7 @@ Google OIDC credentials are resolved in this order:
 - Cookie flags: `HttpOnly`, `SameSite=Lax`. `Secure` is on in production but **off** when `COOKIE_SECURE=false` (dev plain HTTP).
 - Each session records **public IP** (`ip`), **device** (`device_info`), and **location** (`geo_location`). Gmail-style attribution — no workstation agent required:
   1. **`device_info`** — parsed from the `User-Agent` at login time (e.g. `Chrome · Windows 10/11`). Always populated synchronously.
-  2. **`ip`** — client public IP via `getClientIp()` (`CF-Connecting-IP` → first `X-Forwarded-For` hop → socket).
+  2. **`ip`** — endpoint public IP via `getClientIp()` (`CF-Connecting-IP` → `True-Client-IP` → `X-Real-IP` → `X-Forwarded-For` public hops → socket). Skips private IPs and the IdP host EIP (`SERVER_PUBLIC_IP` / EC2 IMDS).
   3. **`geo_location`** — async IP geolocation after login (e.g. `Mumbai · India` via ip-api.com). Fire-and-forget; never blocks login.
 - Migrations **`024_drop_client_mac.sql`** and **`025_session_geo_device.sql`** removed agent-dependent columns (`client_hostname`, `client_local_ip`, `client_mac`).
 
@@ -951,6 +951,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-23 — Fix client IP (use endpoint, not server EIP)
+
+**Why** — IP allowlist deny page showed the IdP/EC2 public IP (`13.203.x`) instead of the user’s endpoint IP when Cloudflare client headers were missing or the origin EIP appeared in `X-Forwarded-For`.
+
+**What changed:**
+
+- **`getClientIp()`** — prefer `CF-Connecting-IP` / `True-Client-IP` / `X-Real-IP`, then public XFF hops; skip private IPs and known server EIP (env + EC2 IMDS warm-up).
+- **`GET /api/me/client-ip`** — debug snapshot of resolved IP + headers.
+- Deny page warns when CF-Connecting-IP is absent / IP matches origin.
 
 ### `ec37d5e` — 2026-07-23 — IP restrict at launch (keep app tiles visible)
 
