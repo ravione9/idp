@@ -19,7 +19,7 @@ import {
   viewGroups, viewBulkUsers, viewSystemUsers, viewIdentityProfiles,
   viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies,
   viewDirectorySync,
-  viewRoles, viewBirthright, viewAppAccessPolicy,
+  viewRoles, viewBirthright, viewEntitlementCatalog, viewAppAccessPolicy,
   viewPamResources, viewPamSessions, viewPamVault,
   viewWorkflowLibrary, viewNotifications,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
@@ -68,6 +68,7 @@ const ROUTES = {
 
   /* ── Admin > Access Model ── */
   roles:            { primary: 'admin', group: 'Access Model', label: 'Business Roles',            icon: 'tag',      admin: true, module: 'access_model', view: viewRoles },
+  entitlementCatalog: { primary: 'admin', group: 'Access Model', label: 'Entitlements Catalog',    icon: 'list',     admin: true, module: 'access_model', view: viewEntitlementCatalog },
   birthright:       { primary: 'admin', group: 'Access Model', label: 'Birthright Rules',          icon: 'triangle', admin: true, module: 'access_model', view: viewBirthright },
   appAccessPolicy:  { primary: 'admin', group: 'Access Model', label: 'Application Access Policy', icon: 'key',      admin: true, module: 'access_model', view: viewAppAccessPolicy },
 

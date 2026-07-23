@@ -3696,7 +3696,20 @@ function initSourcesTab(panel) {
       [configured, 'Not tested', 'info'],
       [errors, 'Errors', errors ? 'danger' : 'neutral'],
       [lastSync ? fmtDate(lastSync) : '—', 'Last sync', 'neutral'],
-    ]);
+    ]) + `<div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap">
+      <button type="button" class="btn btn-secondary btn-sm" id="ds-harvest-all">Harvest All Roles</button>
+      <a class="btn btn-ghost btn-sm" href="/?v=entitlementCatalog">View entitlements catalog →</a>
+    </div>`;
+    panel.querySelector('#ds-harvest-all')?.addEventListener('click', async () => {
+      if (!confirm('Harvest groups/roles from all AD and Google connectors into the entitlements catalog?')) return;
+      const btn = panel.querySelector('#ds-harvest-all');
+      btn.disabled = true; btn.textContent = 'Harvesting…';
+      try {
+        const r = await api.harvestAllEntitlements();
+        showToast(`Done — ${r.harvested ?? 0} new, ${r.updated ?? 0} updated across ${r.connectors ?? 0} connector(s).`);
+      } catch (e) { showToast(e.message || 'Harvest all failed', true); }
+      btn.disabled = false; btn.textContent = 'Harvest All Roles';
+    });
   }
 
   function renderSourceTable(connectors) {
@@ -6163,6 +6176,59 @@ export async function viewRoles(content) {
 }
 
 // ─── 12. Birthright ───────────────────────────────────────────────────────────
+/** Admin catalog of IGA entitlements (including harvested AD/Google groups). */
+export async function viewEntitlementCatalog(content) {
+  content.replaceChildren(el(`<div>${header('Entitlements Catalog', 'Roles and groups available for Request Access — including harvested directory entitlements', `<button class="btn btn-secondary" id="ec-refresh">Refresh</button>`)}
+    <p class="muted" style="margin:-0.5rem 0 1rem">Harvest from <strong>Directory Sync → Harvest Roles</strong> (AD/Google). SAML apps use <strong>Application Access Policy</strong> for SSO; in-app roles need a future app connector.</p>
+    <div id="ec-area">${loading()}</div></div>`));
+  const wrap = content.firstChild;
+
+  async function load() {
+    try {
+      const [ents, connectors] = await Promise.all([
+        api.igaEntitlements({ limit: 500, active: 1 }),
+        api.igaConnectors().catch(() => ({ data: [] })),
+      ]);
+      const list = norm(ents);
+      const connOpts = norm(connectors);
+      const harvested = list.filter(e => e.external_id && e.connector_id);
+      const rows = list.length ? list.map(e => {
+        let source = 'Manual';
+        try {
+          const m = typeof e.metadata === 'string' ? JSON.parse(e.metadata || '{}') : (e.metadata || {});
+          if (m.source) source = String(m.source);
+        } catch { /* ignore */ }
+        if (e.external_id && e.connector_id) source = source === 'Manual' ? 'Harvested' : source;
+        return `<tr>
+          <td class="cell-strong">${esc(e.name)}</td>
+          <td><code style="font-size:0.75rem">${esc(e.slug || '')}</code></td>
+          <td><span class="badge badge-info">${esc(e.type || '—')}</span></td>
+          <td class="muted">${esc(e.connector_name || '—')}</td>
+          <td class="muted" style="font-size:0.78rem;max-width:14rem;overflow:hidden;text-overflow:ellipsis" title="${esc(e.external_id || '')}">${esc(e.external_id || '—')}</td>
+          <td><span class="badge ${source === 'Manual' ? 'badge-neutral' : 'badge-success'}">${esc(source)}</span></td>
+          <td class="muted">${e.last_harvested_at ? fmtDate(e.last_harvested_at) : '—'}</td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="7"><div class="empty-state"><p>No entitlements yet. Run <strong>Harvest Roles</strong> on a Connected AD/Google source, or create birthright rules.</p></div></td></tr>`;
+
+      wrap.querySelector('#ec-area').innerHTML = `
+        <div class="stat-grid" style="margin-bottom:1rem">
+          <div class="stat-card"><div class="stat-value">${list.length}</div><div class="stat-label">Active entitlements</div></div>
+          <div class="stat-card"><div class="stat-value">${harvested.length}</div><div class="stat-label">Harvested from connectors</div></div>
+          <div class="stat-card"><div class="stat-value">${connOpts.length}</div><div class="stat-label">Directory sources</div></div>
+        </div>
+        <div class="table-wrap"><table><thead><tr>
+          <th>Name</th><th>Slug</th><th>Type</th><th>Connector</th><th>External ID</th><th>Source</th><th>Last harvest</th>
+        </tr></thead><tbody>${rows}</tbody></table></div>
+        <p class="muted" style="margin-top:1rem;font-size:0.85rem">End users see these under <strong>Request Access → Entitlements</strong>. Granted memberships appear in <strong>My Access</strong>.</p>`;
+    } catch (e) {
+      wrap.querySelector('#ec-area').innerHTML = errHtml(e.message);
+    }
+  }
+
+  wrap.querySelector('#ec-refresh')?.addEventListener('click', () => load());
+  await load();
+}
+
 export async function viewBirthright(content) {
   content.replaceChildren(el(`<div>${header('Birthright Rules', 'Auto-grant entitlements when joiner attributes match a rule')}<div id="br-area">${loading()}</div></div>`));
   const wrap = content.firstChild;

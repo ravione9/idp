@@ -105,7 +105,19 @@ Object.assign(api, {
   deleteIgaApp:     (id) => f(`/api/iga/applications/${id}`, { method: 'DELETE' }),
   igaConnectors:    () => f('/api/iga/connectors'),
   harvestEntitlements: (id) => f(`/api/iga/connectors/${id}/harvest-entitlements`, { method: 'POST' }),
-  igaEntitlements:  (appId) => f(`/api/iga/entitlements${appId ? `?appId=${appId}` : ''}`),
+  harvestAllEntitlements: () => f('/api/iga/connectors/harvest-entitlements-all', { method: 'POST' }),
+  igaEntitlements:  (opts) => {
+    const q = new URLSearchParams();
+    if (typeof opts === 'string' && opts) q.set('appId', opts);
+    else if (opts && typeof opts === 'object') {
+      if (opts.appId) q.set('appId', opts.appId);
+      if (opts.connectorId) q.set('connectorId', opts.connectorId);
+      if (opts.active != null) q.set('active', String(opts.active));
+      if (opts.limit) q.set('limit', String(opts.limit));
+    }
+    const qs = q.toString();
+    return f(`/api/iga/entitlements${qs ? `?${qs}` : ''}`);
+  },
   igaMyAccess:      () => f('/api/iga/entitlements/me'),
   igaAccessReqs:    (scope = 'mine', status = '') =>
     f(`/api/iga/access-requests?scope=${encodeURIComponent(scope)}${status ? `&status=${encodeURIComponent(status)}` : ''}`),

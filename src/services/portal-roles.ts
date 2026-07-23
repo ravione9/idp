@@ -38,6 +38,7 @@ export const ROUTE_MODULE: Record<string, PortalModuleKey> = {
   radiusVpn: 'authentication',
   directorySync: 'connections',
   roles: 'access_model',
+  entitlementCatalog: 'access_model',
   birthright: 'access_model',
   appAccessPolicy: 'access_model',
   reviews: 'governance',

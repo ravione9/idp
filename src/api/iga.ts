@@ -282,6 +282,42 @@ router.get(
   }),
 );
 
+/** Harvest entitlements from every AD/Google connector (must be before :id routes). */
+router.post(
+  '/connectors/harvest-entitlements-all',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const connectors = await query<{ id: string; name: string; connector_type: string; status: string }>(
+      `SELECT id, name, connector_type, status FROM connectors
+        WHERE UPPER(connector_type) IN ('AD','LDAP','GOOGLE','GOOGLE_WORKSPACE')
+           OR slug IN ('active-directory','google-workspace')
+        ORDER BY name`,
+      [],
+    );
+    const results: Array<Record<string, unknown>> = [];
+    for (const c of connectors) {
+      try {
+        const r = await harvestConnectorEntitlements(c.id, req.user!.empId);
+        results.push({ ...r, ok: true });
+      } catch (err) {
+        results.push({
+          connectorId: c.id,
+          connectorName: c.name,
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    res.json({
+      connectors: results.length,
+      harvested: results.reduce((n, r) => n + (Number(r['harvested']) || 0), 0),
+      updated: results.reduce((n, r) => n + (Number(r['updated']) || 0), 0),
+      results,
+    });
+  }),
+);
+
 router.post(
   '/connectors/:id/sync',
   requireRole('ADMIN', 'SUPER_ADMIN'),
@@ -330,6 +366,7 @@ router.post(
     }
   }),
 );
+
 
 // GET /connectors/:id — get single connector with config
 router.get(

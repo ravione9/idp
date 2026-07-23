@@ -719,7 +719,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Authentication** | SSO Configuration · Strong Auth Methods · Adaptive Auth · Password Policies · **VPN / RADIUS** |
 | **Applications** | Applications (tabs: Catalog · SAML · OIDC / OAuth · Pre-built · App Discovery) |
 | **Connections** | Directory Sync (Connectors redirects here) |
-| **Access Model** | Business Roles · Birthright Rules · Application Access Policy |
+| **Access Model** | Business Roles · **Entitlements Catalog** (harvested + manual) · Birthright Rules · Application Access Policy |
 | **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault · System Users — **SUPER_ADMIN only** (AES-GCM vault; no session broker yet) |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
 | **Workflows** | Workflows (tabs: Definitions · Event Triggers · Run History) · Notifications |
@@ -993,7 +993,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-07-23 — Entitlement harvest from connectors (OIG-style)
+### `2cbbed9` — 2026-07-23 — Entitlement harvest from connectors (OIG-style)
 
 **Why** — Oracle IGA pulls app/directory roles into a request catalog via connector harvest; we only had manual entitlements + directory account sync.
 
