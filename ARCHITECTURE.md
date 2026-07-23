@@ -1005,7 +1005,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-07-23 — Expire stale JIT requests + Request Access status UI
+### `2f9a219` — 2026-07-23 — Expire stale JIT requests + Request Access status UI
 
 **Why** — A pending APP_ACCESS request hid the app forever; after SLA elapsed users could not re-request. Empty state looked sparse.
 
