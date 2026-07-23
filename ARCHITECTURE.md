@@ -1012,7 +1012,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-23 — App Discovery: browser signals only (no wishlist)
+### `e6e9c72` — 2026-07-23 — App Discovery: browser signals only (no wishlist)
 
 **Why** — Catalog-suggestion list still looked like “discovered apps” the user never used. Browsers also cannot expose HTTP disk cache/history to a website.
 
