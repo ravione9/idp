@@ -963,7 +963,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-23 — Enterprise Reports Hub
+### `0b7b789` — 2026-07-23 — Enterprise Reports Hub
 
 **Why** — Reports was a thin audit/CSV surface; auditors and IAM ops need an executive overview plus governance reports (inventory, MFA, lifecycle, certifications, SoD) in one place.
 
