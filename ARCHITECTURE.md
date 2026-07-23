@@ -1005,7 +1005,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-07-23 — JIT Request Access catalog visibility fixes
+### `2c1bf89` — 2026-07-23 — JIT Request Access catalog visibility fixes
 
 **Why** — Users configured a JIT workflow but the app did not appear under Request Access (silent empty catalog).
 
