@@ -644,6 +644,7 @@ To add a new migration:
 | `POST` | `/api/iga/connectors` | Register connector |
 | `GET` | `/api/iga/connectors/:id/runs` | Connector run history |
 | `POST` | `/api/iga/connectors/:id/sync` | Trigger sync / outbound provision (AD, LDAP, GOOGLE, GOOGLE_WORKSPACE) |
+| `POST` | `/api/iga/connectors/:id/harvest-entitlements` | Harvest directory groups into IGA `entitlements` catalog (OIG-style) |
 | `GET` | `/api/iga/entitlements[?appId=…]` | Entitlement catalog (any authenticated user — Request Access) |
 | `GET` | `/api/iga/entitlements/me` | My current entitlements |
 | `GET` | `/api/iga/roles` | Active business roles for Request Access catalog |
@@ -922,6 +923,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Access request decisions** — `POST /api/iga/access-requests/:id/decision` (approve/reject, auto-fulfil entitlements on final approval) in `src/services/access-request-workflow.ts`
 - ✅ **Birthright entitlement engine** — `src/services/birthright.ts` evaluates `birthright_rule` JSON (dept / employment type / role / group / exclude) and assigns/revokes on workflow JOINER/LEAVER + admin Dry Run / Run Now; optional connector kick for outbound AD/Google provision
 - ✅ **Connector dispatcher** — `src/services/connector-dispatcher.ts` routes `POST /api/iga/connectors/:id/sync` to the right sync service (AD or Google)
+- ✅ **Entitlement harvest** — `src/services/entitlement-harvest.ts` + fulfill (`entitlement-fulfillment.ts`): AD/Google groups → `entitlements` catalog; grant/request pushes group membership on target
 - ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); inbound import **skips disabled AD accounts** (does not create new portal users); existing linked users disabled in AD are marked `SUSPENDED_AUTO` and hidden from the Universal Directory; tracks runs in `connector_runs`
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import **skips suspended Google accounts** (same rules as AD); outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank OU/user scope syncs the full directory; non-empty filters combine with AND logic; blank/`*` **Sync Groups** auto-mirrors up to 200 Workspace groups into `groups` / `group_members` (requires `admin.directory.group.readonly` domain-wide delegation)
 - ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; AD writeback auto-retries StartTLS/LDAPS when the connector uses plain LDAP; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
@@ -990,6 +992,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `TBD` — 2026-07-23 — Entitlement harvest from connectors (OIG-style)
+
+**Why** — Oracle IGA pulls app/directory roles into a request catalog via connector harvest; we only had manual entitlements + directory account sync.
+
+**What changed:**
+
+- **Migration `045`** — `ENTITLEMENT_HARVEST` run type, `entitlements.last_harvested_at`, `entitlement_provision_log`.
+- **Harvest** — `POST /api/iga/connectors/:id/harvest-entitlements` imports AD/Google groups into `entitlements` (`type=GROUP`, `external_id`, metadata).
+- **Fulfillment** — grant / access-request approval adds/removes AD or Google group membership when entitlement is connector-backed.
+- **UI** — Directory Sync → **Harvest Roles** on each connector.
 
 ### `edff32f` — 2026-07-23 — Birthright rules, Credential Vault, connector provisioning
 

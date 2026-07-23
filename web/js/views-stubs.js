@@ -3724,6 +3724,7 @@ function initSourcesTab(panel) {
         <td class="actions">
           <div class="row-actions">
             <button class="btn btn-sm btn-primary ds-sync" data-id="${esc(String(c.id))}">Sync</button>
+            <button class="btn btn-sm btn-secondary ds-harvest" data-id="${esc(String(c.id))}" title="Import groups/roles into IGA entitlements catalog">Harvest Roles</button>
             <button class="btn btn-sm btn-secondary ds-test" data-id="${esc(String(c.id))}">Test</button>
             <button class="btn btn-sm btn-ghost ds-edit" data-id="${esc(String(c.id))}" data-type="${esc(c.connector_type)}" data-name="${esc(c.name)}" data-mode="${esc(c.sync_mode || '')}" data-sched="${esc(c.sync_schedule || '')}">Edit</button>
             <button class="btn btn-sm btn-ghost ds-logs" data-id="${esc(String(c.id))}" data-name="${esc(c.name)}">History</button>
@@ -3781,6 +3782,23 @@ function initSourcesTab(panel) {
           showToast('Sync triggered — check history for results.');
           await load();
         } catch(e) { alert('Sync failed: ' + e.message); btn.disabled = false; btn.textContent = '▶ Sync Now'; }
+      });
+    });
+
+    // Harvest Roles → IGA entitlements catalog (OIG-style)
+    panel.querySelectorAll('.ds-harvest').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Harvest groups/roles from this connector into the Request Access entitlements catalog?')) return;
+        btn.disabled = true; const prev = btn.textContent; btn.textContent = 'Harvesting…';
+        try {
+          const r = await api.harvestEntitlements(btn.dataset.id);
+          const errs = (r.errors && r.errors.length) ? ` Warnings: ${r.errors.slice(0, 3).join('; ')}` : '';
+          showToast(`Harvested ${r.harvested ?? 0} new, updated ${r.updated ?? 0}, deactivated ${r.deactivated ?? 0}.${errs}`);
+          await load();
+        } catch (e) {
+          showToast(e.message || 'Harvest failed', true);
+        }
+        btn.disabled = false; btn.textContent = prev || 'Harvest Roles';
       });
     });
 

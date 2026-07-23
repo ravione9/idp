@@ -20,6 +20,8 @@ import logger from '../utils/logger.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { triggerConnectorSync } from '../services/connector-dispatcher.js';
 import { runConnectorConnectivityTest } from '../services/connector-health.js';
+import { harvestConnectorEntitlements } from '../services/entitlement-harvest.js';
+import { fulfillEntitlementOnTarget } from '../services/entitlement-fulfillment.js';
 import { submitAccessRequest, processDecision } from '../services/access-request-workflow.js';
 import { listJitRequestableAppsForUser } from '../services/app-access-policy.js';
 import { createCampaign, submitReviewDecision } from '../services/access-review.js';
@@ -305,6 +307,30 @@ router.post(
   }),
 );
 
+/** Harvest app/directory roles (groups) into the IGA entitlements catalog (OIG-style). */
+router.post(
+  '/connectors/:id/harvest-entitlements',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    try {
+      const result = await harvestConnectorEntitlements(req.params['id']!, req.user!.empId);
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === 'Connector not found') {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg.includes('not connected') || msg.includes('not supported')) {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
+
 // GET /connectors/:id — get single connector with config
 router.get(
   '/connectors/:id',
@@ -450,12 +476,18 @@ router.get(
     const where: string[] = [];
     const params: unknown[] = [];
     if (appId) { where.push('e.app_id = ?'); params.push(appId); }
+    const connectorId = req.query['connectorId'] as string | undefined;
+    if (connectorId) { where.push('e.connector_id = ?'); params.push(connectorId); }
+    const activeOnly = String(req.query['active'] ?? '1') !== '0';
+    if (activeOnly) where.push('e.active = 1');
     const rows = await safeQuery<Record<string, unknown>>(
-      `SELECT e.id, e.app_id, e.connector_id, e.name, e.slug, e.type,
-              e.risk_score, e.is_birthright, e.requires_review, e.active, e.created_at,
-              a.name AS app_name
+      `SELECT e.id, e.app_id, e.connector_id, e.name, e.slug, e.type, e.description,
+              e.risk_score, e.is_birthright, e.requires_review, e.external_id, e.metadata,
+              e.active, e.created_at, e.last_harvested_at,
+              a.name AS app_name, c.name AS connector_name, c.connector_type
          FROM entitlements e
          LEFT JOIN applications a ON a.id = e.app_id
+         LEFT JOIN connectors c ON c.id = e.connector_id
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         ORDER BY e.name ASC
         LIMIT ? OFFSET ?`,
@@ -1086,17 +1118,19 @@ router.post(
       return;
     }
 
-    // Grant
-    const grantId = uuidv4();
+    // Grant (BIGINT AUTO_INCREMENT id)
+    const actor = grantedBy ?? req.user!.empId;
     await execute(
       `INSERT IGNORE INTO user_entitlements
-         (id, emp_id, entitlement_id, source, granted_by, granted_at)
-       VALUES (?, ?, ?, 'ADMIN_GRANT', ?, UTC_TIMESTAMP())`,
-      [grantId, empId, entId, grantedBy ?? req.user!.empId],
+         (emp_id, entitlement_id, source, granted_by, granted_at)
+       VALUES (?, ?, 'MANUAL', ?, UTC_TIMESTAMP())`,
+      [empId, entId, actor],
     );
 
-    logger.info({ grantId, empId, entId, grantedBy: grantedBy ?? req.user!.empId }, 'Entitlement granted directly');
-    res.status(201).json({ id: grantId, empId, entitlementId: entId });
+    const provision = await fulfillEntitlementOnTarget(empId, entId, 'GRANT', actor);
+
+    logger.info({ empId, entId, grantedBy: actor, provision }, 'Entitlement granted directly');
+    res.status(201).json({ empId, entitlementId: entId, provision });
   }),
 );
 

@@ -488,6 +488,63 @@ export class ADAdapter extends BaseAdapter {
   }
 
   /**
+   * Add a user (by sAMAccountName / UPN / DN) to an AD group (by DN or CN).
+   */
+  async addGroupMember(userKey: string, groupKey: string): Promise<AdapterResult<void>> {
+    return this.safe(async () => {
+      await this.ensureConnected();
+      const users = await this.findUser(userKey, ['dn']);
+      if (!users.length) throw new Error(`AD user not found: ${userKey}`);
+      const groupRes = await this.findGroup(groupKey);
+      if (!groupRes.success || !groupRes.data) throw new Error(`AD group not found: ${groupKey}`);
+      const userDn = users[0]!.dn;
+      const groupDn = groupRes.data.dn;
+      try {
+        await this.client.modify(groupDn, [
+          new Change({
+            operation: 'add',
+            modification: new Attribute({ type: 'member', values: [userDn] }),
+          }),
+        ]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Already a member — treat as success
+        if (/ATTRIBUTE_OR_VALUE_EXISTS|already exists|ENTRY_EXISTS/i.test(msg)) return;
+        throw err;
+      }
+      logger.info({ userDn, groupDn }, 'AD group member added');
+    });
+  }
+
+  /**
+   * Remove a user from an AD group.
+   */
+  async removeGroupMember(userKey: string, groupKey: string): Promise<AdapterResult<void>> {
+    return this.safe(async () => {
+      await this.ensureConnected();
+      const users = await this.findUser(userKey, ['dn']);
+      if (!users.length) throw new Error(`AD user not found: ${userKey}`);
+      const groupRes = await this.findGroup(groupKey);
+      if (!groupRes.success || !groupRes.data) throw new Error(`AD group not found: ${groupKey}`);
+      const userDn = users[0]!.dn;
+      const groupDn = groupRes.data.dn;
+      try {
+        await this.client.modify(groupDn, [
+          new Change({
+            operation: 'delete',
+            modification: new Attribute({ type: 'member', values: [userDn] }),
+          }),
+        ]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/NO_SUCH_ATTRIBUTE|no such attribute|not found/i.test(msg)) return;
+        throw err;
+      }
+      logger.info({ userDn, groupDn }, 'AD group member removed');
+    });
+  }
+
+  /**
    * List security groups under the domain root (for syncGroups = *).
    * Skips built-in domain groups; capped at 200.
    */

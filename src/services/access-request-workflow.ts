@@ -397,13 +397,16 @@ export async function processDecision(
   }
 
   if (request.item_type === 'ENTITLEMENT') {
+    const { fulfillEntitlementOnTarget } = await import('./entitlement-fulfillment.js');
     for (const itemId of itemIds) {
       await execute(
         `INSERT IGNORE INTO user_entitlements
-           (id, emp_id, entitlement_id, source, granted_by, granted_at)
-         VALUES (?, ?, ?, 'REQUEST', ?, UTC_TIMESTAMP())`,
-        [uuidv4(), request.target_emp_id, itemId, actorEmpId],
+           (emp_id, entitlement_id, source, granted_by, granted_at)
+         VALUES (?, ?, 'REQUEST', ?, UTC_TIMESTAMP())`,
+        [request.target_emp_id, itemId, actorEmpId],
       ).catch((err) => logger.warn({ err, requestId, itemId }, 'Failed to grant entitlement'));
+      await fulfillEntitlementOnTarget(request.target_emp_id, itemId, 'GRANT', actorEmpId)
+        .catch((err) => logger.warn({ err, requestId, itemId }, 'Entitlement target fulfill failed'));
     }
   }
 

@@ -104,6 +104,7 @@ Object.assign(api, {
   updateIgaApp:     (id, data) => f(`/api/iga/applications/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteIgaApp:     (id) => f(`/api/iga/applications/${id}`, { method: 'DELETE' }),
   igaConnectors:    () => f('/api/iga/connectors'),
+  harvestEntitlements: (id) => f(`/api/iga/connectors/${id}/harvest-entitlements`, { method: 'POST' }),
   igaEntitlements:  (appId) => f(`/api/iga/entitlements${appId ? `?appId=${appId}` : ''}`),
   igaMyAccess:      () => f('/api/iga/entitlements/me'),
   igaAccessReqs:    (scope = 'mine', status = '') =>
