@@ -35,6 +35,7 @@ export const ROUTE_MODULE: Record<string, PortalModuleKey> = {
   mfaMethods: 'authentication',
   adaptiveAuth: 'authentication',
   passwordPolicies: 'authentication',
+  radiusVpn: 'authentication',
   directorySync: 'connections',
   roles: 'access_model',
   birthright: 'access_model',

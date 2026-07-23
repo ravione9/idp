@@ -473,6 +473,10 @@ To add a new migration:
 | `attendance_iga_rollback_log` | **(029)** Admin rollback audit trail |
 | `event_triggers` | **(006)** Webhook / Slack / email subscriptions fired on platform events |
 | `compliance_reports` | **(003)** Generated SOX / GDPR / HIPAA reports |
+| `radius_clients` | **(044)** RADIUS NAS clients (VPN/wireless/switch); shared secret AES-GCM sealed |
+| `radius_auth_policies` | **(044)** Group / MFA / reply-attribute policies for RADIUS Accept |
+| `vpn_profiles` | **(044)** VPN gateway catalog (AnyConnect, GlobalProtect, FortiClient, …) |
+| `radius_auth_log` | **(044)** RADIUS Accept/Reject audit trail |
 | `notifications` | **(003, 011)** Email / Slack / Teams notification outbox — 011 adds `recipient_emp_id`, `subject`, `body`, `template_id`, `reference_id`, `reference_type`, `error` for service layer |
 | `general_settings` | **(006, 012, 021)** Singleton operational settings (login toggles, maintenance mode, portal TLS certs, Google OIDC GUI overrides) |
 
@@ -575,7 +579,15 @@ To add a new migration:
 | `POST` | `/api/admin/audit/sessions/:id/revoke` | Admin force-logout (sets `revoked_at`, clears Redis) |
 | `GET` | `/api/admin/audit/integrity` | Verify `audit_log` hash chain |
 | `GET` | `/api/admin/audit/summary` | Compliance counters for a date window (includes sessions created / active) |
-| `GET` | `/api/admin/sso-reports/*` | Login summary / failed logins / adoption / dormant (`days` or `from`/`to`); adoption uses app assignments when present |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/radius/clients[/:id]` | RADIUS NAS clients (shared secret sealed at rest) |
+| `POST` | `/api/admin/radius/clients/:id/reveal-secret` | Reveal shared secret for FreeRADIUS config |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/radius/policies[/:id]` | RADIUS auth policies (groups, MFA, reply attrs) |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/radius/vpn-profiles[/:id]` | VPN profile catalog (AnyConnect / GlobalProtect / …) |
+| `GET` | `/api/admin/radius/logs` | RADIUS accept/reject audit |
+| `GET` | `/api/admin/radius/overview` | Client/policy/VPN counts + UDP status |
+| `POST` | `/api/admin/radius/test-auth` | Admin test of the RADIUS auth path |
+| `POST` | `/api/internal/radius/authenticate` | FreeRADIUS `rlm_rest` / AAA agent (X-Internal-Token) |
+| `GET` | `/api/internal/radius/health` | RADIUS module health |
 | `GET` | `/api/admin/reports/overview` | Enterprise Reports Hub KPIs + 30d trends (logins / SSO / failures) |
 | `GET` | `/api/admin/reports/access-inventory` | Who-has-what (apps, roles, entitlements); `export=csv` |
 | `GET` | `/api/admin/reports/mfa-coverage` | MFA enrollment posture for active users; `export=csv` |
@@ -695,7 +707,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 |---|---|
 | **Overview** | Dashboard |
 | **Identity** | Users / Identities · Groups (Directory · Tag Groups) · Bulk User Import · Administrators *(SUPER_ADMIN)* · System / Privileged Users *(SUPER_ADMIN / PAM)* · Identity Profiles |
-| **Authentication** | SSO Configuration · Strong Auth Methods · Adaptive Auth · Password Policies |
+| **Authentication** | SSO Configuration · Strong Auth Methods · Adaptive Auth · Password Policies · **VPN / RADIUS** |
 | **Applications** | Applications (tabs: Catalog · SAML · OIDC / OAuth · Pre-built · App Discovery) |
 | **Connections** | Directory Sync (Connectors redirects here) |
 | **Access Model** | Business Roles · Birthright Rules · Application Access Policy |
@@ -734,7 +746,10 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | `SESSION_TTL_CORPORATE_HOURS` | no | `8` | Corporate session TTL |
 | `SESSION_TTL_STORE_HOURS` | no | `12` | Store session TTL |
 | `COOKIE_SECURE` | no | `true` if `NODE_ENV=production`, else `false` | Force secure cookie. **Set `false` for plain-HTTP dev.** |
-| `INTERNAL_TOKEN` | yes (≥16) | — | `X-Internal-Token` for `/api/internal/*` |
+| `INTERNAL_TOKEN` | yes (≥16) | — | `X-Internal-Token` for `/api/internal/*` (includes RADIUS REST) |
+| `RADIUS_UDP_ENABLED` | no | `false` | Enable in-process UDP RADIUS auth listener (PAP) |
+| `RADIUS_UDP_PORT` | no | `1812` | UDP listen port when enabled |
+| `RADIUS_UDP_BIND` | no | `0.0.0.0` | Bind address for RADIUS UDP |
 | `LOCAL_BOOTSTRAP_TOKEN` | no | — | First-time admin bootstrap (disable after) |
 | `MASTER_ADMIN_EMAIL` | recommended | — | Master admin auto-provisioned on startup |
 | `MASTER_ADMIN_PASSWORD` | recommended | — | (≥10 chars) |
@@ -921,6 +936,11 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ### Phase 3 — Modern AM
 
+- OIDC / OAuth OP ✅
+- WebAuthn / MFA methods ✅
+- **VPN / RADIUS AAA** ✅ (FreeRADIUS REST + optional UDP PAP; VPN profiles)
+- WS-Fed / header SSO (planned)
+
 - ✅ **OIDC / OAuth 2.0 Authorization Server (OP)** — discovery, JWKS, authorize (code + PKCE), token (code + refresh), UserInfo; admin client registry with edit/rotate (`src/oidc/*`, `/api/admin/oidc-clients`)
 - ✅ **WebAuthn / passkeys** — registration + login (`src/auth/mfa-webauthn.ts`, `webauthn_credentials`)
 - WS-Federation, header-based SSO (legacy proxy)
@@ -962,6 +982,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-23 — VPN / RADIUS AAA module
+
+**Why** — VPN gateways (AnyConnect, GlobalProtect, FortiClient, OpenVPN) need IdP-backed AAA with group policies and optional MFA, not only browser SSO.
+
+**What changed:**
+
+- **Migration `044`** — `radius_clients`, `radius_auth_policies`, `vpn_profiles`, `radius_auth_log`.
+- **Auth engine** — `src/services/radius-auth.ts` (local/AD password, lifecycle, groups, TOTP append); optional UDP PAP listener (`RADIUS_UDP_ENABLED`).
+- **API** — `/api/admin/radius/*` (clients, policies, VPN profiles, logs, test); `/api/internal/radius/authenticate` for FreeRADIUS `rlm_rest`.
+- **UI** — Admin → Authentication → **VPN / RADIUS**.
+- **Deps** — `radius` (UDP encode/decode). Compose exposes `1812/udp`.
 
 ### `0b7b789` — 2026-07-23 — Enterprise Reports Hub
 

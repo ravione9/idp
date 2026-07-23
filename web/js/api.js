@@ -263,6 +263,24 @@ Object.assign(api, {
     return `/api/admin/reports/${kind}?${q}`;
   },
 
+  // VPN / RADIUS
+  radiusOverview:     () => f('/api/admin/radius/overview'),
+  radiusClients:      () => f('/api/admin/radius/clients'),
+  createRadiusClient: (data) => f('/api/admin/radius/clients', { method: 'POST', body: JSON.stringify(data) }),
+  updateRadiusClient: (id, data) => f(`/api/admin/radius/clients/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteRadiusClient: (id) => f(`/api/admin/radius/clients/${id}`, { method: 'DELETE' }),
+  revealRadiusSecret: (id) => f(`/api/admin/radius/clients/${id}/reveal-secret`, { method: 'POST' }),
+  radiusPolicies:     () => f('/api/admin/radius/policies'),
+  createRadiusPolicy: (data) => f('/api/admin/radius/policies', { method: 'POST', body: JSON.stringify(data) }),
+  updateRadiusPolicy: (id, data) => f(`/api/admin/radius/policies/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteRadiusPolicy: (id) => f(`/api/admin/radius/policies/${id}`, { method: 'DELETE' }),
+  vpnProfiles:        () => f('/api/admin/radius/vpn-profiles'),
+  createVpnProfile:   (data) => f('/api/admin/radius/vpn-profiles', { method: 'POST', body: JSON.stringify(data) }),
+  updateVpnProfile:   (id, data) => f(`/api/admin/radius/vpn-profiles/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteVpnProfile:   (id) => f(`/api/admin/radius/vpn-profiles/${id}`, { method: 'DELETE' }),
+  radiusLogs:         (params = {}) => f(`/api/admin/radius/logs?${new URLSearchParams(params)}`),
+  radiusTestAuth:     (data) => f('/api/admin/radius/test-auth', { method: 'POST', body: JSON.stringify(data) }),
+
   // Business Roles
   listBusinessRoles:     () => f('/api/admin/business-roles'),
   listRequestableRoles:  () => f('/api/iga/roles'),

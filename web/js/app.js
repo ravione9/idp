@@ -23,7 +23,7 @@ import {
   viewPamResources, viewPamSessions, viewPamVault,
   viewWorkflowLibrary, viewNotifications,
   viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
-  viewAttendanceIga,
+  viewAttendanceIga, viewRadiusVpn,
 } from './views-stubs.js';
 
 /* ----------------------------------------------------------------
@@ -58,6 +58,7 @@ const ROUTES = {
   mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', icon: 'fingerprint', admin: true, module: 'authentication', view: viewMfaMethods },
   adaptiveAuth:       { primary: 'admin', group: 'Authentication', label: 'Adaptive Auth',       icon: 'adaptive',    admin: true, module: 'authentication', view: viewAdaptiveAuth },
   passwordPolicies:   { primary: 'admin', group: 'Authentication', label: 'Password Policies',   icon: 'lock',        admin: true, module: 'authentication', view: viewPasswordPolicies },
+  radiusVpn:          { primary: 'admin', group: 'Authentication', label: 'VPN / RADIUS',        icon: 'server',      admin: true, module: 'authentication', view: viewRadiusVpn },
 
   /* ── Admin > Applications ── */
   applications: { primary: 'admin', group: 'Applications', label: 'Applications', icon: 'catalog', admin: true, module: 'applications', view: viewApplications },
@@ -391,6 +392,7 @@ const ROUTE_DEFAULT_TABS = {
   home:            'all',
   audit:           'saml',
   govReports:      'inventory',
+  radiusVpn:       'overview',
   directorySync:   'sources',
   workflowLibrary: 'definitions',
   groups:          'directory',
@@ -465,7 +467,7 @@ async function navigate(key, opts = {}) {
     else if (key === 'settings') await route.view(me, content, viewTab);
     else if (key === 'home') await route.view(me, content, viewTab);
     else await route.view(me, content);
-  } else if (key === 'audit' || key === 'govReports' || key === 'workflowLibrary' || key === 'groups') {
+  } else if (key === 'audit' || key === 'govReports' || key === 'radiusVpn' || key === 'workflowLibrary' || key === 'groups') {
     await route.view(content, viewTab);
   } else if (key === 'directorySync') {
     await route.view(content, viewTab, me);

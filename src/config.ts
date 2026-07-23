@@ -84,6 +84,14 @@ const ConfigSchema = z.object({
   // Internal token
   INTERNAL_TOKEN: z.string().min(16),
 
+  // RADIUS / VPN AAA (optional UDP listener; REST always available via /api/internal/radius)
+  RADIUS_UDP_ENABLED: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    envBool.optional(),
+  ),
+  RADIUS_UDP_PORT: z.preprocess(emptyToUndefined, envInt.optional()),
+  RADIUS_UDP_BIND: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+
   // One-time bootstrap token for first local super admin (dev only — unset in prod after bootstrap)
   LOCAL_BOOTSTRAP_TOKEN: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
 
@@ -235,6 +243,11 @@ export const config = {
       if (pub.startsWith('https://')) return true;
       return parsed.NODE_ENV === 'production' ? 1 : false;
     })(),
+  },
+  radius: {
+    udpEnabled: parsed.RADIUS_UDP_ENABLED ?? false,
+    udpPort: parsed.RADIUS_UDP_PORT ?? 1812,
+    udpBind: parsed.RADIUS_UDP_BIND ?? '0.0.0.0',
   },
   saml:
     parsed.SAML_IDP_BASE_URL &&

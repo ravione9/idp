@@ -85,6 +85,8 @@ services:
     ports:
       - "0.0.0.0:8080:8080"
       - "0.0.0.0:443:8443"
+      # Optional RADIUS UDP (enable RADIUS_UDP_ENABLED=true in .env)
+      - "0.0.0.0:1812:1812/udp"
     depends_on:
       mysql:
         condition: service_healthy

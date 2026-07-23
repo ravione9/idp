@@ -8467,3 +8467,422 @@ export async function viewAttendanceIga(content) {
   await loadStats();
   await loadDash();
 }
+/* ---------- VPN / RADIUS ---------- */
+export async function viewRadiusVpn(content, initialTab = 'overview') {
+  const tabs = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'clients', label: 'RADIUS clients' },
+    { id: 'policies', label: 'Auth policies' },
+    { id: 'vpn', label: 'VPN profiles' },
+    { id: 'logs', label: 'Auth log' },
+    { id: 'test', label: 'Test auth' },
+  ];
+  const valid = tabs.some((t) => t.id === initialTab) ? initialTab : 'overview';
+  const wrap = el(`<div class="ent-page">
+    ${header('VPN / RADIUS', 'Network AAA for VPN gateways — FreeRADIUS REST backend + optional UDP PAP listener')}
+    <div class="inline-tabs" id="rad-tabs" style="margin-bottom:1rem">
+      ${tabs.map((t) => `<button type="button" class="inline-tab${t.id === valid ? ' active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('')}
+    </div>
+    <div id="rad-panel"><div class="loading-row"><span class="spinner"></span></div></div>
+  </div>`);
+  content.replaceChildren(wrap);
+  const panel = wrap.querySelector('#rad-panel');
+  let active = valid;
+
+  wrap.querySelectorAll('#rad-tabs .inline-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      active = btn.dataset.tab;
+      wrap.querySelectorAll('#rad-tabs .inline-tab').forEach((b) => b.classList.toggle('active', b === btn));
+      syncAppUrl('radiusVpn', active, 'overview');
+      void load();
+    });
+  });
+
+  async function load() {
+    panel.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      if (active === 'overview') await loadOverview();
+      else if (active === 'clients') await loadClients();
+      else if (active === 'policies') await loadPolicies();
+      else if (active === 'vpn') await loadVpn();
+      else if (active === 'logs') await loadLogs();
+      else await loadTest();
+    } catch (err) {
+      panel.innerHTML = errHtml(err.message);
+    }
+  }
+
+  async function loadOverview() {
+    const r = await api.radiusOverview();
+    const d = r.data || {};
+    panel.innerHTML = `
+      <div class="stat-grid" style="margin-bottom:1rem">
+        <div class="stat-card"><div class="stat-label">RADIUS clients</div><div class="stat-value">${esc(String(d.activeClients ?? 0))}</div></div>
+        <div class="stat-card"><div class="stat-label">Auth policies</div><div class="stat-value">${esc(String(d.activePolicies ?? 0))}</div></div>
+        <div class="stat-card"><div class="stat-label">VPN profiles</div><div class="stat-value">${esc(String(d.activeVpnProfiles ?? 0))}</div></div>
+        <div class="stat-card"><div class="stat-label">Accepts (24h)</div><div class="stat-value">${esc(String(d.accepts24h ?? 0))}</div></div>
+        <div class="stat-card"><div class="stat-label">Rejects (24h)</div><div class="stat-value">${esc(String(d.rejects24h ?? 0))}</div></div>
+      </div>
+      <div class="card">
+        <h2>Integration</h2>
+        <p class="subtitle">Point FreeRADIUS <code>rlm_rest</code> (or the VPN NAS) at this IdP. Shared secrets are stored encrypted.</p>
+        <ul style="margin:0.75rem 0 0;padding-left:1.25rem;line-height:1.6">
+          <li><strong>REST</strong> — <code>POST ${esc(d.restEndpoint || '/api/internal/radius/authenticate')}</code> with header <code>X-Internal-Token</code></li>
+          <li><strong>UDP</strong> — ${d.udpEnabled ? `listening on port <code>${esc(String(d.udpPort))}</code> (PAP Access-Request)` : 'disabled — set <code>RADIUS_UDP_ENABLED=true</code> in .env'}</li>
+          <li><strong>MFA</strong> — enable on a policy; users append TOTP (<code>password\\123456</code> or trailing 6 digits)</li>
+        </ul>
+        <pre style="margin-top:1rem;padding:0.85rem;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;font-size:0.78rem"># FreeRADIUS mods-available/rest (excerpt)
+url = "https://idp.lenskart.com/api/internal/radius/authenticate"
+body = '{"username":"%{User-Name}","password":"%{User-Password}","nasIp":"%{NAS-IP-Address}","callingStationId":"%{Calling-Station-Id}"}'
+header = "Content-Type: application/json"
+header = "X-Internal-Token: &lt;INTERNAL_TOKEN&gt;"</pre>
+      </div>`;
+  }
+
+  async function loadClients() {
+    const r = await api.radiusClients();
+    const rows = r.data || [];
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
+        <button type="button" class="btn btn-primary" id="rad-client-add">+ Add client</button>
+      </div>
+      ${rows.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>NAS IP / CIDR</th><th>Type</th><th>Vendor</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows.map((row) => `<tr>
+          <td class="cell-strong">${esc(row.name)}</td>
+          <td><code>${esc(row.nas_ip)}</code></td>
+          <td>${esc(row.client_type)}</td>
+          <td class="muted">${esc(row.vendor || '—')}</td>
+          <td>${row.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
+          <td style="white-space:nowrap">
+            <button type="button" class="btn btn-sm btn-secondary rad-reveal" data-id="${esc(row.id)}">Reveal secret</button>
+            <button type="button" class="btn btn-sm btn-secondary rad-edit" data-id="${esc(row.id)}">Edit</button>
+            <button type="button" class="btn btn-sm btn-danger rad-del" data-id="${esc(row.id)}">Delete</button>
+          </td>
+        </tr>`).join('')}</tbody></table></div>` : `<div class="card empty-state">No RADIUS clients yet — add your VPN gateway NAS IP</div>`}`;
+
+    panel.querySelector('#rad-client-add')?.addEventListener('click', () => openClientModal());
+    panel.querySelectorAll('.rad-edit').forEach((btn) => {
+      const row = rows.find((x) => x.id === btn.dataset.id);
+      btn.addEventListener('click', () => openClientModal(row));
+    });
+    panel.querySelectorAll('.rad-del').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Delete this RADIUS client?')) return;
+        await api.deleteRadiusClient(btn.dataset.id);
+        await loadClients();
+      });
+    });
+    panel.querySelectorAll('.rad-reveal').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        try {
+          const s = await api.revealRadiusSecret(btn.dataset.id);
+          alert(`Shared secret:\n${s.secret}`);
+        } catch (e) { alert(e.message); }
+      });
+    });
+  }
+
+  function openClientModal(row = null) {
+    const bd = openModal(`<div class="modal" style="max-width:520px">
+      <div class="modal-header"><h2>${row ? 'Edit' : 'Add'} RADIUS client</h2></div>
+      <div class="modal-body">
+        <div class="form-group"><label class="form-label">Name</label>
+          <input class="form-input" id="rc-name" value="${esc(row?.name || '')}"></div>
+        <div class="form-group"><label class="form-label">NAS IP or CIDR</label>
+          <input class="form-input" id="rc-nas" placeholder="10.0.0.5 or 10.0.0.0/24" value="${esc(row?.nas_ip || '')}"></div>
+        <div class="form-group"><label class="form-label">Shared secret${row ? ' (leave blank to keep)' : ''}</label>
+          <input class="form-input" id="rc-secret" type="password" autocomplete="new-password"></div>
+        <div class="form-row-2">
+          <div class="form-group"><label class="form-label">Type</label>
+            <select class="form-select" id="rc-type">
+              ${['VPN','WIRELESS','SWITCH','OTHER'].map((t) => `<option ${row?.client_type===t?'selected':''}>${t}</option>`).join('')}
+            </select></div>
+          <div class="form-group"><label class="form-label">Vendor</label>
+            <select class="form-select" id="rc-vendor">
+              ${[['','—'],['cisco_anyconnect','Cisco AnyConnect'],['globalprotect','Palo Alto GlobalProtect'],['fortinet','FortiClient'],['openvpn','OpenVPN'],['other','Other']].map(([v,l]) =>
+                `<option value="${v}" ${((row?.vendor||'')===v)?'selected':''}>${l}</option>`).join('')}
+            </select></div>
+        </div>
+        <div class="form-group"><label class="form-label">Description</label>
+          <input class="form-input" id="rc-desc" value="${esc(row?.description || '')}"></div>
+        <div id="rc-msg"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="rc-save">Save</button>
+        <button class="btn btn-secondary" id="rc-cancel">Cancel</button>
+      </div>
+    </div>`);
+    bd.querySelector('#rc-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#rc-save').addEventListener('click', async () => {
+      const payload = {
+        name: bd.querySelector('#rc-name').value.trim(),
+        nasIp: bd.querySelector('#rc-nas').value.trim(),
+        clientType: bd.querySelector('#rc-type').value,
+        vendor: bd.querySelector('#rc-vendor').value || null,
+        description: bd.querySelector('#rc-desc').value.trim() || null,
+      };
+      const secret = bd.querySelector('#rc-secret').value;
+      if (secret) payload.sharedSecret = secret;
+      try {
+        if (row) await api.updateRadiusClient(row.id, payload);
+        else {
+          if (!payload.sharedSecret) throw new Error('Shared secret required');
+          await api.createRadiusClient(payload);
+        }
+        bd.remove();
+        await loadClients();
+      } catch (e) {
+        bd.querySelector('#rc-msg').innerHTML = errHtml(e.message);
+      }
+    });
+  }
+
+  async function loadPolicies() {
+    const r = await api.radiusPolicies();
+    const rows = r.data || [];
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
+        <button type="button" class="btn btn-primary" id="rad-pol-add">+ Add policy</button>
+      </div>
+      ${rows.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Priority</th><th>Name</th><th>Scope</th><th>MFA</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows.map((row) => `<tr>
+          <td>${row.priority}</td>
+          <td class="cell-strong">${esc(row.name)}<br><span class="muted" style="font-size:0.75rem">${esc(row.description || '')}</span></td>
+          <td>${esc(row.client_type)}${row.vendor ? ` · ${esc(row.vendor)}` : ''}</td>
+          <td>${row.require_mfa ? 'OTP append' : (row.require_mfa_enrolled ? 'Enrolled' : '—')}</td>
+          <td>${row.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
+          <td>
+            <button type="button" class="btn btn-sm btn-secondary rad-pol-edit" data-id="${esc(row.id)}">Edit</button>
+            <button type="button" class="btn btn-sm btn-danger rad-pol-del" data-id="${esc(row.id)}">Delete</button>
+          </td>
+        </tr>`).join('')}</tbody></table></div>` : `<div class="card empty-state">No policies</div>`}`;
+
+    panel.querySelector('#rad-pol-add')?.addEventListener('click', () => openPolicyModal());
+    panel.querySelectorAll('.rad-pol-edit').forEach((btn) => {
+      const row = rows.find((x) => x.id === btn.dataset.id);
+      btn.addEventListener('click', () => openPolicyModal(row));
+    });
+    panel.querySelectorAll('.rad-pol-del').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Delete this policy?')) return;
+        await api.deleteRadiusPolicy(btn.dataset.id);
+        await loadPolicies();
+      });
+    });
+  }
+
+  function openPolicyModal(row = null) {
+    let reply = row?.reply_attributes;
+    if (typeof reply === 'string') {
+      try { reply = JSON.parse(reply); } catch { reply = {}; }
+    }
+    const replyText = reply && typeof reply === 'object'
+      ? Object.entries(reply).map(([k, v]) => `${k}=${v}`).join('\n')
+      : 'Session-Timeout=28800\nFilter-Id=vpn-users';
+    const bd = openModal(`<div class="modal" style="max-width:560px">
+      <div class="modal-header"><h2>${row ? 'Edit' : 'Add'} auth policy</h2></div>
+      <div class="modal-body">
+        <div class="form-group"><label class="form-label">Name</label>
+          <input class="form-input" id="rp-name" value="${esc(row?.name || '')}"></div>
+        <div class="form-group"><label class="form-label">Description</label>
+          <input class="form-input" id="rp-desc" value="${esc(row?.description || '')}"></div>
+        <div class="form-row-2">
+          <div class="form-group"><label class="form-label">Priority</label>
+            <input type="number" class="form-input" id="rp-pri" value="${esc(String(row?.priority ?? 100))}"></div>
+          <div class="form-group"><label class="form-label">Client type</label>
+            <select class="form-select" id="rp-type">
+              ${['ANY','VPN','WIRELESS','SWITCH','OTHER'].map((t) => `<option ${((row?.client_type||'ANY')===t)?'selected':''}>${t}</option>`).join('')}
+            </select></div>
+        </div>
+        <label class="form-check" style="display:flex;gap:0.5rem;align-items:center;margin:0.5rem 0">
+          <input type="checkbox" id="rp-mfa" ${row?.require_mfa ? 'checked' : ''}> Require MFA (password + TOTP)
+        </label>
+        <label class="form-check" style="display:flex;gap:0.5rem;align-items:center;margin:0.5rem 0">
+          <input type="checkbox" id="rp-enroll" ${row?.require_mfa_enrolled ? 'checked' : ''}> Require MFA enrolled
+        </label>
+        <div class="form-group"><label class="form-label">Reply attributes (one KEY=value per line)</label>
+          <textarea class="form-input" id="rp-reply" rows="4">${esc(replyText)}</textarea></div>
+        <div id="rp-msg"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="rp-save">Save</button>
+        <button class="btn btn-secondary" id="rp-cancel">Cancel</button>
+      </div>
+    </div>`);
+    bd.querySelector('#rp-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#rp-save').addEventListener('click', async () => {
+      const replyAttributes = {};
+      bd.querySelector('#rp-reply').value.split('\n').forEach((line) => {
+        const m = line.trim().match(/^([^=]+)=(.*)$/);
+        if (m) replyAttributes[m[1].trim()] = m[2].trim();
+      });
+      const payload = {
+        name: bd.querySelector('#rp-name').value.trim(),
+        description: bd.querySelector('#rp-desc').value.trim() || null,
+        priority: Number(bd.querySelector('#rp-pri').value) || 100,
+        clientType: bd.querySelector('#rp-type').value,
+        requireMfa: bd.querySelector('#rp-mfa').checked,
+        requireMfaEnrolled: bd.querySelector('#rp-enroll').checked,
+        replyAttributes,
+      };
+      try {
+        if (row) await api.updateRadiusPolicy(row.id, payload);
+        else await api.createRadiusPolicy(payload);
+        bd.remove();
+        await loadPolicies();
+      } catch (e) {
+        bd.querySelector('#rp-msg').innerHTML = errHtml(e.message);
+      }
+    });
+  }
+
+  async function loadVpn() {
+    const [vr, cr, pr] = await Promise.all([api.vpnProfiles(), api.radiusClients(), api.radiusPolicies()]);
+    const rows = vr.data || [];
+    const clients = cr.data || [];
+    const policies = pr.data || [];
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
+        <button type="button" class="btn btn-primary" id="rad-vpn-add">+ Add VPN profile</button>
+      </div>
+      ${rows.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Vendor</th><th>Gateway</th><th>RADIUS client</th><th>Policy</th><th></th></tr></thead>
+        <tbody>${rows.map((row) => `<tr>
+          <td class="cell-strong">${esc(row.name)}<br><span class="muted" style="font-size:0.75rem">${esc(row.slug)}</span></td>
+          <td>${esc(row.vendor)}</td>
+          <td class="muted">${esc(row.connection_hint || '—')}</td>
+          <td class="muted">${esc(row.radius_client_name || '—')}</td>
+          <td class="muted">${esc(row.policy_name || '—')}</td>
+          <td>
+            <button type="button" class="btn btn-sm btn-secondary rad-vpn-edit" data-id="${esc(row.id)}">Edit</button>
+            <button type="button" class="btn btn-sm btn-danger rad-vpn-del" data-id="${esc(row.id)}">Delete</button>
+          </td>
+        </tr>`).join('')}</tbody></table></div>` : `<div class="card empty-state">No VPN profiles — document AnyConnect / GlobalProtect gateways here</div>`}`;
+
+    const openVpn = (row = null) => {
+      const bd = openModal(`<div class="modal" style="max-width:560px">
+        <div class="modal-header"><h2>${row ? 'Edit' : 'Add'} VPN profile</h2></div>
+        <div class="modal-body">
+          <div class="form-group"><label class="form-label">Name</label>
+            <input class="form-input" id="vp-name" value="${esc(row?.name || '')}"></div>
+          <div class="form-group"><label class="form-label">Slug</label>
+            <input class="form-input" id="vp-slug" value="${esc(row?.slug || '')}" placeholder="corp-vpn"></div>
+          <div class="form-row-2">
+            <div class="form-group"><label class="form-label">Vendor</label>
+              <select class="form-select" id="vp-vendor">
+                ${['cisco_anyconnect','globalprotect','fortinet','openvpn','other'].map((v) =>
+                  `<option value="${v}" ${(row?.vendor||'other')===v?'selected':''}>${v}</option>`).join('')}
+              </select></div>
+            <div class="form-group"><label class="form-label">Gateway / portal</label>
+              <input class="form-input" id="vp-hint" value="${esc(row?.connection_hint || '')}" placeholder="vpn.lenskart.com"></div>
+          </div>
+          <div class="form-group"><label class="form-label">RADIUS client</label>
+            <select class="form-select" id="vp-client">
+              <option value="">—</option>
+              ${clients.map((c) => `<option value="${esc(c.id)}" ${row?.radius_client_id===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
+            </select></div>
+          <div class="form-group"><label class="form-label">Auth policy</label>
+            <select class="form-select" id="vp-pol">
+              <option value="">—</option>
+              ${policies.map((p) => `<option value="${esc(p.id)}" ${row?.policy_id===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}
+            </select></div>
+          <div class="form-group"><label class="form-label">Instructions</label>
+            <textarea class="form-input" id="vp-inst" rows="3">${esc(row?.instructions || '')}</textarea></div>
+          <div id="vp-msg"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary" id="vp-save">Save</button>
+          <button class="btn btn-secondary" id="vp-cancel">Cancel</button>
+        </div>
+      </div>`);
+      bd.querySelector('#vp-cancel').addEventListener('click', () => bd.remove());
+      bd.querySelector('#vp-save').addEventListener('click', async () => {
+        const payload = {
+          name: bd.querySelector('#vp-name').value.trim(),
+          slug: bd.querySelector('#vp-slug').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+          vendor: bd.querySelector('#vp-vendor').value,
+          connectionHint: bd.querySelector('#vp-hint').value.trim() || null,
+          radiusClientId: bd.querySelector('#vp-client').value || null,
+          policyId: bd.querySelector('#vp-pol').value || null,
+          instructions: bd.querySelector('#vp-inst').value.trim() || null,
+        };
+        try {
+          if (row) await api.updateVpnProfile(row.id, payload);
+          else await api.createVpnProfile(payload);
+          bd.remove();
+          await loadVpn();
+        } catch (e) {
+          bd.querySelector('#vp-msg').innerHTML = errHtml(e.message);
+        }
+      });
+    };
+
+    panel.querySelector('#rad-vpn-add')?.addEventListener('click', () => openVpn());
+    panel.querySelectorAll('.rad-vpn-edit').forEach((btn) => {
+      const row = rows.find((x) => x.id === btn.dataset.id);
+      btn.addEventListener('click', () => openVpn(row));
+    });
+    panel.querySelectorAll('.rad-vpn-del').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Delete this VPN profile?')) return;
+        await api.deleteVpnProfile(btn.dataset.id);
+        await loadVpn();
+      });
+    });
+  }
+
+  async function loadLogs() {
+    const r = await api.radiusLogs({ limit: '100' });
+    const rows = r.data || [];
+    panel.innerHTML = rows.length
+      ? `<div class="table-wrap"><table>
+          <thead><tr><th>Time</th><th>Result</th><th>User</th><th>NAS</th><th>Protocol</th><th>Reason</th></tr></thead>
+          <tbody>${rows.map((row) => `<tr>
+            <td class="muted">${fmtDate(row.ts)}</td>
+            <td><span class="badge badge-${row.result === 'ACCEPT' ? 'success' : 'danger'}">${esc(row.result)}</span></td>
+            <td>${esc(row.username)}${row.emp_id ? `<br><span class="muted" style="font-size:0.75rem">${esc(row.emp_id)}</span>` : ''}</td>
+            <td class="muted">${esc(row.nas_ip || '—')}</td>
+            <td class="muted">${esc(row.protocol)}</td>
+            <td class="muted">${esc(row.reason || '—')}</td>
+          </tr>`).join('')}</tbody></table></div>`
+      : `<div class="card empty-state">No RADIUS auth attempts yet</div>`;
+  }
+
+  async function loadTest() {
+    panel.innerHTML = `<div class="card" style="max-width:480px">
+      <h2>Test authentication</h2>
+      <p class="subtitle">Runs the same path as FreeRADIUS / UDP (logged to auth log)</p>
+      <div class="form-group"><label class="form-label">Username (email)</label>
+        <input class="form-input" id="rt-user" autocomplete="username"></div>
+      <div class="form-group"><label class="form-label">Password (+ OTP if policy requires)</label>
+        <input class="form-input" id="rt-pass" type="password" autocomplete="current-password"></div>
+      <div class="form-group"><label class="form-label">NAS IP (optional)</label>
+        <input class="form-input" id="rt-nas" placeholder="10.0.0.5"></div>
+      <button type="button" class="btn btn-primary" id="rt-go">Authenticate</button>
+      <div id="rt-out" style="margin-top:1rem"></div>
+    </div>`;
+    panel.querySelector('#rt-go').addEventListener('click', async () => {
+      const out = panel.querySelector('#rt-out');
+      out.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+      try {
+        const r = await api.radiusTestAuth({
+          username: panel.querySelector('#rt-user').value.trim(),
+          password: panel.querySelector('#rt-pass').value,
+          nasIp: panel.querySelector('#rt-nas').value.trim() || undefined,
+        });
+        const d = r.data || {};
+        out.innerHTML = `<div class="alert alert-${d.result === 'ACCEPT' ? 'success' : 'error'}">
+          <strong>${esc(d.result)}</strong>${d.reason ? ` — ${esc(d.reason)}` : ''}
+          ${d.empId ? `<br>empId: ${esc(d.empId)}` : ''}
+          ${d.reply ? `<pre style="margin:0.5rem 0 0;font-size:0.8rem">${esc(JSON.stringify(d.reply, null, 2))}</pre>` : ''}
+        </div>`;
+      } catch (e) {
+        out.innerHTML = errHtml(e.message);
+      }
+    });
+  }
+
+  await load();
+}

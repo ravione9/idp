@@ -58,6 +58,9 @@ import configAppAccessPolicyRouter from './api/config-app-access-policy.js';
 import configNotificationsRouter from './api/config-notifications.js';
 import configPortalSslRouter from './api/config-portal-ssl.js';
 import configAttendanceIgaRouter from './api/config-attendance-iga.js';
+import configRadiusRouter from './api/config-radius.js';
+import internalRadiusRouter from './api/internal-radius.js';
+import { startRadiusUdpServer } from './services/radius-udp.js';
 
 // Auth
 import {
@@ -215,12 +218,14 @@ app.use('/api/admin/app-access-policy', configAppAccessPolicyRouter);
 app.use('/api/admin/notifications', configNotificationsRouter);
 app.use('/api/admin/portal-ssl',   configPortalSslRouter);
 app.use('/api/admin/attendance-iga', configAttendanceIgaRouter);
+app.use('/api/admin/radius', configRadiusRouter);
 
 // ---------------------------------------------------------------------------
 // Internal routes (internal token gated — no session cookie required)
 // ---------------------------------------------------------------------------
 app.use('/api/internal',      internalRouter);
 app.use('/api/internal/saml', internalSamlRouter);
+app.use('/api/internal/radius', internalRadiusRouter);
 
 // ---------------------------------------------------------------------------
 // Web UI (login + admin central)
@@ -315,6 +320,7 @@ async function main(): Promise<void> {
 
   startAttendanceIgaScheduler();
   startConnectorHealthScheduler();
+  startRadiusUdpServer();
 
   const server = app.listen(config.app.port, () => {
     logger.info({ port: config.app.port, env: config.app.nodeEnv }, 'IDP API server started');
