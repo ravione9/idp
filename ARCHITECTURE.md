@@ -983,7 +983,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-23 — VAPT dependency + hardening patch
+### `ca22101` — 2026-07-23 — VAPT dependency + hardening patch
 
 **Why** — `npm audit` reported Critical samlify signature-wrapping / XML injection, High axios DoS/prototype-pollution, Moderate nested `uuid`, plus local agent permission file risk and thin security headers.
 
