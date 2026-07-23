@@ -952,7 +952,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-23 — Diagnose CF-Connecting-IP ≠ browser public IP
+### `37aec33` — 2026-07-23 — Diagnose CF-Connecting-IP ≠ browser public IP
 
 **Why** — `/api/me/client-ip` showed `CF-Connecting-IP=13.203.115.4` while the browser’s public IP was `103.240.236.211`. `remoteAddress` was Cloudflare (`172.69.x`); IdP host EIP was `3.6.124.122`. So Cloudflare’s edge is fine, but the IP Cloudflare saw *connecting to Cloudflare* is a mid-path proxy/host — not the laptop.
 
