@@ -1011,7 +1011,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-07-23 — App Discovery MVP (shadow IT inventory)
+### `8fcae30` — 2026-07-23 — App Discovery MVP (shadow IT inventory)
 
 **Why** — Applications → App Discovery was a stub that looked for non-existent DISCOVERY connectors.
 
