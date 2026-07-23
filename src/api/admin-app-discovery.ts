@@ -1,5 +1,5 @@
 /**
- * Admin — App Discovery (shadow IT / unsanctioned SaaS inventory)
+ * Admin — App Discovery (shadow IT from real browser / manual signals)
  */
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
@@ -9,7 +9,6 @@ import { asyncHandler } from '../utils/async-handler.js';
 import {
   deleteDiscoveredApp,
   getDiscoveryStats,
-  importCatalogSuggestions,
   listDiscoveredApps,
   promoteDiscoveredApp,
   runDiscoveryScan,
@@ -80,14 +79,6 @@ router.post(
   }),
 );
 
-const patchSchema = z.object({
-  status: z.enum(['NEW', 'REVIEWING', 'SANCTIONED', 'IGNORED']).optional(),
-  riskLevel: z.enum(['LOW', 'MEDIUM', 'HIGH', 'UNKNOWN']).optional(),
-  notes: z.string().max(2000).optional().nullable(),
-  name: z.string().min(1).max(200).optional(),
-  category: z.string().max(80).optional().nullable(),
-});
-
 router.post(
   '/scan',
   asyncHandler(async (req: Request, res: Response) => {
@@ -96,36 +87,13 @@ router.post(
   }),
 );
 
-const importSchema = z.object({
-  items: z.array(z.object({
-    name: z.string().min(1).max(200),
-    domain: z.string().min(3).max(255),
-    category: z.string().max(80).optional(),
-    risk: z.enum(['LOW', 'MEDIUM', 'HIGH', 'UNKNOWN']).optional(),
-  })).min(1).max(100),
+const patchSchema = z.object({
+  status: z.enum(['NEW', 'REVIEWING', 'SANCTIONED', 'IGNORED']).optional(),
+  riskLevel: z.enum(['LOW', 'MEDIUM', 'HIGH', 'UNKNOWN']).optional(),
+  notes: z.string().max(2000).optional().nullable(),
+  name: z.string().min(1).max(200).optional(),
+  category: z.string().max(80).optional().nullable(),
 });
-
-router.post(
-  '/import-suggestions',
-  asyncHandler(async (req: Request, res: Response) => {
-    const parsed = importSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
-      return;
-    }
-    const items = parsed.data.items.map((item) => {
-      const row: { name: string; domain: string; category?: string; risk?: 'LOW' | 'MEDIUM' | 'HIGH' | 'UNKNOWN' } = {
-        name: item.name,
-        domain: item.domain,
-      };
-      if (item.category !== undefined) row.category = item.category;
-      if (item.risk !== undefined) row.risk = item.risk;
-      return row;
-    });
-    const result = await importCatalogSuggestions(items, req.user!.empId);
-    res.json({ success: true, ...result });
-  }),
-);
 
 router.patch(
   '/:id',

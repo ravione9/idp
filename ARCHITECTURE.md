@@ -576,9 +576,9 @@ To add a new migration:
 | `POST` | `/api/admin/saml-apps/enable-request-access-all` | Enable IGA JIT for every active SAML SP |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/api/admin/app-discovery[/:id]` | App Discovery inventory (`discovered_apps`) |
 | `GET` | `/api/admin/app-discovery/stats` | Discovery counters (new / high-risk / sanctioned) |
-| `POST` | `/api/admin/app-discovery/scan` | Reconcile inventory + return catalog-gap *suggestions* (no auto-insert) |
-| `POST` | `/api/admin/app-discovery/import-suggestions` | Import selected SaaS suggestions into inventory |
+| `POST` | `/api/admin/app-discovery/scan` | Clean noise, reconcile catalog, ingest `browser_app_signals` |
 | `POST` | `/api/admin/app-discovery/:id/promote` | Promote finding into `applications` catalog |
+| `POST` | `/api/me/browser-app-signals` | Authenticated portal reports referrer/resource/launch domains |
 | `GET` | `/api/admin/saml-apps/attribute-fields` | Mappable employee fields + default attribute map |
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
@@ -987,9 +987,9 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ### Phase 5 — Advanced IGA
 
 - ✅ Credential Vault (AES-GCM checkout) + PAM resource/session/system-user inventory (SUPER_ADMIN)
-- ✅ **App Discovery (MVP)** — `discovered_apps` inventory; scan reconciles/cleans false positives and returns SaaS suggestions (import on demand); promote to Application Catalog (`Applications → App Discovery`)
+- ✅ **App Discovery (MVP)** — real signals only: portal browser referrer/resource/launch → `browser_app_signals` → scan ingest; no static SaaS wishlist; promote to catalog
 - JIT elevation / session broker + session recording for high-risk apps
-- App Discovery Phase 2 — Google Workspace audit / proxy log ingestion
+- App Discovery Phase 2 — Google Workspace audit / proxy log / browser-extension deep discovery
 - SCIM 2.0 *server* (inbound, so Workday / Zoho People can push directly into `employees`)
 - Identity warehouse on Elasticsearch / OpenSearch for slice-and-dice analytics
 - Compliance report templates (SOX, GDPR, HIPAA, PCI) — framework-specific control packs (generic evidence snapshots already live)
@@ -1011,6 +1011,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-23 — App Discovery: browser signals only (no wishlist)
+
+**Why** — Catalog-suggestion list still looked like “discovered apps” the user never used. Browsers also cannot expose HTTP disk cache/history to a website.
+
+**What changed:**
+
+- **Removed** static SaaS wishlist / import-suggestions UX.
+- **Migration `048`** — `browser_app_signals` + `BROWSER` source on `discovered_apps`.
+- **Portal** — `POST /api/me/browser-app-signals` collects referrer (incl. pre-login), Performance resource hosts, app-launch entity hosts.
+- **Scan** — cleans wishlist noise, reconciles catalog matches, ingests aggregated browser signals only.
 
 ### `fb15af0` — 2026-07-23 — App Discovery: stop false-positive wishlist dump
 

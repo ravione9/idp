@@ -3536,7 +3536,7 @@ export async function viewAppDiscovery(content, opts = {}) {
   content.replaceChildren(el(`<div class="disc-page">
     ${embed
       ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actions}</div>`
-      : header('App Discovery', 'Find unsanctioned SaaS (catalog gaps + SSO signals) and promote into the app catalog', actions)}
+      : header('App Discovery', 'Inventory from real browser session signals + manual findings (not a SaaS wishlist)', actions)}
     <div id="disc-stats" class="stat-grid" style="margin-bottom:1rem">${loading()}</div>
     <div class="card ra-filter-card" style="margin-bottom:1rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
       <input class="form-input" id="disc-q" placeholder="Search name or domain…" style="flex:1;min-width:180px">
@@ -3549,14 +3549,13 @@ export async function viewAppDiscovery(content, opts = {}) {
       </select>
       <select class="form-select" id="disc-source" style="width:auto">
         <option value="all">All sources</option>
-        <option value="CATALOG_GAP">Catalog gap</option>
-        <option value="SSO_SIGNAL">SSO signal</option>
+        <option value="BROWSER">Browser signal</option>
         <option value="MANUAL">Manual</option>
         <option value="IMPORT">Import</option>
+        <option value="CATALOG_GAP">Catalog gap (legacy)</option>
       </select>
     </div>
     <div id="disc-msg"></div>
-    <div id="disc-suggestions" style="display:none;margin-bottom:1rem"></div>
     <div id="disc-area">${loading()}</div>
   </div>`));
   const wrap = content.firstChild;
@@ -3569,7 +3568,7 @@ export async function viewAppDiscovery(content, opts = {}) {
     const m = { NEW: 'badge-warning', REVIEWING: 'badge-info', SANCTIONED: 'badge-success', IGNORED: 'badge-neutral' };
     return `<span class="badge ${m[s] || 'badge-neutral'}">${esc(s || '—')}</span>`;
   };
-  const sourceLabel = (s) => ({ CATALOG_GAP: 'Catalog gap', SSO_SIGNAL: 'SSO signal', MANUAL: 'Manual', IMPORT: 'Import' }[s] || s);
+  const sourceLabel = (s) => ({ BROWSER: 'Browser', CATALOG_GAP: 'Catalog gap', SSO_SIGNAL: 'SSO signal', MANUAL: 'Manual', IMPORT: 'Import' }[s] || s);
 
   async function loadStats() {
     try {
@@ -3604,8 +3603,9 @@ export async function viewAppDiscovery(content, opts = {}) {
           <div class="empty-icon">🔍</div>
           <p>No discovered apps for this filter.</p>
           <p class="muted" style="font-size:0.85rem;margin-top:0.5rem;max-width:28rem">
-            Click <strong>Run Discovery Scan</strong> to find known SaaS missing from your catalog,
-            or <strong>+ Add App</strong> to record a shadow IT finding manually.
+            Discovery uses real signals from users who open the IdP portal (login referrer, page resources, app launches).
+            Browsers block reading full HTTP cache/history. Have users sign in, then run <strong>Run Discovery Scan</strong>,
+            or <strong>+ Add App</strong> manually.
           </p>
         </div>`;
         return;
@@ -3708,57 +3708,16 @@ export async function viewAppDiscovery(content, opts = {}) {
     const btn = wrap.querySelector('#disc-scan');
     btn.disabled = true; btn.textContent = 'Scanning…';
     wrap.querySelector('#disc-msg').innerHTML = '';
-    wrap.querySelector('#disc-suggestions').style.display = 'none';
-    wrap.querySelector('#disc-suggestions').innerHTML = '';
     try {
       const r = await api.scanDiscoveredApps();
-      const suggestions = r.suggestions || [];
       wrap.querySelector('#disc-msg').innerHTML = `<div class="alert alert-success">
         Scan complete — removed <strong>${r.removedNoise ?? 0}</strong> false positives,
         reconciled <strong>${r.reconciled ?? 0}</strong> with your catalog,
-        <strong>${suggestions.length}</strong> SaaS suggestion(s) not yet in inventory
-        (not auto-added — import only what you care about).
+        browser signals: <strong>${r.browserCreated ?? 0}</strong> new / <strong>${r.browserUpdated ?? 0}</strong> updated.
+        <span class="muted" style="display:block;margin-top:0.35rem;font-size:0.85rem">
+          Only domains observed from user portal sessions appear here (not a wishlist). Full browser cache/history is blocked by the browser.
+        </span>
       </div>`;
-      if (suggestions.length) {
-        const box = wrap.querySelector('#disc-suggestions');
-        box.style.display = 'block';
-        box.innerHTML = `<div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem">
-            <div>
-              <strong>Catalog suggestions</strong>
-              <p class="muted" style="margin:0.2rem 0 0;font-size:0.85rem">Known SaaS not found in SAML / Application Catalog. Select rows to add as discovery findings.</p>
-            </div>
-            <button class="btn btn-primary btn-sm" id="disc-import-sel">Add selected to inventory</button>
-          </div>
-          <div class="table-wrap"><table>
-            <thead><tr><th style="width:2rem"><input type="checkbox" id="disc-sug-all"></th><th>Application</th><th>Domain</th><th>Category</th><th>Risk</th></tr></thead>
-            <tbody>${suggestions.map((s, i) => `<tr>
-              <td><input type="checkbox" class="disc-sug-cb" data-i="${i}"></td>
-              <td class="cell-strong">${esc(s.name)}</td>
-              <td><code style="font-size:0.78rem">${esc(s.domain)}</code></td>
-              <td class="muted">${esc(s.category || '—')}</td>
-              <td>${riskBadge(s.risk)}</td>
-            </tr>`).join('')}</tbody>
-          </table></div>
-        </div>`;
-        box._suggestions = suggestions;
-        box.querySelector('#disc-sug-all')?.addEventListener('change', (e) => {
-          box.querySelectorAll('.disc-sug-cb').forEach(cb => { cb.checked = e.target.checked; });
-        });
-        box.querySelector('#disc-import-sel')?.addEventListener('click', async () => {
-          const picked = [...box.querySelectorAll('.disc-sug-cb:checked')].map(cb => suggestions[Number(cb.dataset.i)]).filter(Boolean);
-          if (!picked.length) { alert('Select at least one suggestion'); return; }
-          try {
-            const ir = await api.importDiscoverySuggestions(picked.map(s => ({
-              name: s.name, domain: s.domain, category: s.category, risk: s.risk,
-            })));
-            wrap.querySelector('#disc-msg').innerHTML = `<div class="alert alert-success">Imported <strong>${ir.created ?? 0}</strong> finding(s)${ir.skipped ? `, skipped ${ir.skipped}` : ''}.</div>`;
-            box.style.display = 'none'; box.innerHTML = '';
-            wrap.querySelector('#disc-status').value = 'NEW';
-            await loadStats(); await loadList();
-          } catch (e) { alert(e.message); }
-        });
-      }
       await loadStats(); await loadList();
     } catch (e) {
       wrap.querySelector('#disc-msg').innerHTML = errHtml(e.message);

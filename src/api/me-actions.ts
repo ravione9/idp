@@ -38,11 +38,40 @@ import {
 } from '../auth/mfa-webauthn.js';
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { enforcePasswordPolicy } from '../services/password-policy.js';
+import { recordBrowserAppSignals } from '../services/app-discovery.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
 
 router.use(requireAuth);
+
+// ---------------------------------------------------------------------------
+// POST /browser-app-signals — domains observed in the portal browser session
+// (referrer / resource hosts / launches). Not HTTP disk cache — browsers block that.
+// ---------------------------------------------------------------------------
+const browserSignalsSchema = z.object({
+  domains: z.array(z.object({
+    domain: z.string().min(3).max(255),
+    signalType: z.string().max(40).optional(),
+  })).min(1).max(40),
+});
+
+router.post('/browser-app-signals', async (req: Request, res: Response): Promise<void> => {
+  const parsed = browserSignalsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+  const result = await recordBrowserAppSignals(
+    req.user!.empId,
+    parsed.data.domains.map((d) => {
+      const row: { domain: string; signalType?: string } = { domain: d.domain };
+      if (d.signalType !== undefined) row.signalType = d.signalType;
+      return row;
+    }),
+  );
+  res.json({ success: true, ...result });
+});
 
 // ---------------------------------------------------------------------------
 // PUT /password — change own password (local accounts only)

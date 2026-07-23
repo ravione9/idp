@@ -105,9 +105,9 @@ Object.assign(api, {
   createDiscoveredApp: (data) => f('/api/admin/app-discovery', { method: 'POST', body: JSON.stringify(data) }),
   updateDiscoveredApp: (id, data) => f(`/api/admin/app-discovery/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   scanDiscoveredApps: () => f('/api/admin/app-discovery/scan', { method: 'POST' }),
-  importDiscoverySuggestions: (items) => f('/api/admin/app-discovery/import-suggestions', { method: 'POST', body: JSON.stringify({ items }) }),
   promoteDiscoveredApp: (id) => f(`/api/admin/app-discovery/${id}/promote`, { method: 'POST' }),
   deleteDiscoveredApp: (id) => f(`/api/admin/app-discovery/${id}`, { method: 'DELETE' }),
+  reportBrowserAppSignals: (domains) => f('/api/me/browser-app-signals', { method: 'POST', body: JSON.stringify({ domains }) }),
 
   igaApps:          () => f('/api/iga/applications'),
   igaRequestableApps: (opts = {}) => {

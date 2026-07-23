@@ -1,17 +1,15 @@
 /**
- * App Discovery — shadow IT inventory.
+ * App Discovery — shadow IT inventory from real signals only.
  *
- * Scan does NOT dump a static SaaS wishlist into the DB (that produced false "NEW" rows).
- * Instead it:
- *  1) Reconciles existing discoveries against registered SAML / catalog apps
- *  2) Returns catalog-gap *suggestions* (known SaaS not in catalog) without auto-inserting
- *  3) Leaves MANUAL / IMPORT findings intact for admin review
+ * Browsers do not expose HTTP disk cache or history to websites.
+ * We collect portal-visible hints (referrer, third-party resource hosts,
+ * launch destinations) and ingest them on admin scan — never a static SaaS wishlist.
  */
 import { v4 as uuidv4 } from 'uuid';
 import { execute, query, queryOne } from '../db/connection.js';
 import logger from '../utils/logger.js';
 
-export type DiscoverySource = 'MANUAL' | 'CATALOG_GAP' | 'SSO_SIGNAL' | 'IMPORT';
+export type DiscoverySource = 'MANUAL' | 'CATALOG_GAP' | 'SSO_SIGNAL' | 'IMPORT' | 'BROWSER';
 export type DiscoveryStatus = 'NEW' | 'REVIEWING' | 'SANCTIONED' | 'IGNORED';
 export type DiscoveryRisk = 'LOW' | 'MEDIUM' | 'HIGH' | 'UNKNOWN';
 
@@ -35,65 +33,36 @@ export interface DiscoveredAppRow {
   linked_app_name?: string | null;
 }
 
-export interface CatalogSuggestion {
-  name: string;
-  domain: string;
-  category: string;
-  risk: DiscoveryRisk;
-  reason: string;
-}
-
-type KnownSaas = {
-  name: string;
-  domain: string;
-  category: string;
-  risk: DiscoveryRisk;
-  /** Extra host suffixes / tokens that mean this vendor is already onboarded */
-  aliases?: string[];
-};
-
-const KNOWN_SAAS: KnownSaas[] = [
+/** Optional name/risk enrichment when a browser reports a well-known host. */
+const VENDOR_HINTS: { domain: string; name: string; category: string; risk: DiscoveryRisk; aliases?: string[] }[] = [
   { name: 'Slack', domain: 'slack.com', category: 'Collaboration', risk: 'MEDIUM' },
-  { name: 'Microsoft 365', domain: 'microsoft.com', category: 'Productivity', risk: 'LOW', aliases: ['office.com', 'microsoftonline.com', 'live.com'] },
-  { name: 'Google Workspace', domain: 'google.com', category: 'Productivity', risk: 'LOW', aliases: ['googleusercontent.com', 'googleapis.com'] },
+  { name: 'Microsoft 365', domain: 'microsoft.com', category: 'Productivity', risk: 'LOW', aliases: ['office.com', 'microsoftonline.com'] },
+  { name: 'Google Workspace', domain: 'google.com', category: 'Productivity', risk: 'LOW', aliases: ['googleusercontent.com'] },
   { name: 'Salesforce', domain: 'salesforce.com', category: 'CRM', risk: 'HIGH', aliases: ['force.com'] },
   { name: 'ServiceNow', domain: 'servicenow.com', category: 'ITSM', risk: 'HIGH' },
-  { name: 'Atlassian / Jira', domain: 'atlassian.com', category: 'DevOps', risk: 'MEDIUM', aliases: ['jira.com', 'bitbucket.org', 'trello.com'] },
+  { name: 'Atlassian / Jira', domain: 'atlassian.com', category: 'DevOps', risk: 'MEDIUM', aliases: ['jira.com', 'bitbucket.org'] },
   { name: 'GitHub', domain: 'github.com', category: 'DevOps', risk: 'HIGH' },
   { name: 'GitLab', domain: 'gitlab.com', category: 'DevOps', risk: 'HIGH' },
   { name: 'Notion', domain: 'notion.so', category: 'Knowledge', risk: 'MEDIUM' },
   { name: 'Dropbox', domain: 'dropbox.com', category: 'Storage', risk: 'MEDIUM' },
-  { name: 'Box', domain: 'box.com', category: 'Storage', risk: 'MEDIUM' },
   { name: 'Zoom', domain: 'zoom.us', category: 'Meetings', risk: 'MEDIUM' },
-  { name: 'DocuSign', domain: 'docusign.com', category: 'Agreements', risk: 'HIGH', aliases: ['docusign.net'] },
-  { name: 'HubSpot', domain: 'hubspot.com', category: 'CRM', risk: 'MEDIUM' },
-  { name: 'Zendesk', domain: 'zendesk.com', category: 'Support', risk: 'MEDIUM' },
-  { name: 'Okta', domain: 'okta.com', category: 'Identity', risk: 'HIGH', aliases: ['oktapreview.com'] },
-  { name: '1Password', domain: '1password.com', category: 'Security', risk: 'HIGH' },
-  { name: 'LastPass', domain: 'lastpass.com', category: 'Security', risk: 'HIGH' },
-  { name: 'Canva', domain: 'canva.com', category: 'Design', risk: 'LOW' },
-  { name: 'Figma', domain: 'figma.com', category: 'Design', risk: 'MEDIUM' },
-  { name: 'Asana', domain: 'asana.com', category: 'Work Mgmt', risk: 'LOW' },
-  { name: 'Monday.com', domain: 'monday.com', category: 'Work Mgmt', risk: 'LOW' },
-  { name: 'Airtable', domain: 'airtable.com', category: 'Data', risk: 'MEDIUM' },
-  { name: 'Tableau', domain: 'tableau.com', category: 'Analytics', risk: 'MEDIUM' },
-  { name: 'Snowflake', domain: 'snowflake.com', category: 'Data', risk: 'HIGH' },
-  { name: 'AWS Console', domain: 'aws.amazon.com', category: 'Cloud', risk: 'HIGH', aliases: ['amazonaws.com'] },
-  { name: 'Azure Portal', domain: 'portal.azure.com', category: 'Cloud', risk: 'HIGH', aliases: ['azure.com', 'microsoftazuread-sso.com'] },
-  { name: 'Cloudflare', domain: 'cloudflare.com', category: 'Network', risk: 'MEDIUM' },
-  { name: 'Datadog', domain: 'datadoghq.com', category: 'Observability', risk: 'MEDIUM' },
-  { name: 'PagerDuty', domain: 'pagerduty.com', category: 'Ops', risk: 'MEDIUM' },
-  { name: 'Twilio', domain: 'twilio.com', category: 'Comms', risk: 'MEDIUM' },
+  { name: 'DocuSign', domain: 'docusign.com', category: 'Agreements', risk: 'HIGH' },
+  { name: 'Okta', domain: 'okta.com', category: 'Identity', risk: 'HIGH' },
   { name: 'Stripe', domain: 'stripe.com', category: 'Payments', risk: 'HIGH' },
-  { name: 'Zoho', domain: 'zoho.com', category: 'Suite', risk: 'MEDIUM', aliases: ['zoho.in', 'zoho.eu', 'zoho.com.au', 'zohocloud.ca'] },
-  { name: 'Freshworks', domain: 'freshworks.com', category: 'Support', risk: 'MEDIUM', aliases: ['freshdesk.com', 'freshservice.com'] },
-  {
-    name: 'ManageEngine / Endpoint Central',
-    domain: 'manageengine.com',
-    category: 'Endpoint',
-    risk: 'HIGH',
-    aliases: ['endpointcentral.com', 'zoho.com', 'uems.manageengine.com'],
-  },
+  { name: 'Zoho', domain: 'zoho.com', category: 'Suite', risk: 'MEDIUM', aliases: ['zoho.in', 'zoho.eu'] },
+  { name: 'AWS Console', domain: 'aws.amazon.com', category: 'Cloud', risk: 'HIGH', aliases: ['amazonaws.com'] },
+  { name: 'Azure Portal', domain: 'portal.azure.com', category: 'Cloud', risk: 'HIGH', aliases: ['azure.com'] },
+];
+
+/** CDNs / trackers — never treat as shadow-IT apps. */
+const NOISE_SUFFIXES = [
+  'gstatic.com', 'googleapis.com', 'google-analytics.com', 'googletagmanager.com',
+  'cloudflare.com', 'cloudflareinsights.com', 'jsdelivr.net', 'unpkg.com',
+  'cdnjs.cloudflare.com', 'bootstrapcdn.com', 'fontawesome.com', 'typekit.net',
+  'hotjar.com', 'segment.com', 'sentry.io', 'newrelic.com', 'nr-data.net',
+  'doubleclick.net', 'facebook.net', 'fbcdn.net', 'twitter.com', 'twimg.com',
+  'linkedin.com', 'licdn.com', 'gravatar.com', 'wp.com', 'jquery.com',
+  'localhost', '127.0.0.1',
 ];
 
 function normalizeDomain(raw: string): string {
@@ -101,17 +70,20 @@ function normalizeDomain(raw: string): string {
   d = d.replace(/^https?:\/\//, '').replace(/^www\./, '');
   d = d.split('/')[0] ?? d;
   d = d.split(':')[0] ?? d;
-  // bare entity IDs like "zoho.com" stay; urn:… entity IDs → empty
   if (d.startsWith('urn:')) return '';
   return d.replace(/^\.+|\.+$/g, '');
 }
 
-/** eTLD+1-ish: accounts.zoho.in → zoho.in ; foo.bar.slack.com → slack.com */
 function registrableHint(host: string): string {
   const parts = host.split('.').filter(Boolean);
   if (parts.length <= 2) return host;
-  // keep last 2; for .co.uk-style we'd need a list — good enough for SaaS hosts
   return parts.slice(-2).join('.');
+}
+
+function isNoiseDomain(domain: string): boolean {
+  if (!domain.includes('.')) return true;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(domain)) return true;
+  return NOISE_SUFFIXES.some((n) => domain === n || domain.endsWith(`.${n}`));
 }
 
 function slugFromName(name: string): string {
@@ -129,6 +101,24 @@ function tokensFromText(text: string): string[] {
     .split(/[\s._-]+/)
     .map((t) => t.trim())
     .filter((t) => t.length >= 3);
+}
+
+function titleFromDomain(domain: string): string {
+  const hint = VENDOR_HINTS.find((v) => {
+    const needles = [v.domain, ...(v.aliases ?? [])].map(normalizeDomain);
+    return needles.some((n) => n && (domain === n || domain.endsWith(`.${n}`)));
+  });
+  if (hint) return hint.name;
+  const base = registrableHint(domain).split('.')[0] ?? domain;
+  return base.charAt(0).toUpperCase() + base.slice(1);
+}
+
+function vendorMeta(domain: string): { category: string | null; risk: DiscoveryRisk } {
+  const hint = VENDOR_HINTS.find((v) => {
+    const needles = [v.domain, ...(v.aliases ?? [])].map(normalizeDomain);
+    return needles.some((n) => n && (domain === n || domain.endsWith(`.${n}`)));
+  });
+  return { category: hint?.category ?? null, risk: hint?.risk ?? 'UNKNOWN' };
 }
 
 type CatalogApp = {
@@ -171,7 +161,6 @@ async function loadCatalogApps(): Promise<CatalogApp[]> {
         if (hint) domains.add(hint);
       }
     }
-    // slug without dots still useful as token
     const tokens = new Set<string>(existing?.tokens ?? []);
     for (const t of tokensFromText(`${name} ${slug}`)) tokens.add(t);
     byKey.set(key, {
@@ -187,38 +176,11 @@ async function loadCatalogApps(): Promise<CatalogApp[]> {
     add(sp.id, sp.name, sp.slug, [sp.entity_id, sp.acs_url]);
   }
   for (const a of apps) {
-    // Prefer application UUID when both exist — use slug match to merge later
     const matchSp = sps.find((s) => s.slug === a.slug);
     add(matchSp?.id ?? a.id, a.name, a.slug);
   }
 
   return [...byKey.values()];
-}
-
-function vendorCoveredByCatalog(saas: KnownSaas, catalog: CatalogApp[]): CatalogApp | null {
-  const needles = new Set<string>([
-    saas.domain,
-    registrableHint(saas.domain),
-    ...(saas.aliases ?? []).map(normalizeDomain),
-  ]);
-  const nameTokens = tokensFromText(saas.name);
-
-  for (const app of catalog) {
-    for (const d of app.domains) {
-      for (const n of needles) {
-        if (!n) continue;
-        if (d === n || d.endsWith(`.${n}`) || n.endsWith(`.${d}`)) return app;
-      }
-    }
-    // name / slug token overlap (e.g. "Zoho Mail" covers Zoho; "Endpoint Central" covers ManageEngine)
-    for (const t of nameTokens) {
-      if (t.length < 4) continue;
-      if (app.tokens.includes(t) || app.name.toLowerCase().includes(t) || app.slug.includes(t)) {
-        return app;
-      }
-    }
-  }
-  return null;
 }
 
 function discoveryMatchesCatalog(
@@ -239,11 +201,20 @@ function discoveryMatchesCatalog(
       if (app.tokens.includes(t) || app.name.toLowerCase().includes(t)) return app;
     }
   }
-  // known-vendor alias bridge
-  for (const saas of KNOWN_SAAS) {
-    const needles = [saas.domain, ...(saas.aliases ?? [])].map(normalizeDomain);
-    if (needles.some((n) => n && (domain === n || domain.endsWith(`.${n}`) || hint === n))) {
-      return vendorCoveredByCatalog(saas, catalog);
+  for (const v of VENDOR_HINTS) {
+    const needles = [v.domain, ...(v.aliases ?? [])].map(normalizeDomain);
+    if (!needles.some((n) => n && (domain === n || domain.endsWith(`.${n}`) || hint === n))) continue;
+    for (const app of catalog) {
+      for (const d of app.domains) {
+        for (const n of needles) {
+          if (!n) continue;
+          if (d === n || d.endsWith(`.${n}`) || n.endsWith(`.${d}`)) return app;
+        }
+      }
+      for (const t of tokensFromText(v.name)) {
+        if (t.length < 4) continue;
+        if (app.tokens.includes(t) || app.name.toLowerCase().includes(t)) return app;
+      }
     }
   }
   return null;
@@ -432,39 +403,67 @@ export async function updateDiscoveredApp(
   );
 }
 
+/** Persist domains observed in a user's browser session (portal SPA). */
+export async function recordBrowserAppSignals(
+  empId: string,
+  items: { domain: string; signalType?: string }[],
+): Promise<{ accepted: number; skipped: number }> {
+  let accepted = 0;
+  let skipped = 0;
+  for (const item of items.slice(0, 40)) {
+    const domain = normalizeDomain(item.domain);
+    if (!domain || isNoiseDomain(domain)) {
+      skipped += 1;
+      continue;
+    }
+    const signalType = (item.signalType || 'referrer').slice(0, 40);
+    try {
+      await execute(
+        `INSERT INTO browser_app_signals (emp_id, domain, signal_type, hit_count)
+         VALUES (?, ?, ?, 1)
+         ON DUPLICATE KEY UPDATE
+           hit_count = hit_count + 1,
+           last_seen_at = UTC_TIMESTAMP()`,
+        [empId, domain, signalType],
+      );
+      accepted += 1;
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { accepted, skipped };
+}
+
 /**
- * Reconcile inventory + compute catalog-gap suggestions (not auto-inserted).
- * Also removes prior auto-inserted CATALOG_GAP noise that was never reviewed.
+ * Clean false-positive wishlist rows, reconcile catalog matches,
+ * ingest browser signals into inventory.
  */
 export async function runDiscoveryScan(actorEmpId: string): Promise<{
-  catalogGaps: number;
-  reconciled: number;
   removedNoise: number;
-  suggestions: CatalogSuggestion[];
+  reconciled: number;
+  browserCreated: number;
+  browserUpdated: number;
   created: number;
   updated: number;
 }> {
   const catalog = await loadCatalogApps();
 
-  // Remove false-positive wishlist rows from the first MVP scan (never manually reviewed)
+  // Wipe prior static wishlist dumps (never real usage)
   const noise = await execute(
     `DELETE FROM discovered_apps
       WHERE source = 'CATALOG_GAP'
-        AND status = 'NEW'
-        AND (notes IS NULL OR notes = '')
-        AND (created_by IS NULL OR created_by = ?)`,
-    [actorEmpId],
+        AND status = 'NEW'`,
+    [],
   ).catch(() => ({ affectedRows: 0 }));
-  // Also clear SSO_SIGNAL rows — registered SPs are not "discovered" shadow IT
   const ssoNoise = await execute(
     `DELETE FROM discovered_apps WHERE source = 'SSO_SIGNAL'`,
     [],
   ).catch(() => ({ affectedRows: 0 }));
   const removedNoise = Number(noise.affectedRows ?? 0) + Number(ssoNoise.affectedRows ?? 0);
 
-  // Reconcile remaining discoveries against catalog
-  const existing = await query<{ id: string; name: string; domain: string; status: string; linked_app_id: string | null }>(
-    `SELECT id, name, domain, status, linked_app_id FROM discovered_apps
+  // Reconcile open findings that are already onboarded
+  const existing = await query<{ id: string; name: string; domain: string }>(
+    `SELECT id, name, domain FROM discovered_apps
       WHERE status IN ('NEW', 'REVIEWING')`,
     [],
   );
@@ -472,12 +471,10 @@ export async function runDiscoveryScan(actorEmpId: string): Promise<{
   for (const row of existing) {
     const match = discoveryMatchesCatalog(row, catalog);
     if (!match) continue;
-    // Prefer applications.id when slug matches
     const appRow = await queryOne<{ id: string }>(
       `SELECT id FROM applications WHERE slug = ? AND active = 1 LIMIT 1`,
       [match.slug],
     );
-    const linkedId = appRow?.id ?? null;
     await execute(
       `UPDATE discovered_apps
           SET status = 'SANCTIONED',
@@ -487,7 +484,7 @@ export async function runDiscoveryScan(actorEmpId: string): Promise<{
               updated_at = UTC_TIMESTAMP()
         WHERE id = ?`,
       [
-        linkedId,
+        appRow?.id ?? null,
         JSON.stringify({ reconciledAt: new Date().toISOString(), matchedSlug: match.slug }),
         row.id,
       ],
@@ -495,75 +492,73 @@ export async function runDiscoveryScan(actorEmpId: string): Promise<{
     reconciled += 1;
   }
 
-  // Suggestions only — not written until admin imports them
-  const suggestions: CatalogSuggestion[] = [];
-  for (const saas of KNOWN_SAAS) {
-    if (vendorCoveredByCatalog(saas, catalog)) continue;
-    const already = await queryOne<{ id: string }>(
-      `SELECT id FROM discovered_apps WHERE domain = ? LIMIT 1`,
-      [saas.domain],
-    );
-    if (already) continue;
-    suggestions.push({
-      name: saas.name,
-      domain: saas.domain,
-      category: saas.category,
-      risk: saas.risk,
-      reason: 'Not found in SAML apps or Application Catalog',
+  // Aggregate browser signals → discovered_apps (skip cataloged / noise)
+  const signals = await query<{
+    domain: string;
+    hits: number;
+    users: number;
+    last_seen: string;
+  }>(
+    `SELECT domain,
+            SUM(hit_count) AS hits,
+            COUNT(DISTINCT emp_id) AS users,
+            MAX(last_seen_at) AS last_seen
+       FROM browser_app_signals
+      GROUP BY domain
+      HAVING hits > 0
+      ORDER BY hits DESC
+      LIMIT 500`,
+    [],
+  ).catch(() => []);
+
+  let browserCreated = 0;
+  let browserUpdated = 0;
+  for (const sig of signals) {
+    const domain = normalizeDomain(sig.domain);
+    if (!domain || isNoiseDomain(domain)) continue;
+    if (discoveryMatchesCatalog({ name: titleFromDomain(domain), domain }, catalog)) continue;
+
+    const meta = vendorMeta(domain);
+    const r = await upsertDiscoveredApp({
+      name: titleFromDomain(domain),
+      domain,
+      category: meta.category,
+      source: 'BROWSER',
+      riskLevel: meta.risk,
+      userCount: Number(sig.users) || 1,
+      hitCount: Number(sig.hits) || 1,
+      evidence: {
+        from: 'browser_app_signals',
+        lastSeen: sig.last_seen,
+        note: 'Observed via portal browser signals (referrer / resources / launches). Not HTTP disk cache.',
+      },
+      notes: 'Observed from user browser session signals in the IdP portal',
+      createdBy: actorEmpId,
     });
+    if (r.created) browserCreated += 1;
+    else browserUpdated += 1;
   }
 
   logger.info(
     {
-      catalogGaps: suggestions.length,
-      reconciled,
       removedNoise,
-      catalogSize: catalog.length,
+      reconciled,
+      browserCreated,
+      browserUpdated,
+      signalDomains: signals.length,
       actorEmpId,
     },
     'App discovery scan complete',
   );
 
   return {
-    catalogGaps: suggestions.length,
-    reconciled,
     removedNoise,
-    suggestions,
-    created: 0,
-    updated: reconciled,
+    reconciled,
+    browserCreated,
+    browserUpdated,
+    created: browserCreated,
+    updated: reconciled + browserUpdated,
   };
-}
-
-/** Import selected catalog-gap suggestions into the discovery inventory. */
-export async function importCatalogSuggestions(
-  items: { name: string; domain: string; category?: string; risk?: DiscoveryRisk }[],
-  actorEmpId: string,
-): Promise<{ created: number; skipped: number }> {
-  let created = 0;
-  let skipped = 0;
-  const catalog = await loadCatalogApps();
-  for (const item of items) {
-    const domain = normalizeDomain(item.domain);
-    const saas = KNOWN_SAAS.find((k) => k.domain === domain)
-      ?? { name: item.name, domain, category: item.category ?? 'SaaS', risk: item.risk ?? 'UNKNOWN' as DiscoveryRisk };
-    if (vendorCoveredByCatalog(saas as KnownSaas, catalog)) {
-      skipped += 1;
-      continue;
-    }
-    const r = await upsertDiscoveredApp({
-      name: item.name,
-      domain,
-      category: item.category ?? null,
-      source: 'CATALOG_GAP',
-      riskLevel: item.risk ?? 'UNKNOWN',
-      notes: 'Imported from catalog-gap suggestions',
-      createdBy: actorEmpId,
-      hitCount: 0,
-    });
-    if (r.created) created += 1;
-    else skipped += 1;
-  }
-  return { created, skipped };
 }
 
 /** Promote a discovered app into the IGA applications catalog. */
@@ -584,7 +579,6 @@ export async function promoteDiscoveredApp(
     return { appId: disc.linked_app_id, slug: linked?.slug ?? '' };
   }
 
-  // If already registered under SAML / catalog, just link — don't create a duplicate
   const catalog = await loadCatalogApps();
   const match = discoveryMatchesCatalog(disc, catalog);
   if (match) {

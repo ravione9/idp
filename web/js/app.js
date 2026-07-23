@@ -10,6 +10,7 @@ import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './
 import {
   renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
 } from './views-end-user.js';
+import { reportBrowserAppSignals } from './browser-discovery.js';
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewUsers, viewAdmins,
   viewReviews, viewAccessRequests, viewSod, viewRisk, viewAuth, viewAudit, viewReports,
@@ -513,6 +514,9 @@ async function main() {
 
     root.replaceChildren(buildShell());
     await navigate(state.current, { tab: params.get('tab') });
+
+    /* Background: portal browser signals for App Discovery (not HTTP disk cache) */
+    reportBrowserAppSignals().catch(() => {});
 
     /* Background: populate task badge counts */
     api.igaMyTasks().then(r => {

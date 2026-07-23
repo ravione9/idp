@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { el, esc, fmtDate, ilgBadge, initials, persistSearch, syncAppUrl, isPortalAdmin, prepareWebAuthnRegOptions, webAuthnRegResponseToJson, prepareWebAuthnAuthOptions, webAuthnAuthResponseToJson } from './ui.js';
 import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
+import { captureLoginReferrer, rememberAppLaunch, wireAppLaunchTracking } from './browser-discovery.js';
 
 
 function loginReturnTo() {
@@ -60,6 +61,7 @@ function showAuthErrorFromUrl(errEl) {
 
 /* ---------- Login ---------- */
 export function renderLogin() {
+  captureLoginReferrer();
   const loginParams = new URLSearchParams(location.search);
   const returnTo = loginParams.get('return_to') || loginReturnTo();
   const ssoResume = returnTo.startsWith('/saml/resume/') || returnTo.startsWith('/saml/launch/');
@@ -525,6 +527,14 @@ export async function viewHome(me, content, initialTab = 'all') {
 
   function redraw() {
     appsRender.innerHTML = renderApps();
+    wireAppLaunchTracking(appsRender);
+    appsRender.querySelectorAll('a.app-tile').forEach((a) => {
+      a.addEventListener('click', () => {
+        const slug = (a.getAttribute('href') || '').split('/').pop();
+        const app = allApps.find((x) => x.slug === slug || (x.launchUrl || '').endsWith(`/${slug}`));
+        if (app) rememberAppLaunch(app);
+      });
+    });
     /* Wire fav buttons */
     appsRender.querySelectorAll('.app-fav-btn').forEach((btn) => {
       btn.addEventListener('click', (e) => {
