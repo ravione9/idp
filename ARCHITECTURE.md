@@ -993,6 +993,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `TBD` — 2026-07-23 — Hide harvested directory groups from Request Access
+
+**Why** — Harvest flooded Request Access with AD/Google groups; those are not app entitlements for end-user request.
+
+**What changed:**
+
+- **Migration `046`** — `entitlements.requestable`; harvested rows set `requestable = 0`.
+- **Harvest** — always writes `requestable = 0`.
+- **Request Access** — `GET /entitlements` defaults to curated only (excludes connector-harvested groups). Admin catalog uses `?requestable=all`.
+
 ### `2cbbed9` — 2026-07-23 — Entitlement harvest from connectors (OIG-style)
 
 **Why** — Oracle IGA pulls app/directory roles into a request catalog via connector harvest; we only had manual entitlements + directory account sync.

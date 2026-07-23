@@ -601,7 +601,7 @@ export async function viewRequestAccess(content) {
   const wrap = el(`
     <div class="enduser-page enduser-request">
       <div class="page-header page-header--compact">
-        <div><h1>Request Access</h1><p class="subtitle">Request Just-In-Time access to applications your admin has made requestable — apps you already have are hidden</p></div>
+        <div><h1>Request Access</h1><p class="subtitle">Request Just-In-Time access to applications and curated roles — directory groups are not listed here</p></div>
       </div>
 
       <!-- search + filter bar -->
@@ -758,7 +758,7 @@ export async function viewRequestAccess(content) {
   try {
     const [appsR, entsR, rolesR, myAccessR] = await Promise.all([
       api.igaRequestableApps().catch(() => ({ data: [] })),
-      api.igaEntitlements().catch(() => ({ data: [] })),
+      api.igaEntitlements({ requestable: 1 }).catch(() => ({ data: [] })),
       api.listRequestableRoles().catch(() => ({ data: [] })),
       api.igaMyAccess().catch(() => ({ data: [] })),
     ]);

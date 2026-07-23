@@ -517,10 +517,23 @@ router.get(
     if (connectorId) { where.push('e.connector_id = ?'); params.push(connectorId); }
     const activeOnly = String(req.query['active'] ?? '1') !== '0';
     if (activeOnly) where.push('e.active = 1');
+
+    // Request Access must not list directory-harvested groups.
+    // Admin catalog: ?requestable=all | harvested-only: ?requestable=0
+    const reqFlag = String(req.query['requestable'] ?? '1').toLowerCase();
+    if (reqFlag === 'all' || reqFlag === '*') {
+      /* no filter */
+    } else if (reqFlag === '0' || reqFlag === 'false') {
+      where.push('(e.requestable = 0 OR (e.connector_id IS NOT NULL AND e.external_id IS NOT NULL AND e.external_id != \'\'))');
+    } else {
+      // default + requestable=1 — curated / app entitlements only
+      where.push('(e.requestable = 1 AND NOT (e.connector_id IS NOT NULL AND e.external_id IS NOT NULL AND e.external_id != \'\'))');
+    }
+
     const rows = await safeQuery<Record<string, unknown>>(
       `SELECT e.id, e.app_id, e.connector_id, e.name, e.slug, e.type, e.description,
               e.risk_score, e.is_birthright, e.requires_review, e.external_id, e.metadata,
-              e.active, e.created_at, e.last_harvested_at,
+              e.active, e.requestable, e.created_at, e.last_harvested_at,
               a.name AS app_name, c.name AS connector_name, c.connector_type
          FROM entitlements e
          LEFT JOIN applications a ON a.id = e.app_id

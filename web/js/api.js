@@ -113,6 +113,7 @@ Object.assign(api, {
       if (opts.appId) q.set('appId', opts.appId);
       if (opts.connectorId) q.set('connectorId', opts.connectorId);
       if (opts.active != null) q.set('active', String(opts.active));
+      if (opts.requestable != null) q.set('requestable', String(opts.requestable));
       if (opts.limit) q.set('limit', String(opts.limit));
     }
     const qs = q.toString();

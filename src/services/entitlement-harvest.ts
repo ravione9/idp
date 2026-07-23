@@ -87,7 +87,7 @@ async function upsertEntitlement(
     await execute(
       `UPDATE entitlements SET
          name = ?, slug = ?, description = ?, type = 'GROUP',
-         metadata = ?, active = 1, last_harvested_at = UTC_TIMESTAMP()
+         metadata = ?, active = 1, requestable = 0, last_harvested_at = UTC_TIMESTAMP()
        WHERE id = ?`,
       [ent.name, ent.slug, ent.description ?? null, JSON.stringify(ent.metadata), existing.id],
     );
@@ -102,11 +102,12 @@ async function upsertEntitlement(
   );
   if (clash) slug = `${slug}-${uuidv4().slice(0, 6)}`;
 
+  // Directory groups are inventory / fulfill targets — not Request Access catalog items
   await execute(
     `INSERT INTO entitlements
        (id, app_id, connector_id, name, slug, type, description, risk_score,
-        is_birthright, external_id, metadata, active, last_harvested_at)
-     VALUES (?, NULL, ?, ?, ?, 'GROUP', ?, 0, 0, ?, ?, 1, UTC_TIMESTAMP())`,
+        is_birthright, external_id, metadata, active, requestable, last_harvested_at)
+     VALUES (?, NULL, ?, ?, ?, 'GROUP', ?, 0, 0, ?, ?, 1, 0, UTC_TIMESTAMP())`,
     [
       uuidv4(),
       connectorId,

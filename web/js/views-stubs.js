@@ -6179,14 +6179,14 @@ export async function viewRoles(content) {
 /** Admin catalog of IGA entitlements (including harvested AD/Google groups). */
 export async function viewEntitlementCatalog(content) {
   content.replaceChildren(el(`<div>${header('Entitlements Catalog', 'Roles and groups available for Request Access — including harvested directory entitlements', `<button class="btn btn-secondary" id="ec-refresh">Refresh</button>`)}
-    <p class="muted" style="margin:-0.5rem 0 1rem">Harvest from <strong>Directory Sync → Harvest Roles</strong> (AD/Google). SAML apps use <strong>Application Access Policy</strong> for SSO; in-app roles need a future app connector.</p>
+    <p class="muted" style="margin:-0.5rem 0 1rem">Harvested AD/Google <strong>groups are inventory only</strong> — they do <em>not</em> appear in Request Access. End users request apps (Access Policy / JIT) and curated entitlements only.</p>
     <div id="ec-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
 
   async function load() {
     try {
       const [ents, connectors] = await Promise.all([
-        api.igaEntitlements({ limit: 500, active: 1 }),
+        api.igaEntitlements({ limit: 500, active: 1, requestable: 'all' }),
         api.igaConnectors().catch(() => ({ data: [] })),
       ]);
       const list = norm(ents);
