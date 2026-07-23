@@ -48,6 +48,8 @@ Object.assign(api, {
   deactivateSamlApp:(id) => f(`/api/admin/saml-apps/${id}`, { method: 'DELETE' }),
   updateSamlApp:    (id, data) => f(`/api/admin/saml-apps/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   activateSamlApp:  (id) => f(`/api/admin/saml-apps/${id}/activate`, { method: 'PUT' }),
+  enableSamlRequestAccess: (id) => f(`/api/admin/saml-apps/${id}/enable-request-access`, { method: 'POST' }),
+  enableAllSamlRequestAccess: () => f('/api/admin/saml-apps/enable-request-access-all', { method: 'POST' }),
   samlAudit:        (params = {}) => f(`/api/admin/audit/saml?${new URLSearchParams(params)}`),
   systemAudit:      (params = {}) => f(`/api/admin/audit/system?${new URLSearchParams(params)}`),
   authAttemptsAudit:(params = {}) => f(`/api/admin/audit/auth-attempts?${new URLSearchParams(params)}`),

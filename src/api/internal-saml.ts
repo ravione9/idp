@@ -10,7 +10,7 @@ import { config } from '../config.js';
 import { execute, query } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { timingSafeEqualString } from '../utils/timing-safe.js';
-import { ensureSamlAppMirrored } from '../services/app-access-policy.js';
+import { enableSamlAppRequestAccess, ensureSamlAppMirrored } from '../services/app-access-policy.js';
 
 const router = Router();
 
@@ -80,6 +80,10 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 
   await ensureSamlAppMirrored(d.slug).catch((err) =>
     logger.warn({ err, slug: d.slug }, 'Failed to mirror new SAML SP into applications catalog'),
+  );
+
+  await enableSamlAppRequestAccess(d.slug, 'internal').catch((err) =>
+    logger.warn({ err, slug: d.slug }, 'Failed to enable Request Access for new SAML SP'),
   );
 
   logger.info({ id, slug: d.slug, entityId: d.entityId }, 'SAML SP registered');

@@ -78,8 +78,11 @@ export async function submitAccessRequest(params: AccessRequestParams): Promise<
     // When requesting for someone else, also ensure target does not already have access
     if (params.targetEmpId !== params.requesterEmpId) {
       const targetElig = await canUserRequestApp(params.targetEmpId, appId);
-      if (targetElig.reason === 'You already have access to this application') {
+      if (targetElig.reason?.startsWith('You already have access')) {
         throw new Error('Target employee already has access to this application');
+      }
+      if (targetElig.reason?.includes('pending request')) {
+        throw new Error('Target employee already has a pending request for this application');
       }
     }
   }

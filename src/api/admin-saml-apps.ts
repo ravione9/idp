@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { config, isSamlEnabled } from '../config.js';
-import { execute, query } from '../db/connection.js';
+import { execute, query, queryOne } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { parseSpMetadataXml } from '../saml/parse-sp-metadata.js';
 import {
@@ -16,7 +16,7 @@ import {
   SAML_MAPPABLE_FIELD_OPTIONS,
   SAML_MAPPABLE_FIELD_SET,
 } from '../saml/types.js';
-import { ensureSamlAppMirrored } from '../services/app-access-policy.js';
+import { enableSamlAppRequestAccess, ensureSamlAppMirrored, enableRequestAccessForAllSamlApps } from '../services/app-access-policy.js';
 
 const router = Router();
 
@@ -114,6 +114,9 @@ function mapAdminRow(row: Record<string, unknown>) {
     active:            Number(row['active']) === 1,
     sort_order:        Number(row['sort_order'] ?? 0),
     created_at:        row['created_at'],
+    /** IGA Request Access (JIT) — mirrored applications.requestable + active workflow */
+    request_access:    Number(row['app_requestable'] ?? 0) === 1 && Number(row['has_jit_workflow'] ?? 0) === 1,
+    app_requestable:   Number(row['app_requestable'] ?? 0) === 1,
   };
 }
 
@@ -161,14 +164,33 @@ router.post('/parse-metadata', async (req: Request, res: Response): Promise<void
 // GET / — list all registered SAML applications
 router.get('/', async (_req: Request, res: Response): Promise<void> => {
   const rows = await query<Record<string, unknown>>(
-    `SELECT id, name, slug, entity_id, acs_url, slo_url, nameid_format,
-            nameid_attribute, attribute_map, sign_assertions, sign_response,
-            merge_default_attrs, active, sort_order, icon_url, created_at
-       FROM saml_service_providers
-      ORDER BY sort_order ASC, name ASC`,
+    `SELECT sp.id, sp.name, sp.slug, sp.entity_id, sp.acs_url, sp.slo_url, sp.nameid_format,
+            sp.nameid_attribute, sp.attribute_map, sp.sign_assertions, sp.sign_response,
+            sp.merge_default_attrs, sp.active, sp.sort_order, sp.icon_url, sp.created_at,
+            COALESCE(a.requestable, 0) AS app_requestable,
+            EXISTS (
+              SELECT 1 FROM app_group_access_workflows w
+               WHERE w.app_id = a.id AND w.active = 1
+            ) AS has_jit_workflow
+       FROM saml_service_providers sp
+       LEFT JOIN applications a ON a.slug = sp.slug
+      ORDER BY sp.sort_order ASC, sp.name ASC`,
     [],
   );
   res.json({ data: rows.map(mapAdminRow) });
+});
+
+// POST /enable-request-access-all — enable IGA JIT Request Access for every active SAML SP
+router.post('/enable-request-access-all', async (req: Request, res: Response): Promise<void> => {
+  const actor = req.user?.empId ?? 'system';
+  try {
+    const result = await enableRequestAccessForAllSamlApps(actor);
+    logger.info({ actor, ...result }, 'Enabled Request Access for all SAML apps');
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to enable Request Access';
+    res.status(500).json({ error: msg });
+  }
 });
 
 // POST / — register a SAML Service Provider
@@ -224,6 +246,12 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 
     await ensureSamlAppMirrored(d.slug).catch((err) =>
       logger.warn({ err, slug: d.slug }, 'Failed to mirror new SAML SP into applications catalog'),
+    );
+
+    // Enable IGA Request Access (JIT) so the app appears for end-user SSO requests
+    const actor = req.user?.empId ?? 'system';
+    await enableSamlAppRequestAccess(d.slug, actor).catch((err) =>
+      logger.warn({ err, slug: d.slug }, 'Failed to enable Request Access for new SAML SP'),
     );
 
     logger.info({ id, slug: d.slug }, 'SAML SP registered via Admin Central');
@@ -330,6 +358,34 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
       res.status(409).json({ error: 'An application with this slug or entity ID already exists' });
       return;
     }
+    res.status(400).json({ error: msg });
+  }
+});
+
+// POST /:id/enable-request-access — enable IGA JIT for one SAML SP (mirror + workflow + requestable)
+router.post('/:id/enable-request-access', async (req: Request, res: Response): Promise<void> => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing application id' });
+    return;
+  }
+
+  const sp = await queryOne<{ slug: string }>(
+    'SELECT slug FROM saml_service_providers WHERE id = ? LIMIT 1',
+    [id],
+  );
+  if (!sp) {
+    res.status(404).json({ error: 'Application not found' });
+    return;
+  }
+
+  const actor = req.user?.empId ?? 'system';
+  try {
+    const result = await enableSamlAppRequestAccess(sp.slug, actor);
+    logger.info({ id, slug: sp.slug, actor, ...result }, 'Enabled Request Access for SAML SP');
+    res.json({ success: true, slug: sp.slug, ...result });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to enable Request Access';
     res.status(400).json({ error: msg });
   }
 });

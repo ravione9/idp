@@ -601,16 +601,16 @@ export async function viewRequestAccess(content) {
   const wrap = el(`
     <div class="enduser-page enduser-request">
       <div class="page-header page-header--compact">
-        <div><h1>Request Access</h1><p class="subtitle">Request Just-In-Time access to applications and curated roles — directory groups are not listed here</p></div>
+        <div><h1>Request Access</h1><p class="subtitle">Request SSO only for apps you do not already have — assigned apps open from All Applications with no request needed</p></div>
       </div>
 
       <!-- search + filter bar -->
       <div class="card ra-filter-card" style="margin-bottom:0;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
-        <input class="form-input" id="ra-search" placeholder="Search applications…" style="flex:1;min-width:200px">
+        <input class="form-input" id="ra-search" placeholder="Search connected apps…" style="flex:1;min-width:200px">
         <select class="form-select" id="ra-type" style="width:auto">
+          <option value="APP">Connected applications</option>
           <option value="">All types</option>
-          <option value="APP">Applications</option>
-          <option value="ENTITLEMENT">Entitlements</option>
+          <option value="ENTITLEMENT">Curated entitlements</option>
           <option value="ROLE">Business Roles</option>
         </select>
       </div>
@@ -659,9 +659,15 @@ export async function viewRequestAccess(content) {
     // Group by type
     const groups = { APP: [], ENTITLEMENT: [], ROLE: [] };
     filtered.forEach(i => (groups[i._type] || (groups.OTHER = groups.OTHER||[])).push(i));
-    const typeLabel = { APP: 'Applications', ENTITLEMENT: 'Entitlements', ROLE: 'Business Roles' };
+    const typeLabel = {
+      APP: 'Connected applications (SAML SSO)',
+      ENTITLEMENT: 'Curated entitlements',
+      ROLE: 'Business Roles',
+    };
+    const typeOrder = ['APP', 'ENTITLEMENT', 'ROLE'];
     let html = '';
-    for (const [t, items] of Object.entries(groups)) {
+    for (const t of typeOrder) {
+      const items = groups[t] || [];
       if (!items.length) continue;
       html += `<h3 class="section-title">${typeLabel[t] || t}</h3>
         <div class="grid-3" style="margin-bottom:1.5rem">
@@ -671,11 +677,11 @@ export async function viewRequestAccess(content) {
                 ${item.icon_url ? `<img src="${esc(item.icon_url)}" alt="" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.style.display='none'">` : `<div style="width:36px;height:36px;border-radius:6px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">${esc((item.name||'?').charAt(0).toUpperCase())}</div>`}
                 <div style="flex:1;min-width:0">
                   <div style="font-weight:600;margin-bottom:0.25rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.name)}</div>
-                  <div class="muted" style="font-size:0.78rem;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${esc(item.description||'')}</div>
+                  <div class="muted" style="font-size:0.78rem;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${esc(item.description || (item._type === 'APP' ? 'Request SSO access to this connected application' : ''))}</div>
                 </div>
               </div>
               <div style="margin-top:0.75rem;display:flex;justify-content:space-between;align-items:center">
-                <span class="badge badge-info">${esc(item._type)}</span>
+                <span class="badge badge-info">${item._type === 'APP' ? 'SSO' : esc(item._type)}</span>
                 <button class="btn btn-sm btn-primary req-btn" data-req-id="${esc(String(item.id))}" data-req-type="${esc(item._type)}" data-req-name="${esc(item.name)}">Request</button>
               </div>
             </div>`).join('')}
@@ -778,8 +784,14 @@ export async function viewRequestAccess(content) {
     wrap.querySelector('#ra-type').addEventListener('change', renderCatalog);
     persistSearch(wrap.querySelector('#ra-search'), 'request-access');
     if (!allItems.length) {
-      wrap.querySelector('#ra-catalog').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div><p>No requestable items. Applications appear here only when an admin enables Request Access (JIT) under Application Access Policy → Group Access Workflow, and you are in an allowed requester group.</p></div>`;
-    } else if (!wrap.querySelector('#ra-search').value) {
+      wrap.querySelector('#ra-catalog').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div>
+        <p>Nothing to request right now.</p>
+        <p class="muted" style="max-width:36rem;margin:0.75rem auto 0;font-size:0.9rem">
+          Apps already assigned to you are under <strong>All Applications</strong> — launch them directly (no request).
+          New apps appear here only if an admin enabled Request Access and you do not already have a grant or pending request.
+        </p>
+      </div>`;
+    } else {
       renderCatalog();
     }
   } catch(err) {

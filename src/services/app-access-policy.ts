@@ -333,7 +333,23 @@ export async function hasPolicyAppAccess(empId: string, appSlug: string): Promis
       LIMIT 1`,
     [appSlug, empId, empId, empId],
   );
-  return (row?.ok ?? 0) === 1;
+  // mysql2 may return TINYINT/Buffer — coerce before comparing
+  return Number(row?.ok ?? 0) === 1;
+}
+
+/** True when the user already has a pending APP_ACCESS request for this app (avoid re-request). */
+export async function hasPendingAppAccessRequest(empId: string, appId: string): Promise<boolean> {
+  const row = await queryOne<{ ok: number }>(
+    `SELECT 1 AS ok
+       FROM access_requests
+      WHERE target_emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+        AND item_type = 'APP_ACCESS'
+        AND status = 'PENDING'
+        AND JSON_CONTAINS(item_ids, JSON_QUOTE(?), '$')
+      LIMIT 1`,
+    [empId, appId],
+  );
+  return Number(row?.ok ?? 0) === 1;
 }
 
 export async function getPolicyGrantedAppSlugs(empId: string): Promise<string[]> {
@@ -665,8 +681,13 @@ export async function canUserRequestApp(
     return { ok: false, reason: 'Application is not enabled for Request Access (JIT)' };
   }
 
+  // Assigned users launch from All Applications — never need Request Access again
   if (await hasPolicyAppAccess(empId, app.slug)) {
-    return { ok: false, reason: 'You already have access to this application' };
+    return { ok: false, reason: 'You already have access to this application — open it from All Applications' };
+  }
+
+  if (await hasPendingAppAccessRequest(empId, appId)) {
+    return { ok: false, reason: 'You already have a pending request for this application' };
   }
 
   const workflows = await query<WorkflowRow>(
@@ -698,7 +719,8 @@ export async function canUserRequestApp(
 
 /**
  * JIT Request Access catalog for the signed-in user:
- * requestable apps with an active workflow, that the user does not already hold,
+ * requestable apps with an active workflow that the user does **not** already hold
+ * (assignment = launch from All Applications, no request), with no pending request,
  * and that their identity groups are allowed to request.
  */
 export async function listJitRequestableAppsForUser(empId: string): Promise<{
@@ -709,6 +731,7 @@ export async function listJitRequestableAppsForUser(empId: string): Promise<{
   icon_url: string | null;
   category: string | null;
 }[]> {
+  // Pre-filter in SQL: drop apps already granted (USER / GROUP / TAG_GROUP) or pending
   const rows = await query<{
     id: string;
     slug: string;
@@ -725,8 +748,37 @@ export async function listJitRequestableAppsForUser(empId: string): Promise<{
           SELECT 1 FROM app_group_access_workflows w
            WHERE w.app_id = a.id AND w.active = 1
         )
+        AND NOT EXISTS (
+          SELECT 1 FROM app_access_assignments x
+           WHERE x.app_id = a.id AND x.active = 1
+             AND x.assignment_type = 'USER'
+             AND x.target_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM app_access_assignments x
+            JOIN tag_group_members tgm
+              ON tgm.tag_group_id COLLATE utf8mb4_unicode_ci = x.target_id COLLATE utf8mb4_unicode_ci
+           WHERE x.app_id = a.id AND x.active = 1
+             AND x.assignment_type = 'TAG_GROUP'
+             AND tgm.emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM app_access_assignments x
+            JOIN group_members gm
+              ON gm.group_id COLLATE utf8mb4_unicode_ci = x.target_id COLLATE utf8mb4_unicode_ci
+           WHERE x.app_id = a.id AND x.active = 1
+             AND x.assignment_type = 'GROUP'
+             AND gm.emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM access_requests ar
+           WHERE ar.target_emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+             AND ar.item_type = 'APP_ACCESS'
+             AND ar.status = 'PENDING'
+             AND JSON_CONTAINS(ar.item_ids, JSON_QUOTE(a.id), '$')
+        )
       ORDER BY a.name`,
-    [],
+    [empId, empId, empId, empId],
   );
 
   const out: typeof rows = [];
@@ -745,6 +797,83 @@ export async function setApplicationRequestable(
     `UPDATE applications SET requestable = ? WHERE id = ?`,
     [requestable ? 1 : 0, appId],
   );
+}
+
+/**
+ * Enable IGA Request Access (JIT) for a SAML-connected application:
+ * mirror into applications, create a default approval workflow if missing,
+ * mark requestable. Empty requester groups = any authenticated user may request.
+ */
+export async function enableSamlAppRequestAccess(
+  slug: string,
+  createdBy: string,
+): Promise<{ appId: string; workflowId: string | null; created: boolean }> {
+  await ensureSamlAppMirrored(slug);
+  const app = await queryOne<{ id: string; name: string; requestable: number }>(
+    `SELECT id, name, requestable FROM applications WHERE slug = ? LIMIT 1`,
+    [slug],
+  );
+  if (!app) {
+    throw new Error(`Application not found for SAML slug ${slug}`);
+  }
+
+  const existingWf = await queryOne<{ id: string }>(
+    `SELECT id FROM app_group_access_workflows
+      WHERE app_id = ? AND active = 1 LIMIT 1`,
+    [app.id],
+  );
+
+  let workflowId: string | null = existingWf?.id ?? null;
+  let created = false;
+
+  if (!workflowId) {
+    workflowId = uuidv4();
+    const levels: ApprovalLevel[] = [
+      { level: 1, approverType: 'MANAGER' },
+      { level: 2, approverType: 'ADMIN' },
+    ];
+    await execute(
+      `INSERT INTO app_group_access_workflows
+         (id, app_id, tag_group_id, name, approval_levels, requester_group_ids, auto_provision, created_by)
+       VALUES (?, ?, NULL, ?, ?, ?, 1, ?)`,
+      [
+        workflowId,
+        app.id,
+        `${app.name} SSO access`,
+        JSON.stringify(levels),
+        JSON.stringify([]),
+        createdBy,
+      ],
+    );
+    created = true;
+    logger.info({ slug, appId: app.id, workflowId }, 'Created default JIT workflow for SAML app');
+  }
+
+  await setApplicationRequestable(app.id, true);
+  return { appId: app.id, workflowId, created };
+}
+
+/** Enable Request Access for every active SAML SP that is mirrored. */
+export async function enableRequestAccessForAllSamlApps(
+  createdBy: string,
+): Promise<{ enabled: number; createdWorkflows: number; errors: string[] }> {
+  const sps = await query<{ slug: string }>(
+    `SELECT slug FROM saml_service_providers WHERE active = 1 ORDER BY name`,
+    [],
+  );
+  let enabled = 0;
+  let createdWorkflows = 0;
+  const errors: string[] = [];
+  for (const sp of sps) {
+    try {
+      const r = await enableSamlAppRequestAccess(sp.slug, createdBy);
+      enabled += 1;
+      if (r.created) createdWorkflows += 1;
+    } catch (err) {
+      errors.push(`${sp.slug}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return { enabled, createdWorkflows, errors };
 }
 
 export function parseApprovalLevels(raw: string | unknown): ApprovalLevel[] {

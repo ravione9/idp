@@ -346,6 +346,16 @@ Each SAML application is registered in `saml_service_providers`:
 
 Policy-check errors **deny** access (fail closed). New SAML apps default to `entitlement_rule.all_active = false` and are mirrored as `RESTRICTED` on create (migration `040` backfills existing rows).
 
+**IGA Request Access (JIT) for SAML SSO:** Connected SAML apps use Application Access Policy grants for launch — not directory `user_entitlements`.
+
+| Path | Behavior |
+|---|---|
+| **Admin assigns** (Access Policy → USER / GROUP / TAG_GROUP) | User sees the app under **All Applications** and launches SSO. **No Request Access** — assigned apps are excluded from the JIT catalog and submit is rejected. |
+| **Self-service JIT** | On register, SP is mirrored, default workflow (MANAGER → ADMIN) is created, `requestable = 1`. User requests once → approval → `fulfillAppAccessRequest` grant → same as assigned. Pending requests also hide the app from the catalog (no re-request). |
+| **Existing apps** | **Enable Request Access** / **Enable all** on Applications → SAML, or `POST …/enable-request-access[-all]`. |
+
+Directory harvest (AD/Google groups) is inventory only and is **not** listed on Request Access.
+
 Apps can be registered:
 - Via UI: **Admin Central → SAML Applications → Register new SAML application** (super admin only)
 - Via internal API: `POST /api/internal/saml` with `X-Internal-Token`
@@ -561,7 +571,9 @@ To add a new migration:
 | `POST` | `/api/admin/directory/google/full-sync` | Full Google directory resync |
 | `GET` | `/api/admin/directory/google/logs` | Sync runs + directory audit |
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD |
-| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles) |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; list includes `request_access` JIT flag) |
+| `POST` | `/api/admin/saml-apps/:id/enable-request-access` | Enable IGA JIT for one SAML SP (mirror + default workflow + `requestable`) |
+| `POST` | `/api/admin/saml-apps/enable-request-access-all` | Enable IGA JIT for every active SAML SP |
 | `GET` | `/api/admin/saml-apps/attribute-fields` | Mappable employee fields + default attribute map |
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
@@ -993,7 +1005,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-07-23 — Hide harvested directory groups from Request Access
+### `TBD` — 2026-07-23 — SAML connected-app IGA Request Access (JIT)
+
+**Why** — Operators care about SSO for connected SAML apps, not directory group catalogs. New SAML apps were mirrored as RESTRICTED but Request Access (JIT) stayed off unless manually configured under Access Policy. Assigned users must not be forced through Request Access again.
+
+**What changed:**
+
+- **Service** — `enableSamlAppRequestAccess` / `enableRequestAccessForAllSamlApps` (mirror + default MANAGER→ADMIN workflow + `requestable=1`).
+- **API** — auto-enable on SAML create (admin + internal); `POST …/enable-request-access` and `…/enable-request-access-all`; list includes `request_access`.
+- **Assigned = no request** — JIT catalog SQL-excludes USER/GROUP/TAG_GROUP grants and pending `APP_ACCESS` requests; submit rejects “already have access”.
+- **UI** — SAML Apps: IGA column, Enable Request Access / Enable all; Request Access defaults to Connected applications (SSO); copy clarifies All Applications for assigned apps.
+
+### `4fd270f` — 2026-07-23 — Hide harvested directory groups from Request Access
 
 **Why** — Harvest flooded Request Access with AD/Google groups; those are not app entitlements for end-user request.
 

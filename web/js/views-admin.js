@@ -968,13 +968,16 @@ export async function viewSamlApps(me, content, opts = {}) {
   const isSuper = isPortalSuperAdmin(me);
 
   const actionBtn = isSuper
-    ? `<button class="btn btn-primary" id="sa-new-btn">+ Register SAML App</button>`
+    ? `<div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end">
+         <button class="btn btn-secondary" id="sa-enable-all-jit" title="Enable Request Access (JIT) for all active SAML apps">Enable Request Access (all)</button>
+         <button class="btn btn-primary" id="sa-new-btn">+ Register SAML App</button>
+       </div>`
     : '';
 
   const wrap = el(`<div>
     ${embed
       ? (isSuper ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actionBtn}</div>` : '')
-      : header('SAML Applications', 'Service Providers registered with this Identity Provider', actionBtn)}
+      : header('SAML Applications', 'Connected SSO apps — register SPs and enable IGA Request Access so users can request SSO', actionBtn)}
     <div id="sa-area"><div class="loading-row"><span class="spinner"></span></div></div>
   </div>`);
   content.replaceChildren(wrap);
@@ -1109,20 +1112,26 @@ export async function viewSamlApps(me, content, opts = {}) {
         <td>${sp.active
           ? '<span class="badge badge-success">Active</span>'
           : '<span class="badge badge-neutral">Disabled</span>'}</td>
+        <td>${sp.request_access
+          ? '<span class="badge badge-success" title="Users can request SSO via Request Access">Request Access</span>'
+          : '<span class="badge badge-neutral" title="Not in Request Access catalog">SSO only</span>'}</td>
         <td style="white-space:nowrap">${isSuper ? `
           <button class="btn btn-sm btn-secondary sp-edit" data-id="${esc(String(sp.id))}" title="Edit">✏️ Edit</button>
+          ${!sp.request_access ? `<button class="btn btn-sm btn-primary sp-enable-jit"
+            data-id="${esc(String(sp.id))}" data-name="${esc(sp.name)}" title="Enable IGA Request Access (JIT)">Enable Request Access</button>` : ''}
           <button class="btn btn-sm ${sp.active ? 'btn-warning' : 'btn-success'} sp-toggle"
             data-id="${esc(String(sp.id))}" data-active="${sp.active ? '1' : '0'}">${sp.active ? 'Disable' : 'Enable'}</button>
           <button class="btn btn-sm btn-danger sp-del"
             data-id="${esc(String(sp.id))}" data-name="${esc(sp.name)}">Delete</button>
         ` : ''}</td>
       </tr>`).join('')
-    : `<tr><td colspan="6" class="empty-state"><span class="empty-icon">⛨</span>No SAML applications registered.</td></tr>`;
+    : `<tr><td colspan="7" class="empty-state"><span class="empty-icon">⛨</span>No SAML applications registered.</td></tr>`;
 
   wrap.querySelector('#sa-area').innerHTML = `
     ${status.metadataUrl ? `<div class="alert alert-info" style="margin-bottom:1.5rem">
       <div style="font-weight:500;margin-bottom:0.2rem">IdP metadata for SP onboarding</div>
       <a href="${esc(status.metadataUrl)}" target="_blank">${esc(status.metadataUrl)}</a>
+      <div class="muted" style="margin-top:0.5rem;font-size:0.85rem">New apps get Request Access (JIT) automatically. Existing apps: use <strong>Enable Request Access</strong> so users can request SSO from My Portal.</div>
     </div>` : ''}
     <div class="table-wrap">
       <div class="table-toolbar">
@@ -1131,7 +1140,7 @@ export async function viewSamlApps(me, content, opts = {}) {
       </div>
       <table>
         <thead><tr>
-          <th>Name</th><th>Slug</th><th>Entity ID</th><th>ACS URL</th><th>Status</th><th>Actions</th>
+          <th>Name</th><th>Slug</th><th>Entity ID</th><th>ACS URL</th><th>Status</th><th>IGA</th><th>Actions</th>
         </tr></thead>
         <tbody>${tableBody}</tbody>
       </table>
@@ -1157,6 +1166,17 @@ export async function viewSamlApps(me, content, opts = {}) {
     });
   });
 
+  wrap.querySelectorAll('.sp-enable-jit').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Enable Request Access for "${btn.dataset.name}"?\n\nUsers will see this app under Request Access and can request SSO (manager → admin approval).`)) return;
+      btn.disabled = true; btn.textContent = 'Enabling…';
+      try {
+        await api.enableSamlRequestAccess(btn.dataset.id);
+        viewSamlApps(me, content, opts);
+      } catch (err) { alert(err.message); btn.disabled = false; btn.textContent = 'Enable Request Access'; }
+    });
+  });
+
   // Wire delete buttons
   wrap.querySelectorAll('.sp-del').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -1172,6 +1192,21 @@ export async function viewSamlApps(me, content, opts = {}) {
   // Wire register button
   if (isSuper) {
     wrap.querySelector('#sa-new-btn')?.addEventListener('click', () => openSpModal());
+    wrap.querySelector('#sa-enable-all-jit')?.addEventListener('click', async () => {
+      if (!confirm('Enable Request Access (JIT) for all active SAML applications?\n\nCreates a default manager→admin workflow where missing and marks apps requestable.')) return;
+      const btn = wrap.querySelector('#sa-enable-all-jit');
+      btn.disabled = true; btn.textContent = 'Enabling…';
+      try {
+        const r = await api.enableAllSamlRequestAccess();
+        alert(`Done: ${r.enabled ?? 0} app(s) enabled` +
+          (r.createdWorkflows ? ` (${r.createdWorkflows} new workflow(s))` : '') +
+          (r.errors?.length ? `\n\nErrors:\n${r.errors.join('\n')}` : ''));
+        viewSamlApps(me, content, opts);
+      } catch (err) {
+        alert(err.message);
+        btn.disabled = false; btn.textContent = 'Enable Request Access (all)';
+      }
+    });
   }
 }
 
