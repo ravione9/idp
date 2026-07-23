@@ -335,13 +335,14 @@ Each SAML application is registered in `saml_service_providers`:
 | `merge_default_attrs` | Merge IdP default attribute map (default true) |
 | `entitlement_rule` | JSON ABAC rule (`all_active`, `roles`, `dept_ids`, `deny_ilg_states`) |
 
-**Launch entitlement** (`canUserLaunchApp` in `src/services/app-access-policy.ts`) is evaluated for `GET /api/apps`, `/saml/launch/:slug`, and SP-initiated SSO (including `/saml/resume`):
+**Launch entitlement** (`evaluateAppLaunch` / `canUserLaunchApp` in `src/services/app-access-policy.ts`) is evaluated for `GET /api/apps`, `/saml/launch/:slug`, and SP-initiated SSO (including `/saml/resume`):
 
 | Condition | Who may launch |
 |---|---|
 | **Active SAML SP** (any slug in `saml_service_providers`) | **Only** users with an explicit Application Access Policy grant (USER / GROUP / TAG_GROUP). Birthright via `entitlement_rule.all_active` is **not** enough. On check, the SP is auto-mirrored into `applications` as `RESTRICTED` if missing. |
 | Non-SAML catalog app with `visibility = RESTRICTED` **or** any active assignment | Explicit grant only |
 | Other non-SAML catalog apps | Grant **or** `entitlement_rule` birthright |
+| **IP allowlist** (`applications.allowed_cidrs`, migration `043`) | When non-empty, client IP (from `CF-Connecting-IP` / `X-Forwarded-For`) must match a CIDR, exact IP, or trailing-dot prefix. Empty/null = unrestricted. Enforced after grant checks. |
 
 Policy-check errors **deny** access (fail closed). New SAML apps default to `entitlement_rule.all_active = false` and are mirrored as `RESTRICTED` on create (migration `040` backfills existing rows).
 
@@ -420,7 +421,7 @@ To add a new migration:
 |---|---|
 | `saml_service_providers` | Legacy SAML SP registry (live) |
 | `saml_assertion_log` | Issued SAML assertions audit (live) |
-| `applications` | **(003)** Protocol-agnostic application catalog |
+| `applications` | **(003)** Protocol-agnostic application catalog; **(043)** `allowed_cidrs` IP allowlist for SSO |
 | `app_protocol_configs` | **(003)** Per-application protocol bindings (SAML / OIDC / SCIM …) |
 | `oidc_clients` | **(003, 007, 010)** Registered OIDC RP clients — `name`, `token_endpoint_auth_method` (010 idempotent backfill/rename when 007 partially applied) |
 | `oauth_tokens` | **(003)** Refresh / authorization-code token store |
@@ -576,7 +577,8 @@ To add a new migration:
 | `GET`/`POST` | `/api/iga/reports` | List / generate compliance evidence snapshots |
 | `GET` | `/api/iga/reports/:id` | Fetch snapshot; `export=json` downloads evidence |
 | `GET` | `/api/admin/app-access-policy/summary` | Assignment / workflow / audit counts |
-| `GET` | `/api/admin/app-access-policy/applications` | Assignable apps (IGA catalog + auto-mirrored SAML SPs) |
+| `GET` | `/api/admin/app-access-policy/applications` | Assignable apps (IGA catalog + auto-mirrored SAML SPs; includes `allowed_cidrs`) |
+| `PUT` | `/api/admin/app-access-policy/applications/:id/ip-policy` | Set per-app IP/CIDR allowlist (`allowedCidrs`) |
 | `GET`/`POST` | `/api/admin/app-access-policy/tag-groups[/:id]` | Tag group CRUD |
 | `POST`/`DELETE` | `/api/admin/app-access-policy/tag-groups/:id/members[/:empId]` | Tag group membership |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/groups[/:id]` | Identity directory groups (local + synced) |
@@ -949,6 +951,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-23 — Fix user-based app access + IP allowlists
+
+**Why** — User-based Application Access Policy grants returned HTTP 500 (uncaught validation / lookup failures; email > 36 chars rejected poorly). Operators also needed per-app IP restrictions for SSO.
+
+**What changed:**
+
+- **User grants** — resolve targets by `emp_id`, employee number, or corporate email; map create/update errors to 400/404/409; user search in Assign modal.
+- **Migration `043`** — `applications.allowed_cidrs` JSON allowlist.
+- **SSO / catalog** — `evaluateAppLaunch` enforces IP after grant; `PUT .../applications/:id/ip-policy`; Admin → Application Access Policy → **IP Restrictions** tab.
 
 ### `5768b42` — 2026-07-22 — MFA exclude groups override global (incl. enrolled)
 

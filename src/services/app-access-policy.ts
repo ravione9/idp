@@ -7,6 +7,7 @@ import { query, queryOne, execute } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { canReceiveSamlAssertion, evaluateEntitlement } from '../saml/entitlements.js';
 import type { EmployeeSamlContext, EntitlementRule } from '../saml/types.js';
+import { ipInAllowlist, parseCidrList } from '../utils/ip-match.js';
 
 export type AssignmentType = 'USER' | 'TAG_GROUP' | 'GROUP';
 export type AuditAction =
@@ -112,8 +113,8 @@ export async function syncSamlAppsToCatalog(): Promise<number> {
 
 export async function listAssignableApplications(): Promise<Record<string, unknown>[]> {
   await syncSamlAppsToCatalog();
-  return query(
-    `SELECT a.id, a.slug, a.name, a.icon_url, a.category, a.active,
+  const rows = await query<Record<string, unknown>>(
+    `SELECT a.id, a.slug, a.name, a.icon_url, a.category, a.active, a.allowed_cidrs,
             EXISTS (
               SELECT 1 FROM saml_service_providers sp WHERE sp.slug = a.slug AND sp.active = 1
             ) AS has_saml
@@ -122,6 +123,46 @@ export async function listAssignableApplications(): Promise<Record<string, unkno
       ORDER BY a.sort_order ASC, a.name ASC`,
     [],
   );
+  return rows.map((r) => ({
+    ...r,
+    allowed_cidrs: parseCidrList(r['allowed_cidrs']),
+  }));
+}
+
+export async function setApplicationAllowedCidrs(
+  appId: string,
+  cidrs: string[],
+): Promise<void> {
+  const app = await queryOne<{ id: string }>(
+    `SELECT id FROM applications WHERE id = ? LIMIT 1`,
+    [appId],
+  );
+  if (!app) throw new Error('Application not found');
+  const cleaned = parseCidrList(cidrs);
+  await execute(
+    `UPDATE applications SET allowed_cidrs = ? WHERE id = ?`,
+    [cleaned.length ? JSON.stringify(cleaned) : null, appId],
+  );
+  logger.info({ appId, count: cleaned.length }, 'Updated application IP allowlist');
+}
+
+export async function getApplicationAllowedCidrs(appSlug: string): Promise<string[]> {
+  const row = await queryOne<{ allowed_cidrs: unknown }>(
+    `SELECT allowed_cidrs FROM applications WHERE slug = ? AND active = 1 LIMIT 1`,
+    [appSlug],
+  );
+  return parseCidrList(row?.allowed_cidrs);
+}
+
+/** True when the app has no IP allowlist, or the client IP matches it. */
+export async function isClientIpAllowedForApp(
+  appSlug: string,
+  clientIp: string | undefined | null,
+): Promise<boolean> {
+  const cidrs = await getApplicationAllowedCidrs(appSlug);
+  if (!cidrs.length) return true;
+  if (!clientIp || clientIp === 'unknown') return false;
+  return ipInAllowlist(clientIp, cidrs);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,32 +225,67 @@ export async function appRequiresExplicitGrant(appSlug: string): Promise<boolean
   return (row.has_assignments ?? 0) === 1;
 }
 
-export async function canUserLaunchApp(
+export type AppLaunchDenyReason = 'ILG_STATE' | 'NO_GRANT' | 'IP_DENIED' | 'ERROR';
+
+export interface AppLaunchDecision {
+  allowed: boolean;
+  reason?: AppLaunchDenyReason;
+}
+
+export async function evaluateAppLaunch(
   emp: EmployeeSamlContext,
   slug: string,
   rule: EntitlementRule | null,
-): Promise<boolean> {
-  if (!canReceiveSamlAssertion(emp)) return false;
+  opts?: { clientIp?: string | null },
+): Promise<AppLaunchDecision> {
+  if (!canReceiveSamlAssertion(emp)) {
+    return { allowed: false, reason: 'ILG_STATE' };
+  }
 
   try {
     const requiresGrant = await appRequiresExplicitGrant(slug);
     const policyAccess = await hasPolicyAppAccess(emp.emp_id, slug);
+    let entitled = false;
     if (requiresGrant) {
       if (!policyAccess) {
         logger.info(
           { empId: emp.emp_id, slug },
           'SSO denied — no Application Access Policy grant',
         );
+        return { allowed: false, reason: 'NO_GRANT' };
       }
-      return policyAccess;
+      entitled = true;
+    } else {
+      // Non-SAML catalog apps only: optional birthright via entitlement_rule.
+      entitled = policyAccess || evaluateEntitlement(emp, rule);
+      if (!entitled) return { allowed: false, reason: 'NO_GRANT' };
     }
-    // Non-SAML catalog apps only: optional birthright via entitlement_rule.
-    return policyAccess || evaluateEntitlement(emp, rule);
+
+    const ipOk = await isClientIpAllowedForApp(slug, opts?.clientIp);
+    if (!ipOk) {
+      logger.info(
+        { empId: emp.emp_id, slug, ip: opts?.clientIp ?? null },
+        'SSO denied — client IP not in application allowlist',
+      );
+      return { allowed: false, reason: 'IP_DENIED' };
+    }
+
+    return { allowed: true };
   } catch (err) {
     // Fail closed — never fall back to open entitlement on policy errors.
     logger.warn({ err, empId: emp.emp_id, slug }, 'App access policy check failed; denying launch');
-    return false;
+    return { allowed: false, reason: 'ERROR' };
   }
+}
+
+export async function canUserLaunchApp(
+  emp: EmployeeSamlContext,
+  slug: string,
+  rule: EntitlementRule | null,
+  opts?: { clientIp?: string | null },
+): Promise<boolean> {
+  const decision = await evaluateAppLaunch(emp, slug, rule, opts);
+  return decision.allowed;
 }
 
 export async function hasPolicyAppAccess(empId: string, appSlug: string): Promise<boolean> {
@@ -221,19 +297,24 @@ export async function hasPolicyAppAccess(empId: string, appSlug: string): Promis
           EXISTS (
             SELECT 1 FROM app_access_assignments x
              WHERE x.app_id = a.id AND x.active = 1
-               AND x.assignment_type = 'USER' AND x.target_id = ?
+               AND x.assignment_type = 'USER'
+               AND x.target_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
           )
           OR EXISTS (
             SELECT 1 FROM app_access_assignments x
-              JOIN tag_group_members tgm ON tgm.tag_group_id = x.target_id
+              JOIN tag_group_members tgm
+                ON tgm.tag_group_id COLLATE utf8mb4_unicode_ci = x.target_id COLLATE utf8mb4_unicode_ci
              WHERE x.app_id = a.id AND x.active = 1
-               AND x.assignment_type = 'TAG_GROUP' AND tgm.emp_id = ?
+               AND x.assignment_type = 'TAG_GROUP'
+               AND tgm.emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
           )
           OR EXISTS (
             SELECT 1 FROM app_access_assignments x
-              JOIN group_members gm ON gm.group_id = x.target_id
+              JOIN group_members gm
+                ON gm.group_id COLLATE utf8mb4_unicode_ci = x.target_id COLLATE utf8mb4_unicode_ci
              WHERE x.app_id = a.id AND x.active = 1
-               AND x.assignment_type = 'GROUP' AND gm.emp_id = ?
+               AND x.assignment_type = 'GROUP'
+               AND gm.emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
           )
         )
       LIMIT 1`,
@@ -274,17 +355,43 @@ export async function getPolicyGrantedAppSlugs(empId: string): Promise<string[]>
 // ---------------------------------------------------------------------------
 // Assignments
 // ---------------------------------------------------------------------------
-async function assertAssignmentTarget(
+/** Resolve USER target to canonical emp_id (accepts emp_id, employee_number, or email). */
+async function resolveActiveEmployeeId(target: string): Promise<string> {
+  const raw = target.trim();
+  if (!raw) throw new Error('Employee ID or email is required');
+  if (raw.length > 255) throw new Error('Employee lookup value is too long');
+
+  const emp = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees
+      WHERE ilg_state IN ('ACTIVE', 'REACTIVATED')
+        AND (
+          emp_id = ?
+          OR employee_number = ?
+          OR LOWER(email_corp) = LOWER(?)
+        )
+      ORDER BY
+        CASE
+          WHEN emp_id = ? THEN 0
+          WHEN employee_number = ? THEN 1
+          ELSE 2
+        END
+      LIMIT 1`,
+    [raw, raw, raw, raw, raw],
+  );
+  if (!emp) {
+    throw new Error(
+      'Employee not found or not active — use emp_id, employee number, or corporate email',
+    );
+  }
+  return emp.emp_id;
+}
+
+async function resolveAssignmentTarget(
   assignmentType: AssignmentType,
   targetId: string,
-): Promise<void> {
+): Promise<string> {
   if (assignmentType === 'USER') {
-    const emp = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM employees WHERE emp_id = ? AND ilg_state IN ('ACTIVE','REACTIVATED') LIMIT 1`,
-      [targetId],
-    );
-    if (!emp) throw new Error('Employee not found or not active');
-    return;
+    return resolveActiveEmployeeId(targetId);
   }
   if (assignmentType === 'GROUP') {
     const grp = await queryOne<{ id: string }>(
@@ -292,13 +399,18 @@ async function assertAssignmentTarget(
       [targetId],
     );
     if (!grp) throw new Error('Identity group not found or inactive');
-    return;
+    return grp.id;
   }
   const tg = await queryOne<{ id: string }>(
     `SELECT id FROM tag_groups WHERE id = ? AND active = 1 LIMIT 1`,
     [targetId],
   );
   if (!tg) throw new Error('Tag group not found or inactive');
+  return tg.id;
+}
+
+function actorIdForDb(empId: string): string {
+  return empId.slice(0, 20);
 }
 
 export async function grantAppAccess(params: {
@@ -309,12 +421,19 @@ export async function grantAppAccess(params: {
   source?: 'ADMIN' | 'REQUEST';
   requestId?: string;
 }): Promise<string> {
-  await assertAssignmentTarget(params.assignmentType, params.targetId);
+  const app = await queryOne<{ id: string }>(
+    `SELECT id FROM applications WHERE id = ? LIMIT 1`,
+    [params.appId],
+  );
+  if (!app) throw new Error('Application not found');
+
+  const targetId = await resolveAssignmentTarget(params.assignmentType, params.targetId);
+  const grantedBy = actorIdForDb(params.grantedBy);
 
   const existing = await queryOne<{ id: string }>(
     `SELECT id FROM app_access_assignments
       WHERE app_id = ? AND assignment_type = ? AND target_id = ?`,
-    [params.appId, params.assignmentType, params.targetId],
+    [params.appId, params.assignmentType, targetId],
   );
 
   if (existing) {
@@ -323,20 +442,20 @@ export async function grantAppAccess(params: {
           SET active = 1, granted_by = ?, granted_at = UTC_TIMESTAMP(),
               revoked_at = NULL, revoked_by = NULL
         WHERE id = ?`,
-      [params.grantedBy, existing.id],
+      [grantedBy, existing.id],
     );
     await logAppAccessAudit({
       appId: params.appId,
       action: params.assignmentType === 'USER' ? 'ASSIGN_USER' : 'ASSIGN_GROUP',
-      actorEmpId: params.grantedBy,
-      targetEmpId: params.assignmentType === 'USER' ? params.targetId : null,
-      tagGroupId: params.assignmentType === 'TAG_GROUP' ? params.targetId : null,
+      actorEmpId: grantedBy,
+      targetEmpId: params.assignmentType === 'USER' ? targetId : null,
+      tagGroupId: params.assignmentType === 'TAG_GROUP' ? targetId : null,
       requestId: params.requestId ?? null,
       details: {
         source: params.source ?? 'ADMIN',
         assignmentId: existing.id,
         assignmentType: params.assignmentType,
-        groupId: params.assignmentType === 'GROUP' ? params.targetId : undefined,
+        groupId: params.assignmentType === 'GROUP' ? targetId : undefined,
       },
     });
     return existing.id;
@@ -347,21 +466,21 @@ export async function grantAppAccess(params: {
     `INSERT INTO app_access_assignments
        (id, app_id, assignment_type, target_id, active, granted_by, granted_at)
      VALUES (?, ?, ?, ?, 1, ?, UTC_TIMESTAMP())`,
-    [id, params.appId, params.assignmentType, params.targetId, params.grantedBy],
+    [id, params.appId, params.assignmentType, targetId, grantedBy],
   );
 
   await logAppAccessAudit({
     appId: params.appId,
     action: params.assignmentType === 'USER' ? 'ASSIGN_USER' : 'ASSIGN_GROUP',
-    actorEmpId: params.grantedBy,
-    targetEmpId: params.assignmentType === 'USER' ? params.targetId : null,
-    tagGroupId: params.assignmentType === 'TAG_GROUP' ? params.targetId : null,
+    actorEmpId: grantedBy,
+    targetEmpId: params.assignmentType === 'USER' ? targetId : null,
+    tagGroupId: params.assignmentType === 'TAG_GROUP' ? targetId : null,
     requestId: params.requestId ?? null,
     details: {
       source: params.source ?? 'ADMIN',
       assignmentId: id,
       assignmentType: params.assignmentType,
-      groupId: params.assignmentType === 'GROUP' ? params.targetId : undefined,
+      groupId: params.assignmentType === 'GROUP' ? targetId : undefined,
     },
   });
 
@@ -389,12 +508,19 @@ export async function updateAppAccess(
   );
   if (!row || !row.active) throw new Error('Assignment not found');
 
-  await assertAssignmentTarget(params.assignmentType, params.targetId);
+  const app = await queryOne<{ id: string }>(
+    `SELECT id FROM applications WHERE id = ? LIMIT 1`,
+    [params.appId],
+  );
+  if (!app) throw new Error('Application not found');
+
+  const targetId = await resolveAssignmentTarget(params.assignmentType, params.targetId);
+  const updatedBy = actorIdForDb(params.updatedBy);
 
   const conflict = await queryOne<{ id: string }>(
     `SELECT id FROM app_access_assignments
       WHERE app_id = ? AND assignment_type = ? AND target_id = ? AND id <> ?`,
-    [params.appId, params.assignmentType, params.targetId, assignmentId],
+    [params.appId, params.assignmentType, targetId, assignmentId],
   );
   if (conflict) {
     throw new Error('An assignment for this application and target already exists');
@@ -403,7 +529,7 @@ export async function updateAppAccess(
   const unchanged =
     row.app_id === params.appId &&
     row.assignment_type === params.assignmentType &&
-    row.target_id === params.targetId;
+    row.target_id === targetId;
   if (unchanged) return;
 
   await execute(
@@ -412,20 +538,20 @@ export async function updateAppAccess(
             granted_by = ?, granted_at = UTC_TIMESTAMP(),
             revoked_at = NULL, revoked_by = NULL, active = 1
       WHERE id = ?`,
-    [params.appId, params.assignmentType, params.targetId, params.updatedBy, assignmentId],
+    [params.appId, params.assignmentType, targetId, updatedBy, assignmentId],
   );
 
   await logAppAccessAudit({
     appId: params.appId,
     action: params.assignmentType === 'USER' ? 'ASSIGN_USER' : 'ASSIGN_GROUP',
-    actorEmpId: params.updatedBy,
-    targetEmpId: params.assignmentType === 'USER' ? params.targetId : null,
-    tagGroupId: params.assignmentType === 'TAG_GROUP' ? params.targetId : null,
+    actorEmpId: updatedBy,
+    targetEmpId: params.assignmentType === 'USER' ? targetId : null,
+    tagGroupId: params.assignmentType === 'TAG_GROUP' ? targetId : null,
     details: {
       source: 'ADMIN',
       assignmentId,
       assignmentType: params.assignmentType,
-      groupId: params.assignmentType === 'GROUP' ? params.targetId : undefined,
+      groupId: params.assignmentType === 'GROUP' ? targetId : undefined,
       previous: {
         appId: row.app_id,
         assignmentType: row.assignment_type,

@@ -265,6 +265,11 @@ Object.assign(api, {
   // Application Access Policy
   appAccessSummary:     () => f('/api/admin/app-access-policy/summary'),
   listAppAccessApps:    () => f('/api/admin/app-access-policy/applications'),
+  updateAppIpPolicy:    (appId, allowedCidrs) =>
+    f(`/api/admin/app-access-policy/applications/${encodeURIComponent(appId)}/ip-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ allowedCidrs }),
+    }),
   listTagGroups:        (activeOnly = true) =>
     f(`/api/admin/app-access-policy/tag-groups${activeOnly ? '' : '?activeOnly=0'}`),
   getTagGroup:          (id) => f(`/api/admin/app-access-policy/tag-groups/${id}`),

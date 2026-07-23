@@ -9,6 +9,7 @@ import { isSamlEnabled } from '../config.js';
 import { canReceiveSamlAssertion } from '../saml/entitlements.js';
 import { getActiveServiceProviders, getEmployeeForSaml } from '../saml/sp-registry.js';
 import { canUserLaunchApp } from '../services/app-access-policy.js';
+import { getClientIp } from '../utils/request-context.js';
 
 const router = Router();
 
@@ -29,11 +30,12 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
     return;
   }
 
+  const clientIp = getClientIp(req);
   const allApps = await getActiveServiceProviders();
   const launchChecks = await Promise.all(
     allApps.map(async (sp) => ({
       sp,
-      ok: await canUserLaunchApp(emp, sp.slug, sp.entitlement_rule),
+      ok: await canUserLaunchApp(emp, sp.slug, sp.entitlement_rule, { clientIp }),
     })),
   );
   const entitled = launchChecks.filter((c) => c.ok).map((c) => c.sp);

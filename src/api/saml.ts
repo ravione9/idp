@@ -26,12 +26,13 @@ import {
   getServiceProviderByEntityId,
   getServiceProviderBySlug,
 } from '../saml/sp-registry.js';
-import { canUserLaunchApp } from '../services/app-access-policy.js';
+import { evaluateAppLaunch } from '../services/app-access-policy.js';
 import {
   extractRequestIdFromAuthnRequest,
   logSamlAssertion,
   samlBindingFromFlow,
 } from '../saml/assertion-log.js';
+import { getClientIp } from '../utils/request-context.js';
 
 const router = Router();
 const PENDING_SSO_PREFIX = 'lilg:saml:pending:';
@@ -176,9 +177,22 @@ async function issueAssertion(
     return;
   }
 
-  if (!(await canUserLaunchApp(emp, resolved.sp.slug, resolved.sp.entitlement_rule))) {
-    res.status(403).json({ error: 'You are not entitled to access this application' });
-    return;
+  {
+    const decision = await evaluateAppLaunch(
+      emp,
+      resolved.sp.slug,
+      resolved.sp.entitlement_rule,
+      { clientIp: getClientIp(req) },
+    );
+    if (!decision.allowed) {
+      res.status(403).json({
+        error: decision.reason === 'IP_DENIED'
+          ? 'Access to this application is not allowed from your IP address'
+          : 'You are not entitled to access this application',
+        code: decision.reason ?? 'NO_GRANT',
+      });
+      return;
+    }
   }
 
   try {
@@ -309,9 +323,22 @@ router.get('/launch/:slug', async (req: Request, res: Response): Promise<void> =
     return;
   }
 
-  if (!(await canUserLaunchApp(emp, sp.slug, sp.entitlement_rule))) {
-    res.status(403).json({ error: 'You are not entitled to access this application' });
-    return;
+  {
+    const decision = await evaluateAppLaunch(
+      emp,
+      sp.slug,
+      sp.entitlement_rule,
+      { clientIp: getClientIp(req) },
+    );
+    if (!decision.allowed) {
+      res.status(403).json({
+        error: decision.reason === 'IP_DENIED'
+          ? 'Access to this application is not allowed from your IP address'
+          : 'You are not entitled to access this application',
+        code: decision.reason ?? 'NO_GRANT',
+      });
+      return;
+    }
   }
 
   try {

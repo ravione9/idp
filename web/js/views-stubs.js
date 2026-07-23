@@ -6197,10 +6197,12 @@ export async function viewAppAccessPolicy(content) {
     <div id="aap-stats" class="stat-grid aap-stats">${loading()}</div>
     <div class="cfg-tab-bar inline-tabs aap-tabs">
       <button type="button" class="cfg-tab inline-tab active" data-tab="assign">Application Assignment</button>
+      <button type="button" class="cfg-tab inline-tab" data-tab="ip">IP Restrictions</button>
       <button type="button" class="cfg-tab inline-tab" data-tab="workflow">JIT / Request Workflow</button>
       <button type="button" class="cfg-tab inline-tab" data-tab="audit">Audit Log</button>
     </div>
     <div id="tab-assign"></div>
+    <div id="tab-ip" style="display:none"></div>
     <div id="tab-workflow" style="display:none"></div>
     <div id="tab-audit" style="display:none"></div>
   </div>`));
@@ -6227,6 +6229,7 @@ export async function viewAppAccessPolicy(content) {
       t.classList.toggle('active', on);
     });
     wrap.querySelector('#tab-assign').style.display   = name === 'assign' ? '' : 'none';
+    wrap.querySelector('#tab-ip').style.display       = name === 'ip' ? '' : 'none';
     wrap.querySelector('#tab-workflow').style.display = name === 'workflow' ? '' : 'none';
     wrap.querySelector('#tab-audit').style.display    = name === 'audit' ? '' : 'none';
   }
@@ -6367,8 +6370,15 @@ export async function viewAppAccessPolicy(content) {
         <select class="form-select" id="aa-app"><option value="">— Select —</option>${appOpts}</select></div>
       <div class="form-group"><label class="form-label">Assignment Type</label>
         <select class="form-select" id="aa-type"><option value="USER"${typeUserSel}>User-based</option><option value="GROUP"${typeGroupSel}>Group-based</option></select></div>
-      <div class="form-group" id="aa-user-wrap" style="${startAsUser ? '' : 'display:none'}"><label class="form-label">Employee ID</label>
-        <input class="form-input" id="aa-emp" placeholder="e.g. E12345" value="${empVal}"></div>
+      <div class="form-group" id="aa-user-wrap" style="${startAsUser ? '' : 'display:none'}">
+        <label class="form-label">User (search name, email, or emp ID)</label>
+        <input class="form-input" id="aa-emp-search" placeholder="Type to search…" autocomplete="off">
+        <input type="hidden" id="aa-emp" value="${empVal}">
+        <div id="aa-emp-picked" class="muted" style="margin-top:0.35rem;font-size:0.85rem">${empVal ? `Selected: <code>${empVal}</code>` : 'Or paste emp_id / corporate email below and Grant.'}</div>
+        <div id="aa-emp-results" style="margin-top:0.5rem"></div>
+        <label class="form-label" style="margin-top:0.75rem">Or enter emp_id / employee number / email</label>
+        <input class="form-input" id="aa-emp-manual" placeholder="e.g. E12345 or user@lenskart.com" value="${empVal}">
+      </div>
       <div class="form-group" id="aa-tg-wrap" style="${startAsUser ? 'display:none' : ''}"><label class="form-label">Group</label>
         <select class="form-select" id="aa-tg"><option value="">— Select —</option>${tgOpts}</select></div>
       <div id="aa-err"></div>
@@ -6382,13 +6392,47 @@ export async function viewAppAccessPolicy(content) {
       bd.querySelector('#aa-user-wrap').style.display = isUser ? '' : 'none';
       bd.querySelector('#aa-tg-wrap').style.display = isUser ? 'none' : '';
     });
+    let searchTimer = null;
+    bd.querySelector('#aa-emp-search')?.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      const q = bd.querySelector('#aa-emp-search').value.trim();
+      const box = bd.querySelector('#aa-emp-results');
+      if (q.length < 2) { box.innerHTML = ''; return; }
+      searchTimer = setTimeout(async () => {
+        try {
+          const r = await api.listUsersUnified(q, '', '', 8, 0);
+          const items = r?.data || [];
+          if (!items.length) {
+            box.innerHTML = `<p class="muted" style="font-size:0.85rem">No active users matched.</p>`;
+            return;
+          }
+          box.innerHTML = `<div class="table-wrap"><table><tbody>${items.map((u) => `
+            <tr style="cursor:pointer" class="aa-pick-user" data-emp="${esc(u.emp_id)}" data-label="${esc(u.full_name || u.emp_id)} · ${esc(u.email_corp || '')}">
+              <td class="cell-strong">${esc(u.full_name || u.emp_id)}</td>
+              <td class="muted">${esc(u.email_corp || '—')}</td>
+              <td><code style="font-size:0.78rem">${esc(u.emp_id)}</code></td>
+            </tr>`).join('')}</tbody></table></div>`;
+          box.querySelectorAll('.aa-pick-user').forEach((row) => {
+            row.addEventListener('click', () => {
+              bd.querySelector('#aa-emp').value = row.dataset.emp;
+              bd.querySelector('#aa-emp-manual').value = row.dataset.emp;
+              bd.querySelector('#aa-emp-picked').innerHTML = `Selected: <strong>${esc(row.dataset.label)}</strong>`;
+              box.innerHTML = '';
+              bd.querySelector('#aa-emp-search').value = '';
+            });
+          });
+        } catch (e) {
+          box.innerHTML = errHtml(e.message);
+        }
+      }, 280);
+    });
     bd.querySelector('#aa-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#aa-save').addEventListener('click', async () => {
       const appId = bd.querySelector('#aa-app').value;
       let assignmentType = typeSel.value;
       let targetId = '';
       if (assignmentType === 'USER') {
-        targetId = bd.querySelector('#aa-emp').value.trim();
+        targetId = (bd.querySelector('#aa-emp').value || bd.querySelector('#aa-emp-manual').value || '').trim();
       } else {
         const tgSel = bd.querySelector('#aa-tg');
         const selected = tgSel.selectedOptions[0];
@@ -6404,6 +6448,75 @@ export async function viewAppAccessPolicy(content) {
         }
         bd.remove(); await loadAssignTab(); await loadStats();
       } catch (e) { bd.querySelector('#aa-err').innerHTML = errHtml(e.message); }
+    });
+  }
+
+  // ── Tab: IP Restrictions ──
+  async function loadIpTab() {
+    const area = wrap.querySelector('#tab-ip');
+    area.innerHTML = loading();
+    try {
+      await loadAppsAndGroups();
+      const rows = appsCache.length ? appsCache.map((a) => {
+        const cidrs = Array.isArray(a.allowed_cidrs) ? a.allowed_cidrs : [];
+        const summary = cidrs.length
+          ? `<span class="badge badge-warning">${cidrs.length} rule${cidrs.length === 1 ? '' : 's'}</span> <span class="muted" style="font-size:0.8rem">${esc(cidrs.slice(0, 3).join(', '))}${cidrs.length > 3 ? '…' : ''}</span>`
+          : '<span class="badge badge-neutral">Unrestricted</span>';
+        return `<tr>
+          <td class="cell-strong">${esc(a.name)}</td>
+          <td class="muted"><code style="font-size:0.78rem">${esc(a.slug)}</code></td>
+          <td>${summary}</td>
+          <td><button class="btn btn-sm btn-secondary edit-ip" data-id="${esc(String(a.id))}" data-name="${esc(a.name)}" data-cidrs="${esc(JSON.stringify(cidrs))}">Edit IPs</button></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="4"><div class="empty-state"><p>No applications yet.</p></div></td></tr>`;
+
+      area.innerHTML = `
+        <div class="aap-actions">
+          <div>
+            <h3 class="section-title">IP Restrictions</h3>
+            <p class="subtitle">Optional per-app allowlist. When set, SSO launch is allowed only from matching client IPs (CIDR, exact IP, or prefix like <code>10.0.</code>). Empty = no IP restriction.</p>
+          </div>
+        </div>
+        <div id="ip-msg" style="margin-bottom:0.75rem"></div>
+        <div class="table-wrap aap-table"><table>
+          <thead><tr><th>Application</th><th>Slug</th><th>Allowlist</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+
+      area.querySelectorAll('.edit-ip').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          let cidrs = [];
+          try { cidrs = JSON.parse(btn.dataset.cidrs || '[]'); } catch { cidrs = []; }
+          openIpModal(btn.dataset.id, btn.dataset.name, cidrs);
+        });
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  function openIpModal(appId, appName, cidrs) {
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>IP allowlist — ${esc(appName)}</h2></div><div class="modal-body">
+      <p class="muted" style="font-size:0.85rem;margin-bottom:0.75rem">One CIDR or IP per line. Examples: <code>10.0.0.0/8</code>, <code>203.0.113.10</code>, <code>192.168.1.</code>. Leave empty to remove restriction.</p>
+      <div class="form-group"><label class="form-label">Allowed CIDRs / IPs</label>
+        <textarea class="form-input" id="ip-cidrs" rows="8" style="font-family:ui-monospace,monospace;font-size:0.85rem">${esc((cidrs || []).join('\n'))}</textarea></div>
+      <div id="ip-err"></div>
+    </div><div class="modal-footer">
+      <button class="btn btn-primary" id="ip-save">Save</button>
+      <button class="btn btn-secondary" id="ip-cancel">Cancel</button>
+    </div></div>`);
+    bd.querySelector('#ip-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#ip-save').addEventListener('click', async () => {
+      const allowedCidrs = bd.querySelector('#ip-cidrs').value
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      try {
+        await api.updateAppIpPolicy(appId, allowedCidrs);
+        bd.remove();
+        wrap.querySelector('#ip-msg').innerHTML = `<div class="alert alert-success">IP policy saved for ${esc(appName)}.</div>`;
+        await loadIpTab();
+      } catch (e) {
+        bd.querySelector('#ip-err').innerHTML = errHtml(e.message);
+      }
     });
   }
 
@@ -6646,6 +6759,7 @@ export async function viewAppAccessPolicy(content) {
   wrap.querySelectorAll('.cfg-tab').forEach(tab => {
     tab.addEventListener('click', async () => {
       if (tab.dataset.tab === 'assign') await loadAssignTab();
+      if (tab.dataset.tab === 'ip') await loadIpTab();
       if (tab.dataset.tab === 'workflow') await loadWorkflowTab();
       if (tab.dataset.tab === 'audit') await loadAuditTab();
     });

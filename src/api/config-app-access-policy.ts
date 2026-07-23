@@ -18,8 +18,10 @@ import {
   parseRequesterGroupIds,
   listAssignableApplications,
   setApplicationRequestable,
+  setApplicationAllowedCidrs,
   type ApprovalLevel,
 } from '../services/app-access-policy.js';
+import { parseCidrList } from '../utils/ip-match.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -224,10 +226,31 @@ router.get('/assignments', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 const assignmentSchema = z.object({
-  appId:          z.string().uuid(),
+  appId:          z.string().min(1).max(36),
   assignmentType: z.enum(['USER', 'TAG_GROUP', 'GROUP']),
-  targetId:       z.string().min(1).max(36),
+  /** emp_id / employee_number / email for USER; group UUID otherwise */
+  targetId:       z.string().min(1).max(255),
 });
+
+function mapAssignmentError(res: Response, err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (
+    msg.includes('not found')
+    || msg.includes('not active')
+    || msg.includes('inactive')
+    || msg.includes('required')
+    || msg.includes('too long')
+  ) {
+    const status = msg.includes('not found') && !msg.includes('Employee') ? 404 : 400;
+    res.status(status).json({ error: msg });
+    return true;
+  }
+  if (msg.includes('already exists')) {
+    res.status(409).json({ error: msg });
+    return true;
+  }
+  return false;
+}
 
 router.post('/assignments', asyncHandler(async (req: Request, res: Response) => {
   const parsed = assignmentSchema.safeParse(req.body);
@@ -238,14 +261,19 @@ router.post('/assignments', asyncHandler(async (req: Request, res: Response) => 
   const grantedBy = actorEmpId(req);
   if (!grantedBy) { res.status(401).json({ error: 'Unauthorized' }); return; }
 
-  const id = await grantAppAccess({
-    appId:          parsed.data.appId,
-    assignmentType: parsed.data.assignmentType,
-    targetId:       parsed.data.targetId,
-    grantedBy,
-    source:         'ADMIN',
-  });
-  res.status(201).json({ id });
+  try {
+    const id = await grantAppAccess({
+      appId:          parsed.data.appId,
+      assignmentType: parsed.data.assignmentType,
+      targetId:       parsed.data.targetId,
+      grantedBy,
+      source:         'ADMIN',
+    });
+    res.status(201).json({ id });
+  } catch (err) {
+    if (mapAssignmentError(res, err)) return;
+    throw err;
+  }
 }));
 
 router.put('/assignments/:id', asyncHandler(async (req: Request, res: Response) => {
@@ -266,13 +294,30 @@ router.put('/assignments/:id', asyncHandler(async (req: Request, res: Response) 
     });
     res.json({ success: true });
   } catch (err) {
+    if (mapAssignmentError(res, err)) return;
+    throw err;
+  }
+}));
+
+// PUT /applications/:id/ip-policy — per-app IP/CIDR allowlist for SSO launch
+const ipPolicySchema = z.object({
+  allowedCidrs: z.array(z.string().min(1).max(64)).max(64),
+});
+
+router.put('/applications/:id/ip-policy', asyncHandler(async (req: Request, res: Response) => {
+  const parsed = ipPolicySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+  try {
+    const cidrs = parseCidrList(parsed.data.allowedCidrs);
+    await setApplicationAllowedCidrs(req.params['id']!, cidrs);
+    res.json({ success: true, allowedCidrs: cidrs });
+  } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('not found')) {
       res.status(404).json({ error: msg });
-      return;
-    }
-    if (msg.includes('already exists')) {
-      res.status(409).json({ error: msg });
       return;
     }
     throw err;
