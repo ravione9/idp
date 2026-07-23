@@ -952,7 +952,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-23 — IP restrict at launch (keep app tiles visible)
+### `ec37d5e` — 2026-07-23 — IP restrict at launch (keep app tiles visible)
 
 **Why** — Applying an IP allowlist hid the app from Home. Desired flow: tile stays visible → launch verifies public IP → allow or show deny page.
 
