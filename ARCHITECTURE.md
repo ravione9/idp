@@ -1012,7 +1012,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-23 — App Discovery: stop false-positive wishlist dump
+### `fb15af0` — 2026-07-23 — App Discovery: stop false-positive wishlist dump
 
 **Why** — First MVP scan auto-inserted the entire known-SaaS list as `CATALOG_GAP` and treated registered SAML apps as `SSO_SIGNAL` discoveries.
 
