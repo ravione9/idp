@@ -983,7 +983,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-23 — VPN / RADIUS AAA module
+### `ec41e95` — 2026-07-23 — VPN / RADIUS AAA module
 
 **Why** — VPN gateways (AnyConnect, GlobalProtect, FortiClient, OpenVPN) need IdP-backed AAA with group policies and optional MFA, not only browser SSO.
 
