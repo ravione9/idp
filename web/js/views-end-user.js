@@ -785,32 +785,78 @@ export async function viewRequestAccess(content) {
     wrap.querySelector('#ra-type').addEventListener('change', renderCatalog);
     // Do not restore a stale search that can hide the whole catalog
     wrap.querySelector('#ra-search').value = '';
-    if (!allItems.length) {
-      const hiddenHtml = hiddenApps.length
-        ? `<div class="table-wrap" style="max-width:40rem;margin:1.25rem auto 0;text-align:left">
-            <p class="muted" style="font-size:0.85rem;margin-bottom:0.5rem">Configured apps and why they are hidden for you:</p>
-            <table><thead><tr><th>Application</th><th>Why not listed</th></tr></thead>
-            <tbody>${hiddenApps.map(h => `<tr>
-              <td class="cell-strong">${esc(h.name)}</td>
-              <td class="muted" style="font-size:0.85rem">${esc(h.reason)}</td>
-            </tr>`).join('')}</tbody></table>
-          </div>`
-        : `<p class="muted" style="max-width:36rem;margin:0.75rem auto 0;font-size:0.9rem">
-            No JIT workflow is configured yet. Admins: Application Access Policy → <strong>JIT / Request Workflow</strong>
-            → enable <strong>Show in Request Access</strong>, and leave <em>Who can request</em> unchecked (any user) or add yourself to the selected identity group.
-          </p>`;
-      wrap.querySelector('#ra-catalog').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div>
-        <p>Nothing to request right now.</p>
-        ${hiddenHtml}
+
+    function fmtDue(iso) {
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return null;
+      return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    }
+    function appInitial(name) {
+      return esc((name || '?').charAt(0).toUpperCase());
+    }
+    function statusCard(h) {
+      const code = h.reasonCode || 'OTHER';
+      const kind = code === 'PENDING' ? 'pending' : code === 'ASSIGNED' ? 'assigned' : 'other';
+      const badge = code === 'PENDING'
+        ? '<span class="ra-status-badge ra-status-badge--pending">Awaiting approval</span>'
+        : code === 'ASSIGNED'
+          ? '<span class="ra-status-badge ra-status-badge--assigned">Already assigned</span>'
+          : `<span class="ra-status-badge ra-status-badge--muted">${esc(code.replace(/_/g, ' '))}</span>`;
+      const due = code === 'PENDING' ? fmtDue(h.slaDueAt) : null;
+      const meta = code === 'PENDING'
+        ? (due
+          ? `Approval in progress. You can request again after <strong>${esc(due)}</strong> if still undecided.`
+          : 'Approval in progress. After the approval window expires you can submit a new request.')
+        : esc(h.reason || '');
+      const icon = h.icon_url
+        ? `<img src="${esc(h.icon_url)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit" onerror="this.remove()">`
+        : appInitial(h.name);
+      return `<div class="ra-status-card ra-status-card--${kind}">
+        <div class="ra-status-card-icon">${icon}</div>
+        <div class="ra-status-card-body">
+          <p class="ra-status-card-title">${esc(h.name)}</p>
+          <p class="ra-status-card-meta">${meta}</p>
+          ${badge}
+        </div>
       </div>`;
+    }
+    function statusSection(title, items) {
+      if (!items.length) return '';
+      return `<div class="ra-status-section">
+        <h3>${esc(title)}</h3>
+        <div class="ra-status-grid">${items.map(statusCard).join('')}</div>
+      </div>`;
+    }
+
+    const pending = hiddenApps.filter(h => h.reasonCode === 'PENDING');
+    const assigned = hiddenApps.filter(h => h.reasonCode === 'ASSIGNED');
+    const otherHidden = hiddenApps.filter(h => h.reasonCode !== 'PENDING' && h.reasonCode !== 'ASSIGNED');
+
+    if (!allItems.length) {
+      wrap.querySelector('#ra-catalog').innerHTML = `
+        <div class="ra-status-hero">
+          <div class="ra-status-hero-icon">◎</div>
+          <h2>Nothing new to request</h2>
+          <p>Assigned apps launch from <strong>All Applications</strong>. Pending requests wait for approval — when the approval window expires, the app shows here again so you can re-request.</p>
+        </div>
+        ${statusSection('Awaiting approval', pending)}
+        ${statusSection('Already on All Applications', assigned)}
+        ${statusSection('Not available to request', otherHidden)}
+        ${!hiddenApps.length ? `<p class="muted" style="max-width:36rem;margin:0.5rem auto;font-size:0.9rem;text-align:center">
+          No JIT workflow is configured yet. Admins: Application Access Policy → <strong>JIT / Request Workflow</strong>
+          → enable <strong>Show in Request Access</strong>.
+        </p>` : ''}`;
     } else {
       renderCatalog();
       if (hiddenApps.length) {
-        const note = document.createElement('div');
-        note.className = 'muted';
-        note.style.cssText = 'font-size:0.8rem;margin-top:1rem;max-width:40rem';
-        note.innerHTML = `${hiddenApps.length} other app(s) with a workflow are hidden for you (already assigned, pending, or not in requester groups).`;
-        wrap.querySelector('#ra-catalog').appendChild(note);
+        const panel = document.createElement('div');
+        panel.style.marginTop = '1.5rem';
+        panel.innerHTML = `
+          ${statusSection('Awaiting approval', pending)}
+          ${statusSection('Already on All Applications', assigned)}
+          ${otherHidden.length ? statusSection('Other', otherHidden) : ''}`;
+        wrap.querySelector('#ra-catalog').appendChild(panel);
       }
     }
   } catch(err) {

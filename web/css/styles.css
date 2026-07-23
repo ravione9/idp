@@ -4268,3 +4268,145 @@ code, .mono, td code {
 .report-catalog-body { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
 .report-catalog-title { font-weight: 600; font-size: 0.92rem; }
 .report-catalog-desc { font-size: 0.78rem; color: var(--text-muted); line-height: 1.35; }
+
+/* ── Request Access status panels ── */
+.ra-status-hero {
+  text-align: center;
+  padding: 2rem 1.25rem 1.25rem;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, var(--primary-soft), transparent 70%),
+    var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 1.25rem;
+}
+.ra-status-hero-icon {
+  width: 3.5rem;
+  height: 3.5rem;
+  margin: 0 auto 0.85rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, var(--primary), var(--accent));
+  color: #fff;
+  font-size: 1.5rem;
+  box-shadow: 0 8px 20px rgba(15, 76, 129, 0.22);
+}
+.ra-status-hero h2 {
+  margin: 0 0 0.35rem;
+  font-size: var(--text-xl);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.ra-status-hero p {
+  margin: 0 auto;
+  max-width: 36rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.ra-status-section {
+  margin-bottom: 1.25rem;
+}
+.ra-status-section h3 {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin: 0 0 0.65rem;
+}
+.ra-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+.ra-status-card {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+  padding: 1rem 1.05rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.ra-status-card:hover {
+  box-shadow: var(--shadow);
+}
+.ra-status-card--pending {
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--border));
+  background: linear-gradient(135deg, var(--warning-soft) 0%, var(--surface) 55%);
+}
+.ra-status-card--assigned {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+  background: linear-gradient(135deg, var(--success-soft) 0%, var(--surface) 55%);
+}
+.ra-status-card--other {
+  background: var(--surface-2);
+}
+.ra-status-card-icon {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1rem;
+  flex-shrink: 0;
+  color: #fff;
+  background: var(--primary);
+}
+.ra-status-card--pending .ra-status-card-icon { background: var(--warning); }
+.ra-status-card--assigned .ra-status-card-icon { background: var(--success); }
+.ra-status-card-body { min-width: 0; flex: 1; }
+.ra-status-card-title {
+  font-weight: 650;
+  font-size: 0.95rem;
+  margin: 0 0 0.2rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ra-status-card-meta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin: 0;
+}
+.ra-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.45rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.ra-status-badge--pending {
+  background: var(--warning-soft);
+  color: var(--warning-text);
+}
+.ra-status-badge--assigned {
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+.ra-status-badge--muted {
+  background: var(--surface-3);
+  color: var(--text-muted);
+}
+.ra-item-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.ra-item-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+  box-shadow: var(--shadow);
+}

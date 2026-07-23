@@ -1005,6 +1005,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `TBD` — 2026-07-23 — Expire stale JIT requests + Request Access status UI
+
+**Why** — A pending APP_ACCESS request hid the app forever; after SLA elapsed users could not re-request. Empty state looked sparse.
+
+**What changed:**
+
+- PENDING requests past `sla_due_at` / `valid_until` (or 3 days if unset) auto-set to `EXPIRED`; approvals skipped; app returns to Request Access.
+- Explain API includes `reasonCode`, `slaDueAt`; Request Access shows awaiting-approval / assigned status cards.
+
 ### `2c1bf89` — 2026-07-23 — JIT Request Access catalog visibility fixes
 
 **Why** — Users configured a JIT workflow but the app did not appear under Request Access (silent empty catalog).

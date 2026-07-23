@@ -337,27 +337,109 @@ export async function hasPolicyAppAccess(empId: string, appSlug: string): Promis
   return Number(row?.ok ?? 0) === 1;
 }
 
-/** True when the user already has a pending APP_ACCESS request for this app (avoid re-request). */
-export async function hasPendingAppAccessRequest(empId: string, appId: string): Promise<boolean> {
+/**
+ * Mark PENDING access requests past their SLA / validity as EXPIRED so the user
+ * can submit a new request. Returns how many rows were expired.
+ */
+export async function expireStaleAccessRequests(empId?: string, appId?: string): Promise<number> {
+  const params: unknown[] = [];
+  let where = `
+    status = 'PENDING'
+    AND (
+      (sla_due_at IS NOT NULL AND sla_due_at < UTC_TIMESTAMP())
+      OR (valid_until IS NOT NULL AND valid_until < UTC_TIMESTAMP())
+      OR (sla_due_at IS NULL AND valid_until IS NULL
+          AND created_at < UTC_TIMESTAMP() - INTERVAL 3 DAY)
+    )`;
+  if (empId) {
+    where += ' AND target_emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci';
+    params.push(empId);
+  }
+  if (appId) {
+    where += ` AND item_type = 'APP_ACCESS'
+      AND (JSON_CONTAINS(item_ids, JSON_QUOTE(?), '$') OR CAST(item_ids AS CHAR) LIKE ?)`;
+    params.push(appId, `%${appId}%`);
+  }
+
   try {
-    const row = await queryOne<{ ok: number }>(
-      `SELECT 1 AS ok
+    // Expire matching requests
+    const stale = await query<{ id: string }>(
+      `SELECT id FROM access_requests WHERE ${where}`,
+      params,
+    );
+    if (!stale.length) return 0;
+
+    const ids = stale.map((r) => r.id);
+    const ph = ids.map(() => '?').join(', ');
+    await execute(
+      `UPDATE access_requests
+          SET status = 'EXPIRED', decided_at = UTC_TIMESTAMP()
+        WHERE id IN (${ph}) AND status = 'PENDING'`,
+      ids,
+    );
+    await execute(
+      `UPDATE access_request_approvals
+          SET decision = 'SKIPPED', decided_at = UTC_TIMESTAMP(),
+              comment = COALESCE(comment, 'Request expired — SLA elapsed')
+        WHERE request_id IN (${ph}) AND decision = 'PENDING'`,
+      ids,
+    ).catch(() => undefined);
+    logger.info({ count: ids.length, empId: empId ?? null, appId: appId ?? null }, 'Expired stale access requests');
+    return ids.length;
+  } catch (err) {
+    logger.warn({ err, empId, appId }, 'Failed to expire stale access requests');
+    return 0;
+  }
+}
+
+export type PendingAppAccessInfo = {
+  requestId: string;
+  slaDueAt: string | null;
+  createdAt: string | null;
+};
+
+/** Active (non-expired) pending APP_ACCESS request for this user+app, if any. */
+export async function getActivePendingAppAccessRequest(
+  empId: string,
+  appId: string,
+): Promise<PendingAppAccessInfo | null> {
+  await expireStaleAccessRequests(empId, appId);
+  try {
+    const row = await queryOne<{
+      id: string;
+      sla_due_at: string | null;
+      created_at: string | null;
+    }>(
+      `SELECT id, sla_due_at, created_at
          FROM access_requests
         WHERE target_emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
           AND item_type = 'APP_ACCESS'
           AND status = 'PENDING'
+          AND (sla_due_at IS NULL OR sla_due_at >= UTC_TIMESTAMP())
+          AND (valid_until IS NULL OR valid_until >= UTC_TIMESTAMP())
           AND (
             JSON_CONTAINS(item_ids, JSON_QUOTE(?), '$')
             OR CAST(item_ids AS CHAR) LIKE ?
           )
+        ORDER BY created_at DESC
         LIMIT 1`,
       [empId, appId, `%${appId}%`],
     );
-    return Number(row?.ok ?? 0) === 1;
+    if (!row) return null;
+    return {
+      requestId: row.id,
+      slaDueAt: row.sla_due_at,
+      createdAt: row.created_at,
+    };
   } catch (err) {
     logger.warn({ err, empId, appId }, 'Pending APP_ACCESS lookup failed; treating as none');
-    return false;
+    return null;
   }
+}
+
+/** True when the user already has a non-expired pending APP_ACCESS request for this app. */
+export async function hasPendingAppAccessRequest(empId: string, appId: string): Promise<boolean> {
+  return (await getActivePendingAppAccessRequest(empId, appId)) !== null;
 }
 
 export async function getPolicyGrantedAppSlugs(empId: string): Promise<string[]> {
@@ -685,29 +767,50 @@ async function userInAnyIdentityGroup(empId: string, groupIds: string[]): Promis
   return Number(membership?.n ?? 0) > 0;
 }
 
+export type JitEligibility = {
+  ok: boolean;
+  reason?: string;
+  reasonCode?: 'INACTIVE' | 'JIT_OFF' | 'ASSIGNED' | 'PENDING' | 'NO_WORKFLOW' | 'GROUP_DENIED';
+  pending?: PendingAppAccessInfo;
+};
+
 /** True when requester may submit a JIT request for this app under active workflows. */
 export async function canUserRequestApp(
   empId: string,
   appId: string,
-): Promise<{ ok: boolean; reason?: string }> {
+): Promise<JitEligibility> {
   const app = await queryOne<{ id: string; slug: string; requestable: number; active: number }>(
     `SELECT id, slug, requestable, active FROM applications WHERE id = ? LIMIT 1`,
     [appId],
   );
   if (!app || Number(app.active) !== 1) {
-    return { ok: false, reason: 'Application not found or inactive' };
+    return { ok: false, reasonCode: 'INACTIVE', reason: 'Application not found or inactive' };
   }
   if (Number(app.requestable) !== 1) {
-    return { ok: false, reason: 'Application is not enabled for Request Access (JIT) — turn on “Show in Request Access” on the workflow' };
+    return {
+      ok: false,
+      reasonCode: 'JIT_OFF',
+      reason: 'Application is not enabled for Request Access (JIT) — turn on “Show in Request Access” on the workflow',
+    };
   }
 
   // Assigned users launch from All Applications — never need Request Access again
   if (await hasPolicyAppAccess(empId, app.slug)) {
-    return { ok: false, reason: 'You already have access — open it from All Applications (no request needed)' };
+    return {
+      ok: false,
+      reasonCode: 'ASSIGNED',
+      reason: 'You already have access — open it from All Applications (no request needed)',
+    };
   }
 
-  if (await hasPendingAppAccessRequest(empId, appId)) {
-    return { ok: false, reason: 'You already have a pending request for this application' };
+  const pending = await getActivePendingAppAccessRequest(empId, appId);
+  if (pending) {
+    return {
+      ok: false,
+      reasonCode: 'PENDING',
+      reason: 'Awaiting approval — you can request again after the approval window expires',
+      pending,
+    };
   }
 
   const workflows = await query<WorkflowRow>(
@@ -718,7 +821,11 @@ export async function canUserRequestApp(
     [appId],
   );
   if (!workflows.length) {
-    return { ok: false, reason: 'No active access request workflow configured for this application' };
+    return {
+      ok: false,
+      reasonCode: 'NO_WORKFLOW',
+      reason: 'No active access request workflow configured for this application',
+    };
   }
 
   // Eligible if any active workflow allows this user (empty requester groups = open).
@@ -733,11 +840,16 @@ export async function canUserRequestApp(
   if (restrictedWorkflows > 0) {
     return {
       ok: false,
+      reasonCode: 'GROUP_DENIED',
       reason: 'You are not in the identity groups allowed to request this app (check “Who can request” on the JIT workflow, or leave groups unchecked for any user)',
     };
   }
 
-  return { ok: false, reason: 'Your groups are not permitted to request this application' };
+  return {
+    ok: false,
+    reasonCode: 'GROUP_DENIED',
+    reason: 'Your groups are not permitted to request this application',
+  };
 }
 
 export type JitAppRow = {
@@ -756,6 +868,7 @@ export type JitAppRow = {
  * and that their identity groups are allowed to request.
  */
 export async function listJitRequestableAppsForUser(empId: string): Promise<JitAppRow[]> {
+  await expireStaleAccessRequests(empId);
   // Keep SQL simple — pending/group checks run in canUserRequestApp (avoids JSON_CONTAINS failures silencing the catalog).
   const rows = await query<JitAppRow>(
     `SELECT a.id, a.slug, a.name, a.description, a.icon_url, a.category
@@ -778,14 +891,27 @@ export async function listJitRequestableAppsForUser(empId: string): Promise<JitA
   return out;
 }
 
+export type JitHiddenApp = {
+  id: string;
+  slug: string;
+  name: string;
+  icon_url?: string | null;
+  reason: string;
+  reasonCode?: JitEligibility['reasonCode'];
+  slaDueAt?: string | null;
+  requestId?: string | null;
+};
+
 /**
  * Explain why JIT apps are or are not visible to this user (for empty-catalog UX / support).
  * Includes apps with a workflow even when requestable=0 so admins can see misconfiguration.
+ * Stale PENDING requests past sla_due_at are expired first so those apps become requestable again.
  */
 export async function explainJitCatalogForUser(empId: string): Promise<{
   available: JitAppRow[];
-  hidden: { id: string; slug: string; name: string; reason: string }[];
+  hidden: JitHiddenApp[];
 }> {
+  await expireStaleAccessRequests(empId);
   const rows = await query<JitAppRow & { requestable: number }>(
     `SELECT a.id, a.slug, a.name, a.description, a.icon_url, a.category, a.requestable
        FROM applications a
@@ -799,7 +925,7 @@ export async function explainJitCatalogForUser(empId: string): Promise<{
   );
 
   const available: JitAppRow[] = [];
-  const hidden: { id: string; slug: string; name: string; reason: string }[] = [];
+  const hidden: JitHiddenApp[] = [];
   for (const app of rows) {
     const check = await canUserRequestApp(empId, app.id);
     if (check.ok) {
@@ -816,7 +942,11 @@ export async function explainJitCatalogForUser(empId: string): Promise<{
         id: app.id,
         slug: app.slug,
         name: app.name,
+        icon_url: app.icon_url,
         reason: check.reason || 'Not eligible',
+        reasonCode: check.reasonCode,
+        slaDueAt: check.pending?.slaDueAt ?? null,
+        requestId: check.pending?.requestId ?? null,
       });
     }
   }
