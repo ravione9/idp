@@ -954,7 +954,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-23 — Session audit logs in Reports
+### `b235bfa` — 2026-07-23 — Session audit logs in Reports
 
 **Why** — Operators needed a compliance view of portal sessions (who signed in, from where, still active / revoked / expired).
 
