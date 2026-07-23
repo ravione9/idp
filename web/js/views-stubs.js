@@ -6146,48 +6146,146 @@ export async function viewRoles(content) {
 
 // ─── 12. Birthright ───────────────────────────────────────────────────────────
 export async function viewBirthright(content) {
-  content.replaceChildren(el(`<div>${header('Birthright Provisioning', 'Automatically provision entitlements based on joiner rules')}<div id="br-area">${loading()}</div></div>`));
+  content.replaceChildren(el(`<div>${header('Birthright Rules', 'Auto-grant entitlements when joiner attributes match a rule')}<div id="br-area">${loading()}</div></div>`));
   const wrap = content.firstChild;
-  try {
-    const list = norm(await api.listBirthrightRules());
-    const rows = list.length ? list.map(r => {
-      let ruleSummary = '—';
-      try { const j = JSON.parse(r.birthright_rule || '{}'); ruleSummary = Object.keys(j).join(', ') || '—'; } catch {}
-      return `<tr>
-        <td class="cell-strong">${esc(r.name||r.entitlement_name||r.id)}</td>
-        <td class="muted" style="font-size:0.8rem">${esc(ruleSummary)}</td>
-        <td class="muted">${esc(r.application||r.app_name||'—')}</td>
-      </tr>`;
-    }).join('') : `<tr><td colspan="3"><div class="empty-state"><div class="empty-icon">◎</div><p>No birthright entitlements.</p></div></td></tr>`;
-    wrap.querySelector('#br-area').innerHTML = `
-      <div style="display:flex;gap:0.75rem;margin-bottom:1rem">
-        <button class="btn btn-secondary" id="br-dryrun">Dry Run</button>
-        <button class="btn btn-primary" id="br-run">Run Now</button>
-      </div>
-      <div id="br-msg"></div>
-      <div class="table-wrap"><table><thead><tr><th>Entitlement</th><th>Rule Summary</th><th>Application</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 
-    wrap.querySelector('#br-dryrun').addEventListener('click', async () => {
-      const btn = wrap.querySelector('#br-dryrun');
-      btn.disabled = true; btn.textContent = 'Running…';
-      try {
-        const result = await api.birthrightDryRun();
-        const n = Array.isArray(result?.data) ? result.data.length : (result.affected_count ?? result.count ?? 0);
-        wrap.querySelector('#br-msg').innerHTML = `<div class="alert alert-success">Dry run complete: <strong>${n}</strong> users would receive birthright entitlements (sample up to 50).</div>`;
-      } catch(e) { wrap.querySelector('#br-msg').innerHTML = errHtml(e.message); }
-      btn.disabled = false; btn.textContent = 'Dry Run';
-    });
-    wrap.querySelector('#br-run').addEventListener('click', async () => {
-      if (!confirm('Run birthright provisioning now?')) return;
-      const btn = wrap.querySelector('#br-run');
-      btn.disabled = true; btn.textContent = 'Running…';
-      try {
-        await api.runBirthright();
-        wrap.querySelector('#br-msg').innerHTML = `<div class="alert alert-success">Birthright provisioning completed.</div>`;
-      } catch(e) { wrap.querySelector('#br-msg').innerHTML = errHtml(e.message); }
-      btn.disabled = false; btn.textContent = 'Run Now';
-    });
-  } catch(e) { wrap.querySelector('#br-area').innerHTML = errHtml(e.message); }
+  function parseRule(raw) {
+    if (!raw) return {};
+    if (typeof raw === 'object') return raw;
+    try { return JSON.parse(raw); } catch { return {}; }
+  }
+  function csv(v) { return Array.isArray(v) ? v.join(', ') : (v || ''); }
+  function fromCsv(s) {
+    return String(s || '').split(/[,;\n]+/).map(x => x.trim()).filter(Boolean);
+  }
+
+  async function load() {
+    try {
+      const [list, apps, connectors, groups] = await Promise.all([
+        api.listBirthrightRules().catch(() => ({ data: [] })),
+        api.igaApps().catch(() => ({ data: [] })),
+        api.igaConnectors().catch(() => ({ data: [] })),
+        api.listGroups().catch(() => ({ data: [] })),
+      ]);
+      const rules = norm(list);
+      const appOpts = norm(apps);
+      const connOpts = norm(connectors);
+      const groupOpts = norm(groups);
+
+      const rows = rules.length ? rules.map(r => {
+        const summary = r.rule_summary || csv(Object.keys(parseRule(r.birthright_rule))) || 'All ACTIVE';
+        return `<tr>
+          <td class="cell-strong">${esc(r.name || r.id)}</td>
+          <td><code style="font-size:0.75rem">${esc(r.slug || '')}</code></td>
+          <td class="muted" style="font-size:0.8rem">${esc(summary)}</td>
+          <td class="muted">${esc(r.app_name || '—')}</td>
+          <td class="muted">${esc(r.connector_name || '—')}</td>
+          <td>${r.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
+          <td>
+            <button class="btn btn-sm btn-secondary br-edit" data-id="${esc(String(r.id))}">Edit</button>
+            <button class="btn btn-sm btn-danger br-del" data-id="${esc(String(r.id))}">Remove</button>
+          </td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">◎</div><p>No birthright rules yet. Create one to grant entitlements on join.</p></div></td></tr>`;
+
+      wrap.querySelector('#br-area').innerHTML = `
+        <div style="display:flex;gap:0.75rem;margin-bottom:1rem;flex-wrap:wrap">
+          <button class="btn btn-primary" id="br-new">+ New Rule</button>
+          <button class="btn btn-secondary" id="br-dryrun">Dry Run</button>
+          <button class="btn btn-primary" id="br-run">Run Now</button>
+        </div>
+        <div id="br-msg"></div>
+        <div class="table-wrap"><table><thead><tr>
+          <th>Entitlement</th><th>Slug</th><th>Rule</th><th>Application</th><th>Connector</th><th>Status</th><th></th>
+        </tr></thead><tbody>${rows}</tbody></table></div>`;
+
+      const openEditor = (existing) => {
+        const rule = parseRule(existing?.birthright_rule);
+        const bd = openModal(`<div class="modal" style="max-width:640px"><div class="modal-header"><h2>${existing ? 'Edit' : 'New'} Birthright Rule</h2></div><div class="modal-body">
+          <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="br-name" value="${esc(existing?.name || '')}"></div>
+          <div class="form-group"><label class="form-label">Slug (optional)</label><input class="form-input" id="br-slug" value="${esc(existing?.slug || '')}" placeholder="auto from name" ${existing ? 'disabled' : ''}></div>
+          <div class="form-group"><label class="form-label">Application</label>
+            <select class="form-select" id="br-app"><option value="">— none —</option>${appOpts.map(a => `<option value="${esc(String(a.id))}" ${existing?.app_id===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}</select>
+          </div>
+          <div class="form-group"><label class="form-label">Provision via connector</label>
+            <select class="form-select" id="br-conn"><option value="">— none —</option>${connOpts.map(c => `<option value="${esc(String(c.id))}" ${existing?.connector_id===c.id?'selected':''}>${esc(c.name)} (${esc(c.connector_type||'')})</option>`).join('')}</select>
+            <p class="muted" style="font-size:0.8rem;margin-top:0.25rem">When granted, kicks AD/Google sync so the account is provisioned outbound.</p>
+          </div>
+          <div class="form-group"><label class="form-label">Dept IDs (comma-separated)</label><input class="form-input" id="br-depts" value="${esc(csv(rule.dept_ids))}" placeholder="IT, HR — blank = any"></div>
+          <div class="form-group"><label class="form-label">Employment types</label><input class="form-input" id="br-types" value="${esc(csv(rule.employment_types))}" placeholder="CORPORATE, STORE"></div>
+          <div class="form-group"><label class="form-label">Job roles</label><input class="form-input" id="br-roles" value="${esc(csv(rule.roles))}" placeholder="Engineer, Manager"></div>
+          <div class="form-group"><label class="form-label">Require group membership</label>
+            <select class="form-select" id="br-groups" multiple size="4" style="min-height:6rem">
+              ${groupOpts.map(g => `<option value="${esc(String(g.id))}" ${(rule.group_ids||[]).includes(g.id)?'selected':''}>${esc(g.name||g.id)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label class="form-label">Exclude dept IDs</label><input class="form-input" id="br-excl" value="${esc(csv(rule.exclude_dept_ids))}"></div>
+          <div class="form-group"><label class="form-check"><input type="checkbox" id="br-active" ${existing?.active === 0 || existing?.active === false ? '' : 'checked'}> Active</label></div>
+          <div id="br-err"></div>
+        </div><div class="modal-footer"><button class="btn btn-primary" id="br-save">Save</button><button class="btn btn-secondary" id="br-cancel">Cancel</button></div></div>`);
+        bd.querySelector('#br-cancel').addEventListener('click', () => bd.remove());
+        bd.querySelector('#br-save').addEventListener('click', async () => {
+          const groupSel = [...bd.querySelector('#br-groups').selectedOptions].map(o => o.value);
+          const body = {
+            name: bd.querySelector('#br-name').value.trim(),
+            slug: bd.querySelector('#br-slug').value.trim() || undefined,
+            app_id: bd.querySelector('#br-app').value || null,
+            connector_id: bd.querySelector('#br-conn').value || null,
+            active: bd.querySelector('#br-active').checked,
+            birthright_rule: {
+              dept_ids: fromCsv(bd.querySelector('#br-depts').value),
+              employment_types: fromCsv(bd.querySelector('#br-types').value),
+              roles: fromCsv(bd.querySelector('#br-roles').value),
+              group_ids: groupSel,
+              exclude_dept_ids: fromCsv(bd.querySelector('#br-excl').value),
+            },
+          };
+          if (!body.name) { bd.querySelector('#br-err').innerHTML = errHtml('Name required'); return; }
+          try {
+            if (existing?.id) await api.updateBirthrightRule(existing.id, body);
+            else await api.createBirthrightRule(body);
+            bd.remove();
+            await load();
+          } catch (e) { bd.querySelector('#br-err').innerHTML = errHtml(e.message); }
+        });
+      };
+
+      wrap.querySelector('#br-new')?.addEventListener('click', () => openEditor(null));
+      wrap.querySelectorAll('.br-edit').forEach(btn => {
+        const row = rules.find(r => String(r.id) === btn.dataset.id);
+        btn.addEventListener('click', () => openEditor(row));
+      });
+      wrap.querySelectorAll('.br-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Remove this birthright rule?')) return;
+          try { await api.deleteBirthrightRule(btn.dataset.id); await load(); } catch (e) { alert(e.message); }
+        });
+      });
+      wrap.querySelector('#br-dryrun').addEventListener('click', async () => {
+        const btn = wrap.querySelector('#br-dryrun');
+        btn.disabled = true; btn.textContent = 'Running…';
+        try {
+          const result = await api.birthrightDryRun();
+          const data = Array.isArray(result?.data) ? result.data : [];
+          const detail = data.slice(0, 10).map(u => `${esc(u.full_name||u.emp_id)} → ${(u.would_get||[]).map(esc).join(', ')}`).join('<br>');
+          wrap.querySelector('#br-msg').innerHTML = `<div class="alert alert-success"><strong>${data.length}</strong> users would receive new grants (sample up to 50).${detail ? `<div style="margin-top:0.5rem;font-size:0.85rem">${detail}</div>` : ''}</div>`;
+        } catch (e) { wrap.querySelector('#br-msg').innerHTML = errHtml(e.message); }
+        btn.disabled = false; btn.textContent = 'Dry Run';
+      });
+      wrap.querySelector('#br-run').addEventListener('click', async () => {
+        if (!confirm('Reconcile birthright for all ACTIVE employees now?')) return;
+        const btn = wrap.querySelector('#br-run');
+        btn.disabled = true; btn.textContent = 'Running…';
+        try {
+          const result = await api.runBirthright();
+          wrap.querySelector('#br-msg').innerHTML = `<div class="alert alert-success">Done — granted <strong>${result.assigned ?? 0}</strong>, revoked <strong>${result.revoked ?? 0}</strong> across ${result.employees ?? 0} employees.${result.connectors_kicked ? ` Kicked ${result.connectors_kicked} connector sync(s).` : ''}</div>`;
+        } catch (e) { wrap.querySelector('#br-msg').innerHTML = errHtml(e.message); }
+        btn.disabled = false; btn.textContent = 'Run Now';
+      });
+    } catch (e) { wrap.querySelector('#br-area').innerHTML = errHtml(e.message); }
+  }
+
+  await load();
 }
 
 // ─── Application Access Policy ────────────────────────────────────────────────
@@ -6912,7 +7010,7 @@ export async function viewPamVault(content) {
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="v-label" placeholder="prod-db-admin"></div>
       <div class="form-group"><label class="form-label">Username</label><input class="form-input" id="v-user" placeholder="admin"></div>
       <div class="form-group"><label class="form-label">Secret</label><input class="form-input" id="v-secret" type="password" autocomplete="new-password" placeholder="Password, token, or key material"></div>
-      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="v-stype"><option value="PASSWORD">PASSWORD</option><option value="SSH_KEY">SSH_KEY</option><option value="API_KEY">API_KEY</option><option value="TOKEN">TOKEN</option></select></div>
+      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="v-stype"><option value="PASSWORD">PASSWORD</option><option value="SSH_KEY">SSH_KEY</option><option value="API_TOKEN">API_TOKEN</option><option value="DATABASE">DATABASE</option><option value="CERTIFICATE">CERTIFICATE</option></select></div>
       <div class="form-group"><label class="form-label">Rotation Days</label><input class="form-input" id="v-rot" type="number" value="90" min="1"></div>
       <div id="v-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="v-save">Add</button><button class="btn btn-secondary" id="v-cancel">Cancel</button></div></div>`);
@@ -7699,10 +7797,10 @@ export async function viewLicense(content) {
       { name: 'OIDC Client Registry', status: 'live' },
       { name: 'OIDC / OAuth Issuer', status: 'live' },
       { name: 'Directory Sync', status: 'live' },
-      { name: 'Connector Provisioning', status: 'progress' },
+      { name: 'Connector Provisioning', status: 'live' },
       { name: 'Attendance IGA', status: 'live' },
-      { name: 'PAM / Vault (base64)', status: 'progress' },
-      { name: 'Birthright Rules', status: 'progress' },
+      { name: 'PAM / Credential Vault', status: 'live' },
+      { name: 'Birthright Rules', status: 'live' },
       { name: 'WebAuthn / Passkeys', status: 'planned' },
       { name: 'App Discovery', status: 'planned' },
     ];

@@ -1,6 +1,6 @@
 /**
  * Portal console roles — built-in + custom — with per-module read/write.
- * Privileged Access (PAM) is intentionally excluded (not designed yet).
+ * Privileged Access (PAM) is SUPER_ADMIN-gated in the API/UI (not a portal module ACL).
  */
 
 import { v4 as uuidv4 } from 'uuid';

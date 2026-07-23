@@ -58,12 +58,22 @@ export async function triggerConnectorSync(
 
   let syncPromise: Promise<SyncResult>;
 
-  if (connector.connector_type === 'AD' || connector.connector_type === 'LDAP' || connector.slug === 'active-directory') {
+  const type = (connector.connector_type || '').toUpperCase();
+  const slug = (connector.slug || '').toLowerCase();
+
+  if (type === 'AD' || type === 'LDAP' || slug === 'active-directory') {
     syncPromise = runAdSync(connectorId);
-  } else if (connector.connector_type === 'GOOGLE' || connector.slug === 'google-workspace') {
+  } else if (
+    type === 'GOOGLE'
+    || type === 'GOOGLE_WORKSPACE'
+    || slug === 'google-workspace'
+  ) {
     syncPromise = runGoogleSync(connectorId);
   } else {
-    throw new Error(`No sync handler for connector type: ${connector.connector_type}`);
+    throw new Error(
+      `No sync/provisioning handler for connector type: ${connector.connector_type}. `
+      + 'Supported: AD, LDAP, GOOGLE / GOOGLE_WORKSPACE.',
+    );
   }
 
   // Fire and forget — callers poll connector_runs for the outcome

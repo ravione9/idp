@@ -293,6 +293,9 @@ Object.assign(api, {
 
   // Birthright
   listBirthrightRules: () => f('/api/admin/birthright'),
+  createBirthrightRule:(data) => f('/api/admin/birthright', { method: 'POST', body: JSON.stringify(data) }),
+  updateBirthrightRule:(id, data) => f(`/api/admin/birthright/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteBirthrightRule:(id) => f(`/api/admin/birthright/${id}`, { method: 'DELETE' }),
   birthrightDryRun:    () => f('/api/admin/birthright/dry-run'),
   runBirthright:       () => f('/api/admin/birthright/run', { method: 'POST' }),
 

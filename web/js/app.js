@@ -71,11 +71,11 @@ const ROUTES = {
   birthright:       { primary: 'admin', group: 'Access Model', label: 'Birthright Rules',          icon: 'triangle', admin: true, module: 'access_model', view: viewBirthright },
   appAccessPolicy:  { primary: 'admin', group: 'Access Model', label: 'Application Access Policy', icon: 'key',      admin: true, module: 'access_model', view: viewAppAccessPolicy },
 
-  /* Privileged Access (PAM) — not designed yet; routes kept for deep-link safety but hidden */
-  pamResources: { primary: 'admin', group: 'Privileged Access', label: 'Privileged Resources', icon: 'server',   admin: true, hidden: true, module: 'pam', view: viewPamResources },
-  pamSessions:  { primary: 'admin', group: 'Privileged Access', label: 'Privileged Sessions',  icon: 'activity', admin: true, hidden: true, module: 'pam', view: viewPamSessions },
-  pamVault:     { primary: 'admin', group: 'Privileged Access', label: 'Credential Vault',     icon: 'vault',    admin: true, hidden: true, module: 'pam', view: viewPamVault },
-  systemUsers:  { primary: 'admin', group: 'Privileged Access', label: 'System / Privileged',  icon: 'userCog',  admin: true, hidden: true, module: 'pam', view: viewSystemUsers },
+  /* Privileged Access — SUPER_ADMIN only (vault encrypts with SESSION_SECRET AES-GCM) */
+  pamResources: { primary: 'admin', group: 'Privileged Access', label: 'Privileged Resources', icon: 'server',   admin: true, super: true, view: viewPamResources },
+  pamSessions:  { primary: 'admin', group: 'Privileged Access', label: 'Privileged Sessions',  icon: 'activity', admin: true, super: true, view: viewPamSessions },
+  pamVault:     { primary: 'admin', group: 'Privileged Access', label: 'Credential Vault',     icon: 'vault',    admin: true, super: true, view: viewPamVault },
+  systemUsers:  { primary: 'admin', group: 'Privileged Access', label: 'System / Privileged',  icon: 'userCog',  admin: true, super: true, view: viewSystemUsers },
 
   /* ── Admin > Identity Governance ── */
   reviews: { primary: 'admin', group: 'Identity Governance', label: 'Certifications',        icon: 'certificate', admin: true, module: 'governance', view: viewReviews },
@@ -110,7 +110,7 @@ const ADMIN_GROUPS = [
   'Applications',
   'Connections',
   'Access Model',
-  /* Privileged Access omitted — PAM not available yet */
+  'Privileged Access',
   'Identity Governance',
   'Workflows',
   'Reports',
@@ -150,7 +150,6 @@ function buildShell() {
   for (const [key, r] of Object.entries(ROUTES)) {
     if (r.primary !== 'admin') continue;
     if (r.hidden) continue;
-    if (r.module === 'pam') continue;
     if (r.super && !isSuper) continue;
     if (r.module && !hasPortalModule(me, r.module, 'read')) continue;
     if (!groupMap.has(r.group)) groupMap.set(r.group, []);
@@ -437,7 +436,7 @@ async function navigate(key, opts = {}) {
   if (!route) return;
   if (route.admin && !isPortalAdmin(me)) return;
   if (route.super && !isPortalSuperAdmin(me)) return;
-  if (route.hidden || route.module === 'pam') return;
+  if (route.hidden) return;
   if (route.module && !hasPortalModule(me, route.module, 'read')) return;
 
   state.current = key;

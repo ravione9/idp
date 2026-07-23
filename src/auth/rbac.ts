@@ -98,14 +98,6 @@ export function requireAnyPortalModule(...moduleKeys: string[]) {
       res.status(401).json({ error: 'Unauthenticated' });
       return;
     }
-    if (moduleKeys.some((k) => k === 'pam' || k.startsWith('pam'))) {
-      res.status(501).json({
-        error: 'Privileged Access (PAM) is not available yet',
-        code: 'PAM_NOT_AVAILABLE',
-      });
-      return;
-    }
-
     try {
       const reqExt = req as Request & { portalAccess?: PortalAccess | null };
       if (reqExt.portalAccess === undefined) {

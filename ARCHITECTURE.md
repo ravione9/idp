@@ -586,6 +586,14 @@ To add a new migration:
 | `GET` | `/api/admin/radius/logs` | RADIUS accept/reject audit |
 | `GET` | `/api/admin/radius/overview` | Client/policy/VPN counts + UDP status |
 | `POST` | `/api/admin/radius/test-auth` | Admin test of the RADIUS auth path |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/birthright[/:id]` | Birthright entitlement rules (`birthright_rule` JSON) |
+| `GET` | `/api/admin/birthright/dry-run` | Sample users who would receive new grants |
+| `POST` | `/api/admin/birthright/run` | Reconcile birthright for all ACTIVE employees |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/pam/vault[/:id]` | Credential vault (SUPER_ADMIN; secrets AES-GCM) |
+| `POST` | `/api/admin/pam/vault/:id/checkout` | Reveal secret once + audit |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/pam/resources[/:id]` | Privileged resource inventory |
+| `GET`/`POST` | `/api/admin/pam/sessions[/:id/terminate]` | Session inventory + terminate |
+| `GET`/`POST`/`DELETE` | `/api/admin/pam/system-users[/:id]` | Service / shared accounts |
 | `POST` | `/api/internal/radius/authenticate` | FreeRADIUS `rlm_rest` / AAA agent (X-Internal-Token) |
 | `GET` | `/api/internal/radius/health` | RADIUS module health |
 | `GET` | `/api/admin/reports/overview` | Enterprise Reports Hub KPIs + 30d trends (logins / SSO / failures) |
@@ -633,9 +641,9 @@ To add a new migration:
 | `PUT` | `/api/iga/applications/:id` | Update application metadata (ADMIN+) |
 | `DELETE` | `/api/iga/applications/:id` | Remove application (SUPER_ADMIN) |
 | `GET` | `/api/iga/connectors` | Target-system connectors |
-| `POST` | `/api/iga/connectors` | Register connector (501) |
+| `POST` | `/api/iga/connectors` | Register connector |
 | `GET` | `/api/iga/connectors/:id/runs` | Connector run history |
-| `POST` | `/api/iga/connectors/:id/sync` | Trigger sync (501) |
+| `POST` | `/api/iga/connectors/:id/sync` | Trigger sync / outbound provision (AD, LDAP, GOOGLE, GOOGLE_WORKSPACE) |
 | `GET` | `/api/iga/entitlements[?appId=…]` | Entitlement catalog (any authenticated user — Request Access) |
 | `GET` | `/api/iga/entitlements/me` | My current entitlements |
 | `GET` | `/api/iga/roles` | Active business roles for Request Access catalog |
@@ -711,7 +719,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Applications** | Applications (tabs: Catalog · SAML · OIDC / OAuth · Pre-built · App Discovery) |
 | **Connections** | Directory Sync (Connectors redirects here) |
 | **Access Model** | Business Roles · Birthright Rules · Application Access Policy |
-| **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault — **SUPER_ADMIN only** (portal `ADMIN` excludes PAM) |
+| **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault · System Users — **SUPER_ADMIN only** (AES-GCM vault; no session broker yet) |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
 | **Workflows** | Workflows (tabs: Definitions · Event Triggers · Run History) · Notifications |
 | **Reports** | **Overview** (executive KPIs, trends, report catalog) · **Identity & Access** (access inventory · MFA coverage · lifecycle · access requests · certifications · SoD · app access changes) · Audit & SSO Reports (SSO assertions · System audit · Auth attempts · Sessions · SSO analytics) · Compliance Reports (evidence snapshots) — all with filters + CSV where applicable |
@@ -888,7 +896,7 @@ docker exec -i idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg < migrations/<
 | Outbound HTTP | `assertSafeOutboundUrl` blocks loopback/private/link-local/metadata (Attendance IGA, workflow webhooks, event triggers) |
 | XSS | `esc()` / `escAttrJson()` for HTML text and JSON-in-attribute sinks |
 | Audit | Hash-chained `audit_log` (tamper-evident) |
-| RBAC | Job hierarchy + **server-enforced** portal module R/W via `requirePortalModule` on admin/IGA routers. Coarse `ADMIN` gate still admits portal operators, but module ACL is authoritative. Google OIDC write + portal SSL mutate = **Super Admin only**. Creating `SUPER_ADMIN` accounts = Super Admin only. **PAM is not available** (APIs return 501). |
+| RBAC | Job hierarchy + **server-enforced** portal module R/W via `requirePortalModule` on admin/IGA routers. Coarse `ADMIN` gate still admits portal operators, but module ACL is authoritative. Google OIDC write + portal SSL mutate = **Super Admin only**. Creating `SUPER_ADMIN` accounts = Super Admin only. **PAM / Credential Vault** = Super Admin only (/api/admin/pam/*, AES-256-GCM via SESSION_SECRET). |
 | ABAC | `policy-engine.ts` evaluates rules on resource access |
 | Headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` |
 
@@ -912,7 +920,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ Read APIs at `/api/iga/*`; new sidebar sections
 - ✅ **Approval-chain resolver** — `POST /api/iga/access-requests` (SoD pre-check, multi-level approval chain creation, SLA deadline) in `src/services/access-request-workflow.ts`
 - ✅ **Access request decisions** — `POST /api/iga/access-requests/:id/decision` (approve/reject, auto-fulfil entitlements on final approval) in `src/services/access-request-workflow.ts`
-- ✅ **Birthright entitlement engine** — `src/services/birthright.ts` assigns/revokes birthright entitlements on lifecycle events (JOINER/LEAVER)
+- ✅ **Birthright entitlement engine** — `src/services/birthright.ts` evaluates `birthright_rule` JSON (dept / employment type / role / group / exclude) and assigns/revokes on workflow JOINER/LEAVER + admin Dry Run / Run Now; optional connector kick for outbound AD/Google provision
 - ✅ **Connector dispatcher** — `src/services/connector-dispatcher.ts` routes `POST /api/iga/connectors/:id/sync` to the right sync service (AD or Google)
 - ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); inbound import **skips disabled AD accounts** (does not create new portal users); existing linked users disabled in AD are marked `SUSPENDED_AUTO` and hidden from the Universal Directory; tracks runs in `connector_runs`
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import **skips suspended Google accounts** (same rules as AD); outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank OU/user scope syncs the full directory; non-empty filters combine with AND logic; blank/`*` **Sync Groups** auto-mirrors up to 200 Workspace groups into `groups` / `group_members` (requires `admin.directory.group.readonly` domain-wide delegation)
@@ -959,8 +967,8 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 ### Phase 5 — Advanced IGA
 
-- Privileged Access (vault for shared credentials, JIT elevation)
-- Session recording for high-risk apps
+- ✅ Credential Vault (AES-GCM checkout) + PAM resource/session/system-user inventory (SUPER_ADMIN)
+- JIT elevation / session broker + session recording for high-risk apps
 - SCIM 2.0 *server* (inbound, so Workday / Zoho People can push directly into `employees`)
 - Identity warehouse on Elasticsearch / OpenSearch for slice-and-dice analytics
 - Compliance report templates (SOX, GDPR, HIPAA, PCI) — framework-specific control packs (generic evidence snapshots already live)
@@ -983,7 +991,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-07-23 — otplib v13 + Jest 30 + declare node-forge
+### `TBD` — 2026-07-23 — Birthright rules, Credential Vault, connector provisioning
+
+**Why** — Access Model / PAM areas were Progress or 501 stubs; operators need real birthright matching, a working vault, and reliable connector outbound kicks.
+
+**What changed:**
+
+- **Birthright** — rule evaluator (`dept_ids`, `employment_types`, `roles`, `group_ids`, `exclude_dept_ids`); fixed create/update API (slug + `birthright_rule` JSON); admin UI create/edit/dry-run/run; reconcile revokes grants that no longer match; linked `connector_id` kicks AD/Google sync after grants.
+- **Credential Vault** — `/api/admin/pam/vault` CRUD + checkout (AES-256-GCM via `secret-box` / `SESSION_SECRET`); audit `VAULT_*` events; Privileged Access sidebar for SUPER_ADMIN; resources / sessions / system-users CRUD (no session broker).
+- **Connectors** — dispatcher accepts `GOOGLE_WORKSPACE` (not only `GOOGLE` / slug).
+
+### `86d8e31` — 2026-07-23 — otplib v13 + Jest 30 + declare node-forge
 
 **Why** — Docker/npm install warned on deprecated `@otplib/*` v12 presets and old `glob` / `inflight` from Jest. After prune, API crashed: `Cannot find package 'node-forge'` (used by SAML auto-key bootstrap but never declared).
 
