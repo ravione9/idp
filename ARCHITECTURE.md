@@ -1005,7 +1005,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-07-23 — SAML connected-app IGA Request Access (JIT)
+### `d74cd8a` — 2026-07-23 — SAML connected-app IGA Request Access (JIT)
 
 **Why** — Operators care about SSO for connected SAML apps, not directory group catalogs. New SAML apps were mirrored as RESTRICTED but Request Access (JIT) stayed off unless manually configured under Access Policy. Assigned users must not be forced through Request Access again.
 
