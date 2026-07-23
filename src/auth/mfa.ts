@@ -1,10 +1,10 @@
 /**
  * MFA — TOTP enrollment and verification (RFC 6238).
  *
- * Uses otplib + Google-Authenticator-compatible 6-digit codes.
+ * Uses otplib v13 + Google-Authenticator-compatible 6-digit codes.
  * Backup codes are 8 random hex chars, hashed at rest with bcrypt.
  */
-import { authenticator } from 'otplib';
+import { generateSecret, generateURI, verify } from 'otplib';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { query, queryOne, transaction } from '../db/connection.js';
@@ -21,9 +21,27 @@ import {
 import { verifyAnyOtpLogin } from './mfa-otp.js';
 import { deleteWebAuthnCredentials } from './mfa-webauthn.js';
 
-authenticator.options = { window: 1, step: 30 };
+/** Google Authenticator–compatible TOTP defaults. */
+const TOTP_BASE = {
+  strategy: 'totp' as const,
+  digits: 6 as const,
+  period: 30,
+};
+
+/** ±1 TOTP step — equivalent to v12 `window: 1`. */
+const TOTP_VERIFY = { ...TOTP_BASE, epochTolerance: 30 };
 
 const ISSUER = 'Lenskart IdP';
+
+async function checkTotp(code: string, secret: string): Promise<boolean> {
+  try {
+    const result = await verify({ secret, token: code, ...TOTP_VERIFY });
+    return result.valid;
+  } catch {
+    // SecretTooShortError / TokenError / malformed secret
+    return false;
+  }
+}
 
 export interface MfaSecretRow {
   id:           number;
@@ -117,7 +135,7 @@ export async function startEnrollment(empId: string, accountLabel: string): Prom
   if (!(await isMethodAllowed('totp', empId))) {
     throw new Error('Authenticator app (TOTP) is not allowed by MFA policy');
   }
-  const secret = authenticator.generateSecret();
+  const secret = generateSecret();
   await query(
     `INSERT INTO mfa_secrets (emp_id, secret_b32, enabled)
        VALUES (?, ?, 0)
@@ -128,7 +146,12 @@ export async function startEnrollment(empId: string, accountLabel: string): Prom
        backup_codes = NULL`,
     [empId, secret],
   );
-  const otpauthUrl = authenticator.keyuri(accountLabel, ISSUER, secret);
+  const otpauthUrl = generateURI({
+    issuer: ISSUER,
+    label: accountLabel,
+    secret,
+    ...TOTP_BASE,
+  });
   return { secret, otpauthUrl };
 }
 
@@ -142,8 +165,7 @@ export async function confirmEnrollment(empId: string, code: string): Promise<{ 
     [empId],
   );
   if (!row) throw new Error('Start enrollment before confirming');
-  const valid = authenticator.check(code, row.secret_b32);
-  if (!valid) throw new Error('Invalid code');
+  if (!(await checkTotp(code, row.secret_b32))) throw new Error('Invalid code');
 
   const plain: string[] = [];
   const hashed: string[] = [];
@@ -216,7 +238,7 @@ export async function verifyTotp(
   if (!row || row.enabled !== 1) return false;
 
   // Try TOTP first
-  if (allowTotp && authenticator.check(code, row.secret_b32)) {
+  if (allowTotp && (await checkTotp(code, row.secret_b32))) {
     await query(
       'UPDATE mfa_secrets SET last_used_at = UTC_TIMESTAMP() WHERE id = ?',
       [row.id],

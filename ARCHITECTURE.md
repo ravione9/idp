@@ -124,7 +124,7 @@ Lenskart IdP is a unified platform that delivers **enterprise SSO + Identity Gov
 | SAML | `samlify` | SAML 2.0 IdP/SP with signing/validation |
 | OIDC verification | `jose` | JWKS-based JWT verification |
 | Password | `bcryptjs` | Salted bcrypt at rest |
-| MFA | `otplib` v12 + `qrcode` | RFC 6238 TOTP, QR enrollment |
+| MFA | `otplib` v13 + `qrcode` | RFC 6238 TOTP, QR enrollment |
 | Validation | `zod` | Runtime schema validation for env + request bodies |
 | Logging | `pino` + `pino-http` | Structured JSON logs |
 | Frontend | Vanilla JS modules + custom CSS | Single static file, no build step |
@@ -982,6 +982,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `TBD` — 2026-07-23 — otplib v13 + Jest 30 + declare node-forge
+
+**Why** — Docker/npm install warned on deprecated `@otplib/*` v12 presets and old `glob` / `inflight` from Jest. After prune, API crashed: `Cannot find package 'node-forge'` (used by SAML auto-key bootstrap but never declared).
+
+**What changed:**
+
+- **Deps** — `otplib@13.4.1` (removed `@otplib/preset-default`); `node-forge` (direct dep for `saml-auto-keys`); `jest@30` + `@types/jest@30` + `ts-jest@29.4`; `overrides.glob = 13.0.6`.
+- **MFA** — `src/auth/mfa.ts` uses v13 functional API (`generateSecret` / `generateURI` / `verify` with `epochTolerance: 30` ≈ former `window: 1`).
 
 ### `ca22101` — 2026-07-23 — VAPT dependency + hardening patch
 
