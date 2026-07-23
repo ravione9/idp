@@ -2635,6 +2635,683 @@ export async function viewRisk(content) {
   } catch (err) { wrap.querySelector('#rk').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`; }
 }
 
+/* ---------- Enterprise Reports Hub ---------- */
+const REPORT_CATALOG = [
+  { key: 'govReports', tab: 'inventory',  icon: 'key',         title: 'Access inventory',     desc: 'Who has which apps, roles, and entitlements', cat: 'Identity' },
+  { key: 'govReports', tab: 'mfa',        icon: 'fingerprint', title: 'MFA coverage',         desc: 'Enrollment gaps across active identities', cat: 'Identity' },
+  { key: 'govReports', tab: 'lifecycle',  icon: 'refresh',     title: 'Lifecycle events',     desc: 'Suspend, terminate, rehire, mover evidence', cat: 'Identity' },
+  { key: 'govReports', tab: 'requests',   icon: 'check',       title: 'Access requests',      desc: 'Volume, SLA breaches, and outcomes', cat: 'Governance' },
+  { key: 'govReports', tab: 'certs',      icon: 'certificate', title: 'Certifications',       desc: 'Campaign completion and revoke rates', cat: 'Governance' },
+  { key: 'govReports', tab: 'sod',        icon: 'split',       title: 'SoD violations',       desc: 'Toxic combinations and exceptions', cat: 'Governance' },
+  { key: 'govReports', tab: 'appaccess',  icon: 'catalog',     title: 'App access changes',   desc: 'Assign / revoke / approve audit trail', cat: 'Governance' },
+  { key: 'audit',      tab: 'saml',       icon: 'saml',        title: 'SSO assertions',       desc: 'SAML assertion log with CSV export', cat: 'Auth & SSO' },
+  { key: 'audit',      tab: 'system',     icon: 'list',        title: 'System audit',         desc: 'Tamper-evident hash-chained audit log', cat: 'Auth & SSO' },
+  { key: 'audit',      tab: 'auth',       icon: 'lock',        title: 'Auth attempts',        desc: 'Login forensics and failure reasons', cat: 'Auth & SSO' },
+  { key: 'audit',      tab: 'sessions',   icon: 'activity',    title: 'Sessions',             desc: 'Portal session history and force-logout', cat: 'Auth & SSO' },
+  { key: 'audit',      tab: 'sso',        icon: 'dashboard',   title: 'SSO analytics',        desc: 'Adoption, dormant users, failed logins', cat: 'Auth & SSO' },
+  { key: 'reports',    tab: '',           icon: 'certificate', title: 'Compliance evidence',  desc: 'SOX / GDPR / HIPAA / PCI JSON snapshots', cat: 'Compliance' },
+];
+
+export async function viewReportsHub(content) {
+  content.replaceChildren(el(`<div class="ent-page"><div class="loading-row"><span class="spinner"></span></div></div>`));
+  let ov;
+  try {
+    ov = await api.reportsOverview({ days: '30' });
+  } catch (err) {
+    content.replaceChildren(el(`<div class="alert alert-error">${esc(err.message)}</div>`));
+    return;
+  }
+  const d = ov.data || {};
+  const k = d.kpis || {};
+  const series = d.series || { logins: [], sso: [], failed: [] };
+  const loginS = build30DaySeries(series.logins);
+  const ssoS = build30DaySeries(series.sso);
+  const failS = build30DaySeries(series.failed);
+  const labels = loginS.map((p) => fmtShortDate(p.d));
+  const lineSvg = renderLineChart({
+    series: [loginS.map((p) => p.n), ssoS.map((p) => p.n), failS.map((p) => p.n)],
+    labels,
+    colors: ['primary', 'accent', 'danger'],
+  });
+  const reqSlices = (d.accessRequestsByStatus || []).map((s) => ({
+    label: s.status,
+    value: s.n,
+    color: ({ PENDING: 'var(--warning)', APPROVED: 'var(--success)', FULFILLED: 'var(--success)', REJECTED: 'var(--danger)', CANCELLED: 'var(--text-dim)' })[s.status] || 'var(--info)',
+  }));
+  const donut = renderDonut(reqSlices.length ? reqSlices : [{ label: 'None', value: 1, color: 'var(--text-dim)' }], 'Requests');
+  const topApps = (d.topApps || []).map((a) => `<tr>
+    <td class="cell-strong">${esc(a.name)}</td>
+    <td><code>${esc(a.slug)}</code></td>
+    <td>${a.n}</td>
+  </tr>`).join('');
+  const camps = (d.certificationCampaigns || []).map((c) => `<tr>
+    <td class="cell-strong">${esc(c.name)}</td>
+    <td><span class="badge badge-info">${esc(c.status)}</span></td>
+    <td>${c.completionPct}%</td>
+    <td class="muted">${c.certified} certify · ${c.revoked} revoke · ${c.pending} pending</td>
+  </tr>`).join('');
+
+  const catalogByCat = {};
+  for (const r of REPORT_CATALOG) {
+    (catalogByCat[r.cat] ||= []).push(r);
+  }
+  const catalogHtml = Object.entries(catalogByCat).map(([cat, items]) => `
+    <div class="report-cat">
+      <h3 class="report-cat-title">${esc(cat)}</h3>
+      <div class="report-catalog-grid">
+        ${items.map((r) => `
+          <button type="button" class="report-catalog-card" data-nav="${esc(r.key)}" data-tab="${esc(r.tab || '')}">
+            <span class="report-catalog-icon">${svgIcon(r.icon)}</span>
+            <span class="report-catalog-body">
+              <span class="report-catalog-title">${esc(r.title)}</span>
+              <span class="report-catalog-desc">${esc(r.desc)}</span>
+            </span>
+          </button>`).join('')}
+      </div>
+    </div>`).join('');
+
+  const wrap = el(`<div class="ent-page">
+    ${header('Reports Overview', 'Enterprise identity reporting — KPIs, trends, and the full report catalog')}
+    <section class="stat-grid">
+      ${statCard('users', 'Active users', k.activeUsers ?? 0, `${k.dormantUsers ?? 0} dormant (30d)`, 'primary')}
+      ${statCard('fingerprint', 'MFA coverage', `${k.mfaCoveragePct ?? 0}%`, `${k.mfaCovered ?? 0} enrolled`, 'purple', 'govReports', 'mfa')}
+      ${statCard('saml', 'SSO assertions', k.ssoAssertions ?? 0, 'last 30 days', 'accent', 'audit', 'saml')}
+      ${statCard('alert', 'Failed logins', k.failedLogins ?? 0, 'last 30 days', 'danger', 'audit', 'auth')}
+      ${statCard('activity', 'Active sessions', k.activeSessions ?? 0, 'live now', 'success', 'audit', 'sessions')}
+      ${statCard('check', 'Pending requests', k.pendingAccessRequests ?? 0, 'awaiting approval', 'warning', 'govReports', 'requests')}
+      ${statCard('certificate', 'Review items', k.pendingReviewItems ?? 0, 'pending certify/revoke', 'info', 'govReports', 'certs')}
+      ${statCard('split', 'SoD open', k.openSodViolations ?? 0, 'violations', 'danger', 'govReports', 'sod')}
+      ${statCard('key', 'App assignments', k.activeAppAssignments ?? 0, 'active grants', 'teal', 'govReports', 'inventory')}
+    </section>
+
+    <div class="chart-row">
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="chart-title">Authentication & SSO trend</div>
+          <div class="chart-meta">Last 30 days</div>
+        </div>
+        ${lineSvg}
+        <div class="legend">
+          <span><span class="swatch primary"></span>Successful logins</span>
+          <span><span class="swatch accent"></span>SSO assertions</span>
+          <span><span class="swatch danger"></span>Failed logins</span>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><div class="chart-title">Access requests (30d)</div></div>
+        <div class="donut-wrap">${donut}</div>
+      </div>
+    </div>
+
+    <div class="grid-main-side" style="margin-top:1rem">
+      <div class="card">
+        <h2>Top applications</h2>
+        <p class="subtitle" style="margin-bottom:0.75rem">SSO assertions in the last 30 days</p>
+        ${topApps
+          ? `<div class="table-wrap"><table><thead><tr><th>App</th><th>Slug</th><th>Logins</th></tr></thead><tbody>${topApps}</tbody></table></div>`
+          : `<div class="empty-state">No SSO data yet</div>`}
+      </div>
+      <div class="card">
+        <h2>Certification campaigns</h2>
+        <p class="subtitle" style="margin-bottom:0.75rem">Completion posture</p>
+        ${camps
+          ? `<div class="table-wrap"><table><thead><tr><th>Campaign</th><th>Status</th><th>Done</th><th>Breakdown</th></tr></thead><tbody>${camps}</tbody></table></div>`
+          : `<div class="empty-state">No campaigns yet</div>`}
+      </div>
+    </div>
+
+    <section class="report-catalog" style="margin-top:1.5rem">
+      <h2 style="margin-bottom:0.25rem">Report catalog</h2>
+      <p class="subtitle" style="margin-bottom:1rem">Open any report with filters and CSV export for auditors</p>
+      ${catalogHtml}
+    </section>
+  </div>`);
+  content.replaceChildren(wrap);
+
+  wrap.querySelectorAll('.report-catalog-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      if (!window.LILG_NAV) return;
+      const tab = card.dataset.tab;
+      window.LILG_NAV(card.dataset.nav, tab ? { tab } : {});
+    });
+  });
+  bindStatCardNav(wrap);
+}
+
+/* ---------- Identity & Access governance reports ---------- */
+export async function viewGovReports(content, initialTab = 'inventory') {
+  const tabs = [
+    { id: 'inventory', label: 'Access inventory' },
+    { id: 'mfa', label: 'MFA coverage' },
+    { id: 'lifecycle', label: 'Lifecycle' },
+    { id: 'requests', label: 'Access requests' },
+    { id: 'certs', label: 'Certifications' },
+    { id: 'sod', label: 'SoD violations' },
+    { id: 'appaccess', label: 'App access changes' },
+  ];
+  const validTab = tabs.some((t) => t.id === initialTab) ? initialTab : 'inventory';
+  const wrap = el(`<div class="ent-page">
+    ${header('Identity & Access Reports', 'Governance evidence — inventory, MFA, lifecycle, requests, certifications, and SoD')}
+    <div class="inline-tabs" id="gov-tabs" style="margin-bottom:1rem">
+      ${tabs.map((t) => `<button type="button" class="inline-tab${t.id === validTab ? ' active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('')}
+    </div>
+    <div id="gov-panel"><div class="loading-row"><span class="spinner"></span></div></div>
+  </div>`);
+  content.replaceChildren(wrap);
+  const panel = wrap.querySelector('#gov-panel');
+  let active = validTab;
+  const state = {
+    inventory: { q: '', kind: '', department: '', offset: 0, limit: 50 },
+    mfa: { q: '', enrolled: '', offset: 0, limit: 50 },
+    lifecycle: { from: isoDateDaysAgo(90), to: todayIso(), q: '', eventType: '', offset: 0, limit: 50 },
+    requests: { from: isoDateDaysAgo(90), to: todayIso(), q: '', status: '', offset: 0, limit: 50 },
+    certs: { status: '', offset: 0, limit: 50 },
+    sod: { q: '', status: 'OPEN', severity: '', offset: 0, limit: 50 },
+    appaccess: { from: isoDateDaysAgo(90), to: todayIso(), q: '', action: '', offset: 0, limit: 50 },
+  };
+
+  wrap.querySelectorAll('#gov-tabs .inline-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      active = btn.dataset.tab;
+      wrap.querySelectorAll('#gov-tabs .inline-tab').forEach((b) => b.classList.toggle('active', b === btn));
+      syncAppUrl('govReports', active, 'inventory');
+      void loadTab(true);
+    });
+  });
+
+  function pagerHtml(meta, offset, limit) {
+    const total = meta?.total ?? 0;
+    const page = Math.floor(offset / limit) + 1;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    return `<div class="audit-pager">
+      <button type="button" class="btn btn-sm btn-secondary gov-prev" ${offset <= 0 ? 'disabled' : ''}>Previous</button>
+      <span class="muted">Page ${page} of ${pages} · ${total} total</span>
+      <button type="button" class="btn btn-sm btn-secondary gov-next" ${offset + limit >= total ? 'disabled' : ''}>Next</button>
+    </div>`;
+  }
+
+  async function exportCsv(kind, params) {
+    try {
+      await downloadAuditCsv(api.reportExportUrl(kind, { ...params, limit: '10000' }), `${kind}.csv`);
+    } catch (err) {
+      alert(err.message || 'Export failed');
+    }
+  }
+
+  async function loadInventory(rebuild) {
+    const s = state.inventory;
+    if (rebuild || !panel.querySelector('.gov-inv-filters')) {
+      panel.innerHTML = `<div class="ent-panel gov-inv-filters">
+        <div class="ent-panel-body">
+          <div class="audit-filter-grid">
+            <div class="form-group"><label class="form-label">Search</label>
+              <input class="form-input gov-q" placeholder="user, email, access name" value="${esc(s.q)}"></div>
+            <div class="form-group"><label class="form-label">Kind</label>
+              <select class="form-select gov-kind">
+                <option value="">All</option>
+                <option value="APP" ${s.kind === 'APP' ? 'selected' : ''}>Apps</option>
+                <option value="ROLE" ${s.kind === 'ROLE' ? 'selected' : ''}>Roles</option>
+                <option value="ENTITLEMENT" ${s.kind === 'ENTITLEMENT' ? 'selected' : ''}>Entitlements</option>
+              </select></div>
+            <div class="form-group"><label class="form-label">Department</label>
+              <input class="form-input gov-dept" value="${esc(s.department)}"></div>
+          </div>
+          <div class="audit-filter-actions">
+            <button type="button" class="btn btn-primary gov-apply">Apply</button>
+            <button type="button" class="btn btn-secondary gov-export">Export CSV</button>
+            <span class="muted audit-meta-count" style="margin-left:auto;font-size:0.8rem"></span>
+          </div>
+        </div>
+      </div><div class="gov-table-area"><div class="loading-row"><span class="spinner"></span></div></div>`;
+      panel.querySelector('.gov-apply').addEventListener('click', () => { s.offset = 0; void loadInventory(); });
+      panel.querySelector('.gov-export').addEventListener('click', () => {
+        s.q = panel.querySelector('.gov-q').value.trim();
+        s.kind = panel.querySelector('.gov-kind').value;
+        s.department = panel.querySelector('.gov-dept').value.trim();
+        void exportCsv('access-inventory', { q: s.q, kind: s.kind, department: s.department });
+      });
+    }
+    s.q = panel.querySelector('.gov-q')?.value.trim() || '';
+    s.kind = panel.querySelector('.gov-kind')?.value || '';
+    s.department = panel.querySelector('.gov-dept')?.value.trim() || '';
+    const area = panel.querySelector('.gov-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.reportAccessInventory({
+        q: s.q, kind: s.kind, department: s.department,
+        limit: String(s.limit), offset: String(s.offset),
+      });
+      const rows = r.data || [];
+      panel.querySelector('.audit-meta-count').textContent = `${r.meta?.total ?? rows.length} grants`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>User</th><th>Department</th><th>Kind</th><th>Access</th><th>Source</th><th>Granted</th><th>Expires</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="cell-strong">${esc(row.emp_name || row.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(row.emp_email || '')}</span></td>
+              <td class="muted">${esc(row.department || '—')}</td>
+              <td><span class="badge badge-info">${esc(row.access_kind)}</span></td>
+              <td>${esc(row.access_name)}<br><span class="muted" style="font-size:0.75rem">${esc(row.access_ref || '')}</span></td>
+              <td class="muted">${esc(row.source || '—')}</td>
+              <td class="muted">${fmtDate(row.granted_at)}</td>
+              <td class="muted">${row.expires_at ? fmtDate(row.expires_at) : '—'}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(r.meta, s.offset, s.limit)}`
+        : `<div class="card empty-state">No access grants match these filters</div>`;
+      area.querySelector('.gov-prev')?.addEventListener('click', () => { s.offset = Math.max(0, s.offset - s.limit); void loadInventory(); });
+      area.querySelector('.gov-next')?.addEventListener('click', () => { s.offset += s.limit; void loadInventory(); });
+    } catch (err) {
+      area.innerHTML = errHtml(err.message);
+    }
+  }
+
+  async function loadMfa(rebuild) {
+    const s = state.mfa;
+    if (rebuild || !panel.querySelector('.gov-mfa-filters')) {
+      panel.innerHTML = `<div id="gov-mfa-summary" class="stat-grid" style="margin-bottom:1rem"></div>
+        <div class="ent-panel gov-mfa-filters"><div class="ent-panel-body">
+          <div class="audit-filter-grid">
+            <div class="form-group"><label class="form-label">Search</label>
+              <input class="form-input gov-q" value="${esc(s.q)}"></div>
+            <div class="form-group"><label class="form-label">Enrollment</label>
+              <select class="form-select gov-enrolled">
+                <option value="">All</option>
+                <option value="1" ${s.enrolled === '1' ? 'selected' : ''}>Enrolled</option>
+                <option value="0" ${s.enrolled === '0' ? 'selected' : ''}>Not enrolled</option>
+              </select></div>
+          </div>
+          <div class="audit-filter-actions">
+            <button type="button" class="btn btn-primary gov-apply">Apply</button>
+            <button type="button" class="btn btn-secondary gov-export">Export CSV</button>
+            <span class="muted audit-meta-count" style="margin-left:auto;font-size:0.8rem"></span>
+          </div>
+        </div></div><div class="gov-table-area"></div>`;
+      panel.querySelector('.gov-apply').addEventListener('click', () => { s.offset = 0; void loadMfa(); });
+      panel.querySelector('.gov-export').addEventListener('click', () => {
+        s.q = panel.querySelector('.gov-q').value.trim();
+        s.enrolled = panel.querySelector('.gov-enrolled').value;
+        void exportCsv('mfa-coverage', { q: s.q, enrolled: s.enrolled });
+      });
+    }
+    s.q = panel.querySelector('.gov-q')?.value.trim() || '';
+    s.enrolled = panel.querySelector('.gov-enrolled')?.value || '';
+    const area = panel.querySelector('.gov-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.reportMfaCoverage({
+        q: s.q, enrolled: s.enrolled, limit: String(s.limit), offset: String(s.offset),
+      });
+      const sum = r.meta?.summary || {};
+      const sumBox = panel.querySelector('#gov-mfa-summary');
+      if (sumBox) {
+        sumBox.innerHTML = `
+          ${statCard('users', 'Active users', sum.activeUsers ?? 0, '', 'primary')}
+          ${statCard('fingerprint', 'Enrolled', sum.covered ?? 0, `${sum.coveragePct ?? 0}% coverage`, 'success')}
+          ${statCard('alert', 'Gaps', sum.gaps ?? 0, 'need MFA enrollment', 'danger')}`;
+      }
+      const rows = r.data || [];
+      panel.querySelector('.audit-meta-count').textContent = `${r.meta?.total ?? rows.length} users`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>User</th><th>Department</th><th>Enrolled</th><th>Methods</th><th>Enrolled at</th><th>Last used</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="cell-strong">${esc(row.full_name || row.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(row.email_corp || '')}</span></td>
+              <td class="muted">${esc(row.department || '—')}</td>
+              <td>${row.enrolled ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-danger">No</span>'}</td>
+              <td>${(row.methods || []).map((m) => `<span class="badge badge-info" style="margin-right:0.25rem">${esc(m)}</span>`).join('') || '—'}</td>
+              <td class="muted">${row.enrolled_at ? fmtDate(row.enrolled_at) : '—'}</td>
+              <td class="muted">${row.last_used_at ? fmtDate(row.last_used_at) : '—'}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(r.meta, s.offset, s.limit)}`
+        : `<div class="card empty-state">No users match</div>`;
+      area.querySelector('.gov-prev')?.addEventListener('click', () => { s.offset = Math.max(0, s.offset - s.limit); void loadMfa(); });
+      area.querySelector('.gov-next')?.addEventListener('click', () => { s.offset += s.limit; void loadMfa(); });
+    } catch (err) {
+      area.innerHTML = errHtml(err.message);
+    }
+  }
+
+  async function loadLifecycle(rebuild) {
+    const s = state.lifecycle;
+    if (rebuild || !panel.querySelector('.audit-filter-panel')) {
+      panel.innerHTML = `${auditFilterBar(`
+        <div class="form-group"><label class="form-label">Search</label>
+          <input class="form-input audit-q" value="${esc(s.q)}"></div>
+        <div class="form-group"><label class="form-label">Event</label>
+          <select class="form-select gov-event">
+            <option value="">All</option>
+            ${['SUSPEND', 'UNSUSPEND', 'TERMINATE', 'REHIRE', 'MOVER'].map((e) =>
+              `<option value="${e}" ${s.eventType === e ? 'selected' : ''}>${e}</option>`).join('')}
+          </select></div>`)}
+        <div class="gov-table-area"></div>`;
+      panel.querySelector('.audit-from').value = s.from;
+      panel.querySelector('.audit-to').value = s.to;
+      const reload = (rb) => { s.offset = 0; void loadLifecycle(!!rb); };
+      panel.querySelectorAll('.audit-preset').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          panel.querySelector('.audit-from').value = isoDateDaysAgo(Number(btn.dataset.days) || 30);
+          panel.querySelector('.audit-to').value = todayIso();
+          reload();
+        });
+      });
+      panel.querySelector('.audit-apply')?.addEventListener('click', () => reload());
+      panel.querySelector('.audit-reset')?.addEventListener('click', () => {
+        Object.assign(s, { from: isoDateDaysAgo(90), to: todayIso(), q: '', eventType: '', offset: 0 });
+        void loadLifecycle(true);
+      });
+      panel.querySelector('.audit-export')?.addEventListener('click', () => {
+        s.from = panel.querySelector('.audit-from').value;
+        s.to = panel.querySelector('.audit-to').value;
+        s.q = panel.querySelector('.audit-q').value.trim();
+        s.eventType = panel.querySelector('.gov-event').value;
+        void exportCsv('lifecycle', { from: s.from, to: s.to, q: s.q, eventType: s.eventType });
+      });
+    }
+    s.from = panel.querySelector('.audit-from')?.value || s.from;
+    s.to = panel.querySelector('.audit-to')?.value || s.to;
+    s.q = panel.querySelector('.audit-q')?.value.trim() || '';
+    s.eventType = panel.querySelector('.gov-event')?.value || '';
+    const area = panel.querySelector('.gov-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.reportLifecycle({
+        from: s.from, to: s.to, q: s.q, eventType: s.eventType,
+        limit: String(s.limit), offset: String(s.offset),
+      });
+      const rows = r.data || [];
+      panel.querySelector('.audit-meta-count').textContent = `${r.meta?.total ?? rows.length} events`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Time</th><th>User</th><th>Event</th><th>State change</th><th>Initiated by</th><th>Reason</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="muted">${fmtDate(row.ts)}</td>
+              <td class="cell-strong">${esc(row.full_name || row.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(row.email_corp || '')}</span></td>
+              <td><span class="badge badge-info">${esc(row.event_type)}</span></td>
+              <td class="muted">${esc(row.old_state || '—')} → ${esc(row.new_state || '—')}</td>
+              <td class="muted">${esc(row.initiated_by || '—')}</td>
+              <td class="muted truncate" title="${esc(row.reason || '')}">${esc(row.reason || '—')}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(r.meta, s.offset, s.limit)}`
+        : `<div class="card empty-state">No lifecycle events in this range</div>`;
+      area.querySelector('.gov-prev')?.addEventListener('click', () => { s.offset = Math.max(0, s.offset - s.limit); void loadLifecycle(); });
+      area.querySelector('.gov-next')?.addEventListener('click', () => { s.offset += s.limit; void loadLifecycle(); });
+    } catch (err) {
+      area.innerHTML = errHtml(err.message);
+    }
+  }
+
+  async function loadRequests(rebuild) {
+    const s = state.requests;
+    if (rebuild || !panel.querySelector('.audit-filter-panel')) {
+      panel.innerHTML = `<div id="gov-req-summary" class="stat-grid" style="margin-bottom:1rem"></div>
+        ${auditFilterBar(`
+        <div class="form-group"><label class="form-label">Search</label>
+          <input class="form-input audit-q" value="${esc(s.q)}"></div>
+        <div class="form-group"><label class="form-label">Status</label>
+          <select class="form-select gov-status">
+            <option value="">All</option>
+            ${['PENDING', 'APPROVED', 'FULFILLED', 'REJECTED', 'CANCELLED', 'EXPIRED'].map((st) =>
+              `<option value="${st}" ${s.status === st ? 'selected' : ''}>${st}</option>`).join('')}
+          </select></div>`)}
+        <div class="gov-table-area"></div>`;
+      panel.querySelector('.audit-from').value = s.from;
+      panel.querySelector('.audit-to').value = s.to;
+      const reload = () => { s.offset = 0; void loadRequests(); };
+      panel.querySelectorAll('.audit-preset').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          panel.querySelector('.audit-from').value = isoDateDaysAgo(Number(btn.dataset.days) || 30);
+          panel.querySelector('.audit-to').value = todayIso();
+          reload();
+        });
+      });
+      panel.querySelector('.audit-apply')?.addEventListener('click', reload);
+      panel.querySelector('.audit-reset')?.addEventListener('click', () => {
+        Object.assign(s, { from: isoDateDaysAgo(90), to: todayIso(), q: '', status: '', offset: 0 });
+        void loadRequests(true);
+      });
+      panel.querySelector('.audit-export')?.addEventListener('click', () => {
+        s.from = panel.querySelector('.audit-from').value;
+        s.to = panel.querySelector('.audit-to').value;
+        s.q = panel.querySelector('.audit-q').value.trim();
+        s.status = panel.querySelector('.gov-status').value;
+        void exportCsv('access-requests', { from: s.from, to: s.to, q: s.q, status: s.status });
+      });
+    }
+    s.from = panel.querySelector('.audit-from')?.value || s.from;
+    s.to = panel.querySelector('.audit-to')?.value || s.to;
+    s.q = panel.querySelector('.audit-q')?.value.trim() || '';
+    s.status = panel.querySelector('.gov-status')?.value || '';
+    const area = panel.querySelector('.gov-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.reportAccessRequests({
+        from: s.from, to: s.to, q: s.q, status: s.status,
+        limit: String(s.limit), offset: String(s.offset),
+      });
+      const by = r.meta?.byStatus || [];
+      const overdue = by.reduce((n, x) => n + (x.overdue || 0), 0);
+      const sumBox = panel.querySelector('#gov-req-summary');
+      if (sumBox) {
+        sumBox.innerHTML = by.map((x) =>
+          statCard('check', x.status, x.n, x.overdue ? `${x.overdue} overdue` : '', x.status === 'PENDING' ? 'warning' : 'info'),
+        ).join('') + (overdue ? statCard('alert', 'SLA breached', overdue, 'pending past due', 'danger') : '');
+      }
+      const rows = r.data || [];
+      panel.querySelector('.audit-meta-count').textContent = `${r.meta?.total ?? rows.length} requests`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Created</th><th>Status</th><th>Type</th><th>Requester</th><th>Target</th><th>Hours</th><th>SLA</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="muted">${fmtDate(row.created_at)}</td>
+              <td><span class="badge badge-info">${esc(row.status)}</span></td>
+              <td class="muted">${esc(row.item_type)}</td>
+              <td>${esc(row.requester_name || row.requester_emp_id)}</td>
+              <td>${esc(row.target_name || row.target_emp_id)}</td>
+              <td class="muted">${row.hours_open ?? '—'}</td>
+              <td>${Number(row.sla_breached) ? '<span class="badge badge-danger">Breached</span>' : (row.sla_due_at ? `<span class="muted">${fmtDate(row.sla_due_at)}</span>` : '—')}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(r.meta, s.offset, s.limit)}`
+        : `<div class="card empty-state">No access requests in this range</div>`;
+      area.querySelector('.gov-prev')?.addEventListener('click', () => { s.offset = Math.max(0, s.offset - s.limit); void loadRequests(); });
+      area.querySelector('.gov-next')?.addEventListener('click', () => { s.offset += s.limit; void loadRequests(); });
+    } catch (err) {
+      area.innerHTML = errHtml(err.message);
+    }
+  }
+
+  async function loadCerts(rebuild) {
+    const s = state.certs;
+    if (rebuild || !panel.querySelector('.gov-certs-filters')) {
+      panel.innerHTML = `<div class="ent-panel gov-certs-filters"><div class="ent-panel-body">
+        <div class="audit-filter-grid">
+          <div class="form-group"><label class="form-label">Status</label>
+            <select class="form-select gov-status">
+              <option value="">All</option>
+              ${['DRAFT', 'ACTIVE', 'COMPLETED', 'CANCELLED'].map((st) =>
+                `<option value="${st}" ${s.status === st ? 'selected' : ''}>${st}</option>`).join('')}
+            </select></div>
+        </div>
+        <div class="audit-filter-actions">
+          <button type="button" class="btn btn-primary gov-apply">Apply</button>
+          <button type="button" class="btn btn-secondary gov-export">Export CSV</button>
+          <span class="muted audit-meta-count" style="margin-left:auto;font-size:0.8rem"></span>
+        </div>
+      </div></div><div class="gov-table-area"></div>`;
+      panel.querySelector('.gov-apply').addEventListener('click', () => { s.offset = 0; void loadCerts(); });
+      panel.querySelector('.gov-export').addEventListener('click', () => {
+        s.status = panel.querySelector('.gov-status').value;
+        void exportCsv('certifications', { status: s.status });
+      });
+    }
+    s.status = panel.querySelector('.gov-status')?.value || '';
+    const area = panel.querySelector('.gov-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.reportCertifications({
+        status: s.status, limit: String(s.limit), offset: String(s.offset),
+      });
+      const rows = r.data || [];
+      panel.querySelector('.audit-meta-count').textContent = `${r.meta?.total ?? rows.length} campaigns`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Campaign</th><th>Status</th><th>Window</th><th>Completion</th><th>Certified</th><th>Revoked</th><th>Pending</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="cell-strong">${esc(row.name)}</td>
+              <td><span class="badge badge-info">${esc(row.status)}</span></td>
+              <td class="muted">${fmtDate(row.start_date)} → ${fmtDate(row.end_date)}</td>
+              <td><strong>${row.completion_pct}%</strong></td>
+              <td>${row.certified}</td>
+              <td>${row.revoked}</td>
+              <td>${row.pending}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(r.meta, s.offset, s.limit)}`
+        : `<div class="card empty-state">No certification campaigns</div>`;
+      area.querySelector('.gov-prev')?.addEventListener('click', () => { s.offset = Math.max(0, s.offset - s.limit); void loadCerts(); });
+      area.querySelector('.gov-next')?.addEventListener('click', () => { s.offset += s.limit; void loadCerts(); });
+    } catch (err) {
+      area.innerHTML = errHtml(err.message);
+    }
+  }
+
+  async function loadSod(rebuild) {
+    const s = state.sod;
+    if (rebuild || !panel.querySelector('.gov-sod-filters')) {
+      panel.innerHTML = `<div class="ent-panel gov-sod-filters"><div class="ent-panel-body">
+        <div class="audit-filter-grid">
+          <div class="form-group"><label class="form-label">Search</label>
+            <input class="form-input gov-q" value="${esc(s.q)}"></div>
+          <div class="form-group"><label class="form-label">Status</label>
+            <select class="form-select gov-status">
+              <option value="">All</option>
+              ${['OPEN', 'APPROVED_EXCEPTION', 'RESOLVED', 'SUPPRESSED'].map((st) =>
+                `<option value="${st}" ${s.status === st ? 'selected' : ''}>${st}</option>`).join('')}
+            </select></div>
+          <div class="form-group"><label class="form-label">Severity</label>
+            <select class="form-select gov-sev">
+              <option value="">All</option>
+              ${['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((st) =>
+                `<option value="${st}" ${s.severity === st ? 'selected' : ''}>${st}</option>`).join('')}
+            </select></div>
+        </div>
+        <div class="audit-filter-actions">
+          <button type="button" class="btn btn-primary gov-apply">Apply</button>
+          <button type="button" class="btn btn-secondary gov-export">Export CSV</button>
+          <span class="muted audit-meta-count" style="margin-left:auto;font-size:0.8rem"></span>
+        </div>
+      </div></div><div class="gov-table-area"></div>`;
+      panel.querySelector('.gov-apply').addEventListener('click', () => { s.offset = 0; void loadSod(); });
+      panel.querySelector('.gov-export').addEventListener('click', () => {
+        s.q = panel.querySelector('.gov-q').value.trim();
+        s.status = panel.querySelector('.gov-status').value;
+        s.severity = panel.querySelector('.gov-sev').value;
+        void exportCsv('sod', { q: s.q, status: s.status, severity: s.severity });
+      });
+    }
+    s.q = panel.querySelector('.gov-q')?.value.trim() || '';
+    s.status = panel.querySelector('.gov-status')?.value || '';
+    s.severity = panel.querySelector('.gov-sev')?.value || '';
+    const area = panel.querySelector('.gov-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.reportSod({
+        q: s.q, status: s.status, severity: s.severity,
+        limit: String(s.limit), offset: String(s.offset),
+      });
+      const rows = r.data || [];
+      panel.querySelector('.audit-meta-count').textContent = `${r.meta?.total ?? rows.length} violations`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Detected</th><th>User</th><th>Policy</th><th>Severity</th><th>Status</th><th>Notes</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="muted">${fmtDate(row.detected_at)}</td>
+              <td class="cell-strong">${esc(row.full_name || row.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(row.email_corp || '')}</span></td>
+              <td>${esc(row.policy_name)}</td>
+              <td><span class="badge badge-${row.severity === 'CRITICAL' || row.severity === 'HIGH' ? 'danger' : 'warning'}">${esc(row.severity)}</span></td>
+              <td><span class="badge badge-info">${esc(row.status)}</span></td>
+              <td class="muted truncate">${esc(row.notes || '—')}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(r.meta, s.offset, s.limit)}`
+        : `<div class="card empty-state">No SoD violations match</div>`;
+      area.querySelector('.gov-prev')?.addEventListener('click', () => { s.offset = Math.max(0, s.offset - s.limit); void loadSod(); });
+      area.querySelector('.gov-next')?.addEventListener('click', () => { s.offset += s.limit; void loadSod(); });
+    } catch (err) {
+      area.innerHTML = errHtml(err.message);
+    }
+  }
+
+  async function loadAppAccess(rebuild) {
+    const s = state.appaccess;
+    if (rebuild || !panel.querySelector('.audit-filter-panel')) {
+      panel.innerHTML = `${auditFilterBar(`
+        <div class="form-group"><label class="form-label">Search</label>
+          <input class="form-input audit-q" value="${esc(s.q)}"></div>
+        <div class="form-group"><label class="form-label">Action</label>
+          <select class="form-select gov-action">
+            <option value="">All</option>
+            ${['ASSIGN_USER', 'ASSIGN_GROUP', 'REVOKE', 'REQUEST', 'APPROVE', 'REJECT', 'PROVISION'].map((a) =>
+              `<option value="${a}" ${s.action === a ? 'selected' : ''}>${a}</option>`).join('')}
+          </select></div>`)}
+        <div class="gov-table-area"></div>`;
+      panel.querySelector('.audit-from').value = s.from;
+      panel.querySelector('.audit-to').value = s.to;
+      const reload = () => { s.offset = 0; void loadAppAccess(); };
+      panel.querySelectorAll('.audit-preset').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          panel.querySelector('.audit-from').value = isoDateDaysAgo(Number(btn.dataset.days) || 30);
+          panel.querySelector('.audit-to').value = todayIso();
+          reload();
+        });
+      });
+      panel.querySelector('.audit-apply')?.addEventListener('click', reload);
+      panel.querySelector('.audit-reset')?.addEventListener('click', () => {
+        Object.assign(s, { from: isoDateDaysAgo(90), to: todayIso(), q: '', action: '', offset: 0 });
+        void loadAppAccess(true);
+      });
+      panel.querySelector('.audit-export')?.addEventListener('click', () => {
+        s.from = panel.querySelector('.audit-from').value;
+        s.to = panel.querySelector('.audit-to').value;
+        s.q = panel.querySelector('.audit-q').value.trim();
+        s.action = panel.querySelector('.gov-action').value;
+        void exportCsv('app-access-changes', { from: s.from, to: s.to, q: s.q, action: s.action });
+      });
+    }
+    s.from = panel.querySelector('.audit-from')?.value || s.from;
+    s.to = panel.querySelector('.audit-to')?.value || s.to;
+    s.q = panel.querySelector('.audit-q')?.value.trim() || '';
+    s.action = panel.querySelector('.gov-action')?.value || '';
+    const area = panel.querySelector('.gov-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const r = await api.reportAppAccessChanges({
+        from: s.from, to: s.to, q: s.q, action: s.action,
+        limit: String(s.limit), offset: String(s.offset),
+      });
+      const rows = r.data || [];
+      panel.querySelector('.audit-meta-count').textContent = `${r.meta?.total ?? rows.length} events`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Time</th><th>Action</th><th>Application</th><th>Actor</th><th>Target</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="muted">${fmtDate(row.created_at)}</td>
+              <td><span class="badge badge-info">${esc(row.action)}</span></td>
+              <td class="cell-strong">${esc(row.app_name || '—')}<br><span class="muted" style="font-size:0.75rem">${esc(row.app_slug || '')}</span></td>
+              <td>${esc(row.actor_name || row.actor_emp_id || '—')}</td>
+              <td>${esc(row.target_name || row.target_emp_id || row.tag_group_id || '—')}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(r.meta, s.offset, s.limit)}`
+        : `<div class="card empty-state">No app access changes in this range</div>`;
+      area.querySelector('.gov-prev')?.addEventListener('click', () => { s.offset = Math.max(0, s.offset - s.limit); void loadAppAccess(); });
+      area.querySelector('.gov-next')?.addEventListener('click', () => { s.offset += s.limit; void loadAppAccess(); });
+    } catch (err) {
+      area.innerHTML = errHtml(err.message);
+    }
+  }
+
+  async function loadTab(rebuild = false) {
+    if (active === 'inventory') return loadInventory(rebuild);
+    if (active === 'mfa') return loadMfa(rebuild);
+    if (active === 'lifecycle') return loadLifecycle(rebuild);
+    if (active === 'requests') return loadRequests(rebuild);
+    if (active === 'certs') return loadCerts(rebuild);
+    if (active === 'sod') return loadSod(rebuild);
+    return loadAppAccess(rebuild);
+  }
+
+  await loadTab(true);
+}
+
 export async function viewReports(content) {
   const wrap = el(`<div class="ent-page">
     ${header('Compliance Reports', 'Generate SOX / GDPR / HIPAA / PCI evidence snapshots from audit trails',

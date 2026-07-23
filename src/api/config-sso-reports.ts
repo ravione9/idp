@@ -70,35 +70,63 @@ router.get('/failed-logins', asyncHandler(async (req: Request, res: Response) =>
 }));
 
 // GET /app-adoption — entitled vs signed-in users per SAML app
+// Entitled = active app_access_assignments (USER + TAG_GROUP members) matched by
+// applications.slug ↔ saml_service_providers.slug. Falls back to all ACTIVE users
+// when an app has no access-policy assignments (open / unrestricted).
 router.get('/app-adoption', asyncHandler(async (req: Request, res: Response) => {
   const { from, to, days } = parseWindow(req);
   const toSql = to ? 'AND al.ts <= ?' : '';
   const params = to ? [from, to] : [from];
 
-  const entitledRow = await queryOne<{ n: number }>(
+  const activeRow = await queryOne<{ n: number }>(
     "SELECT COUNT(*) AS n FROM employees WHERE ilg_state = 'ACTIVE'",
     [],
   );
-  const entitled = entitledRow?.n ?? 0;
+  const activeFallback = Number(activeRow?.n ?? 0);
 
-  const rows = await query<{ app: string; signed_in: number }>(
-    `SELECT sp.name AS app, COUNT(DISTINCT al.emp_id) AS signed_in
+  const entitledRows = await query<{ slug: string; entitled: number }>(
+    `SELECT x.slug, COUNT(DISTINCT x.emp_id) AS entitled FROM (
+       SELECT a.slug, aa.target_id AS emp_id
+       FROM applications a
+       INNER JOIN app_access_assignments aa ON aa.app_id = a.id
+       WHERE aa.active = 1 AND aa.revoked_at IS NULL AND aa.assignment_type = 'USER'
+       UNION
+       SELECT a.slug, tgm.emp_id
+       FROM applications a
+       INNER JOIN app_access_assignments aa ON aa.app_id = a.id
+       INNER JOIN tag_group_members tgm ON tgm.tag_group_id = aa.target_id
+       WHERE aa.active = 1 AND aa.revoked_at IS NULL AND aa.assignment_type = 'TAG_GROUP'
+     ) x
+     INNER JOIN employees e ON e.emp_id = x.emp_id AND e.ilg_state = 'ACTIVE'
+     GROUP BY x.slug`,
+    [],
+  );
+  const entitledBySlug = new Map(entitledRows.map((r) => [r.slug, Number(r.entitled) || 0]));
+
+  const rows = await query<{ app: string; slug: string; signed_in: number }>(
+    `SELECT sp.name AS app, sp.slug, COUNT(DISTINCT al.emp_id) AS signed_in
      FROM saml_service_providers sp
      LEFT JOIN saml_assertion_log al ON al.sp_id = sp.id
        AND al.ts >= ? ${toSql}
      WHERE sp.active = 1
-     GROUP BY sp.id, sp.name
+     GROUP BY sp.id, sp.name, sp.slug
      ORDER BY signed_in DESC`,
     params,
   );
 
   res.json({
-    data: rows.map((row) => ({
-      app:          row.app,
-      entitled,
-      signed_in:    Number(row.signed_in) || 0,
-      adoption_pct: entitled > 0 ? Math.round((Number(row.signed_in) / entitled) * 100) : 0,
-    })),
+    data: rows.map((row) => {
+      const assigned = entitledBySlug.get(row.slug);
+      const entitled = assigned != null && assigned > 0 ? assigned : activeFallback;
+      const signedIn = Number(row.signed_in) || 0;
+      return {
+        app: row.app,
+        entitled,
+        signed_in: signedIn,
+        adoption_pct: entitled > 0 ? Math.round((signedIn / entitled) * 100) : 0,
+        entitlement_basis: assigned != null && assigned > 0 ? 'assignments' : 'all_active',
+      };
+    }),
     meta: { from, to, days },
   });
 }));

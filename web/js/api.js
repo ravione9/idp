@@ -249,6 +249,20 @@ Object.assign(api, {
   getComplianceReport: (id) => f(`/api/iga/reports/${id}`),
   complianceReportExportUrl: (id) => `/api/iga/reports/${id}?export=json`,
 
+  // Enterprise Reports Hub
+  reportsOverview:       (params = {}) => f(`/api/admin/reports/overview?${new URLSearchParams(params)}`),
+  reportAccessInventory: (params = {}) => f(`/api/admin/reports/access-inventory?${new URLSearchParams(params)}`),
+  reportMfaCoverage:     (params = {}) => f(`/api/admin/reports/mfa-coverage?${new URLSearchParams(params)}`),
+  reportLifecycle:       (params = {}) => f(`/api/admin/reports/lifecycle?${new URLSearchParams(params)}`),
+  reportAccessRequests:  (params = {}) => f(`/api/admin/reports/access-requests?${new URLSearchParams(params)}`),
+  reportCertifications:  (params = {}) => f(`/api/admin/reports/certifications?${new URLSearchParams(params)}`),
+  reportSod:             (params = {}) => f(`/api/admin/reports/sod?${new URLSearchParams(params)}`),
+  reportAppAccessChanges:(params = {}) => f(`/api/admin/reports/app-access-changes?${new URLSearchParams(params)}`),
+  reportExportUrl:       (kind, params = {}) => {
+    const q = new URLSearchParams({ ...params, export: 'csv' });
+    return `/api/admin/reports/${kind}?${q}`;
+  },
+
   // Business Roles
   listBusinessRoles:     () => f('/api/admin/business-roles'),
   listRequestableRoles:  () => f('/api/iga/roles'),

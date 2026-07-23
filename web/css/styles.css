@@ -4218,3 +4218,53 @@ code, .mono, td code {
 }
 .audit-payload.is-hidden { display: none; }
 .audit-summary-grid { margin-bottom: 0.25rem; }
+
+/* Enterprise Reports Hub catalog */
+.report-catalog { margin-top: 0.5rem; }
+.report-cat { margin-bottom: 1.25rem; }
+.report-cat-title {
+  margin: 0 0 0.65rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.report-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+.report-catalog-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  text-align: left;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.report-catalog-card:hover {
+  border-color: var(--primary);
+  background: var(--surface-2);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+.report-catalog-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 0.5rem;
+  background: var(--surface-2);
+  color: var(--primary);
+  flex-shrink: 0;
+}
+.report-catalog-icon svg { width: 1.1rem; height: 1.1rem; }
+.report-catalog-body { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.report-catalog-title { font-weight: 600; font-size: 0.92rem; }
+.report-catalog-desc { font-size: 0.78rem; color: var(--text-muted); line-height: 1.35; }

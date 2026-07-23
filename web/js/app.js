@@ -12,7 +12,8 @@ import {
 } from './views-end-user.js';
 import {
   viewDashboard, viewSamlApps, viewIgaApps, viewUsers, viewAdmins,
-  viewReviews, viewAccessRequests, viewSod, viewRisk, viewAuth, viewAudit, viewReports, viewApplications,
+  viewReviews, viewAccessRequests, viewSod, viewRisk, viewAuth, viewAudit, viewReports,
+  viewReportsHub, viewGovReports, viewApplications,
 } from './views-admin.js';
 import {
   viewGroups, viewBulkUsers, viewSystemUsers, viewIdentityProfiles,
@@ -87,8 +88,10 @@ const ROUTES = {
   notifications:   { primary: 'admin', group: 'Workflows', label: 'Notifications', icon: 'bell', admin: true, module: 'workflows', view: viewNotifications },
 
   /* ── Admin > Reports ── */
-  audit:   { primary: 'admin', group: 'Reports', label: 'Audit & SSO Reports', icon: 'list',        admin: true, module: 'reports', view: viewAudit },
-  reports: { primary: 'admin', group: 'Reports', label: 'Compliance Reports', icon: 'certificate', admin: true, module: 'reports', view: viewReports },
+  reportHub:   { primary: 'admin', group: 'Reports', label: 'Overview',            icon: 'dashboard',   admin: true, module: 'reports', view: viewReportsHub },
+  govReports:  { primary: 'admin', group: 'Reports', label: 'Identity & Access',   icon: 'key',         admin: true, module: 'reports', view: viewGovReports },
+  audit:       { primary: 'admin', group: 'Reports', label: 'Audit & SSO Reports', icon: 'list',        admin: true, module: 'reports', view: viewAudit },
+  reports:     { primary: 'admin', group: 'Reports', label: 'Compliance Reports', icon: 'certificate', admin: true, module: 'reports', view: viewReports },
 
   /* ── Admin > Settings ── */
   generalSettings:  { primary: 'admin', group: 'Settings', label: 'General',         icon: 'cog',         admin: true, module: 'settings', view: viewGeneralSettings },
@@ -387,6 +390,7 @@ const ROUTE_DEFAULT_TABS = {
   settings:        'profile',
   home:            'all',
   audit:           'saml',
+  govReports:      'inventory',
   directorySync:   'sources',
   workflowLibrary: 'definitions',
   groups:          'directory',
@@ -461,7 +465,7 @@ async function navigate(key, opts = {}) {
     else if (key === 'settings') await route.view(me, content, viewTab);
     else if (key === 'home') await route.view(me, content, viewTab);
     else await route.view(me, content);
-  } else if (key === 'audit' || key === 'workflowLibrary' || key === 'groups') {
+  } else if (key === 'audit' || key === 'govReports' || key === 'workflowLibrary' || key === 'groups') {
     await route.view(content, viewTab);
   } else if (key === 'directorySync') {
     await route.view(content, viewTab, me);

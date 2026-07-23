@@ -575,7 +575,15 @@ To add a new migration:
 | `POST` | `/api/admin/audit/sessions/:id/revoke` | Admin force-logout (sets `revoked_at`, clears Redis) |
 | `GET` | `/api/admin/audit/integrity` | Verify `audit_log` hash chain |
 | `GET` | `/api/admin/audit/summary` | Compliance counters for a date window (includes sessions created / active) |
-| `GET` | `/api/admin/sso-reports/*` | Login summary / failed logins / adoption / dormant (`days` or `from`/`to`) |
+| `GET` | `/api/admin/sso-reports/*` | Login summary / failed logins / adoption / dormant (`days` or `from`/`to`); adoption uses app assignments when present |
+| `GET` | `/api/admin/reports/overview` | Enterprise Reports Hub KPIs + 30d trends (logins / SSO / failures) |
+| `GET` | `/api/admin/reports/access-inventory` | Who-has-what (apps, roles, entitlements); `export=csv` |
+| `GET` | `/api/admin/reports/mfa-coverage` | MFA enrollment posture for active users; `export=csv` |
+| `GET` | `/api/admin/reports/lifecycle` | Joiner/mover/leaver lifecycle events; `export=csv` |
+| `GET` | `/api/admin/reports/access-requests` | Access request volume + SLA breaches; `export=csv` |
+| `GET` | `/api/admin/reports/certifications` | Certification campaign completion; `export=csv` |
+| `GET` | `/api/admin/reports/sod` | SoD violations report; `export=csv` |
+| `GET` | `/api/admin/reports/app-access-changes` | App access policy audit trail; `export=csv` |
 | `GET`/`POST` | `/api/iga/reports` | List / generate compliance evidence snapshots |
 | `GET` | `/api/iga/reports/:id` | Fetch snapshot; `export=json` downloads evidence |
 | `GET` | `/api/admin/app-access-policy/summary` | Assignment / workflow / audit counts |
@@ -631,7 +639,7 @@ To add a new migration:
 | `GET` | `/api/iga/sod-violations?status=…` | Detected violations |
 | `POST` | `/api/iga/sod-violations/:id/remediate` | Mark an open SoD violation as RESOLVED |
 | `GET` | `/api/iga/risk/dashboard` | Top risk identities + 24h counters |
-| `GET`/`POST` | `/api/iga/reports` | Compliance report archive (POST returns 501) |
+| `GET`/`POST` | `/api/iga/reports` | Compliance evidence archive (generate + list); JSON download via `GET …/:id?export=json` |
 
 ### 8.5 Internal (X-Internal-Token gated)
 
@@ -694,7 +702,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault — **SUPER_ADMIN only** (portal `ADMIN` excludes PAM) |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
 | **Workflows** | Workflows (tabs: Definitions · Event Triggers · Run History) · Notifications |
-| **Reports** | Audit & SSO Reports (tabs: SSO assertions · System audit · Auth attempts · Sessions · SSO analytics) with date filters + CSV export · Compliance Reports (generate evidence snapshots) |
+| **Reports** | **Overview** (executive KPIs, trends, report catalog) · **Identity & Access** (access inventory · MFA coverage · lifecycle · access requests · certifications · SoD · app access changes) · Audit & SSO Reports (SSO assertions · System audit · Auth attempts · Sessions · SSO analytics) · Compliance Reports (evidence snapshots) — all with filters + CSV where applicable |
 | **Settings** | General · Branding & Login · License · Tickets · System Health |
 
 **Merged / redirected routes** (bookmarks still work): `loginCustomization`→`branding`, `connectors`→`directorySync`, `eventTriggers`→`workflowLibrary?tab=triggers`, `appDiscovery`→`applications?tab=discovery`, `ssoReports`→`audit?tab=sso`. Groups also exposes Tag Groups under `/?v=groups&tab=tags`.
@@ -710,7 +718,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/login` — login form (no auth)
 - `/` — console (default landing: admins → Dashboard, others → My Apps)
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
-- `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=groups&tab=tags`)
+- `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=govReports&tab=mfa`, `/?v=groups&tab=tags`)
 
 **Attendance IGA admin console** (`/?v=attendanceIga`) — tabs: Dashboard · Configuration · Import History · Approvals · Executions. Pipeline: fetch attendance (REST API with exponential-backoff retry, or CSV upload) → staging validation → employee match (employee ID → email → username) → rule evaluation (uses `leave_records`, `holiday_calendar`, exclusions) → optional approval → connector actions (suspend, disable, revoke sessions, remove apps/groups/roles) → audit + notification → rollback restores snapshot.
 
@@ -935,8 +943,9 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - Session recording for high-risk apps
 - SCIM 2.0 *server* (inbound, so Workday / Zoho People can push directly into `employees`)
 - Identity warehouse on Elasticsearch / OpenSearch for slice-and-dice analytics
-- Compliance report templates (SOX, GDPR, HIPAA, PCI)
-- Privilege creep / orphan / dormant account detection
+- Compliance report templates (SOX, GDPR, HIPAA, PCI) — framework-specific control packs (generic evidence snapshots already live)
+- Privilege creep / orphan account detection (dormant users + access inventory reports live under Reports)
+- Scheduled report delivery (email/Slack) and SIEM streaming
 
 ### Real SAML SP onboardings (continuous)
 
@@ -953,6 +962,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-23 — Enterprise Reports Hub
+
+**Why** — Reports was a thin audit/CSV surface; auditors and IAM ops need an executive overview plus governance reports (inventory, MFA, lifecycle, certifications, SoD) in one place.
+
+**What changed:**
+
+- **Admin → Reports → Overview** (`/?v=reportHub`) — KPIs, 30-day auth/SSO trends, request donut, top apps, certification posture, clickable report catalog.
+- **Admin → Reports → Identity & Access** (`/?v=govReports`) — tabs: Access inventory · MFA coverage · Lifecycle · Access requests (SLA) · Certifications · SoD · App access changes; filters + CSV export.
+- **API** — `/api/admin/reports/{overview,access-inventory,mfa-coverage,lifecycle,access-requests,certifications,sod,app-access-changes}`.
+- **SSO adoption** — entitled denominator uses app access assignments (USER + TAG_GROUP) when present; falls back to all ACTIVE users.
 
 ### `b235bfa` — 2026-07-23 — Session audit logs in Reports
 
