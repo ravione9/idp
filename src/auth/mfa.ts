@@ -4,7 +4,7 @@
  * Uses otplib v13 + Google-Authenticator-compatible 6-digit codes.
  * Backup codes are 8 random hex chars, hashed at rest with bcrypt.
  */
-import { generateSecret, generateURI, verify } from 'otplib';
+import { createGuardrails, generateSecret, generateURI, verify } from 'otplib';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { query, queryOne, transaction } from '../db/connection.js';
@@ -28,17 +28,35 @@ const TOTP_BASE = {
   period: 30,
 };
 
-/** ±1 TOTP step — equivalent to v12 `window: 1`. */
-const TOTP_VERIFY = { ...TOTP_BASE, epochTolerance: 30 };
+/** ±2 TOTP steps — tolerates mild clock skew (v12 used window: 1 = ±30s). */
+const TOTP_VERIFY = { ...TOTP_BASE, epochTolerance: 60 };
+
+/**
+ * otplib v12 defaulted to 10-byte secrets; v13 rejects those unless MIN_SECRET_BYTES
+ * is lowered. New enrollments still use 20-byte secrets (v13 generateSecret default).
+ */
+const LEGACY_TOTP_GUARDRAILS = createGuardrails({ MIN_SECRET_BYTES: 10 });
 
 const ISSUER = 'Lenskart IdP';
 
 async function checkTotp(code: string, secret: string): Promise<boolean> {
+  const token = code.replace(/\s+/g, '').trim();
+  if (!/^\d{6}$/.test(token)) return false;
+  const secretB32 = secret.replace(/\s+/g, '').trim().toUpperCase();
+  if (!secretB32) return false;
   try {
-    const result = await verify({ secret, token: code, ...TOTP_VERIFY });
+    const result = await verify({
+      secret: secretB32,
+      token,
+      ...TOTP_VERIFY,
+      guardrails: LEGACY_TOTP_GUARDRAILS,
+    });
     return result.valid;
-  } catch {
-    // SecretTooShortError / TokenError / malformed secret
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'TOTP verify error',
+    );
     return false;
   }
 }

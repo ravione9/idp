@@ -1005,6 +1005,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `TBD` — 2026-07-23 — Fix TOTP invalid after otplib v13
+
+**Why** — Login MFA rejected every authenticator code after the v13 migration (`86d8e31`).
+
+**What changed:**
+
+- otplib v12 enrolled **10-byte** secrets; v13 defaults to `MIN_SECRET_BYTES: 16` and throws `SecretTooShortError` (caught as “invalid code”).
+- Verify now uses `createGuardrails({ MIN_SECRET_BYTES: 10 })` for legacy secrets; new enrollments remain 20-byte. Also normalize token/secret and use ±60s clock skew.
+
 ### `d74cd8a` — 2026-07-23 — SAML connected-app IGA Request Access (JIT)
 
 **Why** — Operators care about SSO for connected SAML apps, not directory group catalogs. New SAML apps were mirrored as RESTRICTED but Request Access (JIT) stayed off unless manually configured under Access Policy. Assigned users must not be forced through Request Access again.
