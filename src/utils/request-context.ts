@@ -32,6 +32,56 @@ export function isPrivateOrLocalIp(ip: string): boolean {
   return false;
 }
 
+/**
+ * Cloudflare edge / proxy address ranges (not visitor IPs).
+ * See https://www.cloudflare.com/ips/ — subset covering common IPv4 edges.
+ */
+export function isCloudflareProxyIp(ip: string): boolean {
+  const n = normalizeIp(ip);
+  if (!n) return false;
+  const parts = n.split('.').map((p) => Number(p));
+  if (parts.length !== 4 || parts.some((p) => Number.isNaN(p))) return false;
+  const [a, b] = parts as [number, number, number, number];
+  // 172.64.0.0/13
+  if (a === 172 && b >= 64 && b <= 71) return true;
+  // 104.16.0.0/13
+  if (a === 104 && b >= 16 && b <= 23) return true;
+  // 104.24.0.0/14
+  if (a === 104 && b >= 24 && b <= 27) return true;
+  // 162.158.0.0/15
+  if (a === 162 && (b === 158 || b === 159)) return true;
+  // 108.162.192.0/18
+  if (a === 108 && b === 162 && parts[2]! >= 192) return true;
+  // 141.101.64.0/18
+  if (a === 141 && b === 101 && parts[2]! >= 64 && parts[2]! <= 127) return true;
+  // 190.93.240.0/20
+  if (a === 190 && b === 93 && parts[2]! >= 240) return true;
+  // 188.114.96.0/20
+  if (a === 188 && b === 114 && parts[2]! >= 96 && parts[2]! <= 111) return true;
+  // 197.234.240.0/22
+  if (a === 197 && b === 234 && parts[2]! >= 240 && parts[2]! <= 243) return true;
+  // 198.41.128.0/17
+  if (a === 198 && b === 41 && parts[2]! >= 128) return true;
+  // 103.21.244.0/22
+  if (a === 103 && b === 21 && parts[2]! >= 244 && parts[2]! <= 247) return true;
+  // 103.22.200.0/22
+  if (a === 103 && b === 22 && parts[2]! >= 200 && parts[2]! <= 203) return true;
+  // 103.31.4.0/22
+  if (a === 103 && b === 31 && parts[2]! >= 4 && parts[2]! <= 7) return true;
+  // 173.245.48.0/20
+  if (a === 173 && b === 245 && parts[2]! >= 48 && parts[2]! <= 63) return true;
+  return false;
+}
+
+/** Extra header names (comma-separated) that carry the visitor IP — e.g. from a CF Transform Rule. */
+function extraClientIpHeaders(): string[] {
+  const raw = process.env['CLIENT_IP_HEADERS'] ?? 'x-idp-client-ip,x-lenskart-client-ip';
+  return raw
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 /** Origin / host public IPs that must never be used as the client IP. */
 function knownServerPublicIps(): Set<string> {
   const out = new Set<string>();
@@ -42,20 +92,6 @@ function knownServerPublicIps(): Set<string> {
   const detected = getCachedServerPublicIp();
   if (detected) out.add(detected);
   return out;
-}
-
-/** Debug snapshot of IP-related headers (for /api/me/client-ip and deny logs). */
-export function getClientIpDebug(req: Request): Record<string, string | null> {
-  return {
-    resolved: getClientIp(req),
-    cfConnectingIp: req.get('cf-connecting-ip')?.trim() || null,
-    trueClientIp: req.get('true-client-ip')?.trim() || null,
-    xRealIp: req.get('x-real-ip')?.trim() || null,
-    xForwardedFor: req.get('x-forwarded-for')?.trim() || null,
-    reqIp: req.ip ?? null,
-    remoteAddress: req.socket?.remoteAddress ?? null,
-    serverPublicIp: getCachedServerPublicIp(),
-  };
 }
 
 function pushCandidate(list: string[], seen: Set<string>, raw?: string | null): void {
@@ -75,19 +111,34 @@ function parseForwardedForHeader(forwarded: string): string[] {
   return ips;
 }
 
+function isUsableEndpointIp(ip: string, serverIps: Set<string>): boolean {
+  return (
+    !isPrivateOrLocalIp(ip)
+    && !isCloudflareProxyIp(ip)
+    && !serverIps.has(ip)
+  );
+}
+
 /**
  * Client public IP for the browser / endpoint.
- * Order: CF-Connecting-IP → True-Client-IP → X-Real-IP → Forwarded →
- * X-Forwarded-For hops → Express req.ips/req.ip → socket.
- * Skips private/loopback and known server public IPs when a better candidate exists.
+ * Prefers custom Transform-Rule headers, then Cloudflare visitor headers,
+ * then public XFF hops. Never returns Cloudflare edge or the IdP host EIP
+ * when a better candidate exists.
  */
 export function getClientIp(req: Request): string {
   const candidates: string[] = [];
   const seen = new Set<string>();
 
+  // 1) Explicit visitor headers (Cloudflare Transform Rule → ip.src)
+  for (const h of extraClientIpHeaders()) {
+    pushCandidate(candidates, seen, req.get(h));
+  }
+
+  // 2) Standard Cloudflare / proxy visitor headers
   pushCandidate(candidates, seen, req.get('cf-connecting-ip'));
   pushCandidate(candidates, seen, req.get('true-client-ip'));
   pushCandidate(candidates, seen, req.get('x-real-ip'));
+  pushCandidate(candidates, seen, req.get('x-client-ip'));
 
   const forwarded = req.get('forwarded');
   if (forwarded) {
@@ -110,17 +161,65 @@ export function getClientIp(req: Request): string {
   pushCandidate(candidates, seen, req.socket?.remoteAddress);
 
   const serverIps = knownServerPublicIps();
-  const isUsableClient = (ip: string) =>
-    !isPrivateOrLocalIp(ip) && !serverIps.has(ip);
-
-  const publicClient = candidates.find(isUsableClient);
+  const publicClient = candidates.find((ip) => isUsableEndpointIp(ip, serverIps));
   if (publicClient) return publicClient;
 
-  // No clear public client IP — avoid returning the origin/server EIP.
-  const nonServer = candidates.find((ip) => !serverIps.has(ip));
+  const nonServer = candidates.find(
+    (ip) => !serverIps.has(ip) && !isCloudflareProxyIp(ip),
+  );
   if (nonServer) return nonServer;
 
   return candidates[0] ?? 'unknown';
+}
+
+/** Debug snapshot of IP-related headers (for /api/me/client-ip and deny logs). */
+export function getClientIpDebug(req: Request): Record<string, unknown> {
+  const resolved = getClientIp(req);
+  const remote = normalizeIp(req.socket?.remoteAddress ?? '');
+  const cfConnecting = req.get('cf-connecting-ip')?.trim() || null;
+  const serverPublicIp = getCachedServerPublicIp();
+
+  const ipLikeHeaders: Record<string, string> = {};
+  for (const [key, val] of Object.entries(req.headers)) {
+    if (!/ip|forward|client|cf-|true-client|real-ip|forwarded/i.test(key)) continue;
+    const s = Array.isArray(val) ? val.join(', ') : String(val ?? '');
+    if (s) ipLikeHeaders[key] = s;
+  }
+
+  const fromCloudflare = isCloudflareProxyIp(remote);
+  let diagnosis: string;
+  if (fromCloudflare && cfConnecting && cfConnecting === resolved) {
+    diagnosis =
+      'Cloudflare edge reached this origin, but CF-Connecting-IP is '
+      + `${cfConnecting}. That is the IP Cloudflare saw connecting to its edge — `
+      + 'not necessarily your browser. Open https://idp.lenskart.com/cdn-cgi/trace '
+      + 'and check the ip= line. If it matches CF-Connecting-IP, traffic is proxied '
+      + 'through that address before Cloudflare (old reverse-proxy, corporate SWG, '
+      + 'or a Transform Rule). Your true endpoint IP will not appear until that path is fixed, '
+      + 'or you add a CF Transform Rule header X-IdP-Client-IP = ip.src (only helps if ip.src is correct).';
+  } else if (fromCloudflare && !cfConnecting) {
+    diagnosis =
+      'Request arrived from Cloudflare but CF-Connecting-IP is missing '
+      + '(check Managed Transforms → Remove visitor IP headers).';
+  } else {
+    diagnosis = 'Resolved from available proxy headers / socket.';
+  }
+
+  return {
+    resolved,
+    expectedHint: 'Compare resolved to https://ifconfig.me and to /cdn-cgi/trace ip=',
+    cfConnectingIp: cfConnecting,
+    trueClientIp: req.get('true-client-ip')?.trim() || null,
+    xRealIp: req.get('x-real-ip')?.trim() || null,
+    xForwardedFor: req.get('x-forwarded-for')?.trim() || null,
+    xIdpClientIp: req.get('x-idp-client-ip')?.trim() || null,
+    reqIp: req.ip ?? null,
+    remoteAddress: req.socket?.remoteAddress ?? null,
+    serverPublicIp,
+    fromCloudflareEdge: fromCloudflare,
+    ipLikeHeaders,
+    diagnosis,
+  };
 }
 
 /** True when the client reached the app over HTTPS (via proxy headers or TLS). */
