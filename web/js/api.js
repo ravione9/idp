@@ -51,6 +51,8 @@ Object.assign(api, {
   samlAudit:        (params = {}) => f(`/api/admin/audit/saml?${new URLSearchParams(params)}`),
   systemAudit:      (params = {}) => f(`/api/admin/audit/system?${new URLSearchParams(params)}`),
   authAttemptsAudit:(params = {}) => f(`/api/admin/audit/auth-attempts?${new URLSearchParams(params)}`),
+  sessionsAudit:    (params = {}) => f(`/api/admin/audit/sessions?${new URLSearchParams(params)}`),
+  revokeAuditSession: (id) => f(`/api/admin/audit/sessions/${encodeURIComponent(id)}/revoke`, { method: 'POST' }),
   auditIntegrity:   (limit = 1000) => f(`/api/admin/audit/integrity?limit=${limit}`),
   auditSummary:     (params = {}) => f(`/api/admin/audit/summary?${new URLSearchParams(params)}`),
   auditExportUrl:   (kind, params = {}) => {

@@ -571,8 +571,10 @@ To add a new migration:
 | `GET` | `/api/admin/audit/saml` | SSO assertion log (`from`/`to`/`q`/`app`/`binding`/`limit`/`offset`; `export=csv`) |
 | `GET` | `/api/admin/audit/system` | Tamper-evident `audit_log` (`from`/`to`/`q`/`actor`/`action`; `export=csv`) |
 | `GET` | `/api/admin/audit/auth-attempts` | Login forensics from `auth_attempts` (`from`/`to`/`q`/`ip`/`success`/`reason`; `export=csv`) |
+| `GET` | `/api/admin/audit/sessions` | Portal session audit from `idp_sessions` (`from`/`to`/`q`/`ip`/`status`/`iss`; `export=csv`) |
+| `POST` | `/api/admin/audit/sessions/:id/revoke` | Admin force-logout (sets `revoked_at`, clears Redis) |
 | `GET` | `/api/admin/audit/integrity` | Verify `audit_log` hash chain |
-| `GET` | `/api/admin/audit/summary` | Compliance counters for a date window |
+| `GET` | `/api/admin/audit/summary` | Compliance counters for a date window (includes sessions created / active) |
 | `GET` | `/api/admin/sso-reports/*` | Login summary / failed logins / adoption / dormant (`days` or `from`/`to`) |
 | `GET`/`POST` | `/api/iga/reports` | List / generate compliance evidence snapshots |
 | `GET` | `/api/iga/reports/:id` | Fetch snapshot; `export=json` downloads evidence |
@@ -692,7 +694,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault — **SUPER_ADMIN only** (portal `ADMIN` excludes PAM) |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
 | **Workflows** | Workflows (tabs: Definitions · Event Triggers · Run History) · Notifications |
-| **Reports** | Audit & SSO Reports (tabs: SSO assertions · System audit · Auth attempts · SSO analytics) with date filters + CSV export · Compliance Reports (generate evidence snapshots) |
+| **Reports** | Audit & SSO Reports (tabs: SSO assertions · System audit · Auth attempts · Sessions · SSO analytics) with date filters + CSV export · Compliance Reports (generate evidence snapshots) |
 | **Settings** | General · Branding & Login · License · Tickets · System Health |
 
 **Merged / redirected routes** (bookmarks still work): `loginCustomization`→`branding`, `connectors`→`directorySync`, `eventTriggers`→`workflowLibrary?tab=triggers`, `appDiscovery`→`applications?tab=discovery`, `ssoReports`→`audit?tab=sso`. Groups also exposes Tag Groups under `/?v=groups&tab=tags`.
@@ -951,6 +953,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-23 — Session audit logs in Reports
+
+**Why** — Operators needed a compliance view of portal sessions (who signed in, from where, still active / revoked / expired).
+
+**What changed:**
+
+- **`GET /api/admin/audit/sessions`** — filterable list from `idp_sessions` + CSV export; **`POST …/sessions/:id/revoke`** force-logout.
+- **Admin → Reports → Audit & SSO Reports → Sessions** tab (status, issuer, IP, device/geo, duration).
 
 ### `37aec33` — 2026-07-23 — Diagnose CF-Connecting-IP ≠ browser public IP
 

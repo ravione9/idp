@@ -1833,19 +1833,21 @@ async function downloadAuditCsv(url, filename) {
 }
 
 export async function viewAudit(content, initialTab = 'saml') {
-  const tabs = ['saml', 'system', 'auth', 'sso'];
+  const tabs = ['saml', 'system', 'auth', 'sessions', 'sso'];
   const validTab = tabs.includes(initialTab) ? initialTab : 'saml';
-  const wrap = el(`<div class="ent-page">${header('Audit & SSO Reports', 'Low-level audit trails, login forensics, and SSO analytics for compliance')}
+  const wrap = el(`<div class="ent-page">${header('Audit & SSO Reports', 'Low-level audit trails, login forensics, session history, and SSO analytics for compliance')}
     <div class="inline-tabs" id="audit-tabs" style="margin-bottom:1rem">
       <button type="button" class="inline-tab${validTab === 'saml' ? ' active' : ''}" data-tab="saml">SSO assertions</button>
       <button type="button" class="inline-tab${validTab === 'system' ? ' active' : ''}" data-tab="system">System audit</button>
       <button type="button" class="inline-tab${validTab === 'auth' ? ' active' : ''}" data-tab="auth">Auth attempts</button>
+      <button type="button" class="inline-tab${validTab === 'sessions' ? ' active' : ''}" data-tab="sessions">Sessions</button>
       <button type="button" class="inline-tab${validTab === 'sso' ? ' active' : ''}" data-tab="sso">SSO analytics</button>
     </div>
     <div id="aud-summary" class="stat-grid audit-summary-grid" style="margin-bottom:1rem"></div>
     <div id="aud-saml" ${validTab !== 'saml' ? 'hidden' : ''}><div class="loading-row"><span class="spinner"></span></div></div>
     <div id="aud-system" ${validTab !== 'system' ? 'hidden' : ''}></div>
     <div id="aud-auth" ${validTab !== 'auth' ? 'hidden' : ''}></div>
+    <div id="aud-sessions" ${validTab !== 'sessions' ? 'hidden' : ''}></div>
     <div id="aud-sso" ${validTab !== 'sso' ? 'hidden' : ''}></div>
   </div>`);
   content.replaceChildren(wrap);
@@ -1853,12 +1855,14 @@ export async function viewAudit(content, initialTab = 'saml') {
     saml: wrap.querySelector('#aud-saml'),
     system: wrap.querySelector('#aud-system'),
     auth: wrap.querySelector('#aud-auth'),
+    sessions: wrap.querySelector('#aud-sessions'),
     sso: wrap.querySelector('#aud-sso'),
   };
   const state = {
     saml: { from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', binding: '', offset: 0, limit: 50 },
     system: { from: isoDateDaysAgo(30), to: todayIso(), q: '', actor: '', action: '', offset: 0, limit: 50 },
     auth: { from: isoDateDaysAgo(30), to: todayIso(), q: '', ip: '', success: '', reason: '', offset: 0, limit: 50 },
+    sessions: { from: isoDateDaysAgo(30), to: todayIso(), q: '', ip: '', status: '', iss: '', offset: 0, limit: 50 },
   };
 
   async function refreshSummary(from, to) {
@@ -1870,7 +1874,7 @@ export async function viewAudit(content, initialTab = 'saml') {
         ${statCard('saml', 'SSO assertions', d.ssoAssertions ?? 0, 'in selected range', 'primary')}
         ${statCard('list', 'System events', d.systemAuditEvents ?? 0, 'tamper-evident log', 'info')}
         ${statCard('alert', 'Failed logins', d.failedLogins ?? 0, 'auth attempts', 'danger')}
-        ${statCard('check', 'Successful logins', d.successfulLogins ?? 0, 'auth attempts', 'success')}`;
+        ${statCard('key', 'Sessions created', d.sessionsCreated ?? 0, `${d.sessionsActive ?? 0} active now`, 'success')}`;
     } catch {
       box.innerHTML = '';
     }
@@ -1893,6 +1897,11 @@ export async function viewAudit(content, initialTab = 'saml') {
       state.auth.ip = panel.querySelector('.audit-ip')?.value.trim() || '';
       state.auth.success = panel.querySelector('.audit-success')?.value || '';
       state.auth.reason = panel.querySelector('.audit-reason')?.value.trim() || '';
+    } else if (kind === 'sessions') {
+      state.sessions.q = panel.querySelector('.audit-q')?.value.trim() || '';
+      state.sessions.ip = panel.querySelector('.audit-ip')?.value.trim() || '';
+      state.sessions.status = panel.querySelector('.audit-status')?.value || '';
+      state.sessions.iss = panel.querySelector('.audit-iss')?.value || '';
     }
     return state[kind];
   }
@@ -1912,7 +1921,7 @@ export async function viewAudit(content, initialTab = 'saml') {
       void reload();
     });
     panel.querySelector('.audit-reset')?.addEventListener('click', () => {
-      state[kind] = { ...state[kind], from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', binding: '', actor: '', action: '', ip: '', success: '', reason: '', offset: 0 };
+      state[kind] = { ...state[kind], from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', binding: '', actor: '', action: '', ip: '', success: '', reason: '', status: '', iss: '', offset: 0 };
       void reload(true);
     });
     panel.querySelector('.audit-export')?.addEventListener('click', async () => {
@@ -1926,13 +1935,21 @@ export async function viewAudit(content, initialTab = 'saml') {
         if (f.q) params.q = f.q;
         if (f.actor) params.actor = f.actor;
         if (f.action) params.action = f.action;
+      } else if (kind === 'sessions') {
+        if (f.q) params.q = f.q;
+        if (f.ip) params.ip = f.ip;
+        if (f.status) params.status = f.status;
+        if (f.iss) params.iss = f.iss;
       } else {
         if (f.q) params.q = f.q;
         if (f.ip) params.ip = f.ip;
         if (f.success) params.success = f.success;
         if (f.reason) params.reason = f.reason;
       }
-      const pathKind = kind === 'auth' ? 'auth-attempts' : kind === 'system' ? 'system' : 'saml';
+      const pathKind = kind === 'auth' ? 'auth-attempts'
+        : kind === 'system' ? 'system'
+        : kind === 'sessions' ? 'sessions'
+        : 'saml';
       try {
         await downloadAuditCsv(api.auditExportUrl(pathKind, params), `${pathKind}-${f.from}-${f.to}.csv`);
       } catch (err) {
@@ -2148,6 +2165,112 @@ export async function viewAudit(content, initialTab = 'saml') {
     }
   }
 
+  function sessionStatusBadge(status) {
+    if (status === 'active') return '<span class="badge badge-success">Active</span>';
+    if (status === 'revoked') return '<span class="badge badge-danger">Revoked</span>';
+    if (status === 'expired') return '<span class="badge badge-neutral">Expired</span>';
+    return `<span class="badge badge-neutral">${esc(status || '—')}</span>`;
+  }
+
+  function fmtDurationMinutes(mins) {
+    const n = Number(mins);
+    if (!Number.isFinite(n) || n < 0) return '—';
+    if (n < 60) return `${n}m`;
+    const h = Math.floor(n / 60);
+    const m = n % 60;
+    if (h < 48) return m ? `${h}h ${m}m` : `${h}h`;
+    const d = Math.floor(h / 24);
+    return `${d}d ${h % 24}h`;
+  }
+
+  async function loadSessions(rebuild = false) {
+    const t = panels.sessions;
+    if (rebuild || !t.querySelector('.audit-filter-panel')) {
+      t.innerHTML = `${auditFilterBar(`
+        <div class="form-group"><label class="form-label">User / email</label>
+          <input class="form-input audit-q" placeholder="name, email, emp id" value="${esc(state.sessions.q)}"></div>
+        <div class="form-group"><label class="form-label">IP</label>
+          <input class="form-input audit-ip" placeholder="client IP" value="${esc(state.sessions.ip)}"></div>
+        <div class="form-group"><label class="form-label">Status</label>
+          <select class="form-select audit-status">
+            <option value="">All</option>
+            <option value="active" ${state.sessions.status === 'active' ? 'selected' : ''}>Active</option>
+            <option value="revoked" ${state.sessions.status === 'revoked' ? 'selected' : ''}>Revoked</option>
+            <option value="expired" ${state.sessions.status === 'expired' ? 'selected' : ''}>Expired</option>
+          </select></div>
+        <div class="form-group"><label class="form-label">Issuer</label>
+          <select class="form-select audit-iss">
+            <option value="">All</option>
+            <option value="local" ${state.sessions.iss === 'local' ? 'selected' : ''}>local</option>
+            <option value="google" ${state.sessions.iss === 'google' ? 'selected' : ''}>google</option>
+          </select></div>`)}
+        <div class="audit-table-area"><div class="loading-row"><span class="spinner"></span></div></div>`;
+      wireFilterChrome(t, 'sessions', (rb) => loadSessions(!!rb));
+    }
+    const area = t.querySelector('.audit-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const f = readFilters(t, 'sessions');
+      await refreshSummary(f.from, f.to);
+      const params = { from: f.from, to: f.to, limit: String(f.limit), offset: String(f.offset) };
+      if (f.q) params.q = f.q;
+      if (f.ip) params.ip = f.ip;
+      if (f.status) params.status = f.status;
+      if (f.iss) params.iss = f.iss;
+      const r = await api.sessionsAudit(params);
+      const rows = r.data || [];
+      const meta = r.meta || {};
+      t.querySelector('.audit-meta-count').textContent = `${meta.total ?? rows.length} matching sessions`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr>
+              <th>Created</th><th>User</th><th>Status</th><th>Issuer</th><th>IP</th>
+              <th>Device / Geo</th><th>Last active</th><th>Duration</th><th></th>
+            </tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="muted" style="white-space:nowrap">${fmtDate(row.created_at)}</td>
+              <td class="cell-strong">${esc(row.emp_name || row.emp_id || '—')}<br>
+                <span class="muted" style="font-size:0.75rem">${esc(row.email || row.emp_email || '')}</span><br>
+                <code style="font-size:0.7rem">${esc(String(row.session_id || '').slice(0, 8))}…</code>
+              </td>
+              <td>${sessionStatusBadge(row.status)}</td>
+              <td><span class="badge badge-neutral">${esc(row.iss || '—')}</span><br>
+                <span class="muted" style="font-size:0.75rem">${esc(row.role || '')}</span></td>
+              <td class="muted" style="font-family:var(--mono,monospace);font-size:0.8rem">${esc(row.ip || '—')}</td>
+              <td class="muted" style="font-size:0.8rem;max-width:180px">
+                ${esc(row.device_info || '—')}<br>${esc(row.geo_location || '')}
+              </td>
+              <td class="muted" style="white-space:nowrap;font-size:0.8rem">${fmtDate(row.last_active_at)}</td>
+              <td class="muted">${esc(fmtDurationMinutes(row.duration_minutes))}</td>
+              <td>${row.status === 'active'
+                ? `<button type="button" class="btn btn-sm btn-danger sess-revoke" data-id="${esc(String(row.session_id))}">Revoke</button>`
+                : ''}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(meta, f.offset, f.limit)}`
+        : `<div class="card empty-state"><span class="empty-icon">◎</span>No sessions for this filter</div>`;
+      area.querySelectorAll('.sess-revoke').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Force-logout this session? The user will need to sign in again.')) return;
+          try {
+            await api.revokeAuditSession(btn.dataset.id);
+            void loadSessions();
+          } catch (err) {
+            alert(err.message || 'Revoke failed');
+          }
+        });
+      });
+      area.querySelector('.audit-prev')?.addEventListener('click', () => {
+        state.sessions.offset = Math.max(0, state.sessions.offset - state.sessions.limit);
+        void loadSessions();
+      });
+      area.querySelector('.audit-next')?.addEventListener('click', () => {
+        state.sessions.offset += state.sessions.limit;
+        void loadSessions();
+      });
+    } catch (err) {
+      area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
   async function showTab(name) {
     wrap.querySelectorAll('#audit-tabs .inline-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     for (const [id, panel] of Object.entries(panels)) panel.hidden = id !== name;
@@ -2155,6 +2278,7 @@ export async function viewAudit(content, initialTab = 'saml') {
     if (name === 'saml') await loadSaml(true);
     else if (name === 'system') await loadSystem(true);
     else if (name === 'auth') await loadAuth(true);
+    else if (name === 'sessions') await loadSessions(true);
     else if (name === 'sso') {
       panels.sso.innerHTML = '';
       await viewSsoReports(panels.sso, { embed: true });

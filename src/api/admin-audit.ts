@@ -1,13 +1,17 @@
 /**
- * Admin audit log — SAML assertions, tamper-evident audit_log, auth attempts.
+ * Admin audit log — SAML assertions, tamper-evident audit_log, auth attempts,
+ * portal session audit.
  * Supports date range, filters, pagination, and CSV export for compliance.
  */
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requirePortalModule } from '../auth/rbac.js';
-import { query, queryOne } from '../db/connection.js';
+import { query, queryOne, execute } from '../db/connection.js';
 import { verifyChain } from '../utils/audit-log.js';
 import { asyncHandler } from '../utils/async-handler.js';
+import { redis } from '../auth/session-store.js';
+import { SESSION_REDIS_PREFIX } from '../auth/session.js';
+import logger from '../utils/logger.js';
 
 const router = Router();
 
@@ -281,6 +285,132 @@ router.get('/auth-attempts', asyncHandler(async (req: Request, res: Response) =>
 }));
 
 // ---------------------------------------------------------------------------
+// GET /sessions — portal session audit (active / revoked / expired)
+// ---------------------------------------------------------------------------
+router.get('/sessions', asyncHandler(async (req: Request, res: Response) => {
+  const limit = parseLimit(req.query['limit']);
+  const offset = parseOffset(req.query['offset']);
+  const q = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
+  const ip = typeof req.query['ip'] === 'string' ? req.query['ip'].trim() : '';
+  const iss = typeof req.query['iss'] === 'string' ? req.query['iss'].trim() : '';
+  const status = typeof req.query['status'] === 'string' ? req.query['status'].trim().toLowerCase() : '';
+  const from = parseDateBound(req.query['from'], false);
+  const to = parseDateBound(req.query['to'], true);
+  const exportCsv = String(req.query['export'] || '') === 'csv';
+
+  const where: string[] = ['1=1'];
+  const params: unknown[] = [];
+
+  if (from) { where.push('s.created_at >= ?'); params.push(from); }
+  if (to) { where.push('s.created_at <= ?'); params.push(to); }
+  if (ip) { where.push('s.ip LIKE ?'); params.push(`%${ip}%`); }
+  if (iss) { where.push('s.iss = ?'); params.push(iss); }
+  if (q) {
+    where.push('(s.email LIKE ? OR s.emp_id LIKE ? OR e.full_name LIKE ? OR e.email_corp LIKE ?)');
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+  }
+  if (status === 'active') {
+    where.push('s.revoked_at IS NULL AND s.expires_at > UTC_TIMESTAMP()');
+  } else if (status === 'revoked') {
+    where.push('s.revoked_at IS NOT NULL');
+  } else if (status === 'expired') {
+    where.push('s.revoked_at IS NULL AND s.expires_at <= UTC_TIMESTAMP()');
+  }
+
+  const whereSql = where.join(' AND ');
+
+  const totalRow = await queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n
+       FROM idp_sessions s
+       LEFT JOIN employees e ON e.emp_id = s.emp_id
+      WHERE ${whereSql}`,
+    params,
+  ).catch(() => ({ n: 0 }));
+
+  const fetchLimit = exportCsv ? MAX_EXPORT : limit;
+  const fetchOffset = exportCsv ? 0 : offset;
+
+  const rows = await query<Record<string, unknown>>(
+    `SELECT s.session_id, s.emp_id, s.email, s.role, s.iss, s.sub,
+            s.created_at, s.last_active_at, s.expires_at, s.revoked_at,
+            s.ip, s.user_agent, s.device_info, s.geo_location,
+            e.full_name AS emp_name, e.email_corp AS emp_email,
+            CASE
+              WHEN s.revoked_at IS NOT NULL THEN 'revoked'
+              WHEN s.expires_at <= UTC_TIMESTAMP() THEN 'expired'
+              ELSE 'active'
+            END AS status,
+            TIMESTAMPDIFF(
+              MINUTE,
+              s.created_at,
+              COALESCE(s.revoked_at, LEAST(s.last_active_at, UTC_TIMESTAMP()), UTC_TIMESTAMP())
+            ) AS duration_minutes
+       FROM idp_sessions s
+       LEFT JOIN employees e ON e.emp_id = s.emp_id
+      WHERE ${whereSql}
+      ORDER BY s.created_at DESC
+      LIMIT ? OFFSET ?`,
+    [...params, fetchLimit, fetchOffset],
+  ).catch(() => []);
+
+  if (exportCsv) {
+    sendCsv(
+      res,
+      `sessions-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        'Created', 'Last active', 'Expires', 'Revoked', 'Status', 'Duration (min)',
+        'Emp ID', 'Name', 'Email', 'Role', 'Issuer', 'IP', 'Device', 'Geo', 'User-Agent', 'Session ID',
+      ],
+      rows.map((r) => [
+        r['created_at'], r['last_active_at'], r['expires_at'], r['revoked_at'],
+        r['status'], r['duration_minutes'],
+        r['emp_id'], r['emp_name'], r['email'] || r['emp_email'], r['role'], r['iss'],
+        r['ip'], r['device_info'], r['geo_location'], r['user_agent'], r['session_id'],
+      ]),
+    );
+    return;
+  }
+
+  res.json({
+    data: rows,
+    meta: {
+      total: Number(totalRow?.n ?? 0),
+      limit,
+      offset,
+      from: from ?? null,
+      to: to ?? null,
+    },
+  });
+}));
+
+// POST /sessions/:id/revoke — admin force-logout
+router.post('/sessions/:id/revoke', asyncHandler(async (req: Request, res: Response) => {
+  const sessionId = req.params['id']!;
+  const row = await queryOne<{ session_id: string; revoked_at: Date | null; emp_id: string }>(
+    `SELECT session_id, revoked_at, emp_id FROM idp_sessions WHERE session_id = ? LIMIT 1`,
+    [sessionId],
+  );
+  if (!row) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  if (row.revoked_at) {
+    res.json({ success: true, alreadyRevoked: true });
+    return;
+  }
+
+  await execute(
+    `UPDATE idp_sessions SET revoked_at = UTC_TIMESTAMP() WHERE session_id = ? AND revoked_at IS NULL`,
+    [sessionId],
+  );
+  await redis.del(`${SESSION_REDIS_PREFIX}${sessionId}`).catch(() => undefined);
+
+  const actor = (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'admin';
+  logger.info({ sessionId, empId: row.emp_id, by: actor }, 'Admin revoked portal session');
+  res.json({ success: true });
+}));
+
+// ---------------------------------------------------------------------------
 // GET /integrity — verify tamper-evident hash chain
 // ---------------------------------------------------------------------------
 router.get('/integrity', asyncHandler(async (req: Request, res: Response) => {
@@ -302,8 +432,10 @@ router.get('/summary', asyncHandler(async (req: Request, res: Response) => {
   const samlParams = to ? [from, to] : [from];
   const auditParams = to ? [from, to] : [from];
   const authParams = to ? [from, to] : [from];
+  const sessToClause = to ? 'AND created_at <= ?' : '';
+  const sessParams = to ? [from, to] : [from];
 
-  const [saml, audit, failed, success] = await Promise.all([
+  const [saml, audit, failed, success, sessionsCreated, sessionsActive] = await Promise.all([
     queryOne<{ n: number }>(
       `SELECT COUNT(*) AS n FROM saml_assertion_log WHERE ts >= ? ${toClause}`,
       samlParams,
@@ -320,6 +452,15 @@ router.get('/summary', asyncHandler(async (req: Request, res: Response) => {
       `SELECT COUNT(*) AS n FROM auth_attempts WHERE success = 1 AND ts >= ? ${toClause}`,
       authParams,
     ).catch(() => ({ n: 0 })),
+    queryOne<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM idp_sessions WHERE created_at >= ? ${sessToClause}`,
+      sessParams,
+    ).catch(() => ({ n: 0 })),
+    queryOne<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM idp_sessions
+        WHERE revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()`,
+      [],
+    ).catch(() => ({ n: 0 })),
   ]);
 
   res.json({
@@ -331,6 +472,8 @@ router.get('/summary', asyncHandler(async (req: Request, res: Response) => {
       systemAuditEvents: Number(audit?.n ?? 0),
       failedLogins: Number(failed?.n ?? 0),
       successfulLogins: Number(success?.n ?? 0),
+      sessionsCreated: Number(sessionsCreated?.n ?? 0),
+      sessionsActive: Number(sessionsActive?.n ?? 0),
     },
   });
 }));
