@@ -991,7 +991,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-07-23 — Birthright rules, Credential Vault, connector provisioning
+### `edff32f` — 2026-07-23 — Birthright rules, Credential Vault, connector provisioning
 
 **Why** — Access Model / PAM areas were Progress or 501 stubs; operators need real birthright matching, a working vault, and reliable connector outbound kicks.
 
