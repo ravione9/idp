@@ -1005,7 +1005,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-07-23 — Fix TOTP invalid after otplib v13
+### `dfff59c` — 2026-07-23 — Fix TOTP invalid after otplib v13
 
 **Why** — Login MFA rejected every authenticator code after the v13 migration (`86d8e31`).
 
