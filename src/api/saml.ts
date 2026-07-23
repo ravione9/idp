@@ -70,6 +70,73 @@ function sendLoginForm(res: Response, html: string): void {
   res.send(html);
 }
 
+/** Browser-facing SSO deny page (launch opens in a new tab — JSON 403 is unreadable). */
+function sendSsoDeniedPage(
+  res: Response,
+  opts: { title: string; message: string; detail?: string; code?: string },
+): void {
+  const detail = opts.detail
+    ? `<p style="color:#64748b;font-size:0.9rem;margin:0 0 1.25rem">${escHtml(opts.detail)}</p>`
+    : '';
+  const code = opts.code
+    ? `<p style="color:#94a3b8;font-size:0.75rem;margin:1.5rem 0 0">Code: ${escHtml(opts.code)}</p>`
+    : '';
+  const html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escHtml(opts.title)}</title>
+<style>
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f1f5f9;color:#0f172a}
+  .card{background:#fff;border-radius:12px;padding:2rem 2.25rem;max-width:440px;width:92%;
+    box-shadow:0 10px 40px rgba(15,23,42,.08);border:1px solid #e2e8f0}
+  h1{font-size:1.15rem;margin:0 0 .75rem} p{line-height:1.5;margin:0 0 1rem;color:#334155}
+  a{color:#4f46e5;text-decoration:none;font-weight:600} a:hover{text-decoration:underline}
+  .icon{font-size:1.75rem;margin-bottom:.75rem}
+</style></head><body>
+  <div class="card">
+    <div class="icon" aria-hidden="true">🚫</div>
+    <h1>${escHtml(opts.title)}</h1>
+    <p>${escHtml(opts.message)}</p>
+    ${detail}
+    <a href="/">← Back to portal</a>
+    ${code}
+  </div>
+</body></html>`;
+  res.status(403).setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
+}
+
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function respondLaunchDenied(
+  res: Response,
+  reason: string | undefined,
+  clientIp: string,
+  appName?: string,
+): void {
+  if (reason === 'IP_DENIED') {
+    sendSsoDeniedPage(res, {
+      title: 'Application access denied',
+      message: 'Unrestricted IP — application access denied.',
+      detail: `This application can only be opened from allowed network locations.`
+        + (appName ? ` (${appName})` : '')
+        + (clientIp && clientIp !== 'unknown' ? ` Your public IP: ${clientIp}.` : ''),
+      code: 'IP_DENIED',
+    });
+    return;
+  }
+  sendSsoDeniedPage(res, {
+    title: 'Application access denied',
+    message: 'You are not entitled to access this application.',
+    code: reason ?? 'NO_GRANT',
+  });
+}
+
 /** Express query/body values → flat string map for Redis replay. */
 function normalizeSamlParams(input: Record<string, unknown> | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -178,19 +245,15 @@ async function issueAssertion(
   }
 
   {
+    const clientIp = getClientIp(req);
     const decision = await evaluateAppLaunch(
       emp,
       resolved.sp.slug,
       resolved.sp.entitlement_rule,
-      { clientIp: getClientIp(req) },
+      { clientIp, enforceIp: true },
     );
     if (!decision.allowed) {
-      res.status(403).json({
-        error: decision.reason === 'IP_DENIED'
-          ? 'Access to this application is not allowed from your IP address'
-          : 'You are not entitled to access this application',
-        code: decision.reason ?? 'NO_GRANT',
-      });
+      respondLaunchDenied(res, decision.reason, clientIp, resolved.sp.name);
       return;
     }
   }
@@ -324,19 +387,15 @@ router.get('/launch/:slug', async (req: Request, res: Response): Promise<void> =
   }
 
   {
+    const clientIp = getClientIp(req);
     const decision = await evaluateAppLaunch(
       emp,
       sp.slug,
       sp.entitlement_rule,
-      { clientIp: getClientIp(req) },
+      { clientIp, enforceIp: true },
     );
     if (!decision.allowed) {
-      res.status(403).json({
-        error: decision.reason === 'IP_DENIED'
-          ? 'Access to this application is not allowed from your IP address'
-          : 'You are not entitled to access this application',
-        code: decision.reason ?? 'NO_GRANT',
-      });
+      respondLaunchDenied(res, decision.reason, clientIp, sp.name);
       return;
     }
   }

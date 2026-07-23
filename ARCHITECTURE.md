@@ -342,7 +342,7 @@ Each SAML application is registered in `saml_service_providers`:
 | **Active SAML SP** (any slug in `saml_service_providers`) | **Only** users with an explicit Application Access Policy grant (USER / GROUP / TAG_GROUP). Birthright via `entitlement_rule.all_active` is **not** enough. On check, the SP is auto-mirrored into `applications` as `RESTRICTED` if missing. |
 | Non-SAML catalog app with `visibility = RESTRICTED` **or** any active assignment | Explicit grant only |
 | Other non-SAML catalog apps | Grant **or** `entitlement_rule` birthright |
-| **IP allowlist** (`applications.allowed_cidrs`, migration `043`) | When non-empty, client IP (from `CF-Connecting-IP` / `X-Forwarded-For`) must match a CIDR, exact IP, or trailing-dot prefix. Empty/null = unrestricted. Enforced after grant checks. |
+| **IP allowlist** (`applications.allowed_cidrs`, migration `043`) | When non-empty, verified **at SSO launch** (not catalog listing). Client IP (`CF-Connecting-IP` / `X-Forwarded-For`) must match a CIDR, exact IP, or trailing-dot prefix. Empty/null = unrestricted. Denied launches show an HTML page: “Unrestricted IP — application access denied.” |
 
 Policy-check errors **deny** access (fail closed). New SAML apps default to `entitlement_rule.all_active = false` and are mirrored as `RESTRICTED` on create (migration `040` backfills existing rows).
 
@@ -951,6 +951,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-23 — IP restrict at launch (keep app tiles visible)
+
+**Why** — Applying an IP allowlist hid the app from Home. Desired flow: tile stays visible → launch verifies public IP → allow or show deny page.
+
+**What changed:**
+
+- **`GET /api/apps`** — grant-only listing; exposes `ipRestricted` flag (does not filter by client IP).
+- **SSO launch / SP-initiated** — `enforceIp: true`; HTML deny page: “Unrestricted IP — application access denied” (+ public IP).
 
 ### `1b7ad50` — 2026-07-23 — Fix user-based app access + IP allowlists
 

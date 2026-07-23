@@ -6474,7 +6474,7 @@ export async function viewAppAccessPolicy(content) {
         <div class="aap-actions">
           <div>
             <h3 class="section-title">IP Restrictions</h3>
-            <p class="subtitle">Optional per-app allowlist. When set, SSO launch is allowed only from matching client IPs (CIDR, exact IP, or prefix like <code>10.0.</code>). Empty = no IP restriction.</p>
+            <p class="subtitle">Optional per-app allowlist. Apps stay visible on Home; IP is checked when the user launches SSO. Denied IPs see “Unrestricted IP — application access denied.” Empty = no IP restriction. Use CIDR (<code>10.0.0.0/8</code>), exact IP, or prefix (<code>10.0.</code>).</p>
           </div>
         </div>
         <div id="ip-msg" style="margin-bottom:0.75rem"></div>

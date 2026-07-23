@@ -232,11 +232,21 @@ export interface AppLaunchDecision {
   reason?: AppLaunchDenyReason;
 }
 
+export interface AppLaunchOptions {
+  /** Client public IP — used only when enforceIp is true. */
+  clientIp?: string | null;
+  /**
+   * When true, verify client IP against applications.allowed_cidrs after grant.
+   * Catalog listing must leave this false so apps stay visible; SSO launch sets true.
+   */
+  enforceIp?: boolean;
+}
+
 export async function evaluateAppLaunch(
   emp: EmployeeSamlContext,
   slug: string,
   rule: EntitlementRule | null,
-  opts?: { clientIp?: string | null },
+  opts?: AppLaunchOptions,
 ): Promise<AppLaunchDecision> {
   if (!canReceiveSamlAssertion(emp)) {
     return { allowed: false, reason: 'ILG_STATE' };
@@ -261,13 +271,16 @@ export async function evaluateAppLaunch(
       if (!entitled) return { allowed: false, reason: 'NO_GRANT' };
     }
 
-    const ipOk = await isClientIpAllowedForApp(slug, opts?.clientIp);
-    if (!ipOk) {
-      logger.info(
-        { empId: emp.emp_id, slug, ip: opts?.clientIp ?? null },
-        'SSO denied — client IP not in application allowlist',
-      );
-      return { allowed: false, reason: 'IP_DENIED' };
+    // IP allowlist is enforced at launch time only — never hide the app tile.
+    if (opts?.enforceIp) {
+      const ipOk = await isClientIpAllowedForApp(slug, opts.clientIp);
+      if (!ipOk) {
+        logger.info(
+          { empId: emp.emp_id, slug, ip: opts.clientIp ?? null },
+          'SSO denied — client IP not in application allowlist',
+        );
+        return { allowed: false, reason: 'IP_DENIED' };
+      }
     }
 
     return { allowed: true };
@@ -282,7 +295,7 @@ export async function canUserLaunchApp(
   emp: EmployeeSamlContext,
   slug: string,
   rule: EntitlementRule | null,
-  opts?: { clientIp?: string | null },
+  opts?: AppLaunchOptions,
 ): Promise<boolean> {
   const decision = await evaluateAppLaunch(emp, slug, rule, opts);
   return decision.allowed;

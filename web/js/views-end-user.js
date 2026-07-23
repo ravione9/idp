@@ -464,10 +464,14 @@ export async function viewHome(me, content, initialTab = 'all') {
     const launch = app.launchUrl || (app.slug ? `/saml/launch/${app.slug}` : '#');
     const appKey = app.slug || app.name;
     const isFav = favs.includes(appKey);
+    const ipHint = app.ipRestricted
+      ? ' title="IP-restricted — launch verifies your public IP"'
+      : ` title="${esc(app.name)}"`;
     return `<div class="app-tile-wrap" style="position:relative">
-      <a class="app-tile" href="${esc(launch)}" target="_blank" rel="noopener" title="${esc(app.name)}">
+      <a class="app-tile" href="${esc(launch)}" target="_blank" rel="noopener"${ipHint}>
         <span class="saml-badge">S</span>${fb}
         <span class="app-name">${esc(app.name)}</span>
+        ${app.ipRestricted ? '<span class="saml-badge" style="left:auto;right:0.35rem;background:#b45309" title="IP restricted">IP</span>' : ''}
       </a>
       <button class="app-fav-btn ${isFav ? 'starred' : ''}" data-appkey="${esc(appKey)}" title="${isFav ? 'Remove from favorites' : 'Add to favorites'}">${isFav ? '★' : '☆'}</button>
     </div>`;
