@@ -1005,7 +1005,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-07-23 — Auto-wipe expired access-request approvals
+### `27ecc88` — 2026-07-23 — Auto-wipe expired access-request approvals
 
 **Why** — Expired JIT requests left PENDING rows in Approvals / My Tasks until someone hit Request Access.
 
