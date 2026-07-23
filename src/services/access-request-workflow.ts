@@ -277,9 +277,20 @@ export async function processDecision(
   if (!request) {
     throw new Error('Access request not found');
   }
-  if (request.status !== PENDING_STATUS) {
-    throw new Error(`Request is not in PENDING state (current: ${request.status})`);
+  // Wipe SLA-elapsed requests before allowing a decision
+  await expireStaleAccessRequests(request.target_emp_id);
+  const live = await queryOne<RequestRow>(
+    `SELECT id, requester_emp_id, target_emp_id, item_type, item_ids, status
+       FROM access_requests WHERE id = ?`,
+    [requestId],
+  );
+  if (!live || live.status !== PENDING_STATUS) {
+    throw new Error(
+      `Request is not in PENDING state (current: ${live?.status ?? request.status}) — expired approvals are auto-wiped`,
+    );
   }
+  // Prefer post-expiry row for the rest of the handler
+  Object.assign(request, live);
 
   const adminOverride = opts?.adminOverride === true;
   const decisionDb = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';

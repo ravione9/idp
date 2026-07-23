@@ -71,6 +71,7 @@ import {
 import { googleLoginHandler } from './auth/login-routes.js';
 import { localLoginHandler, localLoginMfaEnrollConfirmHandler, localLoginMfaEnrollDeferHandler, localLoginMfaEnrollHandler, localLoginMfaSendOtpHandler, localLoginMfaVerifyHandler, localLoginMfaWebAuthnOptionsHandler, localLoginMfaWebAuthnVerifyHandler } from './auth/local-auth.js';
 import { startAttendanceIgaScheduler } from './services/attendance-iga/scheduler.js';
+import { startAccessRequestExpiryScheduler } from './services/access-request-expiry.js';
 import { startConnectorHealthScheduler } from './services/connector-health.js';
 import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
@@ -322,6 +323,7 @@ async function main(): Promise<void> {
   }
 
   startAttendanceIgaScheduler();
+  startAccessRequestExpiryScheduler();
   startConnectorHealthScheduler();
   startRadiusUdpServer();
 

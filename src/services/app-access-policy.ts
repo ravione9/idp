@@ -338,8 +338,9 @@ export async function hasPolicyAppAccess(empId: string, appSlug: string): Promis
 }
 
 /**
- * Mark PENDING access requests past their SLA / validity as EXPIRED so the user
- * can submit a new request. Returns how many rows were expired.
+ * Mark PENDING access requests past their SLA / validity as EXPIRED and wipe
+ * pending approvals from approver queues (decision → SKIPPED).
+ * Call with no args for a global sweep. Returns how many requests were expired.
  */
 export async function expireStaleAccessRequests(empId?: string, appId?: string): Promise<number> {
   const params: unknown[] = [];
@@ -362,30 +363,54 @@ export async function expireStaleAccessRequests(empId?: string, appId?: string):
   }
 
   try {
-    // Expire matching requests
     const stale = await query<{ id: string }>(
       `SELECT id FROM access_requests WHERE ${where}`,
       params,
     );
-    if (!stale.length) return 0;
 
-    const ids = stale.map((r) => r.id);
-    const ph = ids.map(() => '?').join(', ');
-    await execute(
-      `UPDATE access_requests
-          SET status = 'EXPIRED', decided_at = UTC_TIMESTAMP()
-        WHERE id IN (${ph}) AND status = 'PENDING'`,
-      ids,
+    let expiredCount = 0;
+    if (stale.length) {
+      const ids = stale.map((r) => r.id);
+      const ph = ids.map(() => '?').join(', ');
+      await execute(
+        `UPDATE access_requests
+            SET status = 'EXPIRED', decided_at = UTC_TIMESTAMP()
+          WHERE id IN (${ph}) AND status = 'PENDING'`,
+        ids,
+      );
+      await execute(
+        `UPDATE access_request_approvals
+            SET decision = 'SKIPPED', decided_at = UTC_TIMESTAMP(),
+                comment = 'Auto-wiped — request expired (SLA elapsed)'
+          WHERE request_id IN (${ph}) AND decision = 'PENDING'`,
+        ids,
+      );
+      expiredCount = ids.length;
+      logger.info({ count: ids.length, empId: empId ?? null, appId: appId ?? null }, 'Expired stale access requests');
+    }
+
+    // Orphan cleanup: approvals still PENDING on already-EXPIRED/CANCELLED requests
+    const orphanWhere = empId
+      ? `ar.target_emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci AND `
+      : '';
+    const orphanParams: unknown[] = empId ? [empId] : [];
+    const orphanResult = await execute(
+      `UPDATE access_request_approvals a
+         JOIN access_requests ar ON ar.id = a.request_id
+          SET a.decision = 'SKIPPED',
+              a.decided_at = UTC_TIMESTAMP(),
+              a.comment = COALESCE(a.comment, 'Auto-wiped — parent request no longer pending')
+        WHERE ${orphanWhere}
+              a.decision = 'PENDING'
+          AND ar.status IN ('EXPIRED', 'CANCELLED', 'REJECTED', 'FULFILLED', 'APPROVED')`,
+      orphanParams,
     );
-    await execute(
-      `UPDATE access_request_approvals
-          SET decision = 'SKIPPED', decided_at = UTC_TIMESTAMP(),
-              comment = COALESCE(comment, 'Request expired — SLA elapsed')
-        WHERE request_id IN (${ph}) AND decision = 'PENDING'`,
-      ids,
-    ).catch(() => undefined);
-    logger.info({ count: ids.length, empId: empId ?? null, appId: appId ?? null }, 'Expired stale access requests');
-    return ids.length;
+    const wipedOrphans = Number(orphanResult.affectedRows ?? 0);
+    if (wipedOrphans > 0) {
+      logger.info({ wipedOrphans }, 'Wiped orphan pending approvals on closed requests');
+    }
+
+    return expiredCount;
   } catch (err) {
     logger.warn({ err, empId, appId }, 'Failed to expire stale access requests');
     return 0;

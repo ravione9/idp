@@ -23,7 +23,11 @@ import { runConnectorConnectivityTest } from '../services/connector-health.js';
 import { harvestConnectorEntitlements } from '../services/entitlement-harvest.js';
 import { fulfillEntitlementOnTarget } from '../services/entitlement-fulfillment.js';
 import { submitAccessRequest, processDecision } from '../services/access-request-workflow.js';
-import { explainJitCatalogForUser, listJitRequestableAppsForUser } from '../services/app-access-policy.js';
+import {
+  explainJitCatalogForUser,
+  expireStaleAccessRequests,
+  listJitRequestableAppsForUser,
+} from '../services/app-access-policy.js';
 import { createCampaign, submitReviewDecision } from '../services/access-review.js';
 import { evaluateSodForGrant } from '../services/sod-evaluator.js';
 
@@ -591,6 +595,9 @@ router.get('/access-requests', asyncHandler(async (req: Request, res: Response) 
   const statusFilter = (req.query['status'] as string) || '';
   const { limit, offset } = paginate(req);
 
+  // Auto-wipe expired requests + their pending approvals before listing queues
+  await expireStaleAccessRequests().catch(() => 0);
+
   let where = '';
   const params: unknown[] = [];
 
@@ -598,7 +605,9 @@ router.get('/access-requests', asyncHandler(async (req: Request, res: Response) 
     where = 'WHERE ar.requester_emp_id = ?';
     params.push(empId);
   } else if (scope === 'tasks') {
-    where = `WHERE EXISTS (
+    // Only live PENDING requests — expired ones are wiped from approver queues
+    where = `WHERE ar.status = 'PENDING'
+      AND EXISTS (
       SELECT 1 FROM access_request_approvals a
        WHERE a.request_id = ar.id
          AND a.approver_emp_id = ?
@@ -613,7 +622,7 @@ router.get('/access-requests', asyncHandler(async (req: Request, res: Response) 
     where = 'WHERE 1=1';
   }
 
-  if (statusFilter && ['PENDING', 'APPROVED', 'REJECTED', 'FULFILLED', 'CANCELLED'].includes(statusFilter)) {
+  if (statusFilter && ['PENDING', 'APPROVED', 'REJECTED', 'FULFILLED', 'CANCELLED', 'EXPIRED'].includes(statusFilter)) {
     where += where ? ' AND ar.status = ?' : 'WHERE ar.status = ?';
     params.push(statusFilter);
   }
