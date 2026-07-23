@@ -339,17 +339,25 @@ export async function hasPolicyAppAccess(empId: string, appSlug: string): Promis
 
 /** True when the user already has a pending APP_ACCESS request for this app (avoid re-request). */
 export async function hasPendingAppAccessRequest(empId: string, appId: string): Promise<boolean> {
-  const row = await queryOne<{ ok: number }>(
-    `SELECT 1 AS ok
-       FROM access_requests
-      WHERE target_emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
-        AND item_type = 'APP_ACCESS'
-        AND status = 'PENDING'
-        AND JSON_CONTAINS(item_ids, JSON_QUOTE(?), '$')
-      LIMIT 1`,
-    [empId, appId],
-  );
-  return Number(row?.ok ?? 0) === 1;
+  try {
+    const row = await queryOne<{ ok: number }>(
+      `SELECT 1 AS ok
+         FROM access_requests
+        WHERE target_emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+          AND item_type = 'APP_ACCESS'
+          AND status = 'PENDING'
+          AND (
+            JSON_CONTAINS(item_ids, JSON_QUOTE(?), '$')
+            OR CAST(item_ids AS CHAR) LIKE ?
+          )
+        LIMIT 1`,
+      [empId, appId, `%${appId}%`],
+    );
+    return Number(row?.ok ?? 0) === 1;
+  } catch (err) {
+    logger.warn({ err, empId, appId }, 'Pending APP_ACCESS lookup failed; treating as none');
+    return false;
+  }
 }
 
 export async function getPolicyGrantedAppSlugs(empId: string): Promise<string[]> {
@@ -665,6 +673,18 @@ export function parseRequesterGroupIds(raw: unknown): string[] {
   }
 }
 
+async function userInAnyIdentityGroup(empId: string, groupIds: string[]): Promise<boolean> {
+  if (!groupIds.length) return true;
+  const placeholders = groupIds.map(() => '?').join(', ');
+  const membership = await queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM group_members
+      WHERE emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+        AND group_id COLLATE utf8mb4_unicode_ci IN (${placeholders})`,
+    [empId, ...groupIds],
+  );
+  return Number(membership?.n ?? 0) > 0;
+}
+
 /** True when requester may submit a JIT request for this app under active workflows. */
 export async function canUserRequestApp(
   empId: string,
@@ -674,16 +694,16 @@ export async function canUserRequestApp(
     `SELECT id, slug, requestable, active FROM applications WHERE id = ? LIMIT 1`,
     [appId],
   );
-  if (!app || !app.active) {
+  if (!app || Number(app.active) !== 1) {
     return { ok: false, reason: 'Application not found or inactive' };
   }
-  if (!app.requestable) {
-    return { ok: false, reason: 'Application is not enabled for Request Access (JIT)' };
+  if (Number(app.requestable) !== 1) {
+    return { ok: false, reason: 'Application is not enabled for Request Access (JIT) — turn on “Show in Request Access” on the workflow' };
   }
 
   // Assigned users launch from All Applications — never need Request Access again
   if (await hasPolicyAppAccess(empId, app.slug)) {
-    return { ok: false, reason: 'You already have access to this application — open it from All Applications' };
+    return { ok: false, reason: 'You already have access — open it from All Applications (no request needed)' };
   }
 
   if (await hasPendingAppAccessRequest(empId, appId)) {
@@ -702,20 +722,32 @@ export async function canUserRequestApp(
   }
 
   // Eligible if any active workflow allows this user (empty requester groups = open).
+  let restrictedWorkflows = 0;
   for (const wf of workflows) {
     const groupIds = parseRequesterGroupIds(wf.requester_group_ids);
     if (groupIds.length === 0) return { ok: true };
-    const placeholders = groupIds.map(() => '?').join(', ');
-    const membership = await queryOne<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM group_members
-        WHERE emp_id = ? AND group_id IN (${placeholders})`,
-      [empId, ...groupIds],
-    );
-    if ((membership?.n ?? 0) > 0) return { ok: true };
+    restrictedWorkflows += 1;
+    if (await userInAnyIdentityGroup(empId, groupIds)) return { ok: true };
+  }
+
+  if (restrictedWorkflows > 0) {
+    return {
+      ok: false,
+      reason: 'You are not in the identity groups allowed to request this app (check “Who can request” on the JIT workflow, or leave groups unchecked for any user)',
+    };
   }
 
   return { ok: false, reason: 'Your groups are not permitted to request this application' };
 }
+
+export type JitAppRow = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  icon_url: string | null;
+  category: string | null;
+};
 
 /**
  * JIT Request Access catalog for the signed-in user:
@@ -723,23 +755,9 @@ export async function canUserRequestApp(
  * (assignment = launch from All Applications, no request), with no pending request,
  * and that their identity groups are allowed to request.
  */
-export async function listJitRequestableAppsForUser(empId: string): Promise<{
-  id: string;
-  slug: string;
-  name: string;
-  description: string | null;
-  icon_url: string | null;
-  category: string | null;
-}[]> {
-  // Pre-filter in SQL: drop apps already granted (USER / GROUP / TAG_GROUP) or pending
-  const rows = await query<{
-    id: string;
-    slug: string;
-    name: string;
-    description: string | null;
-    icon_url: string | null;
-    category: string | null;
-  }>(
+export async function listJitRequestableAppsForUser(empId: string): Promise<JitAppRow[]> {
+  // Keep SQL simple — pending/group checks run in canUserRequestApp (avoids JSON_CONTAINS failures silencing the catalog).
+  const rows = await query<JitAppRow>(
     `SELECT a.id, a.slug, a.name, a.description, a.icon_url, a.category
        FROM applications a
       WHERE a.active = 1
@@ -748,45 +766,61 @@ export async function listJitRequestableAppsForUser(empId: string): Promise<{
           SELECT 1 FROM app_group_access_workflows w
            WHERE w.app_id = a.id AND w.active = 1
         )
-        AND NOT EXISTS (
-          SELECT 1 FROM app_access_assignments x
-           WHERE x.app_id = a.id AND x.active = 1
-             AND x.assignment_type = 'USER'
-             AND x.target_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM app_access_assignments x
-            JOIN tag_group_members tgm
-              ON tgm.tag_group_id COLLATE utf8mb4_unicode_ci = x.target_id COLLATE utf8mb4_unicode_ci
-           WHERE x.app_id = a.id AND x.active = 1
-             AND x.assignment_type = 'TAG_GROUP'
-             AND tgm.emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM app_access_assignments x
-            JOIN group_members gm
-              ON gm.group_id COLLATE utf8mb4_unicode_ci = x.target_id COLLATE utf8mb4_unicode_ci
-           WHERE x.app_id = a.id AND x.active = 1
-             AND x.assignment_type = 'GROUP'
-             AND gm.emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM access_requests ar
-           WHERE ar.target_emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
-             AND ar.item_type = 'APP_ACCESS'
-             AND ar.status = 'PENDING'
-             AND JSON_CONTAINS(ar.item_ids, JSON_QUOTE(a.id), '$')
-        )
       ORDER BY a.name`,
-    [empId, empId, empId, empId],
+    [],
   );
 
-  const out: typeof rows = [];
+  const out: JitAppRow[] = [];
   for (const app of rows) {
     const check = await canUserRequestApp(empId, app.id);
     if (check.ok) out.push(app);
   }
   return out;
+}
+
+/**
+ * Explain why JIT apps are or are not visible to this user (for empty-catalog UX / support).
+ * Includes apps with a workflow even when requestable=0 so admins can see misconfiguration.
+ */
+export async function explainJitCatalogForUser(empId: string): Promise<{
+  available: JitAppRow[];
+  hidden: { id: string; slug: string; name: string; reason: string }[];
+}> {
+  const rows = await query<JitAppRow & { requestable: number }>(
+    `SELECT a.id, a.slug, a.name, a.description, a.icon_url, a.category, a.requestable
+       FROM applications a
+      WHERE a.active = 1
+        AND EXISTS (
+          SELECT 1 FROM app_group_access_workflows w
+           WHERE w.app_id = a.id AND w.active = 1
+        )
+      ORDER BY a.name`,
+    [],
+  );
+
+  const available: JitAppRow[] = [];
+  const hidden: { id: string; slug: string; name: string; reason: string }[] = [];
+  for (const app of rows) {
+    const check = await canUserRequestApp(empId, app.id);
+    if (check.ok) {
+      available.push({
+        id: app.id,
+        slug: app.slug,
+        name: app.name,
+        description: app.description,
+        icon_url: app.icon_url,
+        category: app.category,
+      });
+    } else {
+      hidden.push({
+        id: app.id,
+        slug: app.slug,
+        name: app.name,
+        reason: check.reason || 'Not eligible',
+      });
+    }
+  }
+  return { available, hidden };
 }
 
 export async function setApplicationRequestable(

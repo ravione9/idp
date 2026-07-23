@@ -608,8 +608,8 @@ export async function viewRequestAccess(content) {
       <div class="card ra-filter-card" style="margin-bottom:0;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
         <input class="form-input" id="ra-search" placeholder="Search connected apps…" style="flex:1;min-width:200px">
         <select class="form-select" id="ra-type" style="width:auto">
-          <option value="APP">Connected applications</option>
           <option value="">All types</option>
+          <option value="APP">Connected applications</option>
           <option value="ENTITLEMENT">Curated entitlements</option>
           <option value="ROLE">Business Roles</option>
         </select>
@@ -763,7 +763,7 @@ export async function viewRequestAccess(content) {
   // Load catalog — JIT apps the user may request (+ entitlements/roles, excluding held items)
   try {
     const [appsR, entsR, rolesR, myAccessR] = await Promise.all([
-      api.igaRequestableApps().catch(() => ({ data: [] })),
+      api.igaRequestableApps({ explain: true }).catch(() => ({ data: [], hidden: [] })),
       api.igaEntitlements({ requestable: 1 }).catch(() => ({ data: [] })),
       api.listRequestableRoles().catch(() => ({ data: [] })),
       api.igaMyAccess().catch(() => ({ data: [] })),
@@ -773,6 +773,7 @@ export async function viewRequestAccess(content) {
 
     // Apps already filtered server-side (JIT + not assigned + group-eligible)
     const apps = appsR.data || [];
+    const hiddenApps = appsR.hidden || [];
     const ents = (entsR.data || []).filter(e => !assignedEntitlementIds.has(String(e.id)));
     const roles = (rolesR.data || []).filter(r => r.active);
     allItems = [
@@ -782,17 +783,35 @@ export async function viewRequestAccess(content) {
     ];
     wrap.querySelector('#ra-search').addEventListener('input', renderCatalog);
     wrap.querySelector('#ra-type').addEventListener('change', renderCatalog);
-    persistSearch(wrap.querySelector('#ra-search'), 'request-access');
+    // Do not restore a stale search that can hide the whole catalog
+    wrap.querySelector('#ra-search').value = '';
     if (!allItems.length) {
+      const hiddenHtml = hiddenApps.length
+        ? `<div class="table-wrap" style="max-width:40rem;margin:1.25rem auto 0;text-align:left">
+            <p class="muted" style="font-size:0.85rem;margin-bottom:0.5rem">Configured apps and why they are hidden for you:</p>
+            <table><thead><tr><th>Application</th><th>Why not listed</th></tr></thead>
+            <tbody>${hiddenApps.map(h => `<tr>
+              <td class="cell-strong">${esc(h.name)}</td>
+              <td class="muted" style="font-size:0.85rem">${esc(h.reason)}</td>
+            </tr>`).join('')}</tbody></table>
+          </div>`
+        : `<p class="muted" style="max-width:36rem;margin:0.75rem auto 0;font-size:0.9rem">
+            No JIT workflow is configured yet. Admins: Application Access Policy → <strong>JIT / Request Workflow</strong>
+            → enable <strong>Show in Request Access</strong>, and leave <em>Who can request</em> unchecked (any user) or add yourself to the selected identity group.
+          </p>`;
       wrap.querySelector('#ra-catalog').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div>
         <p>Nothing to request right now.</p>
-        <p class="muted" style="max-width:36rem;margin:0.75rem auto 0;font-size:0.9rem">
-          Apps already assigned to you are under <strong>All Applications</strong> — launch them directly (no request).
-          New apps appear here only if an admin enabled Request Access and you do not already have a grant or pending request.
-        </p>
+        ${hiddenHtml}
       </div>`;
     } else {
       renderCatalog();
+      if (hiddenApps.length) {
+        const note = document.createElement('div');
+        note.className = 'muted';
+        note.style.cssText = 'font-size:0.8rem;margin-top:1rem;max-width:40rem';
+        note.innerHTML = `${hiddenApps.length} other app(s) with a workflow are hidden for you (already assigned, pending, or not in requester groups).`;
+        wrap.querySelector('#ra-catalog').appendChild(note);
+      }
     }
   } catch(err) {
     wrap.querySelector('#ra-catalog').innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;

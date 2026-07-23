@@ -1005,6 +1005,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `TBD` — 2026-07-23 — JIT Request Access catalog visibility fixes
+
+**Why** — Users configured a JIT workflow but the app did not appear under Request Access (silent empty catalog).
+
+**What changed:**
+
+- Catalog query simplified (pending-check moved out of brittle `JSON_CONTAINS` SQL).
+- Requester-group membership uses collation-safe `group_members` match; clearer denial reasons.
+- `GET /api/iga/requestable-applications?explain=1` returns `hidden[]` with per-app reasons; Request Access UI shows them when the catalog is empty.
+
 ### `dfff59c` — 2026-07-23 — Fix TOTP invalid after otplib v13
 
 **Why** — Login MFA rejected every authenticator code after the v13 migration (`86d8e31`).

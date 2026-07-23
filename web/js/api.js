@@ -101,7 +101,12 @@ Object.assign(api, {
     f('/auth/local/login/mfa-webauthn/verify', { method: 'POST', body: JSON.stringify({ challengeId, webauthnChallengeId, response }) }),
 
   igaApps:          () => f('/api/iga/applications'),
-  igaRequestableApps: () => f('/api/iga/requestable-applications'),
+  igaRequestableApps: (opts = {}) => {
+    const q = new URLSearchParams();
+    if (opts.explain) q.set('explain', '1');
+    const qs = q.toString();
+    return f(`/api/iga/requestable-applications${qs ? `?${qs}` : ''}`);
+  },
   createIgaApp:     (data) => f('/api/iga/applications', { method: 'POST', body: JSON.stringify(data) }),
   updateIgaApp:     (id, data) => f(`/api/iga/applications/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteIgaApp:     (id) => f(`/api/iga/applications/${id}`, { method: 'DELETE' }),

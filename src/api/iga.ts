@@ -23,7 +23,7 @@ import { runConnectorConnectivityTest } from '../services/connector-health.js';
 import { harvestConnectorEntitlements } from '../services/entitlement-harvest.js';
 import { fulfillEntitlementOnTarget } from '../services/entitlement-fulfillment.js';
 import { submitAccessRequest, processDecision } from '../services/access-request-workflow.js';
-import { listJitRequestableAppsForUser } from '../services/app-access-policy.js';
+import { explainJitCatalogForUser, listJitRequestableAppsForUser } from '../services/app-access-policy.js';
 import { createCampaign, submitReviewDecision } from '../services/access-review.js';
 import { evaluateSodForGrant } from '../services/sod-evaluator.js';
 
@@ -74,7 +74,14 @@ router.get('/applications', asyncHandler(async (req: Request, res: Response) => 
 
 /** JIT Request Access catalog — only requestable apps the caller may request. */
 router.get('/requestable-applications', asyncHandler(async (req: Request, res: Response) => {
-  const apps = await listJitRequestableAppsForUser(req.user!.empId);
+  const empId = req.user!.empId;
+  const explain = String(req.query['explain'] ?? '') === '1' || String(req.query['explain'] ?? '').toLowerCase() === 'true';
+  if (explain) {
+    const result = await explainJitCatalogForUser(empId);
+    res.json({ data: result.available, hidden: result.hidden });
+    return;
+  }
+  const apps = await listJitRequestableAppsForUser(empId);
   res.json({ data: apps });
 }));
 

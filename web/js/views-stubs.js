@@ -6843,7 +6843,7 @@ export async function viewAppAccessPolicy(content) {
       </div>
       <div class="form-group" style="margin-top:0.75rem">
         <label class="form-label">Who can request (identity groups)</label>
-        <p class="muted" style="font-size:0.8rem;margin:0 0 0.4rem">Leave all unchecked = any authenticated user. Check groups to limit who may submit a request.</p>
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.4rem">Leave all unchecked = any authenticated user can request. If you check groups, only members of those Identity → Groups appear in Request Access — add yourself to the group to test.</p>
         <div style="max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:var(--radius);padding:0.5rem 0.75rem;background:var(--surface-2)">${groupChecks}</div>
       </div>
       <h3 style="font-size:0.9rem;margin:1rem 0 0.5rem">Approval Levels</h3>
