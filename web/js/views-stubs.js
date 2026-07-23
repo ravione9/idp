@@ -3541,8 +3541,8 @@ export async function viewAppDiscovery(content, opts = {}) {
     <div class="card ra-filter-card" style="margin-bottom:1rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
       <input class="form-input" id="disc-q" placeholder="Search name or domain…" style="flex:1;min-width:180px">
       <select class="form-select" id="disc-status" style="width:auto">
-        <option value="all">All statuses</option>
-        <option value="NEW" selected>New</option>
+        <option value="all" selected>All statuses</option>
+        <option value="NEW">New</option>
         <option value="REVIEWING">Reviewing</option>
         <option value="SANCTIONED">Sanctioned</option>
         <option value="IGNORED">Ignored</option>
@@ -3556,6 +3556,7 @@ export async function viewAppDiscovery(content, opts = {}) {
       </select>
     </div>
     <div id="disc-msg"></div>
+    <div id="disc-suggestions" style="display:none;margin-bottom:1rem"></div>
     <div id="disc-area">${loading()}</div>
   </div>`));
   const wrap = content.firstChild;
@@ -3707,13 +3708,57 @@ export async function viewAppDiscovery(content, opts = {}) {
     const btn = wrap.querySelector('#disc-scan');
     btn.disabled = true; btn.textContent = 'Scanning…';
     wrap.querySelector('#disc-msg').innerHTML = '';
+    wrap.querySelector('#disc-suggestions').style.display = 'none';
+    wrap.querySelector('#disc-suggestions').innerHTML = '';
     try {
       const r = await api.scanDiscoveredApps();
+      const suggestions = r.suggestions || [];
       wrap.querySelector('#disc-msg').innerHTML = `<div class="alert alert-success">
-        Scan complete — <strong>${r.catalogGaps ?? 0}</strong> catalog gaps, <strong>${r.ssoSignals ?? 0}</strong> SSO signals
-        (${r.created ?? 0} new, ${r.updated ?? 0} updated).
+        Scan complete — removed <strong>${r.removedNoise ?? 0}</strong> false positives,
+        reconciled <strong>${r.reconciled ?? 0}</strong> with your catalog,
+        <strong>${suggestions.length}</strong> SaaS suggestion(s) not yet in inventory
+        (not auto-added — import only what you care about).
       </div>`;
-      wrap.querySelector('#disc-status').value = 'NEW';
+      if (suggestions.length) {
+        const box = wrap.querySelector('#disc-suggestions');
+        box.style.display = 'block';
+        box.innerHTML = `<div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem">
+            <div>
+              <strong>Catalog suggestions</strong>
+              <p class="muted" style="margin:0.2rem 0 0;font-size:0.85rem">Known SaaS not found in SAML / Application Catalog. Select rows to add as discovery findings.</p>
+            </div>
+            <button class="btn btn-primary btn-sm" id="disc-import-sel">Add selected to inventory</button>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th style="width:2rem"><input type="checkbox" id="disc-sug-all"></th><th>Application</th><th>Domain</th><th>Category</th><th>Risk</th></tr></thead>
+            <tbody>${suggestions.map((s, i) => `<tr>
+              <td><input type="checkbox" class="disc-sug-cb" data-i="${i}"></td>
+              <td class="cell-strong">${esc(s.name)}</td>
+              <td><code style="font-size:0.78rem">${esc(s.domain)}</code></td>
+              <td class="muted">${esc(s.category || '—')}</td>
+              <td>${riskBadge(s.risk)}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>
+        </div>`;
+        box._suggestions = suggestions;
+        box.querySelector('#disc-sug-all')?.addEventListener('change', (e) => {
+          box.querySelectorAll('.disc-sug-cb').forEach(cb => { cb.checked = e.target.checked; });
+        });
+        box.querySelector('#disc-import-sel')?.addEventListener('click', async () => {
+          const picked = [...box.querySelectorAll('.disc-sug-cb:checked')].map(cb => suggestions[Number(cb.dataset.i)]).filter(Boolean);
+          if (!picked.length) { alert('Select at least one suggestion'); return; }
+          try {
+            const ir = await api.importDiscoverySuggestions(picked.map(s => ({
+              name: s.name, domain: s.domain, category: s.category, risk: s.risk,
+            })));
+            wrap.querySelector('#disc-msg').innerHTML = `<div class="alert alert-success">Imported <strong>${ir.created ?? 0}</strong> finding(s)${ir.skipped ? `, skipped ${ir.skipped}` : ''}.</div>`;
+            box.style.display = 'none'; box.innerHTML = '';
+            wrap.querySelector('#disc-status').value = 'NEW';
+            await loadStats(); await loadList();
+          } catch (e) { alert(e.message); }
+        });
+      }
       await loadStats(); await loadList();
     } catch (e) {
       wrap.querySelector('#disc-msg').innerHTML = errHtml(e.message);

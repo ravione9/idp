@@ -576,7 +576,8 @@ To add a new migration:
 | `POST` | `/api/admin/saml-apps/enable-request-access-all` | Enable IGA JIT for every active SAML SP |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/api/admin/app-discovery[/:id]` | App Discovery inventory (`discovered_apps`) |
 | `GET` | `/api/admin/app-discovery/stats` | Discovery counters (new / high-risk / sanctioned) |
-| `POST` | `/api/admin/app-discovery/scan` | Catalog-gap + SSO-signal scan |
+| `POST` | `/api/admin/app-discovery/scan` | Reconcile inventory + return catalog-gap *suggestions* (no auto-insert) |
+| `POST` | `/api/admin/app-discovery/import-suggestions` | Import selected SaaS suggestions into inventory |
 | `POST` | `/api/admin/app-discovery/:id/promote` | Promote finding into `applications` catalog |
 | `GET` | `/api/admin/saml-apps/attribute-fields` | Mappable employee fields + default attribute map |
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
@@ -986,7 +987,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ### Phase 5 — Advanced IGA
 
 - ✅ Credential Vault (AES-GCM checkout) + PAM resource/session/system-user inventory (SUPER_ADMIN)
-- ✅ **App Discovery (MVP)** — `discovered_apps` inventory; catalog-gap scan (known SaaS) + SSO usage signals; promote to Application Catalog (`Applications → App Discovery`)
+- ✅ **App Discovery (MVP)** — `discovered_apps` inventory; scan reconciles/cleans false positives and returns SaaS suggestions (import on demand); promote to Application Catalog (`Applications → App Discovery`)
 - JIT elevation / session broker + session recording for high-risk apps
 - App Discovery Phase 2 — Google Workspace audit / proxy log ingestion
 - SCIM 2.0 *server* (inbound, so Workday / Zoho People can push directly into `employees`)
@@ -1010,6 +1011,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-23 — App Discovery: stop false-positive wishlist dump
+
+**Why** — First MVP scan auto-inserted the entire known-SaaS list as `CATALOG_GAP` and treated registered SAML apps as `SSO_SIGNAL` discoveries.
+
+**What changed:**
+
+- **Scan** — reconciles findings against SAML/catalog → `SANCTIONED`; deletes prior auto `CATALOG_GAP` NEW noise + all `SSO_SIGNAL` rows; returns `suggestions[]` only (not persisted).
+- **API** — `POST /api/admin/app-discovery/import-suggestions` for admin-selected import.
+- **UI** — scan shows suggestion picker (“Add selected to inventory”); default filter All statuses.
 
 ### `8fcae30` — 2026-07-23 — App Discovery MVP (shadow IT inventory)
 

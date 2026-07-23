@@ -9,6 +9,7 @@ import { asyncHandler } from '../utils/async-handler.js';
 import {
   deleteDiscoveredApp,
   getDiscoveryStats,
+  importCatalogSuggestions,
   listDiscoveredApps,
   promoteDiscoveredApp,
   runDiscoveryScan,
@@ -87,6 +88,45 @@ const patchSchema = z.object({
   category: z.string().max(80).optional().nullable(),
 });
 
+router.post(
+  '/scan',
+  asyncHandler(async (req: Request, res: Response) => {
+    const result = await runDiscoveryScan(req.user!.empId);
+    res.json({ success: true, ...result });
+  }),
+);
+
+const importSchema = z.object({
+  items: z.array(z.object({
+    name: z.string().min(1).max(200),
+    domain: z.string().min(3).max(255),
+    category: z.string().max(80).optional(),
+    risk: z.enum(['LOW', 'MEDIUM', 'HIGH', 'UNKNOWN']).optional(),
+  })).min(1).max(100),
+});
+
+router.post(
+  '/import-suggestions',
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = importSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const items = parsed.data.items.map((item) => {
+      const row: { name: string; domain: string; category?: string; risk?: 'LOW' | 'MEDIUM' | 'HIGH' | 'UNKNOWN' } = {
+        name: item.name,
+        domain: item.domain,
+      };
+      if (item.category !== undefined) row.category = item.category;
+      if (item.risk !== undefined) row.risk = item.risk;
+      return row;
+    });
+    const result = await importCatalogSuggestions(items, req.user!.empId);
+    res.json({ success: true, ...result });
+  }),
+);
+
 router.patch(
   '/:id',
   asyncHandler(async (req: Request, res: Response) => {
@@ -114,14 +154,6 @@ router.patch(
       const msg = err instanceof Error ? err.message : 'Update failed';
       res.status(msg.includes('not found') ? 404 : 400).json({ error: msg });
     }
-  }),
-);
-
-router.post(
-  '/scan',
-  asyncHandler(async (req: Request, res: Response) => {
-    const result = await runDiscoveryScan(req.user!.empId);
-    res.json({ success: true, ...result });
   }),
 );
 

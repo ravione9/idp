@@ -1,6 +1,11 @@
 /**
- * App Discovery — shadow IT inventory from manual entry, known-SaaS catalog gaps,
- * and SSO usage signals (registered SPs with traffic vs unsanctioned candidates).
+ * App Discovery — shadow IT inventory.
+ *
+ * Scan does NOT dump a static SaaS wishlist into the DB (that produced false "NEW" rows).
+ * Instead it:
+ *  1) Reconciles existing discoveries against registered SAML / catalog apps
+ *  2) Returns catalog-gap *suggestions* (known SaaS not in catalog) without auto-inserting
+ *  3) Leaves MANUAL / IMPORT findings intact for admin review
  */
 import { v4 as uuidv4 } from 'uuid';
 import { execute, query, queryOne } from '../db/connection.js';
@@ -30,48 +35,65 @@ export interface DiscoveredAppRow {
   linked_app_name?: string | null;
 }
 
-/** Common SaaS domains — used for catalog-gap scan (not an exhaustive list). */
-const KNOWN_SAAS: { name: string; domain: string; category: string; risk: DiscoveryRisk }[] = [
+export interface CatalogSuggestion {
+  name: string;
+  domain: string;
+  category: string;
+  risk: DiscoveryRisk;
+  reason: string;
+}
+
+type KnownSaas = {
+  name: string;
+  domain: string;
+  category: string;
+  risk: DiscoveryRisk;
+  /** Extra host suffixes / tokens that mean this vendor is already onboarded */
+  aliases?: string[];
+};
+
+const KNOWN_SAAS: KnownSaas[] = [
   { name: 'Slack', domain: 'slack.com', category: 'Collaboration', risk: 'MEDIUM' },
-  { name: 'Microsoft 365', domain: 'microsoft.com', category: 'Productivity', risk: 'LOW' },
-  { name: 'Google Workspace', domain: 'google.com', category: 'Productivity', risk: 'LOW' },
-  { name: 'Salesforce', domain: 'salesforce.com', category: 'CRM', risk: 'HIGH' },
+  { name: 'Microsoft 365', domain: 'microsoft.com', category: 'Productivity', risk: 'LOW', aliases: ['office.com', 'microsoftonline.com', 'live.com'] },
+  { name: 'Google Workspace', domain: 'google.com', category: 'Productivity', risk: 'LOW', aliases: ['googleusercontent.com', 'googleapis.com'] },
+  { name: 'Salesforce', domain: 'salesforce.com', category: 'CRM', risk: 'HIGH', aliases: ['force.com'] },
   { name: 'ServiceNow', domain: 'servicenow.com', category: 'ITSM', risk: 'HIGH' },
-  { name: 'Atlassian / Jira', domain: 'atlassian.com', category: 'DevOps', risk: 'MEDIUM' },
+  { name: 'Atlassian / Jira', domain: 'atlassian.com', category: 'DevOps', risk: 'MEDIUM', aliases: ['jira.com', 'bitbucket.org', 'trello.com'] },
   { name: 'GitHub', domain: 'github.com', category: 'DevOps', risk: 'HIGH' },
   { name: 'GitLab', domain: 'gitlab.com', category: 'DevOps', risk: 'HIGH' },
   { name: 'Notion', domain: 'notion.so', category: 'Knowledge', risk: 'MEDIUM' },
   { name: 'Dropbox', domain: 'dropbox.com', category: 'Storage', risk: 'MEDIUM' },
   { name: 'Box', domain: 'box.com', category: 'Storage', risk: 'MEDIUM' },
   { name: 'Zoom', domain: 'zoom.us', category: 'Meetings', risk: 'MEDIUM' },
-  { name: 'DocuSign', domain: 'docusign.com', category: 'Agreements', risk: 'HIGH' },
+  { name: 'DocuSign', domain: 'docusign.com', category: 'Agreements', risk: 'HIGH', aliases: ['docusign.net'] },
   { name: 'HubSpot', domain: 'hubspot.com', category: 'CRM', risk: 'MEDIUM' },
   { name: 'Zendesk', domain: 'zendesk.com', category: 'Support', risk: 'MEDIUM' },
-  { name: 'Okta', domain: 'okta.com', category: 'Identity', risk: 'HIGH' },
+  { name: 'Okta', domain: 'okta.com', category: 'Identity', risk: 'HIGH', aliases: ['oktapreview.com'] },
   { name: '1Password', domain: '1password.com', category: 'Security', risk: 'HIGH' },
   { name: 'LastPass', domain: 'lastpass.com', category: 'Security', risk: 'HIGH' },
   { name: 'Canva', domain: 'canva.com', category: 'Design', risk: 'LOW' },
   { name: 'Figma', domain: 'figma.com', category: 'Design', risk: 'MEDIUM' },
   { name: 'Asana', domain: 'asana.com', category: 'Work Mgmt', risk: 'LOW' },
   { name: 'Monday.com', domain: 'monday.com', category: 'Work Mgmt', risk: 'LOW' },
-  { name: 'Trello', domain: 'trello.com', category: 'Work Mgmt', risk: 'LOW' },
   { name: 'Airtable', domain: 'airtable.com', category: 'Data', risk: 'MEDIUM' },
   { name: 'Tableau', domain: 'tableau.com', category: 'Analytics', risk: 'MEDIUM' },
   { name: 'Snowflake', domain: 'snowflake.com', category: 'Data', risk: 'HIGH' },
-  { name: 'AWS Console', domain: 'aws.amazon.com', category: 'Cloud', risk: 'HIGH' },
-  { name: 'Azure Portal', domain: 'portal.azure.com', category: 'Cloud', risk: 'HIGH' },
+  { name: 'AWS Console', domain: 'aws.amazon.com', category: 'Cloud', risk: 'HIGH', aliases: ['amazonaws.com'] },
+  { name: 'Azure Portal', domain: 'portal.azure.com', category: 'Cloud', risk: 'HIGH', aliases: ['azure.com', 'microsoftazuread-sso.com'] },
   { name: 'Cloudflare', domain: 'cloudflare.com', category: 'Network', risk: 'MEDIUM' },
   { name: 'Datadog', domain: 'datadoghq.com', category: 'Observability', risk: 'MEDIUM' },
   { name: 'PagerDuty', domain: 'pagerduty.com', category: 'Ops', risk: 'MEDIUM' },
   { name: 'Twilio', domain: 'twilio.com', category: 'Comms', risk: 'MEDIUM' },
-  { name: 'SendGrid', domain: 'sendgrid.com', category: 'Email', risk: 'MEDIUM' },
-  { name: 'Mailchimp', domain: 'mailchimp.com', category: 'Marketing', risk: 'LOW' },
-  { name: 'Shopify', domain: 'shopify.com', category: 'Commerce', risk: 'MEDIUM' },
   { name: 'Stripe', domain: 'stripe.com', category: 'Payments', risk: 'HIGH' },
-  { name: 'Zoho', domain: 'zoho.com', category: 'Suite', risk: 'MEDIUM' },
-  { name: 'Freshworks', domain: 'freshworks.com', category: 'Support', risk: 'MEDIUM' },
-  { name: 'ManageEngine', domain: 'manageengine.com', category: 'IT', risk: 'MEDIUM' },
-  { name: 'Endpoint Central', domain: 'endpointcentral.com', category: 'Endpoint', risk: 'HIGH' },
+  { name: 'Zoho', domain: 'zoho.com', category: 'Suite', risk: 'MEDIUM', aliases: ['zoho.in', 'zoho.eu', 'zoho.com.au', 'zohocloud.ca'] },
+  { name: 'Freshworks', domain: 'freshworks.com', category: 'Support', risk: 'MEDIUM', aliases: ['freshdesk.com', 'freshservice.com'] },
+  {
+    name: 'ManageEngine / Endpoint Central',
+    domain: 'manageengine.com',
+    category: 'Endpoint',
+    risk: 'HIGH',
+    aliases: ['endpointcentral.com', 'zoho.com', 'uems.manageengine.com'],
+  },
 ];
 
 function normalizeDomain(raw: string): string {
@@ -79,7 +101,17 @@ function normalizeDomain(raw: string): string {
   d = d.replace(/^https?:\/\//, '').replace(/^www\./, '');
   d = d.split('/')[0] ?? d;
   d = d.split(':')[0] ?? d;
+  // bare entity IDs like "zoho.com" stay; urn:… entity IDs → empty
+  if (d.startsWith('urn:')) return '';
   return d.replace(/^\.+|\.+$/g, '');
+}
+
+/** eTLD+1-ish: accounts.zoho.in → zoho.in ; foo.bar.slack.com → slack.com */
+function registrableHint(host: string): string {
+  const parts = host.split('.').filter(Boolean);
+  if (parts.length <= 2) return host;
+  // keep last 2; for .co.uk-style we'd need a list — good enough for SaaS hosts
+  return parts.slice(-2).join('.');
 }
 
 function slugFromName(name: string): string {
@@ -90,43 +122,131 @@ function slugFromName(name: string): string {
     .slice(0, 50) || `app-${Date.now().toString(36)}`;
 }
 
-async function sanctionedDomains(): Promise<Set<string>> {
-  const rows = await query<{ domain: string }>(
-    `SELECT LOWER(TRIM(domain)) AS domain FROM (
-       SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(REPLACE(acs_url,'https://',''),'http://',''),'/',1),':',1) AS domain
-         FROM saml_service_providers WHERE active = 1
-       UNION
-       SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(REPLACE(entity_id,'https://',''),'http://',''),'/',1),':',1)
-         FROM saml_service_providers WHERE active = 1
-       UNION
-       SELECT LOWER(slug) FROM applications WHERE active = 1
-       UNION
-       SELECT LOWER(SUBSTRING_INDEX(name, ' ', 1)) FROM applications WHERE active = 1
-     ) x
-     WHERE domain IS NOT NULL AND domain != '' AND domain NOT LIKE '% %'`,
-    [],
-  ).catch(() => [] as { domain: string }[]);
+function tokensFromText(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9.\s-]+/g, ' ')
+    .split(/[\s._-]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3);
+}
 
-  const set = new Set<string>();
-  for (const r of rows) {
-    const d = normalizeDomain(r.domain);
-    if (d && d.includes('.')) set.add(d);
-  }
-  // Also match known apps already in catalog by name/domain overlap
-  const apps = await query<{ name: string; slug: string }>(
-    `SELECT name, slug FROM applications WHERE active = 1`,
+type CatalogApp = {
+  id: string;
+  name: string;
+  slug: string;
+  domains: string[];
+  tokens: string[];
+};
+
+async function loadCatalogApps(): Promise<CatalogApp[]> {
+  const sps = await query<{
+    id: string;
+    name: string;
+    slug: string;
+    entity_id: string;
+    acs_url: string;
+  }>(
+    `SELECT id, name, slug, entity_id, acs_url
+       FROM saml_service_providers WHERE active = 1`,
     [],
-  ).catch(() => [] as { name: string; slug: string }[]);
+  ).catch(() => []);
+
+  const apps = await query<{ id: string; name: string; slug: string }>(
+    `SELECT id, name, slug FROM applications WHERE active = 1`,
+    [],
+  ).catch(() => []);
+
+  const byKey = new Map<string, CatalogApp>();
+
+  const add = (id: string, name: string, slug: string, extraDomains: string[] = []) => {
+    const key = id || slug;
+    const existing = byKey.get(key);
+    const domains = new Set<string>(existing?.domains ?? []);
+    for (const raw of [slug, ...extraDomains]) {
+      const d = normalizeDomain(raw);
+      if (d) {
+        domains.add(d);
+        const hint = registrableHint(d);
+        if (hint) domains.add(hint);
+      }
+    }
+    // slug without dots still useful as token
+    const tokens = new Set<string>(existing?.tokens ?? []);
+    for (const t of tokensFromText(`${name} ${slug}`)) tokens.add(t);
+    byKey.set(key, {
+      id,
+      name,
+      slug,
+      domains: [...domains],
+      tokens: [...tokens],
+    });
+  };
+
+  for (const sp of sps) {
+    add(sp.id, sp.name, sp.slug, [sp.entity_id, sp.acs_url]);
+  }
   for (const a of apps) {
-    set.add(normalizeDomain(a.slug));
-    const n = a.name.toLowerCase();
-    for (const k of KNOWN_SAAS) {
-      if (n.includes(k.name.toLowerCase().split(' ')[0]!) || n.includes(k.domain.split('.')[0]!)) {
-        set.add(k.domain);
+    // Prefer application UUID when both exist — use slug match to merge later
+    const matchSp = sps.find((s) => s.slug === a.slug);
+    add(matchSp?.id ?? a.id, a.name, a.slug);
+  }
+
+  return [...byKey.values()];
+}
+
+function vendorCoveredByCatalog(saas: KnownSaas, catalog: CatalogApp[]): CatalogApp | null {
+  const needles = new Set<string>([
+    saas.domain,
+    registrableHint(saas.domain),
+    ...(saas.aliases ?? []).map(normalizeDomain),
+  ]);
+  const nameTokens = tokensFromText(saas.name);
+
+  for (const app of catalog) {
+    for (const d of app.domains) {
+      for (const n of needles) {
+        if (!n) continue;
+        if (d === n || d.endsWith(`.${n}`) || n.endsWith(`.${d}`)) return app;
+      }
+    }
+    // name / slug token overlap (e.g. "Zoho Mail" covers Zoho; "Endpoint Central" covers ManageEngine)
+    for (const t of nameTokens) {
+      if (t.length < 4) continue;
+      if (app.tokens.includes(t) || app.name.toLowerCase().includes(t) || app.slug.includes(t)) {
+        return app;
       }
     }
   }
-  return set;
+  return null;
+}
+
+function discoveryMatchesCatalog(
+  disc: { name: string; domain: string },
+  catalog: CatalogApp[],
+): CatalogApp | null {
+  const domain = normalizeDomain(disc.domain);
+  const hint = registrableHint(domain);
+  for (const app of catalog) {
+    for (const d of app.domains) {
+      if (d === domain || d === hint || domain.endsWith(`.${d}`) || d.endsWith(`.${domain}`)) {
+        return app;
+      }
+    }
+    const dt = tokensFromText(disc.name);
+    for (const t of dt) {
+      if (t.length < 4) continue;
+      if (app.tokens.includes(t) || app.name.toLowerCase().includes(t)) return app;
+    }
+  }
+  // known-vendor alias bridge
+  for (const saas of KNOWN_SAAS) {
+    const needles = [saas.domain, ...(saas.aliases ?? [])].map(normalizeDomain);
+    if (needles.some((n) => n && (domain === n || domain.endsWith(`.${n}`) || hint === n))) {
+      return vendorCoveredByCatalog(saas, catalog);
+    }
+  }
+  return null;
 }
 
 export async function listDiscoveredApps(opts: {
@@ -219,6 +339,7 @@ export async function upsertDiscoveredApp(params: {
   evidence?: Record<string, unknown>;
   notes?: string | null;
   createdBy?: string | null;
+  status?: DiscoveryStatus;
 }): Promise<{ id: string; created: boolean }> {
   const domain = normalizeDomain(params.domain);
   if (!domain || !domain.includes('.')) {
@@ -246,7 +367,7 @@ export async function upsertDiscoveredApp(params: {
         params.category ?? null,
         params.riskLevel ?? null,
         params.userCount ?? 0,
-        Math.max(1, params.hitCount ?? 1),
+        Math.max(0, params.hitCount ?? 0),
         params.evidence ? JSON.stringify(params.evidence) : null,
         params.notes ?? null,
         existing.id,
@@ -260,16 +381,17 @@ export async function upsertDiscoveredApp(params: {
     `INSERT INTO discovered_apps
        (id, name, domain, category, source, status, risk_level, user_count, hit_count,
         evidence_json, notes, created_by)
-     VALUES (?, ?, ?, ?, ?, 'NEW', ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       params.name,
       domain,
       params.category ?? null,
       params.source,
+      params.status ?? 'NEW',
       params.riskLevel ?? 'UNKNOWN',
       params.userCount ?? 0,
-      params.hitCount ?? 1,
+      params.hitCount ?? 0,
       params.evidence ? JSON.stringify(params.evidence) : null,
       params.notes ?? null,
       params.createdBy ?? null,
@@ -311,111 +433,143 @@ export async function updateDiscoveredApp(
 }
 
 /**
- * Scan for unsanctioned SaaS:
- * 1) Known SaaS catalog gaps (not in applications / SAML registry)
- * 2) SSO signals — registered SPs with recent assertions tagged as sanctioned usage
+ * Reconcile inventory + compute catalog-gap suggestions (not auto-inserted).
+ * Also removes prior auto-inserted CATALOG_GAP noise that was never reviewed.
  */
 export async function runDiscoveryScan(actorEmpId: string): Promise<{
   catalogGaps: number;
-  ssoSignals: number;
+  reconciled: number;
+  removedNoise: number;
+  suggestions: CatalogSuggestion[];
   created: number;
   updated: number;
 }> {
-  const sanctioned = await sanctionedDomains();
-  let created = 0;
-  let updated = 0;
-  let catalogGaps = 0;
-  let ssoSignals = 0;
+  const catalog = await loadCatalogApps();
 
+  // Remove false-positive wishlist rows from the first MVP scan (never manually reviewed)
+  const noise = await execute(
+    `DELETE FROM discovered_apps
+      WHERE source = 'CATALOG_GAP'
+        AND status = 'NEW'
+        AND (notes IS NULL OR notes = '')
+        AND (created_by IS NULL OR created_by = ?)`,
+    [actorEmpId],
+  ).catch(() => ({ affectedRows: 0 }));
+  // Also clear SSO_SIGNAL rows — registered SPs are not "discovered" shadow IT
+  const ssoNoise = await execute(
+    `DELETE FROM discovered_apps WHERE source = 'SSO_SIGNAL'`,
+    [],
+  ).catch(() => ({ affectedRows: 0 }));
+  const removedNoise = Number(noise.affectedRows ?? 0) + Number(ssoNoise.affectedRows ?? 0);
+
+  // Reconcile remaining discoveries against catalog
+  const existing = await query<{ id: string; name: string; domain: string; status: string; linked_app_id: string | null }>(
+    `SELECT id, name, domain, status, linked_app_id FROM discovered_apps
+      WHERE status IN ('NEW', 'REVIEWING')`,
+    [],
+  );
+  let reconciled = 0;
+  for (const row of existing) {
+    const match = discoveryMatchesCatalog(row, catalog);
+    if (!match) continue;
+    // Prefer applications.id when slug matches
+    const appRow = await queryOne<{ id: string }>(
+      `SELECT id FROM applications WHERE slug = ? AND active = 1 LIMIT 1`,
+      [match.slug],
+    );
+    const linkedId = appRow?.id ?? null;
+    await execute(
+      `UPDATE discovered_apps
+          SET status = 'SANCTIONED',
+              risk_level = 'LOW',
+              linked_app_id = COALESCE(?, linked_app_id),
+              evidence_json = ?,
+              updated_at = UTC_TIMESTAMP()
+        WHERE id = ?`,
+      [
+        linkedId,
+        JSON.stringify({ reconciledAt: new Date().toISOString(), matchedSlug: match.slug }),
+        row.id,
+      ],
+    );
+    reconciled += 1;
+  }
+
+  // Suggestions only — not written until admin imports them
+  const suggestions: CatalogSuggestion[] = [];
   for (const saas of KNOWN_SAAS) {
-    if (sanctioned.has(saas.domain)) continue;
-    // Partial match: if any sanctioned domain ends with this domain or vice versa
-    let covered = false;
-    for (const s of sanctioned) {
-      if (s === saas.domain || s.endsWith(`.${saas.domain}`) || saas.domain.endsWith(`.${s}`)) {
-        covered = true;
-        break;
-      }
-    }
-    if (covered) continue;
-
-    catalogGaps += 1;
-    const r = await upsertDiscoveredApp({
+    if (vendorCoveredByCatalog(saas, catalog)) continue;
+    const already = await queryOne<{ id: string }>(
+      `SELECT id FROM discovered_apps WHERE domain = ? LIMIT 1`,
+      [saas.domain],
+    );
+    if (already) continue;
+    suggestions.push({
       name: saas.name,
       domain: saas.domain,
       category: saas.category,
-      source: 'CATALOG_GAP',
-      riskLevel: saas.risk,
-      evidence: { scan: 'known_saas_catalog', scannedAt: new Date().toISOString() },
-      createdBy: actorEmpId,
+      risk: saas.risk,
+      reason: 'Not found in SAML apps or Application Catalog',
     });
-    if (r.created) created += 1;
-    else updated += 1;
   }
 
-  // SSO usage signals — apps already registered that have login traffic (mark as seen / reinforce)
-  const ssoUsage = await query<{
-    sp_id: string;
-    name: string;
-    entity_id: string;
-    acs_url: string;
-    hits: number;
-    users: number;
-  }>(
-    `SELECT sp.id AS sp_id, sp.name, sp.entity_id, sp.acs_url,
-            COUNT(l.id) AS hits,
-            COUNT(DISTINCT l.emp_id) AS users
-       FROM saml_service_providers sp
-       LEFT JOIN saml_assertion_log l
-         ON l.sp_id = sp.id AND l.ts > UTC_TIMESTAMP() - INTERVAL 90 DAY
-      WHERE sp.active = 1
-      GROUP BY sp.id, sp.name, sp.entity_id, sp.acs_url
-      HAVING hits > 0
-      ORDER BY hits DESC
-      LIMIT 100`,
-    [],
-  ).catch(() => []);
+  logger.info(
+    {
+      catalogGaps: suggestions.length,
+      reconciled,
+      removedNoise,
+      catalogSize: catalog.length,
+      actorEmpId,
+    },
+    'App discovery scan complete',
+  );
 
-  for (const sp of ssoUsage) {
-    const domain = normalizeDomain(sp.acs_url || sp.entity_id);
-    if (!domain.includes('.')) continue;
-    ssoSignals += 1;
-    // Record as sanctioned usage signal only if not already in discovered as NEW gap
-    // Prefer linking — upsert with low risk when it's a known SP
+  return {
+    catalogGaps: suggestions.length,
+    reconciled,
+    removedNoise,
+    suggestions,
+    created: 0,
+    updated: reconciled,
+  };
+}
+
+/** Import selected catalog-gap suggestions into the discovery inventory. */
+export async function importCatalogSuggestions(
+  items: { name: string; domain: string; category?: string; risk?: DiscoveryRisk }[],
+  actorEmpId: string,
+): Promise<{ created: number; skipped: number }> {
+  let created = 0;
+  let skipped = 0;
+  const catalog = await loadCatalogApps();
+  for (const item of items) {
+    const domain = normalizeDomain(item.domain);
+    const saas = KNOWN_SAAS.find((k) => k.domain === domain)
+      ?? { name: item.name, domain, category: item.category ?? 'SaaS', risk: item.risk ?? 'UNKNOWN' as DiscoveryRisk };
+    if (vendorCoveredByCatalog(saas as KnownSaas, catalog)) {
+      skipped += 1;
+      continue;
+    }
     const r = await upsertDiscoveredApp({
-      name: sp.name,
+      name: item.name,
       domain,
-      category: 'SSO',
-      source: 'SSO_SIGNAL',
-      riskLevel: 'LOW',
-      userCount: Number(sp.users),
-      hitCount: Number(sp.hits),
-      evidence: {
-        scan: 'saml_assertion_log_90d',
-        spId: sp.sp_id,
-        hits: Number(sp.hits),
-        users: Number(sp.users),
-      },
+      category: item.category ?? null,
+      source: 'CATALOG_GAP',
+      riskLevel: item.risk ?? 'UNKNOWN',
+      notes: 'Imported from catalog-gap suggestions',
       createdBy: actorEmpId,
+      hitCount: 0,
     });
-    // Auto-mark SSO signals as SANCTIONED (already in IdP)
-    await execute(
-      `UPDATE discovered_apps SET status = 'SANCTIONED', risk_level = 'LOW'
-        WHERE id = ? AND status = 'NEW' AND source = 'SSO_SIGNAL'`,
-      [r.id],
-    );
     if (r.created) created += 1;
-    else updated += 1;
+    else skipped += 1;
   }
-
-  logger.info({ catalogGaps, ssoSignals, created, updated, actorEmpId }, 'App discovery scan complete');
-  return { catalogGaps, ssoSignals, created, updated };
+  return { created, skipped };
 }
 
 /** Promote a discovered app into the IGA applications catalog. */
 export async function promoteDiscoveredApp(
   id: string,
-  actorEmpId: string,
+  _actorEmpId: string,
 ): Promise<{ appId: string; slug: string }> {
   const disc = await queryOne<DiscoveredAppRow>(
     `SELECT * FROM discovered_apps WHERE id = ? LIMIT 1`,
@@ -428,6 +582,25 @@ export async function promoteDiscoveredApp(
       [disc.linked_app_id],
     );
     return { appId: disc.linked_app_id, slug: linked?.slug ?? '' };
+  }
+
+  // If already registered under SAML / catalog, just link — don't create a duplicate
+  const catalog = await loadCatalogApps();
+  const match = discoveryMatchesCatalog(disc, catalog);
+  if (match) {
+    const appRow = await queryOne<{ id: string; slug: string }>(
+      `SELECT id, slug FROM applications WHERE slug = ? AND active = 1 LIMIT 1`,
+      [match.slug],
+    );
+    if (appRow) {
+      await execute(
+        `UPDATE discovered_apps
+            SET status = 'SANCTIONED', linked_app_id = ?, risk_level = 'LOW', updated_at = UTC_TIMESTAMP()
+          WHERE id = ?`,
+        [appRow.id, id],
+      );
+      return { appId: appRow.id, slug: appRow.slug };
+    }
   }
 
   let slug = slugFromName(disc.name);
@@ -458,7 +631,7 @@ export async function promoteDiscoveredApp(
     [appId, id],
   );
 
-  logger.info({ id, appId, slug, actorEmpId }, 'Discovered app promoted to catalog');
+  logger.info({ id, appId, slug }, 'Discovered app promoted to catalog');
   return { appId, slug };
 }
 
