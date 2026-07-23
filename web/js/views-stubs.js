@@ -3529,32 +3529,208 @@ export async function viewPrebuiltApps(content, opts = {}) {
 // ─── 9. App Discovery ─────────────────────────────────────────────────────────
 export async function viewAppDiscovery(content, opts = {}) {
   const embed = !!opts.embed;
-  content.replaceChildren(el(`<div>
-    ${embed ? '' : header('App Discovery', 'Shadow IT and application usage discovery')}
+  const actions = `<div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+    <button class="btn btn-secondary" id="disc-scan">Run Discovery Scan</button>
+    <button class="btn btn-primary" id="disc-add">+ Add App</button>
+  </div>`;
+  content.replaceChildren(el(`<div class="disc-page">
+    ${embed
+      ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actions}</div>`
+      : header('App Discovery', 'Find unsanctioned SaaS (catalog gaps + SSO signals) and promote into the app catalog', actions)}
+    <div id="disc-stats" class="stat-grid" style="margin-bottom:1rem">${loading()}</div>
+    <div class="card ra-filter-card" style="margin-bottom:1rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
+      <input class="form-input" id="disc-q" placeholder="Search name or domain…" style="flex:1;min-width:180px">
+      <select class="form-select" id="disc-status" style="width:auto">
+        <option value="all">All statuses</option>
+        <option value="NEW" selected>New</option>
+        <option value="REVIEWING">Reviewing</option>
+        <option value="SANCTIONED">Sanctioned</option>
+        <option value="IGNORED">Ignored</option>
+      </select>
+      <select class="form-select" id="disc-source" style="width:auto">
+        <option value="all">All sources</option>
+        <option value="CATALOG_GAP">Catalog gap</option>
+        <option value="SSO_SIGNAL">SSO signal</option>
+        <option value="MANUAL">Manual</option>
+        <option value="IMPORT">Import</option>
+      </select>
+    </div>
+    <div id="disc-msg"></div>
     <div id="disc-area">${loading()}</div>
   </div>`));
   const wrap = content.firstChild;
-  try {
-    const r = await api.igaConnectors();
-    const allConnectors = Array.isArray(r) ? r : (r && r.data ? r.data : []);
-    const disc = allConnectors.filter(c => (c.connector_type || c.type || '') === 'DISCOVERY');
-    wrap.querySelector('#disc-area').innerHTML = `
-      <div class="card" style="margin-bottom:1rem">
-        <strong>Shadow IT Discovery</strong>
-        <p class="muted" style="margin-top:0.25rem">Surfaces unsanctioned SaaS from SSO logs, Workspace audit trails, and proxy logs. Register DISCOVERY connectors below; full log-ingestion ships in Phase 5.</p>
+
+  const riskBadge = (r) => {
+    const m = { HIGH: 'badge-danger', MEDIUM: 'badge-warning', LOW: 'badge-success', UNKNOWN: 'badge-neutral' };
+    return `<span class="badge ${m[r] || 'badge-neutral'}">${esc(r || 'UNKNOWN')}</span>`;
+  };
+  const statusBadge = (s) => {
+    const m = { NEW: 'badge-warning', REVIEWING: 'badge-info', SANCTIONED: 'badge-success', IGNORED: 'badge-neutral' };
+    return `<span class="badge ${m[s] || 'badge-neutral'}">${esc(s || '—')}</span>`;
+  };
+  const sourceLabel = (s) => ({ CATALOG_GAP: 'Catalog gap', SSO_SIGNAL: 'SSO signal', MANUAL: 'Manual', IMPORT: 'Import' }[s] || s);
+
+  async function loadStats() {
+    try {
+      const s = await api.discoveryStats();
+      wrap.querySelector('#disc-stats').innerHTML = [
+        statCard('search', 'Discovered', s.total ?? 0, 'in inventory', 'primary'),
+        statCard('alert', 'New', s.newCount ?? 0, 'awaiting review', 'warning'),
+        statCard('shield', 'High risk', s.highRisk ?? 0, 'new / reviewing', 'danger'),
+        statCard('check', 'Sanctioned', s.sanctioned ?? 0, 'in catalog / accepted', 'success'),
+      ].join('');
+    } catch {
+      wrap.querySelector('#disc-stats').innerHTML = '';
+    }
+  }
+
+  async function loadList() {
+    const area = wrap.querySelector('#disc-area');
+    area.innerHTML = loading();
+    try {
+      const status = wrap.querySelector('#disc-status').value;
+      const source = wrap.querySelector('#disc-source').value;
+      const q = wrap.querySelector('#disc-q').value.trim();
+      const r = await api.listDiscoveredApps({
+        status: status === 'all' ? '' : status,
+        source: source === 'all' ? '' : source,
+        q,
+        limit: '200',
+      });
+      const rows = r.data || [];
+      if (!rows.length) {
+        area.innerHTML = `<div class="empty-state">
+          <div class="empty-icon">🔍</div>
+          <p>No discovered apps for this filter.</p>
+          <p class="muted" style="font-size:0.85rem;margin-top:0.5rem;max-width:28rem">
+            Click <strong>Run Discovery Scan</strong> to find known SaaS missing from your catalog,
+            or <strong>+ Add App</strong> to record a shadow IT finding manually.
+          </p>
+        </div>`;
+        return;
+      }
+      area.innerHTML = `<div class="table-wrap"><table>
+        <thead><tr>
+          <th>Application</th><th>Domain</th><th>Category</th><th>Source</th>
+          <th>Risk</th><th>Status</th><th>Signal</th><th>Actions</th>
+        </tr></thead>
+        <tbody>${rows.map(d => `<tr data-id="${esc(d.id)}">
+          <td class="cell-strong">${esc(d.name)}${d.linked_app_name ? `<div class="muted" style="font-size:0.75rem">→ ${esc(d.linked_app_name)}</div>` : ''}</td>
+          <td><code style="font-size:0.78rem">${esc(d.domain)}</code></td>
+          <td class="muted">${esc(d.category || '—')}</td>
+          <td><span class="badge badge-info">${esc(sourceLabel(d.source))}</span></td>
+          <td>${riskBadge(d.risk_level)}</td>
+          <td>${statusBadge(d.status)}</td>
+          <td class="muted" style="font-size:0.8rem">${Number(d.hit_count) || 0} hits · ${Number(d.user_count) || 0} users<br><span style="font-size:0.72rem">${d.last_seen_at ? fmtDate(d.last_seen_at) : '—'}</span></td>
+          <td style="white-space:nowrap">
+            ${d.status !== 'SANCTIONED' && !d.linked_app_id ? `<button class="btn btn-sm btn-primary disc-promote" data-id="${esc(d.id)}" title="Add to Application Catalog">Promote</button>` : ''}
+            ${d.status === 'NEW' ? `<button class="btn btn-sm btn-secondary disc-review" data-id="${esc(d.id)}">Review</button>` : ''}
+            ${d.status !== 'IGNORED' ? `<button class="btn btn-sm btn-secondary disc-ignore" data-id="${esc(d.id)}">Ignore</button>` : `<button class="btn btn-sm btn-secondary disc-reopen" data-id="${esc(d.id)}">Reopen</button>`}
+            <button class="btn btn-sm btn-danger disc-del" data-id="${esc(d.id)}">Delete</button>
+          </td>
+        </tr>`).join('')}</tbody></table></div>`;
+
+      area.querySelectorAll('.disc-promote').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Promote this app into the Application Catalog as RESTRICTED? You can then register SAML/OIDC.')) return;
+          btn.disabled = true;
+          try {
+            const r = await api.promoteDiscoveredApp(btn.dataset.id);
+            wrap.querySelector('#disc-msg').innerHTML = `<div class="alert alert-success">Promoted as catalog slug <code>${esc(r.slug)}</code>. Open Applications → Catalog / SAML to finish SSO setup.</div>`;
+            await loadStats(); await loadList();
+          } catch (e) { alert(e.message); btn.disabled = false; }
+        });
+      });
+      area.querySelectorAll('.disc-review').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          try { await api.updateDiscoveredApp(btn.dataset.id, { status: 'REVIEWING' }); await loadStats(); await loadList(); }
+          catch (e) { alert(e.message); }
+        });
+      });
+      area.querySelectorAll('.disc-ignore').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          try { await api.updateDiscoveredApp(btn.dataset.id, { status: 'IGNORED' }); await loadStats(); await loadList(); }
+          catch (e) { alert(e.message); }
+        });
+      });
+      area.querySelectorAll('.disc-reopen').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          try { await api.updateDiscoveredApp(btn.dataset.id, { status: 'NEW' }); await loadStats(); await loadList(); }
+          catch (e) { alert(e.message); }
+        });
+      });
+      area.querySelectorAll('.disc-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Delete this discovery record?')) return;
+          try { await api.deleteDiscoveredApp(btn.dataset.id); await loadStats(); await loadList(); }
+          catch (e) { alert(e.message); }
+        });
+      });
+    } catch (e) {
+      area.innerHTML = errHtml(e.message);
+    }
+  }
+
+  function openAddModal() {
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Add discovered app</h2></div><div class="modal-body">
+      <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="da-name" placeholder="e.g. Notion"></div>
+      <div class="form-group"><label class="form-label">Domain</label><input class="form-input" id="da-domain" placeholder="e.g. notion.so"></div>
+      <div class="form-group"><label class="form-label">Category</label><input class="form-input" id="da-cat" placeholder="e.g. Knowledge"></div>
+      <div class="form-group"><label class="form-label">Risk</label>
+        <select class="form-select" id="da-risk"><option value="UNKNOWN">Unknown</option><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option></select>
       </div>
-      ${disc.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Last Run</th></tr></thead><tbody>
-            ${disc.map(c => `<tr>
-              <td class="cell-strong">${esc(c.name)}</td>
-              <td><span class="badge badge-info">${esc(c.connector_type||c.type||'DISCOVERY')}</span></td>
-              <td>${['ACTIVE','CONNECTED'].includes(c.status) ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">'+esc(c.status||'Unknown')+'</span>'}</td>
-              <td class="muted">${c.last_sync_at ? fmtDate(c.last_sync_at) : '—'}</td>
-            </tr>`).join('')}
-          </tbody></table></div>`
-        : `<div class="empty-state"><div class="empty-icon">🔍</div><p>No discovery connectors configured yet.</p><p class="muted" style="font-size:0.8rem;margin-top:0.5rem">Go to <strong>Directory Sync → Add Directory Source</strong> and choose a type to begin.</p></div>`
-      }`;
-  } catch(e) { wrap.querySelector('#disc-area').innerHTML = errHtml(e.message); }
+      <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="da-notes" rows="2" placeholder="How was this found?"></textarea></div>
+      <div id="da-err"></div>
+    </div><div class="modal-footer">
+      <button class="btn btn-primary" id="da-save">Save</button>
+      <button class="btn btn-secondary" id="da-cancel">Cancel</button>
+    </div></div>`);
+    bd.querySelector('#da-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#da-save').addEventListener('click', async () => {
+      const name = bd.querySelector('#da-name').value.trim();
+      const domain = bd.querySelector('#da-domain').value.trim();
+      if (!name || !domain) { bd.querySelector('#da-err').innerHTML = errHtml('Name and domain are required'); return; }
+      try {
+        await api.createDiscoveredApp({
+          name, domain,
+          category: bd.querySelector('#da-cat').value.trim() || null,
+          riskLevel: bd.querySelector('#da-risk').value,
+          notes: bd.querySelector('#da-notes').value.trim() || null,
+        });
+        bd.remove(); await loadStats(); await loadList();
+      } catch (e) { bd.querySelector('#da-err').innerHTML = errHtml(e.message); }
+    });
+  }
+
+  wrap.querySelector('#disc-add')?.addEventListener('click', openAddModal);
+  wrap.querySelector('#disc-scan')?.addEventListener('click', async () => {
+    const btn = wrap.querySelector('#disc-scan');
+    btn.disabled = true; btn.textContent = 'Scanning…';
+    wrap.querySelector('#disc-msg').innerHTML = '';
+    try {
+      const r = await api.scanDiscoveredApps();
+      wrap.querySelector('#disc-msg').innerHTML = `<div class="alert alert-success">
+        Scan complete — <strong>${r.catalogGaps ?? 0}</strong> catalog gaps, <strong>${r.ssoSignals ?? 0}</strong> SSO signals
+        (${r.created ?? 0} new, ${r.updated ?? 0} updated).
+      </div>`;
+      wrap.querySelector('#disc-status').value = 'NEW';
+      await loadStats(); await loadList();
+    } catch (e) {
+      wrap.querySelector('#disc-msg').innerHTML = errHtml(e.message);
+    }
+    btn.disabled = false; btn.textContent = 'Run Discovery Scan';
+  });
+
+  let searchTimer = null;
+  wrap.querySelector('#disc-q').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { void loadList(); }, 280);
+  });
+  wrap.querySelector('#disc-status').addEventListener('change', () => { void loadList(); });
+  wrap.querySelector('#disc-source').addEventListener('change', () => { void loadList(); });
+
+  await loadStats();
+  await loadList();
 }
 
 // ─── 10. Directory Sync ───────────────────────────────────────────────────────
@@ -7886,7 +8062,7 @@ export async function viewLicense(content) {
       { name: 'PAM / Credential Vault', status: 'live' },
       { name: 'Birthright Rules', status: 'live' },
       { name: 'WebAuthn / Passkeys', status: 'planned' },
-      { name: 'App Discovery', status: 'planned' },
+      { name: 'App Discovery', status: 'live' },
     ];
     const featureHtml = features.map(f => {
       const badge = f.status === 'live' ? 'badge-success' : f.status === 'progress' ? 'badge-warning' : 'badge-neutral';

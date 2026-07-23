@@ -574,6 +574,10 @@ To add a new migration:
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; list includes `request_access` JIT flag) |
 | `POST` | `/api/admin/saml-apps/:id/enable-request-access` | Enable IGA JIT for one SAML SP (mirror + default workflow + `requestable`) |
 | `POST` | `/api/admin/saml-apps/enable-request-access-all` | Enable IGA JIT for every active SAML SP |
+| `GET`/`POST`/`PATCH`/`DELETE` | `/api/admin/app-discovery[/:id]` | App Discovery inventory (`discovered_apps`) |
+| `GET` | `/api/admin/app-discovery/stats` | Discovery counters (new / high-risk / sanctioned) |
+| `POST` | `/api/admin/app-discovery/scan` | Catalog-gap + SSO-signal scan |
+| `POST` | `/api/admin/app-discovery/:id/promote` | Promote finding into `applications` catalog |
 | `GET` | `/api/admin/saml-apps/attribute-fields` | Mappable employee fields + default attribute map |
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
@@ -982,7 +986,9 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ### Phase 5 — Advanced IGA
 
 - ✅ Credential Vault (AES-GCM checkout) + PAM resource/session/system-user inventory (SUPER_ADMIN)
+- ✅ **App Discovery (MVP)** — `discovered_apps` inventory; catalog-gap scan (known SaaS) + SSO usage signals; promote to Application Catalog (`Applications → App Discovery`)
 - JIT elevation / session broker + session recording for high-risk apps
+- App Discovery Phase 2 — Google Workspace audit / proxy log ingestion
 - SCIM 2.0 *server* (inbound, so Workday / Zoho People can push directly into `employees`)
 - Identity warehouse on Elasticsearch / OpenSearch for slice-and-dice analytics
 - Compliance report templates (SOX, GDPR, HIPAA, PCI) — framework-specific control packs (generic evidence snapshots already live)
@@ -1004,6 +1010,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `TBD` — 2026-07-23 — App Discovery MVP (shadow IT inventory)
+
+**Why** — Applications → App Discovery was a stub that looked for non-existent DISCOVERY connectors.
+
+**What changed:**
+
+- **Migration `047`** — `discovered_apps` (domain, source, status, risk, evidence, linked catalog app).
+- **Service / API** — list/create/patch/delete, `POST …/scan` (known-SaaS catalog gaps + SAML SSO signals), `POST …/promote` into `applications`.
+- **UI** — live App Discovery tab: stats, filters, scan, promote / review / ignore.
 
 ### `27ecc88` — 2026-07-23 — Auto-wipe expired access-request approvals
 

@@ -100,6 +100,14 @@ Object.assign(api, {
   localLoginMfaWebAuthnVerify: (challengeId, webauthnChallengeId, response) =>
     f('/auth/local/login/mfa-webauthn/verify', { method: 'POST', body: JSON.stringify({ challengeId, webauthnChallengeId, response }) }),
 
+  discoveryStats:   () => f('/api/admin/app-discovery/stats'),
+  listDiscoveredApps: (params = {}) => f(`/api/admin/app-discovery?${new URLSearchParams(params)}`),
+  createDiscoveredApp: (data) => f('/api/admin/app-discovery', { method: 'POST', body: JSON.stringify(data) }),
+  updateDiscoveredApp: (id, data) => f(`/api/admin/app-discovery/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  scanDiscoveredApps: () => f('/api/admin/app-discovery/scan', { method: 'POST' }),
+  promoteDiscoveredApp: (id) => f(`/api/admin/app-discovery/${id}/promote`, { method: 'POST' }),
+  deleteDiscoveredApp: (id) => f(`/api/admin/app-discovery/${id}`, { method: 'DELETE' }),
+
   igaApps:          () => f('/api/iga/applications'),
   igaRequestableApps: (opts = {}) => {
     const q = new URLSearchParams();
