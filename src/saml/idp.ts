@@ -397,9 +397,11 @@ export async function createSpInitiatedLoginResponse(input: SamlLoginInput): Pro
 
   const flowResult = await idp.parseLoginRequest(spInstance, input.binding, requestContainer);
 
+  // samlify ≥2.13 types RequestInfo strictly; runtime still accepts FlowResult.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await idp.createLoginResponse(
     spInstance,
-    flowResult,
+    flowResult as any,
     'post',
     userInfo,
     createLoginResponseTagReplacement(idp, input.sp, userInfo, flowResult as SamlRequestInfo),
@@ -423,9 +425,10 @@ export async function createIdpInitiatedLoginResponse(
   const userInfo = buildUserInfo(emp, sp);
 
   // Pass {} not null — samlify default params do not apply when null is explicit.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = await idp.createLoginResponse(
     spInstance,
-    {},
+    {} as any,
     'post',
     userInfo,
     createLoginResponseTagReplacement(idp, sp, userInfo, null),

@@ -16,6 +16,7 @@ import { timingSafeEqualString } from '../utils/timing-safe.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { authenticateRadius } from '../services/radius-auth.js';
 import { getClientIp } from '../utils/request-context.js';
+import { rateLimit } from '../auth/rate-limit.js';
 
 const router = Router();
 
@@ -30,6 +31,12 @@ function requireInternalToken(req: Request, res: Response, next: NextFunction): 
 }
 
 router.use(requireInternalToken);
+// Brute-force guard even with a valid internal token (compromised FreeRADIUS host / leaked token)
+router.use(rateLimit({
+  max: 120,
+  windowMs: 60_000,
+  keyFn: (req) => `radius-rest:${getClientIp(req)}`,
+}));
 
 const AuthBody = z.object({
   username: z.string().min(1).optional(),

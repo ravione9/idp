@@ -983,6 +983,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### TBD — 2026-07-23 — VAPT dependency + hardening patch
+
+**Why** — `npm audit` reported Critical samlify signature-wrapping / XML injection, High axios DoS/prototype-pollution, Moderate nested `uuid`, plus local agent permission file risk and thin security headers.
+
+**What changed:**
+
+- **Deps** — `samlify@2.13.1`, `axios@1.18.1`, `uuid@11.1.1` (+ `overrides.uuid`), `ldapts@9`; `npm audit` → **0 vulnerabilities**.
+- **Repo** — ignore `.claude/` (local agent auto-approve must not be committed).
+- **Headers** — `Permissions-Policy`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`.
+- **RADIUS REST** — rate-limit (120/min/IP) on `/api/internal/radius/*` even with valid internal token.
+
 ### `ec41e95` — 2026-07-23 — VPN / RADIUS AAA module
 
 **Why** — VPN gateways (AnyConnect, GlobalProtect, FortiClient, OpenVPN) need IdP-backed AAA with group policies and optional MFA, not only browser SSO.

@@ -12,5 +12,6 @@ idp-dev.crt
 coverage/
 .idea/
 .vscode/
+.claude/
 
 COMMIT_MSG.txt

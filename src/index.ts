@@ -127,6 +127,9 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-XSS-Protection', '0'); // disabled in favour of CSP
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
   if (config.app.publicBaseUrl?.startsWith('https://')) {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
