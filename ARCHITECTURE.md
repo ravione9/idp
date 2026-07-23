@@ -952,7 +952,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-23 — Fix user-based app access + IP allowlists
+### `1b7ad50` — 2026-07-23 — Fix user-based app access + IP allowlists
 
 **Why** — User-based Application Access Policy grants returned HTTP 500 (uncaught validation / lookup failures; email > 36 chars rejected poorly). Operators also needed per-app IP restrictions for SSO.
 
