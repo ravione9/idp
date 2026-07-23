@@ -952,7 +952,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-23 — Fix client IP (use endpoint, not server EIP)
+### `4a66b07` — 2026-07-23 — Fix client IP (use endpoint, not server EIP)
 
 **Why** — IP allowlist deny page showed the IdP/EC2 public IP (`13.203.x`) instead of the user’s endpoint IP when Cloudflare client headers were missing or the origin EIP appeared in `X-Forwarded-For`.
 
