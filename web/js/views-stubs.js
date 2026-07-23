@@ -8696,12 +8696,16 @@ header = "X-Internal-Token: &lt;INTERNAL_TOKEN&gt;"</pre>
               ${['ANY','VPN','WIRELESS','SWITCH','OTHER'].map((t) => `<option ${((row?.client_type||'ANY')===t)?'selected':''}>${t}</option>`).join('')}
             </select></div>
         </div>
-        <label class="form-check" style="display:flex;gap:0.5rem;align-items:center;margin:0.5rem 0">
-          <input type="checkbox" id="rp-mfa" ${row?.require_mfa ? 'checked' : ''}> Require MFA (password + TOTP)
-        </label>
-        <label class="form-check" style="display:flex;gap:0.5rem;align-items:center;margin:0.5rem 0">
-          <input type="checkbox" id="rp-enroll" ${row?.require_mfa_enrolled ? 'checked' : ''}> Require MFA enrolled
-        </label>
+        <div class="form-group" style="margin-top:0.25rem">
+          <label class="form-check-row" for="rp-mfa">
+            <input type="checkbox" class="form-check" id="rp-mfa" ${row?.require_mfa ? 'checked' : ''}>
+            Require MFA (password + TOTP)
+          </label>
+          <label class="form-check-row" for="rp-enroll">
+            <input type="checkbox" class="form-check" id="rp-enroll" ${row?.require_mfa_enrolled ? 'checked' : ''}>
+            Require MFA enrolled
+          </label>
+        </div>
         <div class="form-group"><label class="form-label">Reply attributes (one KEY=value per line)</label>
           <textarea class="form-input" id="rp-reply" rows="4">${esc(replyText)}</textarea></div>
         <div id="rp-msg"></div>
