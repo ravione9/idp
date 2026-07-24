@@ -3538,22 +3538,9 @@ export async function viewAppDiscovery(content, opts = {}) {
       ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actions}</div>`
       : header('App Discovery', 'Inventory from browser history / portal signals + manual findings', actions)}
     <div id="disc-stats" class="stat-grid" style="margin-bottom:1rem">${loading()}</div>
-    <div class="card" style="margin-bottom:1rem;padding:1rem 1.1rem">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap">
-        <div>
-          <strong>Browser history discovery (Chrome / Edge)</strong>
-          <p class="muted" style="margin:0.35rem 0 0;font-size:0.85rem;max-width:40rem">
-            Users can download the extension from Home or Account → App Discovery.
-            After they scan history, click <strong>Run Discovery Scan</strong> below to refresh inventory.
-          </p>
-        </div>
-        <a class="btn btn-primary btn-sm" href="/extension/app-discovery.zip" download="lilg-app-discovery-extension.zip">Download extension</a>
-      </div>
-      <ol class="muted" style="margin:0.85rem 0 0 1.1rem;font-size:0.85rem;line-height:1.55">
-        <li>Download zip → extract → <code>chrome://extensions</code> / <code>edge://extensions</code> → Developer mode → <strong>Load unpacked</strong></li>
-        <li>Sign in to the portal → extension popup → <strong>Scan history (90 days)</strong></li>
-        <li>Return here → <strong>Run Discovery Scan</strong></li>
-      </ol>
+    <div class="card" style="margin-bottom:1rem;padding:0.85rem 1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+      <strong>App Discovery browser extension</strong>
+      <a class="btn btn-primary btn-sm" href="/extension/app-discovery.zip" download="lilg-app-discovery-extension.zip">Download</a>
     </div>
     <div class="card ra-filter-card" style="margin-bottom:1rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
       <input class="form-input" id="disc-q" placeholder="Search name or domain…" style="flex:1;min-width:180px">

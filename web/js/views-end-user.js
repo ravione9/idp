@@ -5,26 +5,12 @@ import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import { captureLoginReferrer, rememberAppLaunch, wireAppLaunchTracking } from './browser-discovery.js';
 
-/** Portal install card for the Chrome/Edge App Discovery extension (.zip download). */
+/** Simple download card for the Chrome/Edge App Discovery extension. */
 export function extensionInstallCardHtml(opts = {}) {
   const compact = !!opts.compact;
-  return `<div class="card" style="${compact ? 'padding:0.9rem 1rem;' : ''}">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap">
-      <div style="flex:1;min-width:220px">
-        <strong>App Discovery browser extension</strong>
-        <p class="muted" style="margin:0.35rem 0 0;font-size:0.85rem;max-width:36rem">
-          Scan this browser’s history for SaaS apps and send them to IdP App Discovery.
-          Download the package, extract it, then Load unpacked in Chrome or Edge.
-        </p>
-      </div>
-      <a class="btn btn-primary" href="/extension/app-discovery.zip" download="lilg-app-discovery-extension.zip">Download extension</a>
-    </div>
-    <ol class="muted" style="margin:0.85rem 0 0 1.1rem;font-size:0.82rem;line-height:1.55">
-      <li>Download and unzip <code>lilg-app-discovery-extension.zip</code></li>
-      <li>Open <code>chrome://extensions</code> or <code>edge://extensions</code> → enable <strong>Developer mode</strong></li>
-      <li><strong>Load unpacked</strong> → select the extracted folder</li>
-      <li>Stay signed in here → extension popup → <strong>Scan history (90 days)</strong></li>
-    </ol>
+  return `<div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;${compact ? 'padding:0.85rem 1rem;' : ''}">
+    <strong>App Discovery browser extension</strong>
+    <a class="btn btn-primary${compact ? ' btn-sm' : ''}" href="/extension/app-discovery.zip" download="lilg-app-discovery-extension.zip">Download</a>
   </div>`;
 }
 
@@ -1317,13 +1303,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
     });
   }
   function discovery() {
-    target.innerHTML = `<div style="max-width:640px">
-      <h2 style="margin:0 0 0.5rem;font-size:1.1rem">Install App Discovery extension</h2>
-      <p class="muted" style="margin:0 0 1rem;font-size:0.9rem">
-        Help IT find unsanctioned SaaS used in your browser. Download is available while you are signed in.
-      </p>
-      ${extensionInstallCardHtml()}
-    </div>`;
+    target.innerHTML = `<div style="max-width:480px">${extensionInstallCardHtml()}</div>`;
   }
   function appearance() {
     target.innerHTML = `<div class="card" style="max-width:560px">
