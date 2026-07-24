@@ -578,7 +578,7 @@ To add a new migration:
 | `GET` | `/api/admin/app-discovery/stats` | Discovery counters (new / high-risk / sanctioned) |
 | `POST` | `/api/admin/app-discovery/scan` | Clean noise, reconcile catalog, ingest `browser_app_signals` |
 | `POST` | `/api/admin/app-discovery/:id/promote` | Promote finding into `applications` catalog |
-| `POST` | `/api/me/browser-app-signals` | Authenticated portal reports referrer/resource/launch domains |
+| `POST` | `/api/me/browser-app-signals` | Portal or history-extension reports domains (up to 200; optional `hitCount`) |
 | `GET` | `/api/admin/saml-apps/attribute-fields` | Mappable employee fields + default attribute map |
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
@@ -987,9 +987,9 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ### Phase 5 — Advanced IGA
 
 - ✅ Credential Vault (AES-GCM checkout) + PAM resource/session/system-user inventory (SUPER_ADMIN)
-- ✅ **App Discovery (MVP)** — real signals only: portal browser referrer/resource/launch → `browser_app_signals` → scan ingest; no static SaaS wishlist; promote to catalog
+- ✅ **App Discovery (MVP)** — portal signals + Chrome/Edge history extension (`web/extension/app-discovery`); HTTP disk cache is not readable by browsers; scan ingests `browser_app_signals`
 - JIT elevation / session broker + session recording for high-risk apps
-- App Discovery Phase 2 — Google Workspace audit / proxy log / browser-extension deep discovery
+- App Discovery Phase 2 — Google Workspace audit / proxy / DNS log ingestion
 - SCIM 2.0 *server* (inbound, so Workday / Zoho People can push directly into `employees`)
 - Identity warehouse on Elasticsearch / OpenSearch for slice-and-dice analytics
 - Compliance report templates (SOX, GDPR, HIPAA, PCI) — framework-specific control packs (generic evidence snapshots already live)
@@ -1011,6 +1011,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-23 — App Discovery: browser history extension
+
+**Why** — HTTP disk cache cannot be read by websites or extensions; users need a capable way to find SaaS from the browser.
+
+**What changed:**
+
+- **Extension** — `web/extension/app-discovery` (MV3): scans 90 days of History, reports domains via IdP session tab injection.
+- **API** — `/api/me/browser-app-signals` accepts up to 200 domains + `hitCount` / `extension-history`.
+- **UI** — Discovery tab install steps for Chrome/Edge Load unpacked.
 
 ### `e6e9c72` — 2026-07-23 — App Discovery: browser signals only (no wishlist)
 

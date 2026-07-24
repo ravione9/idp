@@ -403,28 +403,30 @@ export async function updateDiscoveredApp(
   );
 }
 
-/** Persist domains observed in a user's browser session (portal SPA). */
+/** Persist domains observed in a user's browser (portal SPA or history extension). */
 export async function recordBrowserAppSignals(
   empId: string,
-  items: { domain: string; signalType?: string }[],
+  items: { domain: string; signalType?: string; hitCount?: number }[],
 ): Promise<{ accepted: number; skipped: number }> {
   let accepted = 0;
   let skipped = 0;
-  for (const item of items.slice(0, 40)) {
+  // History extension may send up to 200 domains; portal referrer path stays small
+  for (const item of items.slice(0, 200)) {
     const domain = normalizeDomain(item.domain);
     if (!domain || isNoiseDomain(domain)) {
       skipped += 1;
       continue;
     }
     const signalType = (item.signalType || 'referrer').slice(0, 40);
+    const hits = Math.min(10_000, Math.max(1, Number(item.hitCount) || 1));
     try {
       await execute(
         `INSERT INTO browser_app_signals (emp_id, domain, signal_type, hit_count)
-         VALUES (?, ?, ?, 1)
+         VALUES (?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
-           hit_count = hit_count + 1,
+           hit_count = hit_count + VALUES(hit_count),
            last_seen_at = UTC_TIMESTAMP()`,
-        [empId, domain, signalType],
+        [empId, domain, signalType, hits],
       );
       accepted += 1;
     } catch {
@@ -532,7 +534,7 @@ export async function runDiscoveryScan(actorEmpId: string): Promise<{
         lastSeen: sig.last_seen,
         note: 'Observed via portal browser signals (referrer / resources / launches). Not HTTP disk cache.',
       },
-      notes: 'Observed from user browser session signals in the IdP portal',
+      notes: 'Observed from browser signals (portal session and/or history extension)',
       createdBy: actorEmpId,
     });
     if (r.created) browserCreated += 1;

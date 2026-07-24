@@ -46,14 +46,16 @@ const router = Router();
 router.use(requireAuth);
 
 // ---------------------------------------------------------------------------
-// POST /browser-app-signals — domains observed in the portal browser session
-// (referrer / resource hosts / launches). Not HTTP disk cache — browsers block that.
+// POST /browser-app-signals — domains from portal session or history extension.
+// HTTP disk cache is not readable by browsers/extensions; History API is used instead.
 // ---------------------------------------------------------------------------
 const browserSignalsSchema = z.object({
   domains: z.array(z.object({
     domain: z.string().min(3).max(255),
     signalType: z.string().max(40).optional(),
-  })).min(1).max(40),
+    hitCount: z.number().int().min(1).max(10_000).optional(),
+  })).min(1).max(200),
+  source: z.string().max(40).optional(),
 });
 
 router.post('/browser-app-signals', async (req: Request, res: Response): Promise<void> => {
@@ -65,11 +67,19 @@ router.post('/browser-app-signals', async (req: Request, res: Response): Promise
   const result = await recordBrowserAppSignals(
     req.user!.empId,
     parsed.data.domains.map((d) => {
-      const row: { domain: string; signalType?: string } = { domain: d.domain };
+      const row: { domain: string; signalType?: string; hitCount?: number } = { domain: d.domain };
       if (d.signalType !== undefined) row.signalType = d.signalType;
+      else if (parsed.data.source === 'extension-history') row.signalType = 'history';
+      if (d.hitCount !== undefined) row.hitCount = d.hitCount;
       return row;
     }),
   );
+  if (parsed.data.source === 'extension-history') {
+    logger.info(
+      { empId: req.user!.empId, accepted: result.accepted, skipped: result.skipped },
+      'Browser history discovery signals received',
+    );
+  }
   res.json({ success: true, ...result });
 });
 

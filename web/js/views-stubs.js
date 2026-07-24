@@ -3536,8 +3536,22 @@ export async function viewAppDiscovery(content, opts = {}) {
   content.replaceChildren(el(`<div class="disc-page">
     ${embed
       ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actions}</div>`
-      : header('App Discovery', 'Inventory from real browser session signals + manual findings (not a SaaS wishlist)', actions)}
+      : header('App Discovery', 'Inventory from browser history / portal signals + manual findings', actions)}
     <div id="disc-stats" class="stat-grid" style="margin-bottom:1rem">${loading()}</div>
+    <div class="card" style="margin-bottom:1rem;padding:1rem 1.1rem">
+      <strong>Browser history discovery (Chrome / Edge)</strong>
+      <p class="muted" style="margin:0.35rem 0 0.75rem;font-size:0.85rem;max-width:46rem">
+        Websites cannot read HTTP disk cache. Install the IdP extension to scan <em>browser history</em>
+        (sites visited in this browser) — the closest capable signal — then run Discovery Scan below.
+      </p>
+      <ol class="muted" style="margin:0 0 0.75rem 1.1rem;font-size:0.85rem;line-height:1.55">
+        <li>Open <code>chrome://extensions</code> (or <code>edge://extensions</code>) → enable <strong>Developer mode</strong></li>
+        <li><strong>Load unpacked</strong> → folder <code>web/extension/app-discovery</code> (on the IdP host: <code>/extension/app-discovery/</code>)</li>
+        <li>Sign in to this portal in the same browser → extension popup → <strong>Scan history (90 days)</strong></li>
+        <li>Click <strong>Run Discovery Scan</strong> here to refresh inventory</li>
+      </ol>
+      <a class="btn btn-secondary btn-sm" href="/extension/app-discovery/README.md" target="_blank" rel="noopener">Extension docs</a>
+    </div>
     <div class="card ra-filter-card" style="margin-bottom:1rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
       <input class="form-input" id="disc-q" placeholder="Search name or domain…" style="flex:1;min-width:180px">
       <select class="form-select" id="disc-status" style="width:auto">
@@ -3603,9 +3617,9 @@ export async function viewAppDiscovery(content, opts = {}) {
           <div class="empty-icon">🔍</div>
           <p>No discovered apps for this filter.</p>
           <p class="muted" style="font-size:0.85rem;margin-top:0.5rem;max-width:28rem">
-            Discovery uses real signals from users who open the IdP portal (login referrer, page resources, app launches).
-            Browsers block reading full HTTP cache/history. Have users sign in, then run <strong>Run Discovery Scan</strong>,
-            or <strong>+ Add App</strong> manually.
+            Install the browser history extension (instructions above), scan while signed in, then
+            <strong>Run Discovery Scan</strong> — or <strong>+ Add App</strong> manually.
+            HTTP disk cache is not readable; history is used instead.
           </p>
         </div>`;
         return;
@@ -3715,7 +3729,7 @@ export async function viewAppDiscovery(content, opts = {}) {
         reconciled <strong>${r.reconciled ?? 0}</strong> with your catalog,
         browser signals: <strong>${r.browserCreated ?? 0}</strong> new / <strong>${r.browserUpdated ?? 0}</strong> updated.
         <span class="muted" style="display:block;margin-top:0.35rem;font-size:0.85rem">
-          Only domains observed from user portal sessions appear here (not a wishlist). Full browser cache/history is blocked by the browser.
+          Inventory comes from portal signals + history-extension uploads (not a wishlist). HTTP disk cache is not readable by browsers.
         </span>
       </div>`;
       await loadStats(); await loadList();
