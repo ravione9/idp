@@ -1013,7 +1013,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-24 — App Discovery extension downloadable in portal
+### `c6dc6d2` — 2026-07-24 — App Discovery extension downloadable in portal
 
 **Why** — Users needed the extension available in the portal, not only as a server folder path.
 
