@@ -1012,7 +1012,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-23 — App Discovery: browser history extension
+### `4581184` — 2026-07-23 — App Discovery: browser history extension
 
 **Why** — HTTP disk cache cannot be read by websites or extensions; users need a capable way to find SaaS from the browser.
 
