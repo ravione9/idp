@@ -579,6 +579,7 @@ To add a new migration:
 | `POST` | `/api/admin/app-discovery/scan` | Clean noise, reconcile catalog, ingest `browser_app_signals` |
 | `POST` | `/api/admin/app-discovery/:id/promote` | Promote finding into `applications` catalog |
 | `POST` | `/api/me/browser-app-signals` | Portal or history-extension reports domains (up to 200; optional `hitCount`) |
+| `GET` | `/extension/app-discovery.zip` | Authenticated download of Chrome/Edge App Discovery extension package |
 | `GET` | `/api/admin/saml-apps/attribute-fields` | Mappable employee fields + default attribute map |
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
@@ -1011,6 +1012,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-24 — App Discovery extension downloadable in portal
+
+**Why** — Users needed the extension available in the portal, not only as a server folder path.
+
+**What changed:**
+
+- **`GET /extension/app-discovery.zip`** — authenticated zip of the MV3 extension (built on the fly).
+- **UI** — Download + install steps on Home, Account → App Discovery, and Admin Discovery.
 
 ### `4581184` — 2026-07-23 — App Discovery: browser history extension
 

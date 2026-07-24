@@ -29,6 +29,7 @@ import meRouter from './api/me.js';
 import adminLocalUsersRouter from './api/admin-local-users.js';
 import adminSamlAppsRouter from './api/admin-saml-apps.js';
 import adminAppDiscoveryRouter from './api/admin-app-discovery.js';
+import extensionDownloadRouter from './api/extension-download.js';
 import adminDashboardRouter from './api/admin-dashboard.js';
 import adminAuditRouter from './api/admin-audit.js';
 import adminUsersRouter from './api/admin-users.js';
@@ -232,6 +233,11 @@ app.use('/api/admin/radius', configRadiusRouter);
 app.use('/api/internal',      internalRouter);
 app.use('/api/internal/saml', internalSamlRouter);
 app.use('/api/internal/radius', internalRadiusRouter);
+
+// ---------------------------------------------------------------------------
+// Portal downloads (authenticated) — before static so .zip is not 404'd
+// ---------------------------------------------------------------------------
+app.use('/extension', extensionDownloadRouter);
 
 // ---------------------------------------------------------------------------
 // Web UI (login + admin central)

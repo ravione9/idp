@@ -5,6 +5,28 @@ import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import { captureLoginReferrer, rememberAppLaunch, wireAppLaunchTracking } from './browser-discovery.js';
 
+/** Portal install card for the Chrome/Edge App Discovery extension (.zip download). */
+export function extensionInstallCardHtml(opts = {}) {
+  const compact = !!opts.compact;
+  return `<div class="card" style="${compact ? 'padding:0.9rem 1rem;' : ''}">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px">
+        <strong>App Discovery browser extension</strong>
+        <p class="muted" style="margin:0.35rem 0 0;font-size:0.85rem;max-width:36rem">
+          Scan this browser’s history for SaaS apps and send them to IdP App Discovery.
+          Download the package, extract it, then Load unpacked in Chrome or Edge.
+        </p>
+      </div>
+      <a class="btn btn-primary" href="/extension/app-discovery.zip" download="lilg-app-discovery-extension.zip">Download extension</a>
+    </div>
+    <ol class="muted" style="margin:0.85rem 0 0 1.1rem;font-size:0.82rem;line-height:1.55">
+      <li>Download and unzip <code>lilg-app-discovery-extension.zip</code></li>
+      <li>Open <code>chrome://extensions</code> or <code>edge://extensions</code> → enable <strong>Developer mode</strong></li>
+      <li><strong>Load unpacked</strong> → select the extracted folder</li>
+      <li>Stay signed in here → extension popup → <strong>Scan history (90 days)</strong></li>
+    </ol>
+  </div>`;
+}
 
 function loginReturnTo() {
   const raw = new URLSearchParams(location.search).get('returnTo');
@@ -510,6 +532,8 @@ export async function viewHome(me, content, initialTab = 'all') {
         </div>
       </div>
 
+      <div style="margin:0 0 1rem">${extensionInstallCardHtml({ compact: true })}</div>
+
       <div class="apps-section">
         <div class="home-toolbar">
           <input class="form-input" id="home-search" placeholder="Search applications…">
@@ -997,7 +1021,7 @@ export async function viewMyTasks(content) {
 /* ---------- Settings (Profile / Security / Sessions / MFA) ---------- */
 export async function viewSettings(me, content, initialTab = 'profile') {
   const isLocal = me.session?.iss === 'local';
-  const tabs = ['profile', ...(isLocal ? ['security'] : []), 'sessions', 'mfa', 'appearance'];
+  const tabs = ['profile', ...(isLocal ? ['security'] : []), 'sessions', 'mfa', 'discovery', 'appearance'];
   const validTab = tabs.includes(initialTab) ? initialTab : 'profile';
   const wrap = el(`
     <div class="enduser-page enduser-settings">
@@ -1007,6 +1031,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
         ${isLocal ? `<button class="tab${validTab === 'security' ? ' active' : ''}" data-tab="security">Security</button>` : ''}
         <button class="tab${validTab === 'sessions' ? ' active' : ''}" data-tab="sessions">Sessions</button>
         <button class="tab${validTab === 'mfa' ? ' active' : ''}" data-tab="mfa">Two-factor</button>
+        <button class="tab${validTab === 'discovery' ? ' active' : ''}" data-tab="discovery">App Discovery</button>
         <button class="tab${validTab === 'appearance' ? ' active' : ''}" data-tab="appearance">Appearance</button>
       </div>
       <div id="settings-content"><div class="loading-row"><span class="spinner"></span></div></div>
@@ -1291,6 +1316,15 @@ export async function viewSettings(me, content, initialTab = 'profile') {
       }
     });
   }
+  function discovery() {
+    target.innerHTML = `<div style="max-width:640px">
+      <h2 style="margin:0 0 0.5rem;font-size:1.1rem">Install App Discovery extension</h2>
+      <p class="muted" style="margin:0 0 1rem;font-size:0.9rem">
+        Help IT find unsanctioned SaaS used in your browser. Download is available while you are signed in.
+      </p>
+      ${extensionInstallCardHtml()}
+    </div>`;
+  }
   function appearance() {
     target.innerHTML = `<div class="card" style="max-width:560px">
       <h2>Appearance</h2>
@@ -1307,6 +1341,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
     else if (name === 'security') security();
     else if (name === 'sessions') sessions();
     else if (name === 'mfa') mfa();
+    else if (name === 'discovery') discovery();
     else if (name === 'appearance') appearance();
   }
   wrap.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => showTab(tab.dataset.tab)));

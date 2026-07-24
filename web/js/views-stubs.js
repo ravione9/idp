@@ -3539,18 +3539,21 @@ export async function viewAppDiscovery(content, opts = {}) {
       : header('App Discovery', 'Inventory from browser history / portal signals + manual findings', actions)}
     <div id="disc-stats" class="stat-grid" style="margin-bottom:1rem">${loading()}</div>
     <div class="card" style="margin-bottom:1rem;padding:1rem 1.1rem">
-      <strong>Browser history discovery (Chrome / Edge)</strong>
-      <p class="muted" style="margin:0.35rem 0 0.75rem;font-size:0.85rem;max-width:46rem">
-        Websites cannot read HTTP disk cache. Install the IdP extension to scan <em>browser history</em>
-        (sites visited in this browser) — the closest capable signal — then run Discovery Scan below.
-      </p>
-      <ol class="muted" style="margin:0 0 0.75rem 1.1rem;font-size:0.85rem;line-height:1.55">
-        <li>Open <code>chrome://extensions</code> (or <code>edge://extensions</code>) → enable <strong>Developer mode</strong></li>
-        <li><strong>Load unpacked</strong> → folder <code>web/extension/app-discovery</code> (on the IdP host: <code>/extension/app-discovery/</code>)</li>
-        <li>Sign in to this portal in the same browser → extension popup → <strong>Scan history (90 days)</strong></li>
-        <li>Click <strong>Run Discovery Scan</strong> here to refresh inventory</li>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap">
+        <div>
+          <strong>Browser history discovery (Chrome / Edge)</strong>
+          <p class="muted" style="margin:0.35rem 0 0;font-size:0.85rem;max-width:40rem">
+            Users can download the extension from Home or Account → App Discovery.
+            After they scan history, click <strong>Run Discovery Scan</strong> below to refresh inventory.
+          </p>
+        </div>
+        <a class="btn btn-primary btn-sm" href="/extension/app-discovery.zip" download="lilg-app-discovery-extension.zip">Download extension</a>
+      </div>
+      <ol class="muted" style="margin:0.85rem 0 0 1.1rem;font-size:0.85rem;line-height:1.55">
+        <li>Download zip → extract → <code>chrome://extensions</code> / <code>edge://extensions</code> → Developer mode → <strong>Load unpacked</strong></li>
+        <li>Sign in to the portal → extension popup → <strong>Scan history (90 days)</strong></li>
+        <li>Return here → <strong>Run Discovery Scan</strong></li>
       </ol>
-      <a class="btn btn-secondary btn-sm" href="/extension/app-discovery/README.md" target="_blank" rel="noopener">Extension docs</a>
     </div>
     <div class="card ra-filter-card" style="margin-bottom:1rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
       <input class="form-input" id="disc-q" placeholder="Search name or domain…" style="flex:1;min-width:180px">

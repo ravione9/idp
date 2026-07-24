@@ -4,12 +4,15 @@ Browsers **cannot** expose HTTP disk cache to websites or extensions. This exten
 
 ## Install (Chrome / Edge)
 
-1. Open `chrome://extensions` (or `edge://extensions`).
-2. Enable **Developer mode**.
-3. **Load unpacked** → select this folder (`web/extension/app-discovery`).
-4. Sign in to the IdP portal in the same browser.
-5. Open the extension popup → set IdP URL if needed → **Scan history (90 days)**.
-6. In Admin → **Applications → Discovery** → **Run Discovery Scan**.
+**From the portal (recommended):** Home or Account → **App Discovery** → **Download extension**, then:
+
+1. Unzip `lilg-app-discovery-extension.zip`.
+2. Open `chrome://extensions` (or `edge://extensions`) → enable **Developer mode**.
+3. **Load unpacked** → select the extracted folder.
+4. Stay signed in to the IdP portal → extension popup → **Scan history (90 days)**.
+5. Admin runs **Applications → Discovery → Run Discovery Scan**.
+
+Direct download URL (must be signed in): `/extension/app-discovery.zip`
 
 ## Permissions
 
