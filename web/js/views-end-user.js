@@ -197,7 +197,7 @@ export function renderLogin() {
         <p class="subtitle" style="margin-top:0.75rem;text-align:center">Or enter this secret: <code>${esc(r.secret)}</code></p>
         <form id="enroll-confirm-form" style="margin-top:1rem">
           <div class="field"><label>6-digit code</label>
-            <input name="code" type="password" required pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" placeholder="••••••" />
+            <input name="code" type="text" required inputmode="numeric" autocomplete="one-time-code" maxlength="16" spellcheck="false" placeholder="123456" autofocus />
           </div>
           <button type="submit" class="btn btn-primary btn-block btn-lg">Verify and sign in</button>
         </form>
@@ -207,7 +207,7 @@ export function renderLogin() {
         const out = bodyEl.querySelector('#enroll-confirm-result');
         out.innerHTML = '';
         try {
-          const code = new FormData(e.target).get('code');
+          const code = String(new FormData(e.target).get('code') || '').replace(/\s+/g, '').trim();
           const r2 = await api.localLoginMfaEnrollConfirm(enrollChallengeId, code);
           out.innerHTML = `<div class="alert alert-success" style="margin-top:1rem">Two-factor enabled. Save your backup codes — shown only once.</div>
             <div class="alert alert-warning" style="margin-top:0.5rem"><div>
@@ -232,7 +232,7 @@ export function renderLogin() {
   function renderMfaStep(challengeId, email, availableMethods = ['totp']) {
     const methods = new Set(availableMethods || ['totp']);
     const hintParts = [];
-    if (methods.has('totp')) hintParts.push('Authenticator code');
+    if (methods.has('totp')) hintParts.push('6-digit authenticator code');
     if (methods.has('backup_codes')) hintParts.push('backup code');
     if (methods.has('email_otp') || methods.has('sms_otp')) hintParts.push('email/SMS OTP');
     const hint = hintParts.length
@@ -245,27 +245,40 @@ export function renderLogin() {
         <div id="mfa-error"></div>
         <form id="mfa-form">
           <div class="field"><label>Verification code</label>
-            <input name="code" type="password" required pattern="[0-9]{6,8}" inputmode="numeric" autocomplete="one-time-code" placeholder="••••••" />
+            <input id="mfa-code" name="code" type="text" required inputmode="numeric" autocomplete="one-time-code" enterkeyhint="done" maxlength="16" spellcheck="false" autocapitalize="off" placeholder="123456" />
             <p class="hint">${esc(hint)}</p></div>
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
             ${methods.has('email_otp') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-send-email">Email me a code</button>' : ''}
             ${methods.has('sms_otp') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-send-sms">Text me a code</button>' : ''}
             ${methods.has('webauthn') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-use-passkey">Use passkey</button>' : ''}
           </div>
-          <button type="submit" class="btn btn-primary btn-block btn-lg">Verify</button>
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="mfa-verify-btn">Verify</button>
         </form>
       </div>
     `);
     panel.replaceChildren(card);
     const merr = card.querySelector('#mfa-error');
+    const codeInput = card.querySelector('#mfa-code');
+    codeInput?.focus();
     card.querySelector('#mfa-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       merr.innerHTML = '';
+      const btn = card.querySelector('#mfa-verify-btn');
+      const raw = String(new FormData(e.target).get('code') || '');
+      const code = raw.replace(/\s+/g, '').trim();
+      if (code.length < 6) {
+        merr.innerHTML = `<div class="alert alert-error">Enter the full code from your authenticator app.</div>`;
+        return;
+      }
+      btn.disabled = true;
       try {
-        await api.localLoginMfa(challengeId, new FormData(e.target).get('code'));
-        location.href = returnTo;
+        const r = await api.localLoginMfa(challengeId, code);
+        location.href = r?.redirect || returnTo || '/';
       } catch (err) {
         merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+        btn.disabled = false;
+        codeInput.value = '';
+        codeInput.focus();
       }
     });
     card.querySelector('#mfa-send-email')?.addEventListener('click', async () => {
@@ -344,7 +357,7 @@ export function renderLogin() {
       pwErr.innerHTML = '';
       const password = new FormData(e.target).get('password');
       try {
-        const r = await api.localLogin(email, password);
+        const r = await api.localLogin(email, password, returnTo);
         if (r && r.enrollRequired && r.enrollChallengeId) {
           renderMfaEnrollStep(r.enrollChallengeId, email, {
             graceActive: !!r.graceActive,
@@ -356,7 +369,7 @@ export function renderLogin() {
           renderMfaStep(r.challengeId, email, r.availableMethods);
           return;
         }
-        location.href = returnTo;
+        location.href = r?.redirect || returnTo || '/';
       } catch (err) {
         pwErr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }
@@ -1214,7 +1227,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
           <img src="${esc(r.qrDataUrl)}" alt="" style="background:white;padding:0.5rem;border-radius:8px;max-width:220px" />
           <p class="subtitle" style="margin-top:0.75rem">Secret: <code>${esc(r.secret)}</code></p>
           <form id="mfa-confirm" style="margin-top:1rem">
-            <div class="field"><label>6-digit code</label><input name="code" type="password" required pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" placeholder="••••••" /></div>
+            <div class="field"><label>6-digit code</label><input name="code" type="text" required inputmode="numeric" autocomplete="one-time-code" maxlength="16" spellcheck="false" placeholder="123456" /></div>
             <button class="btn btn-primary" type="submit">Verify and enable</button>
           </form>
           <div id="mfa-confirm-result"></div>
@@ -1247,7 +1260,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
         const r = await sendFn();
         msgEl.innerHTML = `<form class="mfa-otp-confirm" style="margin-top:0.65rem">
           <div class="field"><label>Enter 6-digit code</label>
-            <input name="code" type="password" required pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" placeholder="••••••" />
+            <input name="code" type="text" required inputmode="numeric" autocomplete="one-time-code" maxlength="16" spellcheck="false" placeholder="123456" />
           </div>
           ${r.devCode ? `<p class="form-hint">Dev code: <code>${esc(r.devCode)}</code></p>` : ''}
           <button class="btn btn-primary btn-sm" type="submit">Confirm</button>

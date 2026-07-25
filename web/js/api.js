@@ -62,14 +62,14 @@ Object.assign(api, {
     return `/api/admin/audit/${kind}?${q}`;
   },
 
-  localLogin: (email, password) =>
-    f('/auth/local/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  localLogin: (email, password, returnTo) =>
+    f('/auth/local/login', { method: 'POST', body: JSON.stringify({ email, password, ...(returnTo ? { returnTo } : {}) }) }),
   localLoginMfa:    (challengeId, code) =>
-    f('/auth/local/login/mfa-verify', { method: 'POST', body: JSON.stringify({ challengeId, code }) }),
+    f('/auth/local/login/mfa-verify', { method: 'POST', body: JSON.stringify({ challengeId, code: String(code || '').replace(/\s+/g, '').trim() }) }),
   localLoginMfaEnroll: (enrollChallengeId) =>
     f('/auth/local/login/mfa-enroll', { method: 'POST', body: JSON.stringify({ enrollChallengeId }) }),
   localLoginMfaEnrollConfirm: (enrollChallengeId, code) =>
-    f('/auth/local/login/mfa-enroll/confirm', { method: 'POST', body: JSON.stringify({ enrollChallengeId, code }) }),
+    f('/auth/local/login/mfa-enroll/confirm', { method: 'POST', body: JSON.stringify({ enrollChallengeId, code: String(code || '').replace(/\s+/g, '').trim() }) }),
   localLoginMfaEnrollDefer: (enrollChallengeId) =>
     f('/auth/local/login/mfa-enroll/defer', { method: 'POST', body: JSON.stringify({ enrollChallengeId }) }),
   logout:           () => f('/auth/logout', { method: 'POST' }),

@@ -374,6 +374,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
         mfa_challenge: challengeId,
         email,
         return_to: returnTo,
+        returnTo,
         mfa_methods: availableMethods.join(','),
       });
       res.redirect(`/login?${params.toString()}`);

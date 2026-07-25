@@ -26,10 +26,14 @@ const TOTP_BASE = {
   strategy: 'totp' as const,
   digits: 6 as const,
   period: 30,
+  algorithm: 'sha1' as const,
 };
 
-/** ±2 TOTP steps — tolerates mild clock skew (v12 used window: 1 = ±30s). */
-const TOTP_VERIFY = { ...TOTP_BASE, epochTolerance: 60 };
+/**
+ * ±3 TOTP steps (±90s). Phone/server clock skew is a common cause of
+ * intermittent “invalid code” during app SSO login.
+ */
+const TOTP_VERIFY = { ...TOTP_BASE, epochTolerance: 90 };
 
 /**
  * otplib v12 defaulted to 10-byte secrets; v13 rejects those unless MIN_SECRET_BYTES
@@ -39,10 +43,19 @@ const LEGACY_TOTP_GUARDRAILS = createGuardrails({ MIN_SECRET_BYTES: 10 });
 
 const ISSUER = 'Lenskart IdP';
 
+function normalizeTotpToken(code: string): string {
+  return code.replace(/\s+/g, '').trim();
+}
+
+/** Base32 secrets from apps/DB may be mixed-case or padded with '='. */
+function normalizeTotpSecret(secret: string): string {
+  return secret.replace(/\s+/g, '').replace(/=+$/g, '').trim().toUpperCase();
+}
+
 async function checkTotp(code: string, secret: string): Promise<boolean> {
-  const token = code.replace(/\s+/g, '').trim();
+  const token = normalizeTotpToken(code);
   if (!/^\d{6}$/.test(token)) return false;
-  const secretB32 = secret.replace(/\s+/g, '').trim().toUpperCase();
+  const secretB32 = normalizeTotpSecret(secret);
   if (!secretB32) return false;
   try {
     const result = await verify({
@@ -51,7 +64,21 @@ async function checkTotp(code: string, secret: string): Promise<boolean> {
       ...TOTP_VERIFY,
       guardrails: LEGACY_TOTP_GUARDRAILS,
     });
-    return result.valid;
+    if (result.valid) return true;
+
+    // Retry once around period boundary (client typed near rollover).
+    const epoch = Math.floor(Date.now() / 1000);
+    for (const delta of [-30, 30]) {
+      const again = await verify({
+        secret: secretB32,
+        token,
+        ...TOTP_VERIFY,
+        epoch: epoch + delta,
+        guardrails: LEGACY_TOTP_GUARDRAILS,
+      });
+      if (again.valid) return true;
+    }
+    return false;
   } catch (err) {
     logger.warn(
       { err: err instanceof Error ? err.message : String(err) },

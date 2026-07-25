@@ -1013,6 +1013,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `pending` — 2026-07-25 — TOTP login reliability (SSO / app login)
+
+**Why** — Intermittent MFA failures when signing in directly to an application (SAML resume): restrictive OTP input, clock skew, challenge TTL.
+
+**What changed:**
+
+- TOTP verify: normalize secret/token, ±90s tolerance, period-boundary retry.
+- Login MFA UI: text OTP field (no `pattern`/password type), autofocus, strip spaces, use server `redirect`.
+- MFA challenge TTL 10 minutes; local login stores `returnTo` for post-MFA app resume.
+
 ### `c6dc6d2` — 2026-07-24 — App Discovery extension downloadable in portal
 
 **Why** — Users needed the extension available in the portal, not only as a server folder path.

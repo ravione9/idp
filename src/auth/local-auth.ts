@@ -53,16 +53,21 @@ import { PORTAL_OPERATOR_ROLES } from '../services/portal-roles.js';
 export const MFA_CHALLENGE_PREFIX        = 'lilg:mfa-challenge:';
 export const MFA_ENROLL_CHALLENGE_PREFIX = 'lilg:mfa-enroll-challenge:';
 const MFA_GRACE_PREFIX            = 'lilg:mfa-grace:';
-export const MFA_CHALLENGE_TTL_S         = 300; // 5 min
+export const MFA_CHALLENGE_TTL_S         = 600; // 10 min — SSO app login often pauses on authenticator
 
 const loginSchema = z.object({
   email:    z.string().email(),
   password: z.string().min(8),
+  /** Safe relative path so MFA/session can continue to SAML resume / app launch. */
+  returnTo: z.string().max(500).optional(),
 });
+
+/** Allow spaced paste ("123 456"); normalize before verify. */
+const mfaCodeSchema = z.string().min(6).max(16).transform((raw) => raw.replace(/\s+/g, '').trim());
 
 const verifySchema = z.object({
   challengeId: z.string().uuid(),
-  code:        z.string().min(6).max(8),
+  code:        mfaCodeSchema,
 });
 
 const enrollChallengeSchema = z.object({
@@ -71,8 +76,13 @@ const enrollChallengeSchema = z.object({
 
 const enrollConfirmSchema = z.object({
   enrollChallengeId: z.string().uuid(),
-  code:              z.string().min(6).max(8),
+  code:              mfaCodeSchema,
 });
+
+function safeChallengeReturnTo(raw: string | undefined): string | undefined {
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//')) return undefined;
+  return raw.slice(0, 500);
+}
 
 export interface MfaChallenge {
   empId:     string;
@@ -434,12 +444,14 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
     if (mfaRequired) {
       if (!mfa.enabled) {
         const enrollChallengeId = crypto.randomUUID();
+        const enrollReturnTo = safeChallengeReturnTo(parsed.data.returnTo);
         const enrollChallenge: MfaEnrollChallenge = {
           empId:     account.emp_id,
           email:     account.email,
           role:      account.role,
           accountId: account.id,
           createdAt: Date.now(),
+          ...(enrollReturnTo ? { returnTo: enrollReturnTo } : {}),
         };
         await redis.set(
           `${MFA_ENROLL_CHALLENGE_PREFIX}${enrollChallengeId}`,
@@ -460,6 +472,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
       }
 
       const challengeId = crypto.randomUUID();
+      const returnTo = safeChallengeReturnTo(parsed.data.returnTo);
       const challenge: MfaChallenge = {
         empId:     account.emp_id,
         email:     account.email,
@@ -467,6 +480,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
         accountId: account.id,
         createdAt: Date.now(),
         stepUp:    adaptive.action === 'STEP_UP',
+        ...(returnTo ? { returnTo } : {}),
       };
       await redis.set(
         `${MFA_CHALLENGE_PREFIX}${challengeId}`,
@@ -510,10 +524,15 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
   }
 
   const challenge = JSON.parse(raw) as MfaChallenge;
-  const ok = await verifyAnyMfaCode(challenge.empId, parsed.data.code);
+  const code = parsed.data.code;
+  if (code.length < 6 || code.length > 8) {
+    res.status(400).json({ error: 'Enter a 6-digit authenticator code (or 8-character backup code)' });
+    return;
+  }
+  const ok = await verifyAnyMfaCode(challenge.empId, code);
   if (!ok) {
     await logAttempt(challenge.email, getClientIp(req), false, 'mfa-bad-code');
-    res.status(401).json({ error: 'Invalid verification code' });
+    res.status(401).json({ error: 'Invalid or expired verification code — try the next code from your app' });
     return;
   }
 
