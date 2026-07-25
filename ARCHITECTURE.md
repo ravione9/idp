@@ -1013,7 +1013,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-25 — TOTP login reliability (SSO / app login)
+### `81743d6` — 2026-07-25 — TOTP login reliability (SSO / app login)
 
 **Why** — Intermittent MFA failures when signing in directly to an application (SAML resume): restrictive OTP input, clock skew, challenge TTL.
 
