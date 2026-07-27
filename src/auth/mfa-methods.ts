@@ -220,7 +220,8 @@ export async function buildMfaMethodDetails(
   }
 
   const emailRow = enrollments.find((r) => r.method === 'email_otp' && r.enabled === 1);
-  if (emailRow || methods.includes('email_otp')) {
+  // Always expose corp email when present so login can offer Email OTP if policy allows
+  if (emailRow || email) {
     methodDetails.email_otp = {
       enabled: !!emailRow,
       ...(email ? { email } : {}),
@@ -228,8 +229,8 @@ export async function buildMfaMethodDetails(
   }
 
   const smsRow = enrollments.find((r) => r.method === 'sms_otp' && r.enabled === 1);
-  if (smsRow || methods.includes('sms_otp')) {
-    const phone = mobile ?? undefined;
+  const phone = mobile?.trim() || undefined;
+  if (smsRow || phone) {
     const masked = phone ? maskPhone(phone) : undefined;
     methodDetails.sms_otp = {
       enabled: !!smsRow,

@@ -1013,6 +1013,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `pending` — 2026-07-27 — Show Email/SMS OTP on login when policy allows
+
+**Why** — Enabling Email OTP in MFA policy did not show “Email me a code” at login unless the user had separately enrolled.
+
+**What changed:**
+
+- Login challenge offers `email_otp` / `sms_otp` when allowed by policy and corp email / mobile exists.
+- Login OTP verify no longer requires prior enrollment (first success auto-enrolls).
+
 ### `81743d6` — 2026-07-25 — TOTP login reliability (SSO / app login)
 
 **Why** — Intermittent MFA failures when signing in directly to an application (SAML resume): restrictive OTP input, clock skew, challenge TTL.

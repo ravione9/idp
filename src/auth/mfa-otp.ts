@@ -200,12 +200,34 @@ export async function isOtpMethodEnabled(empId: string, channel: OtpChannel): Pr
   return row?.enabled === 1;
 }
 
+/**
+ * Accept login OTPs when the channel is allowed by policy.
+ * Prior enrollment is not required — first successful use records enrollment.
+ */
 export async function verifyAnyOtpLogin(empId: string, code: string): Promise<MfaMethodKey | null> {
-  if (await isOtpMethodEnabled(empId, 'email_otp')) {
-    if (await verifyOtpCode(empId, 'email_otp', code, 'login')) return 'email_otp';
+  if (await isMethodAllowed('email_otp', empId)) {
+    if (await verifyOtpCode(empId, 'email_otp', code, 'login')) {
+      if (!(await isOtpMethodEnabled(empId, 'email_otp'))) {
+        const emp = await queryOne<{ email_corp: string }>(
+          'SELECT email_corp FROM employees WHERE emp_id = ? LIMIT 1',
+          [empId],
+        );
+        await setMethodEnrollment(empId, 'email_otp', true, { email: emp?.email_corp ?? null });
+      }
+      return 'email_otp';
+    }
   }
-  if (await isOtpMethodEnabled(empId, 'sms_otp')) {
-    if (await verifyOtpCode(empId, 'sms_otp', code, 'login')) return 'sms_otp';
+  if (await isMethodAllowed('sms_otp', empId)) {
+    if (await verifyOtpCode(empId, 'sms_otp', code, 'login')) {
+      if (!(await isOtpMethodEnabled(empId, 'sms_otp'))) {
+        const emp = await queryOne<{ mobile: string | null }>(
+          'SELECT mobile FROM employees WHERE emp_id = ? LIMIT 1',
+          [empId],
+        );
+        await setMethodEnrollment(empId, 'sms_otp', true, { phone: emp?.mobile ?? null });
+      }
+      return 'sms_otp';
+    }
   }
   return null;
 }

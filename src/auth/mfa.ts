@@ -158,12 +158,33 @@ export async function getMfaStatus(empId: string): Promise<MfaStatus> {
   };
 }
 
-/** Enrolled methods that are still allowed by policy — used for login challenge UI. */
+/**
+ * Methods shown on the login MFA challenge.
+ * Includes enrolled methods, plus email/SMS OTP when policy allows and contact info exists
+ * (users should not need a separate enrollment step just to receive a login code).
+ */
 export function challengeMethodsFromStatus(status: MfaStatus): MfaMethodKey[] {
   const allowed = new Set(status.allowedMethods ?? []);
   const enrolled = status.methods ?? [];
-  const filtered = enrolled.filter((m) => allowed.has(m));
-  return filtered.length ? filtered : (allowed.has('totp') ? ['totp'] : [...allowed].slice(0, 1));
+  const out: MfaMethodKey[] = [];
+  for (const m of enrolled) {
+    if (allowed.has(m) && !out.includes(m)) out.push(m);
+  }
+
+  if (allowed.has('email_otp') && !out.includes('email_otp') && status.methodDetails?.email_otp?.email) {
+    out.push('email_otp');
+  }
+  if (
+    allowed.has('sms_otp')
+    && !out.includes('sms_otp')
+    && (status.methodDetails?.sms_otp?.phone || status.methodDetails?.sms_otp?.maskedPhone)
+  ) {
+    out.push('sms_otp');
+  }
+
+  if (out.length) return out;
+  if (allowed.has('totp')) return ['totp'];
+  return [...allowed].slice(0, 1);
 }
 
 export interface EnrollResult {
