@@ -1021,7 +1021,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-27 — Fix user vault migration collation for FK
+### `0fb67b6` — 2026-07-27 — Fix user vault migration collation for FK
 
 **Why** — `051` failed on MySQL 8: `emp_id` defaulted to `utf8mb4_0900_ai_ci` while `employees.emp_id` is `utf8mb4_unicode_ci` (`ER_FK_INCOMPATIBLE_COLUMNS`). Migration never applied.
 
