@@ -56,6 +56,8 @@ const browserSignalsSchema = z.object({
     hitCount: z.number().int().min(1).max(10_000).optional(),
   })).min(1).max(200),
   source: z.string().max(40).optional(),
+  /** When true (default for extension-history), write into discovered_apps immediately. */
+  ingest: z.boolean().optional(),
 });
 
 router.post('/browser-app-signals', async (req: Request, res: Response): Promise<void> => {
@@ -64,19 +66,29 @@ router.post('/browser-app-signals', async (req: Request, res: Response): Promise
     res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     return;
   }
+  const fromExtension = parsed.data.source === 'extension-history';
+  const ingest = parsed.data.ingest ?? fromExtension;
   const result = await recordBrowserAppSignals(
     req.user!.empId,
     parsed.data.domains.map((d) => {
       const row: { domain: string; signalType?: string; hitCount?: number } = { domain: d.domain };
       if (d.signalType !== undefined) row.signalType = d.signalType;
-      else if (parsed.data.source === 'extension-history') row.signalType = 'history';
+      else if (fromExtension) row.signalType = 'history';
       if (d.hitCount !== undefined) row.hitCount = d.hitCount;
       return row;
     }),
+    { ingest },
   );
-  if (parsed.data.source === 'extension-history') {
+  if (fromExtension) {
     logger.info(
-      { empId: req.user!.empId, accepted: result.accepted, skipped: result.skipped },
+      {
+        empId: req.user!.empId,
+        accepted: result.accepted,
+        skipped: result.skipped,
+        inventoryCreated: result.inventoryCreated,
+        inventoryUpdated: result.inventoryUpdated,
+        catalogMatched: result.catalogMatched,
+      },
       'Browser history discovery signals received',
     );
   }

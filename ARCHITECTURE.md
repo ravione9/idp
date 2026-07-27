@@ -1013,7 +1013,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-27 — Add nodemailer dependency for SMTP Email OTP
+### `pending` — 2026-07-27 — App Discovery extension: reliable upload + instant inventory
+
+**Why** — Extension scan produced no inventory: upload relied on fragile tab injection, history query was empty for some Chrome builds, and signals required a separate admin scan.
+
+**What changed:**
+
+- Extension **1.1.0** — history without empty `text`, plus open tabs; direct cookie fetch with tab fallback; clearer status.
+- **API** — `POST /api/me/browser-app-signals` with `ingest:true` writes `discovered_apps` immediately (skips catalog matches).
+
+### `ec91a3a` — 2026-07-27 — Add nodemailer dependency for SMTP Email OTP
 
 **Why** — Runtime error: `Cannot find package 'nodemailer'` when SMTP delivery was selected.
 

@@ -403,17 +403,36 @@ export async function updateDiscoveredApp(
   );
 }
 
-/** Persist domains observed in a user's browser (portal SPA or history extension). */
+/**
+ * Persist domains from portal / history extension.
+ * When ingest=true (default for extension uploads), also write non-catalog
+ * domains into discovered_apps immediately so inventory updates without a
+ * separate admin “Run Discovery Scan”.
+ */
 export async function recordBrowserAppSignals(
   empId: string,
   items: { domain: string; signalType?: string; hitCount?: number }[],
-): Promise<{ accepted: number; skipped: number }> {
+  opts?: { ingest?: boolean },
+): Promise<{
+  accepted: number;
+  skipped: number;
+  inventoryCreated: number;
+  inventoryUpdated: number;
+  catalogMatched: number;
+}> {
+  const ingest = opts?.ingest !== false;
+  const catalog = ingest ? await loadCatalogApps() : [];
   let accepted = 0;
   let skipped = 0;
-  // History extension may send up to 200 domains; portal referrer path stays small
+  let inventoryCreated = 0;
+  let inventoryUpdated = 0;
+  let catalogMatched = 0;
+
   for (const item of items.slice(0, 200)) {
-    const domain = normalizeDomain(item.domain);
-    if (!domain || isNoiseDomain(domain)) {
+    // Prefer eTLD+1 so accounts.slack.com → slack.com inventory row
+    const raw = normalizeDomain(item.domain);
+    const domain = raw ? registrableHint(raw) : '';
+    if (!domain || isNoiseDomain(domain) || isNoiseDomain(raw)) {
       skipped += 1;
       continue;
     }
@@ -431,9 +450,38 @@ export async function recordBrowserAppSignals(
       accepted += 1;
     } catch {
       skipped += 1;
+      continue;
     }
+
+    if (!ingest) continue;
+
+    const name = titleFromDomain(domain);
+    if (discoveryMatchesCatalog({ name, domain }, catalog)) {
+      catalogMatched += 1;
+      continue;
+    }
+    const meta = vendorMeta(domain);
+    const r = await upsertDiscoveredApp({
+      name,
+      domain,
+      category: meta.category,
+      source: 'BROWSER',
+      riskLevel: meta.risk,
+      userCount: 1,
+      hitCount: hits,
+      evidence: {
+        from: 'browser_app_signals',
+        signalType,
+        note: 'Ingested from browser history / portal signals',
+      },
+      notes: 'Observed from browser history extension or portal signals',
+      createdBy: empId,
+    });
+    if (r.created) inventoryCreated += 1;
+    else inventoryUpdated += 1;
   }
-  return { accepted, skipped };
+
+  return { accepted, skipped, inventoryCreated, inventoryUpdated, catalogMatched };
 }
 
 /**

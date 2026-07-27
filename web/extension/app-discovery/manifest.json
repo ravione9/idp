@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lenskart IdP — App Discovery",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Scans browser history for SaaS / web apps and reports domains to Lenskart IdP App Discovery. (HTTP disk cache is not readable by browsers or extensions; history is the closest capable API.)",
   "permissions": ["history", "storage", "alarms", "cookies", "tabs", "scripting"],
   "host_permissions": [
