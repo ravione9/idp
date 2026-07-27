@@ -88,9 +88,7 @@ export async function deliverEmail(
     throw new Error('SMTP is not configured — set Email OTP delivery in Admin → MFA Methods');
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const nodemailer = await import('nodemailer' as any) as any;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+  const nodemailer = await import('nodemailer');
   const transporter = nodemailer.default.createTransport({
     host: smtp.host,
     port: smtp.port,
@@ -100,7 +98,6 @@ export async function deliverEmail(
       : undefined,
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
   await transporter.sendMail({
     from: smtp.from || 'noreply@lenskart.com',
     to: recipientEmail,
