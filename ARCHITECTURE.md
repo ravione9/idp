@@ -1013,7 +1013,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-27 — App Discovery: portal “Scan from browser” + extension 1.2
+### `6f8ab1a` — 2026-07-27 — App Discovery: portal “Scan from browser” + extension 1.2
 
 **Why** — Users could not find Preview in the extension and got no Discovery results.
 
