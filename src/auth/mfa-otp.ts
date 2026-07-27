@@ -7,7 +7,7 @@ import bcrypt from 'bcryptjs';
 import { queryOne } from '../db/connection.js';
 import { redis } from './session-store.js';
 import logger from '../utils/logger.js';
-import { sendNotification } from '../services/notification.js';
+import { sendTransactionalEmail } from '../services/notification.js';
 import { getMfaDeliveryConfig } from '../services/mfa-delivery-config.js';
 import {
   isMethodAllowed,
@@ -105,18 +105,32 @@ export async function sendEmailOtp(
   const subject = purpose === 'enroll'
     ? 'Lenskart IdP — verify Email OTP enrollment'
     : 'Lenskart IdP — sign-in verification code';
-  const body = `Your verification code is ${code}. It expires in 5 minutes. Do not share this code.`;
+  const body = [
+    'Your Lenskart IdP verification code is:',
+    '',
+    `    ${code}`,
+    '',
+    'This code expires in 5 minutes. Do not share it with anyone.',
+    'If you did not request this, you can ignore this email.',
+  ].join('\n');
 
   const delivery = await getMfaDeliveryConfig();
   try {
-    await sendNotification({
+    await sendTransactionalEmail({
       recipientEmpId: empId,
-      channel: 'EMAIL',
+      toEmail: emp.email_corp,
       subject,
       body,
       referenceType: 'MFA_EMAIL_OTP',
+      auditBody: purpose === 'enroll'
+        ? 'Email OTP enrollment code sent (code not stored).'
+        : 'Sign-in Email OTP sent (code not stored).',
     });
   } catch (err) {
+    // Roll back stored OTP so user can retry cleanly
+    await redis.del(otpKey(empId, 'email_otp', purpose)).catch(() => 0);
+    await redis.del(sendCooldownKey(empId, 'email_otp')).catch(() => 0);
+
     const emailReady = delivery.emailTransport === 'api'
       ? Boolean(delivery.emailApi.apiUrl)
       : Boolean(delivery.smtp.host);
@@ -128,6 +142,7 @@ export async function sendEmailOtp(
     throw new Error('Email delivery is not configured — set Email OTP delivery in Admin → MFA Methods');
   }
 
+  logger.info({ empId, purpose }, 'Email OTP sent');
   if (delivery.otpDevLog) {
     return { sent: true, devCode: code };
   }

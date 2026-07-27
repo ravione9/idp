@@ -487,7 +487,7 @@ To add a new migration:
 | `radius_auth_policies` | **(044)** Group / MFA / reply-attribute policies for RADIUS Accept |
 | `vpn_profiles` | **(044)** VPN gateway catalog (AnyConnect, GlobalProtect, FortiClient, …) |
 | `radius_auth_log` | **(044)** RADIUS Accept/Reject audit trail |
-| `notifications` | **(003, 011, 049)** Email / Slack / Teams notification outbox — 011 adds service columns; **049** changes `id` BIGINT→VARCHAR(36) for UUID inserts |
+| `notifications` | **(003, 011, 049, 050)** Outbox — UUID `id`, service columns, legacy `recipient`/`template`/`payload` nullable; MFA Email OTP uses transactional send + audit (code not stored) |
 | `general_settings` | **(006, 012, 021)** Singleton operational settings (login toggles, maintenance mode, portal TLS certs, Google OIDC GUI overrides) |
 
 > The legacy `src/db/schema.sql` is **still present** for reference; it is NOT applied automatically — the `migrations/` folder is authoritative.
@@ -1012,6 +1012,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-27 — Email OTP notifications: legacy columns + transactional send
+
+**Why** — After UUID fix, send failed with `Field 'recipient' doesn't have a default value` (migration 003 NOT NULL columns).
+
+**What changed:**
+
+- **Migration `050`** — `recipient` / `template` / `payload` nullable with defaults.
+- **`sendNotification`** — populates legacy + modern columns.
+- **`sendTransactionalEmail`** — MFA OTP delivers once; audit row stores no OTP code.
 
 ### `78d43d8` — 2026-07-27 — Fix notifications.id for Email OTP (UUID vs BIGINT)
 
