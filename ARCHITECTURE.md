@@ -1021,7 +1021,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-27 — Personal Credential Vault for end users
+### `1af618a` — 2026-07-27 — Personal Credential Vault for end users
 
 **Why** — PAM Credential Vault is SUPER_ADMIN-only; employees need a place to store personal secrets.
 
