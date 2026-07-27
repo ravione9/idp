@@ -1013,7 +1013,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-27 — App Discovery extension: reliable upload + instant inventory
+### `pending` — 2026-07-27 — App Discovery: portal “Scan from browser” + extension 1.2
+
+**Why** — Users could not find Preview in the extension and got no Discovery results.
+
+**What changed:**
+
+- Extension **1.2.0** — auto-lists domains on popup open; single **Scan & sync** button; content script bridges portal ↔ extension.
+- **Discovery UI** — **Scan from browser** when extension is detected; download labeled v1.2.
+
+### `d652768` — 2026-07-27 — App Discovery extension: reliable upload + instant inventory
 
 **Why** — Extension scan produced no inventory: upload relied on fragile tab injection, history query was empty for some Chrome builds, and signals required a separate admin scan.
 

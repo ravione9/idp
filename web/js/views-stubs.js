@@ -3530,6 +3530,7 @@ export async function viewPrebuiltApps(content, opts = {}) {
 export async function viewAppDiscovery(content, opts = {}) {
   const embed = !!opts.embed;
   const actions = `<div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+    <button class="btn btn-primary" id="disc-ext-scan" disabled title="Install / enable the App Discovery extension (v1.2+)">Scan from browser</button>
     <button class="btn btn-secondary" id="disc-scan">Run Discovery Scan</button>
     <button class="btn btn-primary" id="disc-add">+ Add App</button>
   </div>`;
@@ -3538,9 +3539,17 @@ export async function viewAppDiscovery(content, opts = {}) {
       ? `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">${actions}</div>`
       : header('App Discovery', 'Inventory from browser history / portal signals + manual findings', actions)}
     <div id="disc-stats" class="stat-grid" style="margin-bottom:1rem">${loading()}</div>
-    <div class="card" style="margin-bottom:1rem;padding:0.85rem 1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
-      <strong>App Discovery browser extension</strong>
-      <a class="btn btn-primary btn-sm" href="/extension/app-discovery.zip" download="lilg-app-discovery-extension.zip">Download</a>
+    <div class="card" style="margin-bottom:1rem;padding:0.85rem 1rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+        <div>
+          <strong>Browser extension</strong>
+          <span id="disc-ext-status" class="muted" style="margin-left:0.5rem;font-size:0.85rem">Checking…</span>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <a class="btn btn-secondary btn-sm" href="/extension/app-discovery.zip" download="lilg-app-discovery-extension.zip">Download v1.2</a>
+          <button class="btn btn-primary btn-sm" id="disc-ext-scan-2" disabled>Scan from browser</button>
+        </div>
+      </div>
     </div>
     <div class="card ra-filter-card" style="margin-bottom:1rem;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center">
       <input class="form-input" id="disc-q" placeholder="Search name or domain…" style="flex:1;min-width:180px">
@@ -3708,6 +3717,81 @@ export async function viewAppDiscovery(content, opts = {}) {
   }
 
   wrap.querySelector('#disc-add')?.addEventListener('click', openAddModal);
+
+  function setExtStatus(text, ready) {
+    const el = wrap.querySelector('#disc-ext-status');
+    if (el) el.textContent = text;
+    wrap.querySelectorAll('#disc-ext-scan, #disc-ext-scan-2').forEach((b) => {
+      b.disabled = !ready;
+      if (ready) b.removeAttribute('title');
+      else b.title = 'Install App Discovery extension v1.2+, then reload this page';
+    });
+  }
+
+  function waitExtMessage(type, timeoutMs = 45000) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', onMsg);
+        reject(new Error('Extension did not respond. Reload the extension (chrome://extensions → Reload) and refresh this page.'));
+      }, timeoutMs);
+      function onMsg(ev) {
+        if (ev.source !== window || ev.data?.source !== 'lilg-extension') return;
+        if (ev.data.type !== type) return;
+        clearTimeout(timer);
+        window.removeEventListener('message', onMsg);
+        resolve(ev.data.payload || ev.data);
+      }
+      window.addEventListener('message', onMsg);
+    });
+  }
+
+  async function runExtScan() {
+    const btns = [...wrap.querySelectorAll('#disc-ext-scan, #disc-ext-scan-2')];
+    btns.forEach((b) => { b.disabled = true; b.textContent = 'Scanning…'; });
+    wrap.querySelector('#disc-msg').innerHTML = '<div class="alert alert-info">Asking the browser extension to scan history…</div>';
+    try {
+      const resultPromise = waitExtMessage('LILG_DISCOVERY_SCAN_RESULT');
+      window.postMessage({ source: 'lilg-idp', type: 'LILG_DISCOVERY_SCAN' }, '*');
+      const res = await resultPromise;
+      const r = res?.result || res || {};
+      if (r.ok === false || (res?.result && res.result.ok === false)) {
+        throw new Error(r.error || res?.result?.error || 'Extension scan failed');
+      }
+      const body = res?.result || r;
+      wrap.querySelector('#disc-msg').innerHTML = `<div class="alert alert-success">
+        Browser scan finished — <strong>${res.domains ?? 0}</strong> domains found,
+        uploaded <strong>${body.accepted ?? 0}</strong>,
+        inventory <strong>${body.inventoryCreated ?? 0}</strong> new /
+        <strong>${body.inventoryUpdated ?? 0}</strong> updated
+        ${body.catalogMatched ? ` · ${body.catalogMatched} already in catalog` : ''}.
+      </div>`;
+      wrap.querySelector('#disc-source').value = 'BROWSER';
+      await loadStats(); await loadList();
+    } catch (e) {
+      wrap.querySelector('#disc-msg').innerHTML = errHtml(e.message);
+    }
+    btns.forEach((b) => { b.textContent = 'Scan from browser'; b.disabled = false; });
+  }
+
+  wrap.querySelector('#disc-ext-scan')?.addEventListener('click', () => { void runExtScan(); });
+  wrap.querySelector('#disc-ext-scan-2')?.addEventListener('click', () => { void runExtScan(); });
+
+  // Detect extension content-script
+  {
+    let detected = false;
+    const onPong = (ev) => {
+      if (ev.source !== window || ev.data?.source !== 'lilg-extension') return;
+      if (ev.data.type !== 'LILG_DISCOVERY_PONG') return;
+      detected = true;
+      setExtStatus(`Connected (v${ev.data.version || '?'})`, true);
+    };
+    window.addEventListener('message', onPong);
+    window.postMessage({ source: 'lilg-idp', type: 'LILG_DISCOVERY_PING' }, '*');
+    setTimeout(() => {
+      if (!detected) setExtStatus('Not detected — download v1.2, Load unpacked, then refresh this page', false);
+    }, 1200);
+  }
+
   wrap.querySelector('#disc-scan')?.addEventListener('click', async () => {
     const btn = wrap.querySelector('#disc-scan');
     btn.disabled = true; btn.textContent = 'Scanning…';
@@ -3718,9 +3802,6 @@ export async function viewAppDiscovery(content, opts = {}) {
         Scan complete — removed <strong>${r.removedNoise ?? 0}</strong> false positives,
         reconciled <strong>${r.reconciled ?? 0}</strong> with your catalog,
         browser signals: <strong>${r.browserCreated ?? 0}</strong> new / <strong>${r.browserUpdated ?? 0}</strong> updated.
-        <span class="muted" style="display:block;margin-top:0.35rem;font-size:0.85rem">
-          Inventory comes from portal signals + history-extension uploads (not a wishlist). HTTP disk cache is not readable by browsers.
-        </span>
       </div>`;
       await loadStats(); await loadList();
     } catch (e) {

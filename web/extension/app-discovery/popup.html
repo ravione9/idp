@@ -18,10 +18,11 @@
       font: 13px/1.45 system-ui, Segoe UI, sans-serif;
       color: var(--text);
       background: var(--bg);
-      width: 340px;
+      width: 360px;
       padding: 14px;
     }
-    h1 { font-size: 14px; margin: 0 0 4px; font-weight: 650; }
+    h1 { font-size: 14px; margin: 0 0 2px; font-weight: 650; }
+    .ver { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
     p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
     label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
     input {
@@ -37,23 +38,24 @@
       width: 100%;
       border: 0;
       border-radius: 6px;
-      padding: 9px 12px;
+      padding: 10px 12px;
       font-weight: 600;
       cursor: pointer;
       background: var(--accent);
       color: #fff;
       margin-bottom: 8px;
     }
-    button.secondary { background: #2a3542; }
     button:disabled { opacity: 0.55; cursor: wait; }
     #status {
-      margin-top: 8px;
+      margin-top: 4px;
       padding: 8px 10px;
       border-radius: 6px;
       background: var(--card);
       font-size: 12px;
       white-space: pre-wrap;
       word-break: break-word;
+      max-height: 220px;
+      overflow: auto;
     }
     #status.ok { color: var(--ok); }
     #status.err { color: var(--err); }
@@ -68,19 +70,18 @@
 </head>
 <body>
   <h1>IdP App Discovery</h1>
-  <p>Scan history + open tabs, upload to IdP, and update Discovery inventory.</p>
+  <div class="ver">Extension v1.2.0</div>
+  <p>Stay signed in to the IdP, then sync. You can also use <strong>Scan from browser</strong> on the Discovery page.</p>
 
   <label for="idp">IdP base URL</label>
   <input id="idp" type="url" placeholder="https://idp.lenskart.com" />
 
-  <button id="scan">Scan history (90 days)</button>
-  <button id="preview" class="secondary">Preview domains (no upload)</button>
+  <button id="scan">Scan &amp; sync to Discovery</button>
 
-  <div id="status">Ready.</div>
+  <div id="status">Checking this browser…</div>
   <div class="note">
-    Browsers block reading HTTP disk cache. This extension uses the History API
-    (sites you visited) — the closest capable signal for shadow-IT discovery.
-    Stay signed in to the IdP portal in this browser.
+    Uses Chrome history + open tabs (not HTTP disk cache). After sync, open
+    Applications → Discovery to review findings.
   </div>
   <script src="popup.js"></script>
 </body>

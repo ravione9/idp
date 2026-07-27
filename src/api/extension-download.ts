@@ -11,7 +11,7 @@ import { buildZipStore, zipFingerprint } from '../utils/zip-store.js';
 const router = Router();
 
 const EXT_DIR = path.join(process.cwd(), 'web', 'extension', 'app-discovery');
-const FILES = ['manifest.json', 'background.js', 'popup.html', 'popup.js', 'README.md'] as const;
+const FILES = ['manifest.json', 'background.js', 'popup.html', 'popup.js', 'content.js', 'README.md'] as const;
 const FOLDER = 'lilg-app-discovery-extension';
 
 function buildExtensionZip(): Buffer {
