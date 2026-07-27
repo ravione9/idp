@@ -22,7 +22,7 @@ import { triggerConnectorSync } from '../services/connector-dispatcher.js';
 import { runConnectorConnectivityTest } from '../services/connector-health.js';
 import { harvestConnectorEntitlements } from '../services/entitlement-harvest.js';
 import { fulfillEntitlementOnTarget } from '../services/entitlement-fulfillment.js';
-import { submitAccessRequest, processDecision } from '../services/access-request-workflow.js';
+import { submitAccessRequest, processDecision, repairAccessRequestFulfillment } from '../services/access-request-workflow.js';
 import {
   explainJitCatalogForUser,
   expireStaleAccessRequests,
@@ -739,6 +739,30 @@ router.post(
         return;
       }
       if (msg.includes('not in PENDING') || msg.includes('No pending approval')) {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
+
+/** Re-provision grants for APPROVED/FULFILLED requests that never received an assignment. */
+router.post(
+  '/access-requests/:id/fulfill',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const requestId = req.params['id']!;
+    try {
+      const result = await repairAccessRequestFulfillment(requestId, req.user!.empId);
+      res.json({ success: true, ...result });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('not found')) {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg.includes('must be APPROVED') || msg.includes('no app id')) {
         res.status(409).json({ error: msg });
         return;
       }

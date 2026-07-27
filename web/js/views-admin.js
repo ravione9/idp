@@ -3494,6 +3494,7 @@ export async function viewAccessRequests(content) {
           const id = String(row.id);
           const short = id.slice(0, 8);
           const canDecide = row.status === 'PENDING';
+          const canRepair = row.status === 'APPROVED' || row.status === 'FULFILLED';
           return `<tr data-rid="${esc(id)}">
             <td><code style="font-size:0.8rem">${esc(short)}…</code></td>
             <td class="cell-strong">${esc(row.requester_name || row.requester_emp_id || '—')}</td>
@@ -3506,6 +3507,8 @@ export async function viewAccessRequests(content) {
             <td style="white-space:nowrap">${canDecide ? `
               <button class="btn btn-sm btn-success approve-btn" data-id="${esc(id)}">✓ Approve</button>
               <button class="btn btn-sm btn-danger reject-btn" style="margin-left:0.25rem" data-id="${esc(id)}">✗ Reject</button>
+            ` : canRepair ? `
+              <button class="btn btn-sm btn-secondary fulfill-btn" data-id="${esc(id)}" title="Re-apply grant if approval did not provision access">Grant access</button>
             ` : ''}</td>
           </tr>`;
         }).join('')}</tbody></table></div>`;
@@ -3551,6 +3554,17 @@ export async function viewAccessRequests(content) {
         btn.addEventListener('click', () => decisionRow(btn.dataset.id, 'APPROVE')));
       wrap.querySelectorAll('.reject-btn').forEach((btn) =>
         btn.addEventListener('click', () => decisionRow(btn.dataset.id, 'REJECT')));
+      wrap.querySelectorAll('.fulfill-btn').forEach((btn) =>
+        btn.addEventListener('click', async () => {
+          if (!confirm('Re-apply access grant for this request? Use when approval completed but the user still cannot launch the app.')) return;
+          try {
+            await api.igaFulfillRequest(btn.dataset.id);
+            wrap.querySelector('#ar-msg').innerHTML = `<div class="alert alert-success">Access grant applied.</div>`;
+            setTimeout(() => load(), 800);
+          } catch (e) {
+            wrap.querySelector('#ar-msg').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+          }
+        }));
     } catch (e) {
       wrap.querySelector('#ar-list').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
     }

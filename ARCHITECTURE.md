@@ -679,6 +679,7 @@ To add a new migration:
 | `GET` | `/api/iga/access-requests?scope=mine\|tasks\|all[&status=…]` | List access requests by scope (`all` = ADMIN+; optional status; includes `pending_approvers`) |
 | `POST` | `/api/iga/access-requests` | Submit access request (SoD pre-check + approval chain) |
 | `POST` | `/api/iga/access-requests/:id/decision` | Approve / reject; `adminOverride: true` for ADMIN/SUPER_ADMIN emergency decide |
+| `POST` | `/api/iga/access-requests/:id/fulfill` | ADMIN+ — re-apply grants for APPROVED/FULFILLED requests missing assignments |
 | `GET` | `/api/iga/access-reviews` | Active certification campaigns |
 | `GET` | `/api/iga/access-reviews/:id/items` | All review items for a campaign (admin) |
 | `GET` | `/api/iga/access-reviews/me` | Review items routed to me |
@@ -1024,6 +1025,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-27 — Fix access request approve not granting app access
+
+**Why** — Approving marked requests `FULFILLED` but never wrote `app_access_assignments`. mysql2 already parses JSON `item_ids`; `JSON.parse(array)` threw and grants were skipped.
+
+**What changed:**
+
+- **`parseItemIds`** — handle array or string; used on approve + audit.
+- **`applyAccessGrants`** — APP_ACCESS / ENTITLEMENT / ROLE; throw if APP_ACCESS has no ids.
+- **`POST /api/iga/access-requests/:id/fulfill`** + Admin **Grant access** button to repair stuck FULFILLED requests.
 
 ### `2c2cefd` — 2026-07-27 — Enforce idle + absolute session timeouts
 

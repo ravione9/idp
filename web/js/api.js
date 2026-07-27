@@ -449,6 +449,8 @@ Object.assign(api, {
         ...(adminOverride ? { adminOverride: true } : {}),
       }),
     }),
+  igaFulfillRequest: (id) =>
+    f(`/api/iga/access-requests/${encodeURIComponent(id)}/fulfill`, { method: 'POST' }),
 
   // Access reviews CRUD
   createAccessReview: (data) => f('/api/iga/access-reviews', { method: 'POST', body: JSON.stringify(data) }),

@@ -40,7 +40,7 @@ interface RequestRow {
   requester_emp_id: string;
   target_emp_id: string;
   item_type: string;
-  item_ids: string;
+  item_ids: unknown;
   status: string;
 }
 
@@ -50,6 +50,99 @@ interface ApprovalRow {
   level: number;
   approver_emp_id: string;
   decision: string;
+}
+
+/** mysql2 returns JSON columns as already-parsed values; older drivers may return strings. */
+export function parseItemIds(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  if (typeof raw === 'string') {
+    try {
+      const v = JSON.parse(raw) as unknown;
+      return Array.isArray(v) ? v.map(String).filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+async function applyAccessGrants(
+  request: RequestRow,
+  itemIds: string[],
+  actorEmpId: string,
+): Promise<void> {
+  if (request.item_type === 'ENTITLEMENT') {
+    const { fulfillEntitlementOnTarget } = await import('./entitlement-fulfillment.js');
+    for (const itemId of itemIds) {
+      await execute(
+        `INSERT IGNORE INTO user_entitlements
+           (emp_id, entitlement_id, source, granted_by, granted_at)
+         VALUES (?, ?, 'REQUEST', ?, UTC_TIMESTAMP())`,
+        [request.target_emp_id, itemId, actorEmpId],
+      );
+      await fulfillEntitlementOnTarget(request.target_emp_id, itemId, 'GRANT', actorEmpId);
+    }
+    return;
+  }
+
+  if (request.item_type === 'ROLE') {
+    for (const roleId of itemIds) {
+      await execute(
+        `INSERT IGNORE INTO user_roles (emp_id, role_id, granted_by, granted_at)
+         VALUES (?, ?, ?, UTC_TIMESTAMP())`,
+        [request.target_emp_id, roleId, actorEmpId],
+      );
+    }
+    return;
+  }
+
+  if (request.item_type === 'APP_ACCESS' || request.item_type === 'APPLICATION') {
+    if (itemIds.length === 0) {
+      throw new Error('Access request has no app id to grant — cannot fulfill');
+    }
+    const appId = itemIds[0]!;
+    const tagGroupId = itemIds[1] ?? null;
+    const workflow = await resolveWorkflowForRequest(appId, tagGroupId);
+    await fulfillAppAccessRequest({
+      targetEmpId:   request.target_emp_id,
+      itemIds,
+      grantedBy:     actorEmpId,
+      requestId:     request.id,
+      autoProvision: workflow ? workflow.auto_provision === 1 : true,
+    });
+  }
+}
+
+/**
+ * Re-apply grants for APPROVED / FULFILLED requests that never got an assignment
+ * (e.g. after the item_ids JSON.parse bug). Admin-only recovery.
+ */
+export async function repairAccessRequestFulfillment(
+  requestId: string,
+  actorEmpId: string,
+): Promise<{ repaired: boolean; itemIds: string[] }> {
+  const request = await queryOne<RequestRow>(
+    `SELECT id, requester_emp_id, target_emp_id, item_type, item_ids, status
+       FROM access_requests WHERE id = ?`,
+    [requestId],
+  );
+  if (!request) throw new Error('Access request not found');
+  if (!['APPROVED', 'FULFILLED'].includes(request.status)) {
+    throw new Error(`Request must be APPROVED or FULFILLED to re-provision (current: ${request.status})`);
+  }
+
+  const itemIds = parseItemIds(request.item_ids);
+  await applyAccessGrants(request, itemIds, actorEmpId);
+
+  await execute(
+    `UPDATE access_requests
+        SET status = 'FULFILLED', fulfilled_at = COALESCE(fulfilled_at, UTC_TIMESTAMP())
+      WHERE id = ?`,
+    [requestId],
+  );
+
+  logger.info({ requestId, actorEmpId, itemType: request.item_type, itemIds }, 'Access request fulfillment repaired');
+  return { repaired: true, itemIds };
 }
 
 // ---------------------------------------------------------------------------
@@ -353,9 +446,8 @@ export async function processDecision(
     }
   }
 
-  if (request.item_type === 'APP_ACCESS') {
-    let itemIds: string[] = [];
-    try { itemIds = JSON.parse(request.item_ids) as string[]; } catch { /* empty */ }
+  if (request.item_type === 'APP_ACCESS' || request.item_type === 'APPLICATION') {
+    const itemIds = parseItemIds(request.item_ids);
     await logAppAccessAudit({
       appId: itemIds[0] ?? null,
       action: decision === 'REJECT' ? 'REJECT' : 'APPROVE',
@@ -407,38 +499,12 @@ export async function processDecision(
     [requestId],
   );
 
-  let itemIds: string[] = [];
+  const itemIds = parseItemIds(request.item_ids);
   try {
-    itemIds = JSON.parse(request.item_ids) as string[];
-  } catch {
-    itemIds = [];
-  }
-
-  if (request.item_type === 'ENTITLEMENT') {
-    const { fulfillEntitlementOnTarget } = await import('./entitlement-fulfillment.js');
-    for (const itemId of itemIds) {
-      await execute(
-        `INSERT IGNORE INTO user_entitlements
-           (emp_id, entitlement_id, source, granted_by, granted_at)
-         VALUES (?, ?, 'REQUEST', ?, UTC_TIMESTAMP())`,
-        [request.target_emp_id, itemId, actorEmpId],
-      ).catch((err) => logger.warn({ err, requestId, itemId }, 'Failed to grant entitlement'));
-      await fulfillEntitlementOnTarget(request.target_emp_id, itemId, 'GRANT', actorEmpId)
-        .catch((err) => logger.warn({ err, requestId, itemId }, 'Entitlement target fulfill failed'));
-    }
-  }
-
-  if (request.item_type === 'APP_ACCESS' && itemIds.length > 0) {
-    const appId = itemIds[0]!;
-    const tagGroupId = itemIds[1] ?? null;
-    const workflow = await resolveWorkflowForRequest(appId, tagGroupId);
-    await fulfillAppAccessRequest({
-      targetEmpId:   request.target_emp_id,
-      itemIds,
-      grantedBy:     actorEmpId,
-      requestId,
-      autoProvision: workflow ? workflow.auto_provision === 1 : true,
-    });
+    await applyAccessGrants(request, itemIds, actorEmpId);
+  } catch (err) {
+    logger.error({ err, requestId, itemType: request.item_type, itemIds }, 'Access request grant failed after approval');
+    throw err instanceof Error ? err : new Error(String(err));
   }
 
   await execute(
@@ -457,5 +523,5 @@ export async function processDecision(
     referenceType:  'ACCESS_REQUEST',
   }).catch((err) => logger.warn({ err, requestId }, 'Failed to notify requester of fulfillment'));
 
-  logger.info({ requestId, actorEmpId, adminOverride }, 'Access request approved and fulfilled');
+  logger.info({ requestId, actorEmpId, adminOverride, itemIds }, 'Access request approved and fulfilled');
 }
