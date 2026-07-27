@@ -1025,7 +1025,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-27 — Enforce idle + absolute session timeouts
+### `2c2cefd` — 2026-07-27 — Enforce idle + absolute session timeouts
 
 **Why** — General Settings “Session” hours were saved but never applied; sessions only used env TTL and never checked inactivity.
 
