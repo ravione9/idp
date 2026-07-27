@@ -1021,6 +1021,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `pending` — 2026-07-27 — Fix user vault migration collation for FK
+
+**Why** — `051` failed on MySQL 8: `emp_id` defaulted to `utf8mb4_0900_ai_ci` while `employees.emp_id` is `utf8mb4_unicode_ci` (`ER_FK_INCOMPATIBLE_COLUMNS`). Migration never applied.
+
+**What changed:**
+
+- **`051_user_credential_vault.sql`** — explicit `utf8mb4_unicode_ci` on table + `emp_id` (safe rewrite; prior apply aborted).
+
 ### `1af618a` — 2026-07-27 — Personal Credential Vault for end users
 
 **Why** — PAM Credential Vault is SUPER_ADMIN-only; employees need a place to store personal secrets.
