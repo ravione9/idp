@@ -487,7 +487,7 @@ To add a new migration:
 | `radius_auth_policies` | **(044)** Group / MFA / reply-attribute policies for RADIUS Accept |
 | `vpn_profiles` | **(044)** VPN gateway catalog (AnyConnect, GlobalProtect, FortiClient, …) |
 | `radius_auth_log` | **(044)** RADIUS Accept/Reject audit trail |
-| `notifications` | **(003, 011)** Email / Slack / Teams notification outbox — 011 adds `recipient_emp_id`, `subject`, `body`, `template_id`, `reference_id`, `reference_type`, `error` for service layer |
+| `notifications` | **(003, 011, 049)** Email / Slack / Teams notification outbox — 011 adds service columns; **049** changes `id` BIGINT→VARCHAR(36) for UUID inserts |
 | `general_settings` | **(006, 012, 021)** Singleton operational settings (login toggles, maintenance mode, portal TLS certs, Google OIDC GUI overrides) |
 
 > The legacy `src/db/schema.sql` is **still present** for reference; it is NOT applied automatically — the `migrations/` folder is authoritative.
