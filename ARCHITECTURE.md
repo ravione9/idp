@@ -1013,7 +1013,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-27 — Show Email/SMS OTP on login when policy allows
+### `d532270` — 2026-07-27 — Show Email/SMS OTP on login when policy allows
 
 **Why** — Enabling Email OTP in MFA policy did not show “Email me a code” at login unless the user had separately enrolled.
 
