@@ -36,6 +36,7 @@ import adminUsersRouter from './api/admin-users.js';
 import adminBulkUsersRouter from './api/admin-bulk-users.js';
 import adminDirectoryGoogleRouter from './api/admin-directory-google.js';
 import meActionsRouter from './api/me-actions.js';
+import meVaultRouter from './api/me-vault.js';
 import igaRouter from './api/iga.js';
 import adminLifecycleRouter from './api/admin-lifecycle.js';
 import configGroupsRouter from './api/config-groups.js';
@@ -192,6 +193,7 @@ app.use('/', oidcRouter);
 // ---------------------------------------------------------------------------
 app.use('/api/me',        meRouter);
 app.use('/api/me',        meActionsRouter);
+app.use('/api/me',        meVaultRouter);
 app.use('/api/apps',      appsRouter);
 app.use('/api/employees', employeeRouter);
 app.use('/api/manager',   managerRouter);

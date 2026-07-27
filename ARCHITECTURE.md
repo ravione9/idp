@@ -489,6 +489,7 @@ To add a new migration:
 | `radius_auth_log` | **(044)** RADIUS Accept/Reject audit trail |
 | `notifications` | **(003, 011, 049, 050)** Outbox — UUID `id`, service columns, legacy `recipient`/`template`/`payload` nullable; MFA Email OTP uses transactional send + audit (code not stored) |
 | `general_settings` | **(006, 012, 021)** Singleton operational settings (login toggles, maintenance mode, portal TLS certs, Google OIDC GUI overrides) |
+| `user_vault_entries` | **(051)** Personal credential vault — owner-scoped (`emp_id`); AES-256-GCM sealed secrets; separate from PAM `credential_vault_entries` |
 
 > The legacy `src/db/schema.sql` is **still present** for reference; it is NOT applied automatically — the `migrations/` folder is authoritative.
 
@@ -530,6 +531,11 @@ To add a new migration:
 | `POST` | `/api/me/mfa/confirm` | Verify code → enable MFA |
 | `POST` | `/api/me/mfa/disable` | Disable MFA |
 | `POST` | `/api/me/mfa/regenerate-codes` | New backup codes |
+| `GET` | `/api/me/vault` | List own personal vault entries (metadata only) |
+| `POST` | `/api/me/vault` | Create personal vault entry (secret sealed AES-GCM) |
+| `PUT` | `/api/me/vault/:id` | Update own entry (optional re-seal) |
+| `DELETE` | `/api/me/vault/:id` | Delete own entry |
+| `POST` | `/api/me/vault/:id/reveal` | Decrypt own secret once + audit `USER_VAULT_REVEAL` |
 | `GET` | `/api/apps` | SAML apps the user may launch (policy grants + entitlement rules; see §6.2) |
 
 ### 8.4 Admin (ADMIN / SUPER_ADMIN)
@@ -718,7 +724,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 
 | Mode | Sidebar | Behaviour |
 |---|---|---|
-| **End-user** (JumpCloud-style) | My Portal nav: All Applications · Request Access · Approvals (badge) · My Access · Security | Top-nav user buttons hidden; sidebar drives navigation |
+| **End-user** (JumpCloud-style) | My Portal nav: All Applications · Request Access · Approvals (badge) · My Access · **Vault** · Security | Top-nav user buttons hidden; sidebar drives navigation |
 | **Admin** (miniOrange-style) | Grouped admin sections (collapsible via ◀/▶ toggle, persisted in `localStorage`) | Visible only when Admin is active |
 
 **Top primary nav** (always visible, modelled on SailPoint IdentityNow)
@@ -726,6 +732,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - **Request Center** — browse the catalogue, raise an access request
 - **Approvals** — pending approvals + access-review items routed to the user
 - **My Access** — current entitlements & roles
+- **Vault** — personal credential vault (`/?v=vault`); AES-GCM secrets owned by the signed-in user (`/api/me/vault*`); distinct from admin PAM Credential Vault
 - **Admin** — opens admin sidebar (admin / super-admin only)
 
 **Admin sidebar** (modelled on miniOrange PAM admin) — every group is collapsible per-tenant in a future release; today every entry is a feature page with status, summary and capability list.
@@ -738,7 +745,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Applications** | Applications (tabs: Catalog · SAML · OIDC / OAuth · Pre-built · App Discovery) |
 | **Connections** | Directory Sync (Connectors redirects here) |
 | **Access Model** | Business Roles · **Entitlements Catalog** (harvested + manual) · Birthright Rules · Application Access Policy |
-| **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault · System Users — **SUPER_ADMIN only** (AES-GCM vault; no session broker yet) |
+| **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault · System Users — **SUPER_ADMIN only** (PAM AES-GCM vault; no session broker yet). End-user personal vault is under workspace **Vault**, not here. |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
 | **Workflows** | Workflows (tabs: Definitions · Event Triggers · Run History) · Notifications |
 | **Reports** | **Overview** (executive KPIs, trends, report catalog) · **Identity & Access** (access inventory · MFA coverage · lifecycle · access requests · certifications · SoD · app access changes) · Audit & SSO Reports (SSO assertions · System audit · Auth attempts · Sessions · SSO analytics) · Compliance Reports (evidence snapshots) — all with filters + CSV where applicable |
@@ -915,7 +922,7 @@ docker exec -i idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg < migrations/<
 | Outbound HTTP | `assertSafeOutboundUrl` blocks loopback/private/link-local/metadata (Attendance IGA, workflow webhooks, event triggers) |
 | XSS | `esc()` / `escAttrJson()` for HTML text and JSON-in-attribute sinks |
 | Audit | Hash-chained `audit_log` (tamper-evident) |
-| RBAC | Job hierarchy + **server-enforced** portal module R/W via `requirePortalModule` on admin/IGA routers. Coarse `ADMIN` gate still admits portal operators, but module ACL is authoritative. Google OIDC write + portal SSL mutate = **Super Admin only**. Creating `SUPER_ADMIN` accounts = Super Admin only. **PAM / Credential Vault** = Super Admin only (/api/admin/pam/*, AES-256-GCM via SESSION_SECRET). |
+| RBAC | Job hierarchy + **server-enforced** portal module R/W via `requirePortalModule` on admin/IGA routers. Coarse `ADMIN` gate still admits portal operators, but module ACL is authoritative. Google OIDC write + portal SSL mutate = **Super Admin only**. Creating `SUPER_ADMIN` accounts = Super Admin only. **PAM Credential Vault** = Super Admin only (`/api/admin/pam/*`). **Personal vault** = any authenticated user (`/api/me/vault*`, owner-scoped `user_vault_entries`; AES-256-GCM via SESSION_SECRET). |
 | ABAC | `policy-engine.ts` evaluates rules on resource access |
 | Headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` |
 
@@ -988,6 +995,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ### Phase 5 — Advanced IGA
 
 - ✅ Credential Vault (AES-GCM checkout) + PAM resource/session/system-user inventory (SUPER_ADMIN)
+- ✅ **Personal Credential Vault** — end-user `/api/me/vault*` + portal **Vault** nav (`user_vault_entries`, owner-scoped)
 - ✅ **App Discovery (MVP)** — portal signals + Chrome/Edge history extension (`web/extension/app-discovery`); HTTP disk cache is not readable by browsers; scan ingests `browser_app_signals`
 - JIT elevation / session broker + session recording for high-risk apps
 - App Discovery Phase 2 — Google Workspace audit / proxy / DNS log ingestion
@@ -1012,6 +1020,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-27 — Personal Credential Vault for end users
+
+**Why** — PAM Credential Vault is SUPER_ADMIN-only; employees need a place to store personal secrets.
+
+**What changed:**
+
+- **Migration `051`** — `user_vault_entries` (owner-scoped; AES-GCM sealed; types PASSWORD / SSH_KEY / API_TOKEN / NOTE).
+- **API** — `/api/me/vault` CRUD + `/reveal`; audit `USER_VAULT_*`; hard isolation from `/api/admin/pam/vault`.
+- **Portal** — workspace **Vault** top-nav + My Portal sidebar (`/?v=vault`).
 
 ### `6f8ab1a` — 2026-07-27 — App Discovery: portal “Scan from browser” + extension 1.2
 

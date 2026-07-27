@@ -93,6 +93,11 @@ Object.assign(api, {
     f('/api/me/mfa/webauthn/register/verify', { method: 'POST', body: JSON.stringify({ challengeId, response, name }) }),
   mfaWebAuthnList:    () => f('/api/me/mfa/webauthn/credentials'),
   mfaWebAuthnDelete:  (id, body) => f(`/api/me/mfa/webauthn/credentials/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify(body || {}) }),
+  listMyVault:        () => f('/api/me/vault'),
+  createMyVaultEntry: (data) => f('/api/me/vault', { method: 'POST', body: JSON.stringify(data) }),
+  updateMyVaultEntry: (id, data) => f(`/api/me/vault/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteMyVaultEntry: (id) => f(`/api/me/vault/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  revealMyVaultEntry: (id) => f(`/api/me/vault/${encodeURIComponent(id)}/reveal`, { method: 'POST' }),
   localLoginMfaSendOtp: (challengeId, channel) =>
     f('/auth/local/login/mfa-send-otp', { method: 'POST', body: JSON.stringify({ challengeId, channel }) }),
   localLoginMfaWebAuthnOptions: (challengeId) =>

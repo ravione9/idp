@@ -1,9 +1,17 @@
-/* End-user views: Home (app launcher), My Access, Request Access, My Tasks, Settings. */
+/* End-user views: Home (app launcher), My Access, Request Access, My Tasks, Settings, Vault. */
 import { api } from './api.js';
 import { el, esc, fmtDate, ilgBadge, initials, persistSearch, syncAppUrl, isPortalAdmin, prepareWebAuthnRegOptions, webAuthnRegResponseToJson, prepareWebAuthnAuthOptions, webAuthnAuthResponseToJson } from './ui.js';
 import { icon } from './icons.js';
 import { mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import { captureLoginReferrer, rememberAppLaunch, wireAppLaunchTracking } from './browser-discovery.js';
+
+function openModal(html) {
+  const bd = el(`<div class="modal-backdrop">${html}</div>`);
+  document.body.appendChild(bd);
+  return bd;
+}
+
+function errHtml(msg) { return `<div class="alert alert-error">${esc(msg)}</div>`; }
 
 /** Simple download card for the Chrome/Edge App Discovery extension. */
 export function extensionInstallCardHtml(opts = {}) {
@@ -1339,4 +1347,119 @@ export async function viewSettings(me, content, initialTab = 'profile') {
   }
   wrap.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => showTab(tab.dataset.tab)));
   showTab(validTab);
+}
+
+/** Personal credential vault — AES-GCM secrets owned by the signed-in user. */
+export async function viewMyVault(content) {
+  content.replaceChildren(el(`<div class="enduser-page">
+    <div class="page-header page-header--compact">
+      <div>
+        <h1>Credential Vault</h1>
+        <p class="subtitle">Store personal passwords, tokens, and keys — encrypted at rest. Only you can reveal them.</p>
+      </div>
+      <button class="btn btn-primary" id="uv-add">+ Add secret</button>
+    </div>
+    <div id="uv-list"><div class="loading-row"><span class="spinner"></span></div></div>
+  </div>`));
+  const wrap = content.firstChild;
+  const listEl = wrap.querySelector('#uv-list');
+
+  async function load() {
+    listEl.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const res = await api.listMyVault();
+      const entries = res.data || [];
+      const rows = entries.length ? entries.map((e) => `
+        <tr>
+          <td class="cell-strong">${esc(e.name)}</td>
+          <td><span class="badge badge-info">${esc(e.type || 'PASSWORD')}</span></td>
+          <td class="muted">${esc(e.username || '—')}</td>
+          <td class="muted" style="max-width:12rem">${esc(e.notes || '—')}</td>
+          <td class="muted">${fmtDate(e.updated_at)}</td>
+          <td class="actions">
+            <button class="btn btn-sm btn-secondary" data-reveal="${esc(e.id)}" data-name="${esc(e.name)}">Reveal</button>
+            <button class="btn btn-sm btn-danger" data-del="${esc(e.id)}">Delete</button>
+          </td>
+        </tr>`).join('') : `<tr><td colspan="6" class="empty-state"><span class="empty-icon">◎</span>No secrets yet. Add a password, API token, or SSH key.</td></tr>`;
+      listEl.innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Type</th><th>Username</th><th>Notes</th><th>Updated</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+
+      listEl.querySelectorAll('[data-reveal]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          try {
+            const r = await api.revealMyVaultEntry(btn.dataset.reveal);
+            const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Reveal: ${esc(btn.dataset.name)}</h2></div>
+              <div class="modal-body">
+                <p class="muted">This reveal is audited. Copy the secret, then close this dialog.</p>
+                ${r.username ? `<div class="field"><label>Username</label><input class="form-input" value="${esc(r.username)}" readonly onclick="this.select()"></div>` : ''}
+                <div class="field"><label>Secret</label><textarea class="form-textarea" rows="4" readonly onclick="this.select()" style="font-family:var(--font-mono,monospace)">${esc(r.secret)}</textarea></div>
+              </div>
+              <div class="modal-footer"><button class="btn btn-primary" id="uv-close">Done</button></div></div>`);
+            bd.querySelector('#uv-close').addEventListener('click', () => bd.remove());
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+      });
+      listEl.querySelectorAll('[data-del]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Delete this vault entry permanently?')) return;
+          try {
+            await api.deleteMyVaultEntry(btn.dataset.del);
+            await load();
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+      });
+    } catch (err) {
+      listEl.innerHTML = errHtml(err.message);
+    }
+  }
+
+  wrap.querySelector('#uv-add').addEventListener('click', () => {
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Add secret</h2></div>
+      <div class="modal-body">
+        <div class="field"><label>Name</label><input class="form-input" id="uv-name" placeholder="e.g. GitHub PAT" maxlength="150"></div>
+        <div class="field"><label>Type</label>
+          <select class="form-select" id="uv-type">
+            <option value="PASSWORD">Password</option>
+            <option value="API_TOKEN">API token</option>
+            <option value="SSH_KEY">SSH key</option>
+            <option value="NOTE">Secure note</option>
+          </select>
+        </div>
+        <div class="field"><label>Username (optional)</label><input class="form-input" id="uv-user" maxlength="100" autocomplete="off"></div>
+        <div class="field"><label>Secret</label><textarea class="form-textarea" id="uv-secret" rows="3" placeholder="Password, token, or key material"></textarea></div>
+        <div class="field"><label>Notes (optional)</label><input class="form-input" id="uv-notes" maxlength="500" placeholder="Non-secret memo"></div>
+        <div id="uv-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="uv-save">Save</button>
+        <button class="btn btn-secondary" id="uv-cancel">Cancel</button>
+      </div></div>`);
+    bd.querySelector('#uv-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#uv-save').addEventListener('click', async () => {
+      const data = {
+        name: bd.querySelector('#uv-name').value.trim(),
+        type: bd.querySelector('#uv-type').value,
+        username: bd.querySelector('#uv-user').value.trim() || null,
+        secret: bd.querySelector('#uv-secret').value,
+        notes: bd.querySelector('#uv-notes').value.trim() || null,
+      };
+      if (!data.name) { bd.querySelector('#uv-err').innerHTML = errHtml('Name required'); return; }
+      if (!data.secret) { bd.querySelector('#uv-err').innerHTML = errHtml('Secret required'); return; }
+      try {
+        await api.createMyVaultEntry(data);
+        bd.remove();
+        await load();
+      } catch (err) {
+        bd.querySelector('#uv-err').innerHTML = errHtml(err.message);
+      }
+    });
+  });
+
+  await load();
 }

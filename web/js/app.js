@@ -8,7 +8,7 @@ import { el, esc, initials, persistSearch, syncAppUrl, portalRoleOf, isPortalAdm
 import { icon } from './icons.js';
 import { initTheme, mountThemeMenu, themeOptionsHtml, wireThemePicker } from './theme.js';
 import {
-  renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings,
+  renderLogin, viewHome, viewMyAccess, viewRequestAccess, viewMyTasks, viewSettings, viewMyVault,
 } from './views-end-user.js';
 import { reportBrowserAppSignals } from './browser-discovery.js';
 import {
@@ -39,6 +39,7 @@ const ROUTES = {
   request:  { primary: 'request',  label: 'Request Access', icon: 'catalog',      view: viewRequestAccess },
   tasks:    { primary: 'tasks',    label: 'Approvals',      icon: 'check',        view: viewMyTasks },
   myaccess: { primary: 'myaccess', label: 'My Access',      icon: 'key',          view: viewMyAccess },
+  vault:    { primary: 'vault',    label: 'Vault',          icon: 'vault',        view: viewMyVault },
 
   /* ── Account ── */
   settings: { primary: 'settings', label: 'Security',       icon: 'shield',       view: viewSettings },
@@ -120,7 +121,7 @@ const ADMIN_GROUPS = [
 ];
 
 /* Order of items in the primary top nav */
-const PRIMARY_NAV_ORDER = ['home', 'request', 'tasks', 'myaccess'];
+const PRIMARY_NAV_ORDER = ['home', 'request', 'tasks', 'myaccess', 'vault'];
 
 const APP_ROUTE_ALIASES = { 'iga-apps': 'catalog', 'saml-apps': 'saml', oidcApps: 'oidc' };
 const ADMIN_SIDEBAR_ALIASES = { 'iga-apps': 'applications', 'saml-apps': 'applications', oidcApps: 'applications' };
@@ -218,6 +219,7 @@ function buildShell() {
           <button data-key="request"><span class="nav-icon">${icon('catalog')}</span><span class="label-text">Request Access</span></button>
           <button data-key="tasks"><span class="nav-icon">${icon('check')}</span><span class="label-text">Approvals</span><span class="task-badge hidden" id="us-task-badge"></span></button>
           <button data-key="myaccess"><span class="nav-icon">${icon('key')}</span><span class="label-text">My Access</span></button>
+          <button data-key="vault"><span class="nav-icon">${icon('vault')}</span><span class="label-text">Vault</span></button>
           <button data-key="settings"><span class="nav-icon">${icon('shield')}</span><span class="label-text">Security</span></button>
         </aside>
         <aside class="admin-sidebar hidden" id="admin-sidebar">${sidebarHtml}</aside>

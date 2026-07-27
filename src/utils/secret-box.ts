@@ -1,6 +1,6 @@
 /**
  * Seal / open secrets with AES-256-GCM using a key derived from SESSION_SECRET.
- * Used for RADIUS shared secrets and Credential Vault entries at rest.
+ * Used for RADIUS shared secrets, PAM Credential Vault, and personal user vault.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { config } from '../config.js';
