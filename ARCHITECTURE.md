@@ -1013,6 +1013,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `78d43d8` — 2026-07-27 — Fix notifications.id for Email OTP (UUID vs BIGINT)
+
+**Why** — Sending Email OTP failed with `Data truncated for column 'id' at row 1` because `notifications.id` was BIGINT AUTO_INCREMENT while `sendNotification` inserts a UUID.
+
+**What changed:**
+
+- **Migration `049`** — `notifications.id` → `VARCHAR(36)`; channel enum accepts `IN_APP`.
+
 ### `d532270` — 2026-07-27 — Show Email/SMS OTP on login when policy allows
 
 **Why** — Enabling Email OTP in MFA policy did not show “Email me a code” at login unless the user had separately enrolled.
