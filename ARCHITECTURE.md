@@ -1013,7 +1013,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-27 — Email OTP notifications: legacy columns + transactional send
+### `acef030` — 2026-07-27 — Email OTP notifications: legacy columns + transactional send
 
 **Why** — After UUID fix, send failed with `Field 'recipient' doesn't have a default value` (migration 003 NOT NULL columns).
 
