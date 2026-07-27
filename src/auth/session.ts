@@ -88,11 +88,12 @@ export async function createSession(params: {
 }
 
 export function setSessionCookie(res: Response, sessionId: string, ttlHours: number): void {
+  const maxAge = Math.max(1_000, Math.floor(ttlHours * 3600 * 1000));
   res.cookie(COOKIE_NAME, signSessionId(sessionId), {
     httpOnly: true,
     secure:   config.session.cookieSecure,
     sameSite: 'lax',
-    maxAge:   ttlHours * 3600 * 1000,
+    maxAge,
     path:     '/',
   });
 }

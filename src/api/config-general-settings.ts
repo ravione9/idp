@@ -9,6 +9,7 @@ import { asyncHandler } from '../utils/async-handler.js';
 import { queryOne, execute } from '../db/connection.js';
 import { getGoogleOidcConfig, isGoogleOidcConfigured } from '../auth/google-oidc-config.js';
 import { parseGoogleHostedDomains } from '../auth/google-domains.js';
+import { invalidateSessionPolicyCache } from '../services/session-policy.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -180,6 +181,7 @@ router.put('/', asyncHandler(async (req: Request, res: Response) => {
      allow_local_login !== undefined ? (allow_local_login ? 1 : 0) : 1,
      maintenance_mode ? 1 : 0, maintenance_msg ?? null, empId],
   );
+  invalidateSessionPolicyCache();
   res.json({ success: true });
 }));
 

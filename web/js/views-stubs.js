@@ -7856,8 +7856,9 @@ export async function viewGeneralSettings(content) {
           <div class="form-group"><label class="form-label">Display Name</label><input class="form-input" id="gs-org" value="${esc(s.display_name||'')}"></div>
           <div class="form-group"><label class="form-label">Support Email</label><input class="form-input" id="gs-email" value="${esc(s.support_email||'')}"></div>
           <h2 style="margin-top:1.5rem">Session</h2>
-          <div class="form-group"><label class="form-label">Default Session (hours)</label><input class="form-input" id="gs-ttl" type="number" value="${s.default_session_hours??8}"></div>
-          <div class="form-group"><label class="form-label">Absolute Session Cap (hours)</label><input class="form-input" id="gs-abs" type="number" value="${s.session_absolute_hours??24}"></div>
+          <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">Idle timeout ends the session after inactivity. Absolute cap is the hard maximum from sign-in, even with activity.</p>
+          <div class="form-group"><label class="form-label">Idle timeout (hours)</label><input class="form-input" id="gs-ttl" type="number" min="1" max="720" value="${s.default_session_hours??8}"><p class="muted" style="font-size:0.75rem;margin:0.25rem 0 0">Default session / sliding window. Maps to <code>default_session_hours</code>.</p></div>
+          <div class="form-group"><label class="form-label">Absolute session cap (hours)</label><input class="form-input" id="gs-abs" type="number" min="1" max="720" value="${s.session_absolute_hours??24}"><p class="muted" style="font-size:0.75rem;margin:0.25rem 0 0">Hard max from login. Must be ≥ idle timeout.</p></div>
           <h2 style="margin-top:1.5rem">Authentication</h2>
           <div class="form-group">
             <label class="form-check"><input type="checkbox" id="gs-local" ${chk(s.allow_local_login)}> Allow Local Login</label>

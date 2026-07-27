@@ -179,8 +179,12 @@ Google OIDC credentials are resolved in this order:
 
 - Sessions are stored in **MySQL** (`idp_sessions`) and cached in **Redis** (`idp:session:<id>`).
 - Session ID = `uuid v4`. Cookie value is `<id>.<HMAC-SHA256(SESSION_SECRET, id)>` (base64url).
-- TTL: 8 hours (corporate) / 12 hours (store) — configurable via env.
+- **Timeouts** (General Settings → Session; env fallback `SESSION_TTL_CORPORATE_HOURS`):
+  - **Idle** (`default_session_hours`) — session ends after this many hours with no activity; sliding window refreshes `expires_at` / cookie on each authenticated request.
+  - **Absolute** (`session_absolute_hours`) — hard cap from login; never exceeded even with activity.
+  - Initial TTL = `min(idle, absolute)`.
 - Cookie flags: `HttpOnly`, `SameSite=Lax`. `Secure` is on in production but **off** when `COOKIE_SECURE=false` (dev plain HTTP).
+- Portal SPA runs a client idle watchdog (logs out when the tab is idle); server still enforces idle/absolute on every auth check.
 - Each session records **public IP** (`ip`), **device** (`device_info`), and **location** (`geo_location`). Gmail-style attribution — no workstation agent required:
   1. **`device_info`** — parsed from the `User-Agent` at login time (e.g. `Chrome · Windows 10/11`). Always populated synchronously.
   2. **`ip`** — endpoint public IP via `getClientIp()` (`CF-Connecting-IP` → `True-Client-IP` → `X-Real-IP` → `X-Forwarded-For` public hops → socket). Skips private IPs and the IdP host EIP (`SERVER_PUBLIC_IP` / EC2 IMDS).
@@ -777,8 +781,8 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | yes | — | MySQL |
 | `REDIS_URL` | yes | — | Sessions + MFA challenges |
 | `SESSION_SECRET` | yes (≥32 chars) | — | HMAC for cookie signing |
-| `SESSION_TTL_CORPORATE_HOURS` | no | `8` | Corporate session TTL |
-| `SESSION_TTL_STORE_HOURS` | no | `12` | Store session TTL |
+| `SESSION_TTL_CORPORATE_HOURS` | no | `8` | Fallback idle/default session TTL when General Settings unavailable |
+| `SESSION_TTL_STORE_HOURS` | no | `12` | Reserved (store employment type); corporate path uses General Settings + corporate fallback |
 | `COOKIE_SECURE` | no | `true` if `NODE_ENV=production`, else `false` | Force secure cookie. **Set `false` for plain-HTTP dev.** |
 | `INTERNAL_TOKEN` | yes (≥16) | — | `X-Internal-Token` for `/api/internal/*` (includes RADIUS REST) |
 | `RADIUS_UDP_ENABLED` | no | `false` | Enable in-process UDP RADIUS auth listener (PAP) |
@@ -1020,6 +1024,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-27 — Enforce idle + absolute session timeouts
+
+**Why** — General Settings “Session” hours were saved but never applied; sessions only used env TTL and never checked inactivity.
+
+**What changed:**
+
+- **`session-policy.ts`** — reads `default_session_hours` (idle) + `session_absolute_hours` (cap); env fallback.
+- **Auth** — createSession uses policy TTL; `resolveSession` revokes on idle/absolute and slides `expires_at`; cookie refreshed on `requireAuth`.
+- **Portal** — client idle watchdog + 401 → login; Admin Settings labels clarify idle vs absolute.
 
 ### `0fb67b6` — 2026-07-27 — Fix user vault migration collation for FK
 

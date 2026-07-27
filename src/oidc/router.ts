@@ -202,7 +202,7 @@ router.get('/oauth/authorize', asyncHandler(async (req: Request, res: Response) 
     return;
   }
 
-  const user = await resolveSession(req);
+  const user = await resolveSession(req, res);
   if (!user) {
     const pendingId = uuidv4();
     await redis.set(
@@ -220,7 +220,7 @@ router.get('/oauth/authorize', asyncHandler(async (req: Request, res: Response) 
 }));
 
 router.get('/oauth/resume/:pendingId', asyncHandler(async (req: Request, res: Response) => {
-  const user = await resolveSession(req);
+  const user = await resolveSession(req, res);
   if (!user) {
     res.redirect(`/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
     return;

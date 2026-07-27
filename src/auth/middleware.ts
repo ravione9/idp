@@ -10,7 +10,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { getClientIp } from '../utils/request-context.js';
-import { config } from '../config.js';
 import { query, queryOne } from '../db/connection.js';
 import { redis } from './session-store.js';
 import logger from '../utils/logger.js';
@@ -27,6 +26,7 @@ import {
   setSessionCookie,
   cacheSessionUser,
 } from './session.js';
+import { getSessionPolicy, getSessionCreateTtlHours } from '../services/session-policy.js';
 import {
   MFA_CHALLENGE_PREFIX,
   MFA_CHALLENGE_TTL_S,
@@ -83,14 +83,20 @@ async function getSessionFromRedis(sessionId: string): Promise<LilgUser | null> 
     role: string;
     expires_at: Date;
     revoked_at: Date | null;
+    created_at: Date;
+    last_active_at: Date;
   }>(
-    `SELECT role, expires_at, revoked_at FROM idp_sessions WHERE session_id = ?`,
+    `SELECT role, expires_at, revoked_at, created_at, last_active_at
+       FROM idp_sessions WHERE session_id = ?`,
     [sessionId],
   );
   if (!live || live.revoked_at !== null || new Date(live.expires_at) < new Date()) {
     await redis.del(`${SESSION_REDIS_PREFIX}${sessionId}`).catch(() => {/* non-fatal */});
     return null;
   }
+
+  const timedOut = await enforceSessionTimeouts(sessionId, live.created_at, live.last_active_at);
+  if (timedOut) return null;
 
   const u = JSON.parse(raw) as LilgUser;
   u.expiresAt = new Date(live.expires_at);
@@ -109,8 +115,11 @@ async function getSessionFromDb(sessionId: string): Promise<LilgUser | null> {
     sub:        string;
     expires_at: Date;
     revoked_at: Date | null;
+    created_at: Date;
+    last_active_at: Date;
   }>(
-    `SELECT session_id, emp_id, email, role, iss, sub, expires_at, revoked_at
+    `SELECT session_id, emp_id, email, role, iss, sub, expires_at, revoked_at,
+            created_at, last_active_at
        FROM idp_sessions
       WHERE session_id = ?`,
     [sessionId],
@@ -118,6 +127,9 @@ async function getSessionFromDb(sessionId: string): Promise<LilgUser | null> {
 
   if (!row || row.revoked_at !== null) return null;
   if (new Date(row.expires_at) < new Date()) return null;
+
+  const timedOut = await enforceSessionTimeouts(sessionId, row.created_at, row.last_active_at);
+  if (timedOut) return null;
 
   const user: LilgUser = {
     sessionId:  row.session_id,
@@ -134,8 +146,36 @@ async function getSessionFromDb(sessionId: string): Promise<LilgUser | null> {
   return user;
 }
 
-/** Resolve portal session from cookie without sending a response (null if absent/invalid). */
-export async function resolveSession(req: Request): Promise<LilgUser | null> {
+/** Returns true if session was revoked due to idle or absolute timeout. */
+async function enforceSessionTimeouts(
+  sessionId: string,
+  createdAt: Date,
+  lastActiveAt: Date,
+): Promise<boolean> {
+  const policy = await getSessionPolicy();
+  const now = Date.now();
+  const createdMs = new Date(createdAt).getTime();
+  const lastActiveMs = new Date(lastActiveAt).getTime();
+  const absoluteDeadline = createdMs + policy.absoluteHours * 3600 * 1000;
+  const idleDeadline = lastActiveMs + policy.idleHours * 3600 * 1000;
+
+  if (now <= absoluteDeadline && now <= idleDeadline) return false;
+
+  const reason = now > absoluteDeadline ? 'ABSOLUTE_TIMEOUT' : 'IDLE_TIMEOUT';
+  await query(
+    `UPDATE idp_sessions
+        SET revoked_at = UTC_TIMESTAMP(), expires_at = UTC_TIMESTAMP()
+      WHERE session_id = ? AND revoked_at IS NULL`,
+    [sessionId],
+  ).catch((err) => logger.warn({ err, sessionId, reason }, 'Failed to revoke timed-out session'));
+  await redis.del(`${SESSION_REDIS_PREFIX}${sessionId}`).catch(() => {/* non-fatal */});
+  logger.info({ sessionId, reason, idleHours: policy.idleHours, absoluteHours: policy.absoluteHours }, 'Session auto-timeout');
+  return true;
+}
+
+/** Resolve portal session from cookie without sending a response (null if absent/invalid).
+ *  Pass `res` to refresh the sliding cookie maxAge (SAML/OIDC HTML flows). */
+export async function resolveSession(req: Request, res?: Response): Promise<LilgUser | null> {
   const cookieHeader = req.headers['cookie'] ?? '';
   const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([^;]+)`));
   if (!match) return null;
@@ -149,10 +189,39 @@ export async function resolveSession(req: Request): Promise<LilgUser | null> {
   }
   if (!user) return null;
 
-  void query(
-    'UPDATE idp_sessions SET last_active_at = UTC_TIMESTAMP() WHERE session_id = ?',
+  // Sliding idle window: refresh last_active + expires_at (capped by absolute)
+  const policy = await getSessionPolicy();
+  const row = await queryOne<{ created_at: Date }>(
+    `SELECT created_at FROM idp_sessions WHERE session_id = ?`,
     [sessionId],
-  ).catch((err) => logger.warn({ err }, 'Failed to update last_active_at'));
+  );
+  if (row) {
+    const createdMs = new Date(row.created_at).getTime();
+    const absoluteDeadline = createdMs + policy.absoluteHours * 3600 * 1000;
+    const slidExpires = Math.min(Date.now() + policy.idleHours * 3600 * 1000, absoluteDeadline);
+    const expiresAt = new Date(slidExpires);
+    const expiresSql = expiresAt.toISOString().slice(0, 19).replace('T', ' ');
+    void query(
+      `UPDATE idp_sessions
+          SET last_active_at = UTC_TIMESTAMP(), expires_at = ?
+        WHERE session_id = ? AND revoked_at IS NULL`,
+      [expiresSql, sessionId],
+    ).catch((err) => logger.warn({ err }, 'Failed to slide session expiry'));
+    user.expiresAt = expiresAt;
+    void cacheSessionUser(user).catch(() => {/* non-fatal */});
+  } else {
+    void query(
+      'UPDATE idp_sessions SET last_active_at = UTC_TIMESTAMP() WHERE session_id = ?',
+      [sessionId],
+    ).catch((err) => logger.warn({ err }, 'Failed to update last_active_at'));
+  }
+
+  if (res) {
+    const remainingMs = user.expiresAt.getTime() - Date.now();
+    if (remainingMs > 0) {
+      setSessionCookie(res, user.sessionId, remainingMs / 3600_000);
+    }
+  }
 
   return user;
 }
@@ -162,7 +231,7 @@ export async function resolveSession(req: Request): Promise<LilgUser | null> {
 // ---------------------------------------------------------------------------
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   void (async () => {
-    const user = await resolveSession(req);
+    const user = await resolveSession(req, res);
     if (!user) {
       const cookieHeader = req.headers['cookie'] ?? '';
       const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([^;]+)`));
@@ -381,18 +450,19 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       return;
     }
 
+    const ttlHours = await getSessionCreateTtlHours();
     const sessionId = await createSession({
       empId:     emp.emp_id,
       email,
       role:      sessionRole,
       iss:       'google',
       sub,
-      ttlHours:  config.session.ttlCorporateHours,
+      ttlHours,
       ip,
       userAgent,
     });
 
-    setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
+    setSessionCookie(res, sessionId, ttlHours);
     if (deviceTrusted && mfaRequirements.rememberDeviceHours > 0) {
       setMfaDeviceTrustCookie(res, emp.emp_id, mfaRequirements.rememberDeviceHours, userAgent);
     }

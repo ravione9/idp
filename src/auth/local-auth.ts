@@ -20,9 +20,9 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import crypto from 'node:crypto';
 import qrcode from 'qrcode';
-import { config } from '../config.js';
 import logger from '../utils/logger.js';
 import { createSession, setSessionCookie } from './session.js';
+import { getSessionCreateTtlHours } from '../services/session-policy.js';
 import { redis } from './session-store.js';
 import { confirmEnrollment, challengeMethodsFromStatus, getMfaStatus, startEnrollment, verifyAnyMfaCode } from './mfa.js';
 import { sendEmailOtp, sendSmsOtp } from './mfa-otp.js';
@@ -333,13 +333,14 @@ async function issueSessionAndRespond(
   const iss = opts?.iss ?? 'local';
   const sub = opts?.sub ?? `local:${account.id}`;
   const userAgent = req.get('user-agent') ?? '';
+  const ttlHours = await getSessionCreateTtlHours();
   const sessionId = await createSession({
     empId:     account.emp_id,
     email:     account.email,
     role:      account.role,
     iss,
     sub,
-    ttlHours:  config.session.ttlCorporateHours,
+    ttlHours,
     ip:        getClientIp(req),
     userAgent,
   });
@@ -347,7 +348,7 @@ async function issueSessionAndRespond(
   if (iss === 'local' && account.id > 0) {
     await touchLocalLogin(account.id);
   }
-  setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
+  setSessionCookie(res, sessionId, ttlHours);
   if ((opts?.rememberDeviceHours ?? 0) > 0) {
     setMfaDeviceTrustCookie(res, account.emp_id, opts!.rememberDeviceHours!, userAgent);
   }
@@ -615,13 +616,14 @@ export async function localLoginMfaEnrollConfirmHandler(req: Request, res: Respo
     const iss = challenge.iss ?? 'local';
     const sub = challenge.sub ?? `local:${challenge.accountId}`;
     const userAgent = req.get('user-agent') ?? '';
+    const ttlHours = await getSessionCreateTtlHours();
     const sessionId = await createSession({
       empId:     challenge.empId,
       email:     challenge.email,
       role:      challenge.role,
       iss,
       sub,
-      ttlHours:  config.session.ttlCorporateHours,
+      ttlHours,
       ip:        getClientIp(req),
       userAgent,
     });
@@ -629,7 +631,7 @@ export async function localLoginMfaEnrollConfirmHandler(req: Request, res: Respo
     if (iss === 'local' && challenge.accountId > 0) {
       await touchLocalLogin(challenge.accountId);
     }
-    setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
+    setSessionCookie(res, sessionId, ttlHours);
     const mfaRequirements = await getMfaRequirementContext(challenge.empId);
     if (mfaRequirements.rememberDeviceHours > 0) {
       setMfaDeviceTrustCookie(res, challenge.empId, mfaRequirements.rememberDeviceHours, userAgent);
@@ -673,18 +675,19 @@ export async function localLoginMfaEnrollDeferHandler(req: Request, res: Respons
 
   if (graceRemainingMs > 0) {
     await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-deferred-grace');
+    const ttlHours = await getSessionCreateTtlHours();
     const sessionId = await createSession({
       empId:     challenge.empId,
       email:     challenge.email,
       role:      challenge.role,
       iss:       'local',
       sub:       `local:${challenge.accountId}`,
-      ttlHours:  config.session.ttlCorporateHours,
+      ttlHours,
       ip:        getClientIp(req),
       userAgent: req.get('user-agent') ?? '',
     });
     await touchLocalLogin(challenge.accountId);
-    setSessionCookie(res, sessionId, config.session.ttlCorporateHours);
+    setSessionCookie(res, sessionId, ttlHours);
     logger.info({ empId: challenge.empId, email: challenge.email }, 'Local login with deferred MFA enrollment');
     res.json({
       success: true,

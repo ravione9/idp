@@ -9,6 +9,7 @@ import { config, isSamlEnabled } from '../config.js';
 import { ROLES } from '../auth/rbac.js';
 import { PORTAL_OPERATOR_ROLES, resolvePortalAccess } from '../services/portal-roles.js';
 import { getClientIpDebug } from '../utils/request-context.js';
+import { getSessionPolicy } from '../services/session-policy.js';
 
 const router = Router();
 
@@ -37,6 +38,12 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
   const base = config.app.publicBaseUrl ?? config.saml?.baseUrl;
   const portalAccess = await resolvePortalAccess(user.empId, role);
   const canAdmin = !!portalAccess || PORTAL_OPERATOR_ROLES.has(role);
+  const sessionPolicy = await getSessionPolicy();
+
+  const sessRow = await queryOne<{ created_at: Date; last_active_at: Date }>(
+    `SELECT created_at, last_active_at FROM idp_sessions WHERE session_id = ?`,
+    [user.sessionId],
+  );
 
   res.json({
     session: {
@@ -44,6 +51,10 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
       email:     user.email,
       iss:       user.iss,
       expiresAt: user.expiresAt,
+      createdAt: sessRow?.created_at ?? null,
+      lastActiveAt: sessRow?.last_active_at ?? null,
+      idleTimeoutHours: sessionPolicy.idleHours,
+      absoluteTimeoutHours: sessionPolicy.absoluteHours,
       portalRole: portalAccess?.roleKey ?? role,
       portalRoleName: portalAccess?.roleName ?? null,
       portalRoleId: portalAccess?.roleId ?? null,

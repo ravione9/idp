@@ -14,6 +14,16 @@ export const api = {
       const err = new Error((body && (body.message || body.error)) || res.statusText);
       err.status = res.status;
       err.body   = body;
+      const code = body && body.code;
+      if (
+        res.status === 401
+        && typeof location !== 'undefined'
+        && !path.startsWith('/auth/')
+        && path !== '/api/me'
+        && (code === 'SESSION_EXPIRED' || code === 'NO_SESSION' || code === 'BAD_SIGNATURE')
+      ) {
+        location.href = '/login?reason=expired';
+      }
       throw err;
     }
     return body;

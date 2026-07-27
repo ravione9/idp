@@ -50,7 +50,7 @@ async function requireSessionOrLogin(
   res: Response,
   returnPath: string,
 ): Promise<boolean> {
-  const user = await resolveSession(req);
+  const user = await resolveSession(req, res);
   if (user) {
     req.user = user;
     return true;
@@ -222,7 +222,7 @@ async function issueAssertion(
   // /saml/sso is public (SP-initiated) — attach portal session when present so
   // an already-signed-in user is not forced through login/MFA again.
   if (!req.user) {
-    const sessionUser = await resolveSession(req);
+    const sessionUser = await resolveSession(req, res);
     if (sessionUser) req.user = sessionUser;
   }
 
