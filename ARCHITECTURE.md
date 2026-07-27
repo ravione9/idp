@@ -1026,7 +1026,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-27 — Fix access request approve not granting app access
+### `e6eb27b` — 2026-07-27 — Fix access request approve not granting app access
 
 **Why** — Approving marked requests `FULFILLED` but never wrote `app_access_assignments`. mysql2 already parses JSON `item_ids`; `JSON.parse(array)` threw and grants were skipped.
 
