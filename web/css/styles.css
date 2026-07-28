@@ -3325,14 +3325,6 @@ body.nav-locked { overflow: hidden; }
    Attendance IGA ? enterprise governance console
    ============================================================ */
 .aig-page { display: flex; flex-direction: column; gap: 1rem; }
-.aig-policy-wizard .aig-policy-stepper {
-  margin: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.aig-policy-wizard .wiz-step { cursor: pointer; }
-.aig-policy-wizard .wiz-step:hover .wiz-label { color: var(--primary); }
 .aig-status-bar {
   display: flex;
   align-items: center;

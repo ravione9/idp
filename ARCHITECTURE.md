@@ -774,7 +774,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
 - `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=govReports&tab=mfa`, `/?v=groups&tab=tags`)
 
-**Attendance IGA admin console** (`/?v=attendanceIga`) — policy picker (+ New / Clone / Delete; Default undeletable) + tabs: Overview · **Policy** (stepped create/edit wizard: Policy scope → Source → Schedule → Approval/actions) · **Configuration** (Truein API + SFTP credentials + manual CSV) · Import History · Approvals · Executions. Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
+**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · Import History · Approvals · Executions. Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
 
 ---
 
@@ -1028,6 +1028,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-28 — Attendance IGA Policy tab matches App Access style
+
+**Why** — In-page stepper felt unlike other admin policy UIs (App Access / Adaptive Auth).
+
+**What changed:**
+
+- **Admin UI** — Policy tab is a table (+ New Policy / Edit / Clone / Delete / Feeds); create/edit uses a `modal-wide` form (scope, source, schedule, approval workflow).
 
 ### `86fc5a9` — 2026-07-28 — Attendance IGA: Policy create/edit wizard
 
