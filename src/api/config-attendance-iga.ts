@@ -14,6 +14,8 @@ import {
   listAttendanceIgaConfigs,
   createAttendanceIgaConfig,
   deleteAttendanceIgaConfig,
+  updatePunchRuleActions,
+  getPunchRuleActions,
 } from '../services/attendance-iga/config.js';
 import {
   getAttendanceIgaDashboard,
@@ -77,6 +79,21 @@ const trueinApiConfigSchema = z.object({
   method: z.enum(['GET', 'POST']).optional(),
 });
 
+const attendanceActionSchema = z.enum([
+  'SUSPEND_USER',
+  'DISABLE_USER',
+  'REVOKE_SESSIONS',
+  'REMOVE_ALL_APPS',
+  'REMOVE_GROUPS',
+  'REMOVE_ROLES',
+  'REMOVE_LICENSES',
+]);
+
+const punchRuleActionsSchema = z.object({
+  no_punch_today: z.array(attendanceActionSchema).min(1).max(6),
+  no_punch_consecutive: z.array(attendanceActionSchema).min(1).max(6),
+}).optional();
+
 const configSchema = z.object({
   enabled: z.number().int().min(0).max(1).optional(),
   source_type: z.enum(['REST_API', 'FILE_UPLOAD', 'SFTP', 'BOTH']).optional(),
@@ -102,6 +119,7 @@ const configSchema = z.object({
   name: z.string().min(1).max(150).optional(),
   slug: z.string().min(1).max(80).optional(),
   employee_scope: employeeScopeSchema,
+  punch_rule_actions: punchRuleActionsSchema,
 });
 
 router.get('/dashboard', asyncHandler(async (req, res) => {
@@ -182,7 +200,10 @@ router.delete('/configs/:id', asyncHandler(async (req, res) => {
 }));
 
 router.get('/config', asyncHandler(async (req, res) => {
-  res.json(redactAttendanceConfig(await loadAttendanceIgaConfig(configIdFromReq(req))));
+  const configId = configIdFromReq(req);
+  const config = await loadAttendanceIgaConfig(configId);
+  const punch_rule_actions = await getPunchRuleActions(configId);
+  res.json({ ...redactAttendanceConfig(config), punch_rule_actions });
 }));
 
 router.get('/sftp/preview', asyncHandler(async (req, res) => {
@@ -357,6 +378,14 @@ router.put('/config', asyncHandler(async (req, res) => {
       id,
     ],
   );
+
+  if (d.punch_rule_actions) {
+    await updatePunchRuleActions(id, {
+      no_punch_today: d.punch_rule_actions.no_punch_today,
+      no_punch_consecutive: d.punch_rule_actions.no_punch_consecutive,
+    });
+  }
+
   res.json({ success: true });
 }));
 

@@ -1029,6 +1029,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### TBD — 2026-07-28 — Attendance IGA policy: missed-punch / consecutive action options
+
+**Why** — Operators need to choose suspend vs disable/deprovision (and optional app revoke) per policy, not only buried rule defaults.
+
+**What changed:**
+
+- **API** — `PUT /config` accepts `punch_rule_actions` (`no_punch_today`, `no_punch_consecutive`); GET config returns current rule actions.
+- **Admin UI** — New/Edit policy modal **Revoke actions** dropdowns for missed punch and consecutive absences.
+
 ### `81e34a1` — 2026-07-28 — Attendance IGA tab sticky on refresh
 
 **Why** — Sub-tabs always reset to Overview after refresh.

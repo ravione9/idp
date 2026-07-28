@@ -201,6 +201,54 @@ export async function deleteAttendanceIgaConfig(configId: number): Promise<void>
   if (r.affectedRows === 0) throw new Error('Config not found');
 }
 
+/** Update ACTION rule payloads for missed-punch / consecutive-absence scenarios. */
+export async function updatePunchRuleActions(
+  configId: number,
+  actions: {
+    no_punch_today: AttendanceAction[];
+    no_punch_consecutive: AttendanceAction[];
+  },
+): Promise<void> {
+  await execute(
+    `UPDATE attendance_iga_rules
+        SET actions_json = ?, updated_at = UTC_TIMESTAMP()
+      WHERE config_id = ? AND rule_key = 'NO_PUNCH_TODAY'`,
+    [JSON.stringify(actions.no_punch_today), configId],
+  );
+  await execute(
+    `UPDATE attendance_iga_rules
+        SET actions_json = ?, updated_at = UTC_TIMESTAMP()
+      WHERE config_id = ? AND rule_key = 'NO_PUNCH_CONSECUTIVE'`,
+    [JSON.stringify(actions.no_punch_consecutive), configId],
+  );
+}
+
+export async function getPunchRuleActions(configId: number): Promise<{
+  no_punch_today: AttendanceAction[];
+  no_punch_consecutive: AttendanceAction[];
+}> {
+  const rows = await query<{ rule_key: string; actions_json: unknown }>(
+    `SELECT rule_key, actions_json FROM attendance_iga_rules
+      WHERE config_id = ? AND rule_key IN ('NO_PUNCH_TODAY', 'NO_PUNCH_CONSECUTIVE')`,
+    [configId],
+  );
+  const byKey = new Map(rows.map((r) => [r.rule_key, r.actions_json]));
+  const parse = (raw: unknown, fallback: AttendanceAction[]): AttendanceAction[] => {
+    if (Array.isArray(raw)) return raw.map(String) as AttendanceAction[];
+    if (typeof raw === 'string') {
+      try {
+        const p = JSON.parse(raw) as unknown;
+        if (Array.isArray(p)) return p.map(String) as AttendanceAction[];
+      } catch { /* ignore */ }
+    }
+    return fallback;
+  };
+  return {
+    no_punch_today: parse(byKey.get('NO_PUNCH_TODAY'), ['SUSPEND_USER']),
+    no_punch_consecutive: parse(byKey.get('NO_PUNCH_CONSECUTIVE'), ['DISABLE_USER']),
+  };
+}
+
 export async function updateSyncStatus(
   status: 'OK' | 'FAILED' | 'PARTIAL',
   error?: string,

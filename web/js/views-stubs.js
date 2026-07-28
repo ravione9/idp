@@ -8709,12 +8709,12 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
           <tbody>${rows}</tbody>
         </table></div>`;
 
-      area.querySelector('#aig-pol-new').addEventListener('click', () => openPolicyModal(null));
+      area.querySelector('#aig-pol-new').addEventListener('click', () => { void openPolicyModal(null); });
       area.querySelectorAll('.aig-pol-edit').forEach((btn) => {
         btn.addEventListener('click', async () => {
           try {
             const full = await api.attendanceIgaConfig(Number(btn.dataset.id));
-            openPolicyModal(full);
+            await openPolicyModal(full);
           } catch (e) { alert(e.message); }
         });
       });
@@ -8739,8 +8739,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
             await loadStatusBar();
             await loadStats();
             await loadPolicy();
-            const created = configList.find((c) => c.id === r.id);
-            openPolicyModal(created || null);
+            const full = await api.attendanceIgaConfig(r.id);
+            await openPolicyModal(full);
           } catch (e) { alert(e.message); }
         });
       });
@@ -8762,7 +8762,33 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
 
-  function openPolicyModal(existing) {
+  const AIG_PUNCH_PRESETS = {
+    SUSPEND: { label: 'Suspend user (block SSO)', actions: ['SUSPEND_USER'] },
+    SUSPEND_SESSIONS: { label: 'Suspend user + revoke sessions', actions: ['SUSPEND_USER', 'REVOKE_SESSIONS'] },
+    DISABLE: { label: 'Disable / deprovision user', actions: ['DISABLE_USER'] },
+    DISABLE_APPS: { label: 'Disable user + revoke all app access', actions: ['DISABLE_USER', 'REMOVE_ALL_APPS'] },
+    REVOKE_APPS: { label: 'Revoke all app access only', actions: ['REMOVE_ALL_APPS'] },
+  };
+
+  function aigActionsToPreset(actions) {
+    const key = JSON.stringify([...(actions || [])].map(String).sort());
+    for (const [id, p] of Object.entries(AIG_PUNCH_PRESETS)) {
+      if (JSON.stringify([...p.actions].sort()) === key) return id;
+    }
+    if ((actions || []).includes('DISABLE_USER') && (actions || []).includes('REMOVE_ALL_APPS')) return 'DISABLE_APPS';
+    if ((actions || []).includes('DISABLE_USER')) return 'DISABLE';
+    if ((actions || []).includes('SUSPEND_USER') && (actions || []).includes('REVOKE_SESSIONS')) return 'SUSPEND_SESSIONS';
+    if ((actions || []).includes('REMOVE_ALL_APPS')) return 'REVOKE_APPS';
+    return 'SUSPEND';
+  }
+
+  function aigPunchPresetOptions(selected) {
+    return Object.entries(AIG_PUNCH_PRESETS).map(([id, p]) =>
+      `<option value="${id}" ${id === selected ? 'selected' : ''}>${esc(p.label)}</option>`,
+    ).join('');
+  }
+
+  async function openPolicyModal(existing) {
     const isEdit = Boolean(existing?.id);
     const scope = existing?.employee_scope || { departments: [], employment_types: [] };
     const deptsVal = (scope.departments || []).join(', ');
@@ -8774,6 +8800,12 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     const poll = existing?.polling_interval || 'manual';
     const cutoff = String(existing?.cutoff_time || '10:00:00').slice(0, 5);
     const days = existing?.consecutive_days ?? 3;
+    const punch = existing?.punch_rule_actions || {
+      no_punch_today: ['SUSPEND_USER'],
+      no_punch_consecutive: ['DISABLE_USER'],
+    };
+    const missPreset = aigActionsToPreset(punch.no_punch_today);
+    const consecPreset = aigActionsToPreset(punch.no_punch_consecutive);
 
     const bd = openModal(`<div class="modal modal-wide" role="dialog">
       <div class="modal-header"><h2>${isEdit ? 'Edit policy' : 'New policy'}</h2></div>
@@ -8838,11 +8870,20 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
             <input class="form-input" id="aig-days" type="number" min="1" max="30" value="${esc(String(days))}"></div>
         </div>
 
+        <h3 style="font-size:0.9rem;margin:1.25rem 0 0.75rem">Revoke actions</h3>
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">Choose what happens when attendance rules match. Suspend blocks SSO; disable/deprovision is stronger; app revoke removes application assignments.</p>
+        <div class="form-2col">
+          <div class="form-group"><label class="form-label">Missed punch (today after cutoff)</label>
+            <select class="form-select" id="aig-miss-punch">${aigPunchPresetOptions(missPreset)}</select></div>
+          <div class="form-group"><label class="form-label">Consecutive absences</label>
+            <select class="form-select" id="aig-consec-punch">${aigPunchPresetOptions(consecPreset)}</select></div>
+        </div>
+
         <h3 style="font-size:0.9rem;margin:1.25rem 0 0.75rem">Approval workflow</h3>
         <div class="form-group">
-          <label class="form-label">Action workflow</label>
+          <label class="form-label">When to run actions</label>
           <select class="form-select" id="aig-action-mode">
-            <option value="auto" ${actionMode==='auto'?'selected':''}>Auto-execute — suspend / revoke immediately</option>
+            <option value="auto" ${actionMode==='auto'?'selected':''}>Auto-execute immediately</option>
             <option value="approval" ${actionMode==='approval'?'selected':''}>Approval workflow — queue on Approvals tab first</option>
             <option value="emergency" ${actionMode==='emergency'?'selected':''}>Emergency — bypass approval</option>
           </select>
@@ -8864,6 +8905,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       const employment_types = [...bd.querySelectorAll('.aig-emp-type:checked')].map((el) => el.value);
       const mode = bd.querySelector('#aig-action-mode').value;
       const cutoffVal = bd.querySelector('#aig-cutoff').value;
+      const missKey = bd.querySelector('#aig-miss-punch').value;
+      const consecKey = bd.querySelector('#aig-consec-punch').value;
       const payload = {
         name,
         employee_scope: { departments: depts, employment_types },
@@ -8875,6 +8918,10 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         approval_enabled: mode === 'approval' ? 1 : 0,
         emergency_mode: mode === 'emergency' ? 1 : 0,
         identifier_field: bd.querySelector('#aig-id-field').value,
+        punch_rule_actions: {
+          no_punch_today: AIG_PUNCH_PRESETS[missKey]?.actions || ['SUSPEND_USER'],
+          no_punch_consecutive: AIG_PUNCH_PRESETS[consecKey]?.actions || ['DISABLE_USER'],
+        },
       };
       try {
         let id = existing?.id;
