@@ -774,7 +774,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
 - `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=govReports&tab=mfa`, `/?v=groups&tab=tags`)
 
-**Attendance IGA admin console** (`/?v=attendanceIga`) — policy picker (+ New / Clone / Delete; Default undeletable) + tabs: Overview · **Policy** (name, dept/type scope, schedule, cutoff, action mode) · **Configuration** (source + Truein API + SFTP + manual CSV) · Import History · Approvals · Executions. Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
+**Attendance IGA admin console** (`/?v=attendanceIga`) — policy picker (+ New / Clone / Delete; Default undeletable) + tabs: Overview · **Policy** (stepped create/edit wizard: Policy scope → Source → Schedule → Approval/actions) · **Configuration** (Truein API + SFTP credentials + manual CSV) · Import History · Approvals · Executions. Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
 
 ---
 
@@ -1028,6 +1028,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-28 — Attendance IGA: Policy create/edit wizard
+
+**Why** — Operators need a guided create/edit flow (scope → source → schedule → approval), not one long form.
+
+**What changed:**
+
+- **Admin UI** — Policy tab is a 4-step wizard (Policy · Source · Schedule · Approval) with Next/Back, review summary, Save, and jump to Configuration for API/SFTP credentials.
 
 ### `3d11397` — 2026-07-28 — Attendance IGA: separate Policy vs Configuration tabs
 

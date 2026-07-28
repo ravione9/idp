@@ -8418,7 +8418,7 @@ export async function viewAttendanceIga(content) {
       <button type="button" class="btn btn-sm btn-secondary" id="aig-config-new">+ New</button>
       <button type="button" class="btn btn-sm btn-secondary" id="aig-config-clone">Clone</button>
       <button type="button" class="btn btn-sm btn-danger" id="aig-config-delete" title="Cannot delete Default">Delete</button>
-      <span class="muted" style="font-size:0.8rem;margin-left:auto" id="aig-config-hint">Each policy can use API or SFTP and target selected departments / employment types.</span>
+      <span class="muted" style="font-size:0.8rem;margin-left:auto" id="aig-config-hint">Policy wizard: scope → source → schedule → approval. API/SFTP credentials on Configuration.</span>
     </div>
     <div id="aig-status-bar" class="aig-status-bar">${loading()}</div>
     <div id="aig-stats" class="stat-grid aap-stats">${loading()}</div>
@@ -8670,72 +8670,282 @@ export async function viewAttendanceIga(content) {
       const c = await api.attendanceIgaConfig(selectedConfigId);
       configCache = c;
       const scope = c.employee_scope || { departments: [], employment_types: [] };
-      const deptsVal = (scope.departments || []).join(', ');
-      const empTypes = new Set(scope.employment_types || []);
       const idField = c.identifier_field === 'EMPLOYEE_CODE' ? 'EMPLOYEE_ID' : (c.identifier_field || 'EMPLOYEE_ID');
       const actionMode = c.emergency_mode ? 'emergency' : (c.approval_enabled ? 'approval' : 'auto');
+      const isNewish = !c.enabled && (c.polling_interval === 'manual' || !c.last_sync_at);
+      const modeLabel = isNewish ? 'Create policy' : 'Edit policy';
 
-      area.innerHTML = `
-        <div class="aig-settings">
-          <div class="aig-settings-main" style="max-width:920px">
-            <div class="aig-settings-scroll">
-              <section class="aig-section active">
-                <div class="aig-section-head">
-                  <h3>Revoke policy</h3>
-                  <p>Who this policy applies to, when it runs, and how access is revoked. Configure Truein API / SFTP under <strong>Configuration</strong>.</p>
-                </div>
-                <div class="aig-field-grid">
-                  ${aigField('aig-name', 'Policy name', `<input class="form-input" id="aig-name" value="${esc(c.name || '')}" placeholder="Store no-punch revoke">`)}
-                  ${aigField('aig-enabled', 'Status', `<select class="form-select" id="aig-enabled"><option value="1" ${c.enabled?'selected':''}>Enabled</option><option value="0" ${!c.enabled?'selected':''}>Disabled</option></select>`)}
-                  <div class="span-2">${aigField('aig-depts', 'Departments (scope)', `<input class="form-input" id="aig-depts" value="${esc(deptsVal)}" placeholder="Retail, Store Ops — leave blank for all">`, 'Comma-separated. Matched against employee department. Blank = all departments.')}</div>
-                  <div class="span-2"><div class="form-group aig-field"><label class="form-label">Employment types (scope)</label>
-                    <div class="aig-emp-type-row" style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:0.5rem;align-items:center">
-                      ${['CORPORATE','STORE','PLANT','DC'].map((t) =>
-                        `<label class="form-check-row" style="margin:0;gap:0.4rem;white-space:nowrap"><input type="checkbox" class="form-check aig-emp-type" value="${t}" ${empTypes.has(t) ? 'checked' : ''}> ${t}</label>`,
-                      ).join('')}
-                    </div>
-                    <span class="form-hint">Leave all unchecked to include every employment type.</span>
-                  </div></div>
-                  ${aigField('aig-poll', 'Schedule', `<select class="form-select" id="aig-poll"><option value="15m" ${c.polling_interval==='15m'?'selected':''}>Every 15 minutes</option><option value="5m" ${c.polling_interval==='5m'?'selected':''}>Every 5 minutes</option><option value="1h" ${c.polling_interval==='1h'?'selected':''}>Hourly</option><option value="1d" ${c.polling_interval==='1d'?'selected':''}>Daily</option><option value="manual" ${c.polling_interval==='manual'?'selected':''}>Manual only</option></select>`, 'Prefer a run after punch cutoff.')}
-                  ${aigField('aig-id-field', 'Match employees by', `<select class="form-select" id="aig-id-field"><option value="EMPLOYEE_ID" ${idField==='EMPLOYEE_ID'?'selected':''}>Employee ID</option><option value="EMAIL" ${idField==='EMAIL'?'selected':''}>Email</option><option value="USERNAME" ${idField==='USERNAME'?'selected':''}>Username</option></select>`)}
-                  ${aigField('aig-cutoff', 'Punch cutoff', `<input class="form-input" id="aig-cutoff" type="time" value="${esc(String(c.cutoff_time||'10:00:00').slice(0,5))}">`, 'No punch after this time may trigger suspend.')}
-                  ${aigField('aig-days', 'Consecutive absences', `<input class="form-input" id="aig-days" type="number" min="1" max="30" value="${esc(String(c.consecutive_days??3))}">`, 'Working days without punch before disable.')}
-                  <div class="span-2">${aigField('aig-action-mode', 'Action mode', `<select class="form-select" id="aig-action-mode"><option value="auto" ${actionMode==='auto'?'selected':''}>Auto-execute actions</option><option value="approval" ${actionMode==='approval'?'selected':''}>Require approval first</option><option value="emergency" ${actionMode==='emergency'?'selected':''}>Emergency — bypass approval</option></select>`, 'Auto runs connector actions; Approval queues them first.')}</div>
-                </div>
-              </section>
+      const draft = {
+        name: c.name || '',
+        enabled: c.enabled ? 1 : 0,
+        departments: (scope.departments || []).join(', '),
+        employment_types: [...(scope.employment_types || [])],
+        source_type: c.source_type || 'REST_API',
+        polling_interval: c.polling_interval || 'manual',
+        identifier_field: idField,
+        cutoff_time: String(c.cutoff_time || '10:00:00').slice(0, 5),
+        consecutive_days: c.consecutive_days ?? 3,
+        action_mode: actionMode,
+      };
+
+      const steps = [
+        { id: 'basics', label: 'Policy' },
+        { id: 'source', label: 'Source' },
+        { id: 'schedule', label: 'Schedule' },
+        { id: 'approval', label: 'Approval' },
+      ];
+      let stepIdx = 0;
+
+      const sourceMeta = {
+        REST_API: { title: 'Truein API', desc: 'Fetch daily attendance with Bearer token + date' },
+        SFTP: { title: 'SFTP file', desc: 'Download dated CSV from drop folder' },
+        BOTH: { title: 'API + SFTP', desc: 'Merge both sources each run' },
+        FILE_UPLOAD: { title: 'Manual only', desc: 'Scheduler off — CSV upload when needed' },
+      };
+      const pollLabel = {
+        '5m': 'Every 5 minutes', '15m': 'Every 15 minutes', '1h': 'Hourly', '1d': 'Daily', manual: 'Manual only',
+      };
+      const modeLabels = {
+        auto: 'Auto-execute actions',
+        approval: 'Require approval first',
+        emergency: 'Emergency — bypass approval',
+      };
+
+      function collectStep() {
+        const root = area.querySelector('#aig-policy-body');
+        if (!root) return null;
+        const id = steps[stepIdx].id;
+        if (id === 'basics') {
+          const name = root.querySelector('#aig-name')?.value.trim() || '';
+          if (!name) return 'Policy name is required.';
+          draft.name = name;
+          draft.enabled = Number(root.querySelector('#aig-enabled')?.value || 0);
+          draft.departments = root.querySelector('#aig-depts')?.value || '';
+          draft.employment_types = [...root.querySelectorAll('.aig-emp-type:checked')].map((el) => el.value);
+        } else if (id === 'source') {
+          draft.source_type = root.querySelector('#aig-source')?.value || draft.source_type;
+        } else if (id === 'schedule') {
+          draft.polling_interval = root.querySelector('#aig-poll')?.value || draft.polling_interval;
+          draft.identifier_field = root.querySelector('#aig-id-field')?.value || draft.identifier_field;
+          draft.cutoff_time = root.querySelector('#aig-cutoff')?.value || draft.cutoff_time;
+          draft.consecutive_days = Number(root.querySelector('#aig-days')?.value || draft.consecutive_days);
+        } else if (id === 'approval') {
+          draft.action_mode = root.querySelector('#aig-action-mode')?.value || draft.action_mode;
+        }
+        return null;
+      }
+
+      function renderStepBody() {
+        const empSet = new Set(draft.employment_types || []);
+        const src = draft.source_type;
+        if (steps[stepIdx].id === 'basics') {
+          return `
+            <div class="aig-section-head">
+              <h3>${esc(modeLabel)}</h3>
+              <p>Name the revoke policy and choose which employees it can act on.</p>
             </div>
-            <div class="aig-settings-footer">
-              <div id="aig-policy-err"></div>
-              <button class="btn btn-primary" id="aig-save-policy">Save policy</button>
+            <div class="aig-field-grid">
+              ${aigField('aig-name', 'Policy name', `<input class="form-input" id="aig-name" value="${esc(draft.name)}" placeholder="Store no-punch revoke">`)}
+              ${aigField('aig-enabled', 'Status', `<select class="form-select" id="aig-enabled"><option value="1" ${draft.enabled?'selected':''}>Enabled</option><option value="0" ${!draft.enabled?'selected':''}>Disabled</option></select>`)}
+              <div class="span-2">${aigField('aig-depts', 'Departments (scope)', `<input class="form-input" id="aig-depts" value="${esc(draft.departments)}" placeholder="Retail, Store Ops — leave blank for all">`, 'Comma-separated. Matched against employee department. Blank = all departments.')}</div>
+              <div class="span-2"><div class="form-group aig-field"><label class="form-label">Employment types (scope)</label>
+                <div class="aig-emp-type-row" style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:0.5rem;align-items:center">
+                  ${['CORPORATE','STORE','PLANT','DC'].map((t) =>
+                    `<label class="form-check-row" style="margin:0;gap:0.4rem;white-space:nowrap"><input type="checkbox" class="form-check aig-emp-type" value="${t}" ${empSet.has(t) ? 'checked' : ''}> ${t}</label>`,
+                  ).join('')}
+                </div>
+                <span class="form-hint">Leave all unchecked to include every employment type.</span>
+              </div></div>
+            </div>`;
+        }
+        if (steps[stepIdx].id === 'source') {
+          return `
+            <div class="aig-section-head">
+              <h3>Select source</h3>
+              <p>How this policy fetches attendance. Enter API token or SFTP path under the <strong>Configuration</strong> tab after saving.</p>
             </div>
+            <div class="aig-source-cards">
+              ${['REST_API','SFTP','BOTH','FILE_UPLOAD'].map((v) => `
+                <label class="aig-source-card ${src===v?'active':''}">
+                  <input type="radio" name="aig-source-radio" value="${v}" ${src===v?'checked':''}>
+                  <strong>${esc(sourceMeta[v].title)}</strong>
+                  <span>${esc(sourceMeta[v].desc)}</span>
+                </label>`).join('')}
+            </div>
+            <input type="hidden" id="aig-source" value="${esc(src)}">
+            <div class="aig-callout" style="margin-top:1rem">
+              <div class="aig-callout-title">Next: connection details</div>
+              <p class="muted" style="margin:0;font-size:0.85rem">Truein base URL / token and SFTP host / remote path are configured on the <strong>Configuration</strong> tab for this policy.</p>
+            </div>`;
+        }
+        if (steps[stepIdx].id === 'schedule') {
+          return `
+            <div class="aig-section-head">
+              <h3>Time &amp; scheduling</h3>
+              <p>When the policy runs and how attendance rows are matched to employees.</p>
+            </div>
+            <div class="aig-field-grid">
+              ${aigField('aig-poll', 'Run schedule', `<select class="form-select" id="aig-poll"><option value="15m" ${draft.polling_interval==='15m'?'selected':''}>Every 15 minutes</option><option value="5m" ${draft.polling_interval==='5m'?'selected':''}>Every 5 minutes</option><option value="1h" ${draft.polling_interval==='1h'?'selected':''}>Hourly</option><option value="1d" ${draft.polling_interval==='1d'?'selected':''}>Daily</option><option value="manual" ${draft.polling_interval==='manual'?'selected':''}>Manual only</option></select>`, 'Prefer a run after punch cutoff.')}
+              ${aigField('aig-id-field', 'Match employees by', `<select class="form-select" id="aig-id-field"><option value="EMPLOYEE_ID" ${draft.identifier_field==='EMPLOYEE_ID'?'selected':''}>Employee ID</option><option value="EMAIL" ${draft.identifier_field==='EMAIL'?'selected':''}>Email</option><option value="USERNAME" ${draft.identifier_field==='USERNAME'?'selected':''}>Username</option></select>`)}
+              ${aigField('aig-cutoff', 'Punch cutoff', `<input class="form-input" id="aig-cutoff" type="time" value="${esc(draft.cutoff_time)}">`, 'No punch after this time may trigger suspend.')}
+              ${aigField('aig-days', 'Consecutive absences', `<input class="form-input" id="aig-days" type="number" min="1" max="30" value="${esc(String(draft.consecutive_days))}">`, 'Working days without punch before disable.')}
+            </div>`;
+        }
+        // approval
+        const deptsSummary = (draft.departments || '').split(',').map((x) => x.trim()).filter(Boolean);
+        const typesSummary = draft.employment_types?.length ? draft.employment_types.join(', ') : 'All types';
+        return `
+          <div class="aig-section-head">
+            <h3>Actions &amp; approval</h3>
+            <p>Choose whether revoke actions run automatically or wait for an approver.</p>
           </div>
-        </div>`;
+          <div class="aig-field-grid">
+            <div class="span-2">${aigField('aig-action-mode', 'Action workflow', `<select class="form-select" id="aig-action-mode">
+              <option value="auto" ${draft.action_mode==='auto'?'selected':''}>Auto-execute — suspend / revoke immediately</option>
+              <option value="approval" ${draft.action_mode==='approval'?'selected':''}>Approval workflow — queue on Approvals tab first</option>
+              <option value="emergency" ${draft.action_mode==='emergency'?'selected':''}>Emergency — bypass approval</option>
+            </select>`, 'Pending items appear under the Approvals tab when approval is required.')}</div>
+          </div>
+          <div class="card" style="margin-top:1.25rem;padding:1rem 1.15rem">
+            <h4 style="margin:0 0 0.75rem;font-size:0.9rem">Review</h4>
+            <div class="kv-list">
+              <div class="kv"><span class="k">Policy</span><span class="v">${esc(draft.name || '—')} · ${draft.enabled ? 'Enabled' : 'Disabled'}</span></div>
+              <div class="kv"><span class="k">Scope</span><span class="v">${esc(deptsSummary.length ? deptsSummary.join(', ') : 'All departments')} / ${esc(typesSummary)}</span></div>
+              <div class="kv"><span class="k">Source</span><span class="v">${esc(sourceMeta[draft.source_type]?.title || draft.source_type)}</span></div>
+              <div class="kv"><span class="k">Schedule</span><span class="v">${esc(pollLabel[draft.polling_interval] || draft.polling_interval)} · cutoff ${esc(draft.cutoff_time)}</span></div>
+              <div class="kv"><span class="k">Workflow</span><span class="v">${esc(modeLabels[draft.action_mode] || draft.action_mode)}</span></div>
+            </div>
+          </div>`;
+      }
 
-      area.querySelector('#aig-save-policy').addEventListener('click', async () => {
-        const errBox = area.querySelector('#aig-policy-err');
-        try {
-          const mode = area.querySelector('#aig-action-mode').value;
-          const cutoff = area.querySelector('#aig-cutoff').value;
-          const depts = (area.querySelector('#aig-depts')?.value || '')
-            .split(',').map((x) => x.trim()).filter(Boolean);
-          const employment_types = [...area.querySelectorAll('.aig-emp-type:checked')].map((el) => el.value);
-          await api.updateAttendanceIgaConfig({
-            name: area.querySelector('#aig-name')?.value.trim() || c.name,
-            employee_scope: { departments: depts, employment_types },
-            enabled: Number(area.querySelector('#aig-enabled').value),
-            polling_interval: area.querySelector('#aig-poll').value,
-            cutoff_time: cutoff.length === 5 ? cutoff + ':00' : cutoff,
-            consecutive_days: Number(area.querySelector('#aig-days').value),
-            approval_enabled: mode === 'approval' ? 1 : 0,
-            emergency_mode: mode === 'emergency' ? 1 : 0,
-            identifier_field: area.querySelector('#aig-id-field').value,
-          }, selectedConfigId);
-          configCache = null;
-          errBox.innerHTML = '<div class="alert alert-success">Policy saved.</div>';
-          await refreshConfigList();
-          await loadStats(); await loadStatusBar();
-        } catch (e) { errBox.innerHTML = errHtml(e.message); }
-      });
+      function wireStep() {
+        const root = area.querySelector('#aig-policy-body');
+        root?.querySelectorAll('input[name="aig-source-radio"]').forEach((radio) => {
+          radio.addEventListener('change', () => {
+            root.querySelector('#aig-source').value = radio.value;
+            root.querySelectorAll('.aig-source-card').forEach((card) => {
+              card.classList.toggle('active', card.querySelector('input')?.value === radio.value);
+            });
+          });
+        });
+      }
+
+      async function savePolicy() {
+        const err = collectStep();
+        if (err) throw new Error(err);
+        const depts = (draft.departments || '').split(',').map((x) => x.trim()).filter(Boolean);
+        const cutoff = draft.cutoff_time;
+        await api.updateAttendanceIgaConfig({
+          name: draft.name,
+          employee_scope: { departments: depts, employment_types: draft.employment_types },
+          enabled: draft.enabled,
+          source_type: draft.source_type,
+          polling_interval: draft.polling_interval,
+          cutoff_time: cutoff.length === 5 ? cutoff + ':00' : cutoff,
+          consecutive_days: draft.consecutive_days,
+          approval_enabled: draft.action_mode === 'approval' ? 1 : 0,
+          emergency_mode: draft.action_mode === 'emergency' ? 1 : 0,
+          identifier_field: draft.identifier_field,
+        }, selectedConfigId);
+        configCache = null;
+        await refreshConfigList();
+        await loadStats();
+        await loadStatusBar();
+      }
+
+      function paint() {
+        const last = stepIdx === steps.length - 1;
+        area.innerHTML = `
+          <div class="aig-policy-wizard">
+            <div class="aig-section-head" style="margin-bottom:0.5rem">
+              <h3 style="margin:0">${esc(modeLabel)}</h3>
+              <p style="margin:0.35rem 0 0">Step ${stepIdx + 1} of ${steps.length} — use Next to continue, or Save on the last step.</p>
+            </div>
+            <div class="wizard-stepper aig-policy-stepper" id="aig-policy-stepper">
+              ${steps.map((s, i) => {
+                const status = i < stepIdx ? 'done' : i === stepIdx ? 'active' : 'pending';
+                const num = i < stepIdx ? '✓' : (i + 1);
+                return `<div class="wiz-step wiz-step-${status}" data-step="${i}" role="button" tabindex="0">
+                  <span class="wiz-num">${num}</span>
+                  <span class="wiz-label">${esc(s.label)}</span>
+                  ${i < steps.length - 1 ? '<span class="wiz-sep"></span>' : ''}
+                </div>`;
+              }).join('')}
+            </div>
+            <div class="aig-settings" style="margin-top:1rem">
+              <div class="aig-settings-main" style="max-width:920px">
+                <div class="aig-settings-scroll">
+                  <div id="aig-policy-body" class="aig-section active">${renderStepBody()}</div>
+                </div>
+                <div class="aig-settings-footer" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                  <button type="button" class="btn btn-secondary" id="aig-policy-back" ${stepIdx === 0 ? 'style="visibility:hidden"' : ''}>← Back</button>
+                  <div id="aig-policy-err" style="flex:1"></div>
+                  ${last
+                    ? `<button type="button" class="btn btn-secondary" id="aig-policy-goto-cfg">Open Configuration</button>
+                       <button type="button" class="btn btn-primary" id="aig-policy-save">Save policy</button>`
+                    : `<button type="button" class="btn btn-primary" id="aig-policy-next">Next →</button>`}
+                </div>
+              </div>
+            </div>
+          </div>`;
+
+        wireStep();
+
+        area.querySelectorAll('#aig-policy-stepper .wiz-step').forEach((el) => {
+          el.addEventListener('click', () => {
+            const target = Number(el.dataset.step);
+            if (target === stepIdx) return;
+            if (target > stepIdx) {
+              const err = collectStep();
+              if (err) {
+                area.querySelector('#aig-policy-err').innerHTML = errHtml(err);
+                return;
+              }
+            } else {
+              collectStep();
+            }
+            stepIdx = target;
+            paint();
+          });
+        });
+
+        area.querySelector('#aig-policy-back')?.addEventListener('click', () => {
+          collectStep();
+          if (stepIdx > 0) { stepIdx--; paint(); }
+        });
+
+        area.querySelector('#aig-policy-next')?.addEventListener('click', () => {
+          const err = collectStep();
+          if (err) {
+            area.querySelector('#aig-policy-err').innerHTML = errHtml(err);
+            return;
+          }
+          stepIdx++;
+          paint();
+        });
+
+        area.querySelector('#aig-policy-save')?.addEventListener('click', async () => {
+          const errBox = area.querySelector('#aig-policy-err');
+          try {
+            await savePolicy();
+            errBox.innerHTML = '<div class="alert alert-success">Policy saved. Configure API / SFTP under Configuration if needed.</div>';
+          } catch (e) { errBox.innerHTML = errHtml(e.message); }
+        });
+
+        area.querySelector('#aig-policy-goto-cfg')?.addEventListener('click', async () => {
+          const errBox = area.querySelector('#aig-policy-err');
+          try {
+            await savePolicy();
+            wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'config'));
+            aigTabIds.forEach((id) => {
+              wrap.querySelector(`#tab-${id}`).style.display = id === 'config' ? '' : 'none';
+            });
+            await loadConfig();
+          } catch (e) { errBox.innerHTML = errHtml(e.message); }
+        });
+      }
+
+      paint();
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
 
