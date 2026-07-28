@@ -73,6 +73,11 @@ const ConfigSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   IDP_DETERMINISTIC: envBool.default('false'),
+  /** When "true", API skips runMigrations() on boot (K8s Job owns schema). Unset/false = current behavior. */
+  SKIP_MIGRATIONS_ON_BOOT: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
 
   // Outbox worker
   OUTBOX_LEADER_TTL_MS: envInt.default('30000'),
@@ -221,6 +226,7 @@ export const config = {
     nodeEnv: parsed.NODE_ENV,
     logLevel: parsed.LOG_LEVEL,
     deterministic: parsed.IDP_DETERMINISTIC,
+    skipMigrationsOnBoot: parsed.SKIP_MIGRATIONS_ON_BOOT ?? false,
     outboxLeaderTtlMs: parsed.OUTBOX_LEADER_TTL_MS,
     outboxPollIntervalMs: parsed.OUTBOX_POLL_INTERVAL_MS,
     circuitBreakerErrorThreshold: parsed.CIRCUIT_BREAKER_ERROR_THRESHOLD,

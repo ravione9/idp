@@ -268,6 +268,17 @@ export async function runMigrations(): Promise<void> {
 
   if (!conn) throw new Error('MySQL connection failed');
 
+  const LOCK_NAME = 'lilg_migrations';
+  const LOCK_TIMEOUT_S = 120;
+
+  const [lockRows] = await conn.query<mysql.RowDataPacket[]>(
+    'SELECT GET_LOCK(?, ?) AS got',
+    [LOCK_NAME, LOCK_TIMEOUT_S],
+  );
+  if (Number(lockRows[0]?.['got']) !== 1) {
+    throw new Error(`Could not acquire migration lock '${LOCK_NAME}' within ${LOCK_TIMEOUT_S}s`);
+  }
+
   try {
     await ensureTrackingTable(conn);
 
@@ -318,6 +329,7 @@ export async function runMigrations(): Promise<void> {
       logger.info({ applied: pending, total: migrations.length }, 'Migrations applied');
     }
   } finally {
+    await conn.query('SELECT RELEASE_LOCK(?)', [LOCK_NAME]);
     await conn.end();
   }
 }

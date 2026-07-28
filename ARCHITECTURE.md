@@ -97,7 +97,7 @@ Lenskart IdP is a unified platform that delivers **enterprise SSO + Identity Gov
    │  - employees     │         │  - sessions      │
    │  - lilg_sessions │         │  - mfa challenges│
    │  - saml_*        │         │  - rate limit    │
-   │  - mfa_secrets   │         │    (future)      │
+   │  - mfa_secrets   │         │  - sched locks   │
    │  - audit_log     │         └──────────────────┘
    │  - ...           │
    └──────────────────┘
@@ -120,7 +120,7 @@ Lenskart IdP is a unified platform that delivers **enterprise SSO + Identity Gov
 | Language | TypeScript 5 (strict) | Type safety; compiles to ESM |
 | HTTP | Express 4 | Battle-tested, simple, well-supported |
 | DB | MySQL 8 (`mysql2/promise`) | Enterprise standard at Lenskart |
-| Cache / sessions | Redis 7 (`ioredis`) | Hot session lookup, MFA challenges |
+| Cache / sessions | Redis 7 (`ioredis`) | Hot session lookup, MFA challenges, rate limits, scheduler locks, outbox leader |
 | SAML | `samlify` | SAML 2.0 IdP/SP with signing/validation |
 | OIDC verification | `jose` | JWKS-based JWT verification |
 | Password | `bcryptjs` | Salted bcrypt at rest |
@@ -234,7 +234,7 @@ Supported methods (policy-controlled via `mfa_policy.allowed_methods` + optional
 
 ### 5.5 Rate limiting
 
-`/auth/local/login`, `/auth/local/login/mfa-verify`, `/auth/local/login/mfa-enroll`, `/auth/local/login/mfa-enroll/confirm`, and `/auth/local/login/mfa-enroll/defer` are rate limited at **10 requests / minute / (IP+email or IP+challenge)** via in-process sliding window (`src/auth/rate-limit.ts`).
+`/auth/local/login`, `/auth/local/login/mfa-verify`, `/auth/local/login/mfa-enroll`, `/auth/local/login/mfa-enroll/confirm`, and `/auth/local/login/mfa-enroll/defer` are rate limited at **10 requests / minute / (IP+email or IP+challenge)** via a **Redis fixed-window** counter (`src/auth/rate-limit.ts`, keys `idp:rl:*`, atomic Lua `INCR` + `PEXPIRE`). Same middleware signature as before; cluster-safe across API replicas. On Redis errors the limiter **fails open** (allows the request and logs a warning).
 Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 ### 5.6 Adaptive / Risk-based Authentication
@@ -398,19 +398,23 @@ Add more apps via **Admin Central → SAML Applications → Register new SAML ap
 ### 7.1 Migration system
 
 - Folder: `migrations/NNN_name.sql`
-- Runner: `src/db/migrate.ts` — runs on startup before listening.
+- Runner: `src/db/migrate.ts` (`runMigrations()`).
+- **Boot (docker-compose / single instance):** `src/index.ts` calls `maybeRunBootMigrations()` before listening — applies pending migrations unless `SKIP_MIGRATIONS_ON_BOOT=true`.
+- **K8s:** set `SKIP_MIGRATIONS_ON_BOOT=true` on API pods; run a one-shot Job with `node dist/db/migrate-cli.js` (`src/db/migrate-cli.ts`) before rolling the Deployment.
+- **Advisory lock:** `runMigrations()` acquires MySQL `GET_LOCK('lilg_migrations', 120)` after connect and `RELEASE_LOCK` in `finally`, so concurrent callers serialize; the second pass no-ops via the tracking table.
 - Tracking: `lilg_schema_migrations(name, checksum, applied_at, duration_ms)`.
 - Each file is executed as a single multi-statement batch (the runner opens a connection with `multipleStatements: true`).
 - Compatibility fallback: if MySQL rejects `ADD COLUMN IF NOT EXISTS` with `ER_PARSE_ERROR`, the runner retries that migration statement-by-statement and emulates `IF NOT EXISTS` via `information_schema.COLUMNS` checks before each `ALTER TABLE ... ADD COLUMN`.
 - Files are applied in lexicographic order; already-applied files are skipped.
 - A checksum mismatch (file was edited after apply) logs a warning but does **not** fail startup.
-- A failed migration aborts startup (`process.exit(1)`).
+- A failed migration aborts startup (`process.exit(1)`) when migrations run on boot; the CLI exits `1` for Job failure.
 
 To add a new migration:
 
 ```bash
 # 1. Add migrations/003_my_change.sql with idempotent DDL
 # 2. Pull on the server, restart the API; migration applies automatically
+#    (or run the migrate Job when SKIP_MIGRATIONS_ON_BOOT=true)
 ```
 
 ### 7.2 Tables (current)
@@ -704,7 +708,7 @@ To add a new migration:
 | `POST` | `/api/internal/ingest/truein` | Legacy Truein ingest into `attendance_events` — prefer Attendance IGA when enabled |
 | Various | `/api/internal/*` | Airflow / automation hooks |
 
-**Attendance ownership:** when any Attendance IGA policy is enabled, that pipeline owns Truein/SFTP fetch + suspensions. In-process scheduler ticks every 60s and runs each due enabled policy independently. Keep Airflow on `/attendance-iga/run` (optional `configId`); do not also schedule `/risk-scan` for the same attendance gap policy.
+**Attendance ownership:** when any Attendance IGA policy is enabled, that pipeline owns Truein/SFTP fetch + suspensions. In-process scheduler ticks every 60s (guarded by Redis `withSchedLock('attendance-iga', …)`) and runs each due enabled policy independently. Keep Airflow on `/attendance-iga/run` (optional `configId`); do not also schedule `/risk-scan` for the same attendance gap policy.
 
 ---
 
@@ -783,7 +787,8 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | Env var | Required | Default | Purpose |
 |---|---|---|---|
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | yes | — | MySQL |
-| `REDIS_URL` | yes | — | Sessions + MFA challenges |
+| `REDIS_URL` | yes | — | Sessions, MFA challenges, rate limits (`idp:rl:*`), scheduler locks (`idp:sched:*`), outbox leader |
+| `SKIP_MIGRATIONS_ON_BOOT` | no | `false` | When `"true"`, API skips `runMigrations()` (K8s Job runs `node dist/db/migrate-cli.js`). Unset/false = apply migrations on boot (docker-compose). |
 | `SESSION_SECRET` | yes (≥32 chars) | — | HMAC for cookie signing |
 | `SESSION_TTL_CORPORATE_HOURS` | no | `8` | Fallback idle/default session TTL when General Settings unavailable |
 | `SESSION_TTL_STORE_HOURS` | no | `12` | Reserved (store employment type); corporate path uses General Settings + corporate fallback |
@@ -857,9 +862,21 @@ sudo bash scripts/fix-and-start.sh
 5. Migrations apply automatically on API startup — **no manual SQL**.
 6. Wait for `/healthz`, print login info.
 
-### 11.2 Production (target: `idp.lenskart.com`)
+### 11.2 Production / multi-replica (Kubernetes)
 
-Not yet deployed. See [Roadmap §14.A](#14-roadmap).
+Target topology is multi-replica API behind a load balancer with shared MySQL + Redis. Multi-replica safety (backward-compatible when new env vars are unset):
+
+| Concern | Mechanism |
+|---|---|
+| Schema migrations | K8s Job: `node dist/db/migrate-cli.js` + `SKIP_MIGRATIONS_ON_BOOT=true` on pods; MySQL `GET_LOCK('lilg_migrations')` as defense-in-depth |
+| Rate limiting | Redis fixed-window (`src/auth/rate-limit.ts`); fails open if Redis down |
+| In-process schedulers | Redis `SET NX PX` via `withSchedLock` (`src/utils/sched-lock.ts`) — attendance-iga, access-request-expiry, connector-health; lock expires (not released early) |
+| Outbox drain | Existing Redis leader election in `src/services/outbox-worker.ts` |
+| SAML/OIDC signing keys | Inject `SAML_IDP_PRIVATE_KEY_PEM` + `SAML_IDP_CERT_PEM` (Secret); `ensureSamlKeys()` short-circuits; `ensureOidcKeys()` reuses SAML key when SAML is enabled |
+
+Single-instance docker-compose leaves `SKIP_MIGRATIONS_ON_BOOT` unset and always wins scheduler locks — behavior unchanged aside from rate limits now using Redis (already required).
+
+See [Roadmap §14.A](#14-roadmap) for remaining production cutover items.
 
 ### 11.3 Docker image
 
@@ -989,13 +1006,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - WS-Federation, header-based SSO (legacy proxy)
 - Adaptive / risk-based MFA step-up (deny / MFA / allow decision)
 - Account lockout policy (data already in `auth_attempts`)
-- Redis-backed rate limiter for multi-instance deploys
+- ✅ Redis-backed rate limiter for multi-instance deploys (`src/auth/rate-limit.ts`)
 
 ### Phase 4 — Productionize `idp.lenskart.com`
 
 - TLS termination (Caddy with auto-HTTPS or Nginx + cert-manager / Let's Encrypt)
 - DNS, real domain, replace `192.168.24.254:8080`
-- HA: 2× API replicas behind LB, MySQL primary+replica, Redis Sentinel
+- ✅ Multi-replica API safety — migrate Job CLI + `SKIP_MIGRATIONS_ON_BOOT`, Redis rate limits, `withSchedLock` for in-process schedulers (K8s manifests / LB / Redis Sentinel still deploy-time)
+- HA deploy: 2× API replicas behind LB, MySQL primary+replica, Redis Sentinel
 - Secrets in AWS Secrets Manager (already wired via `@aws-sdk/client-secrets-manager`)
 - MySQL backup strategy
 - Move frontend to **React + Vite + TypeScript**, add as a build stage in Dockerfile
@@ -1028,6 +1046,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### _(uncommitted)_ — 2026-07-28 — Multi-replica K8s safety (migrations, rate limit, sched locks)
+
+**Why** — Running multiple API replicas on Kubernetes must not race migrations, under-enforce login rate limits, or duplicate in-process scheduler work, while docker-compose (no new env vars) stays behavior-compatible.
+
+**What changed:**
+
+- **Migrations** — `src/db/migrate-cli.ts` for K8s Jobs; `SKIP_MIGRATIONS_ON_BOOT` → `config.app.skipMigrationsOnBoot` + `maybeRunBootMigrations()`; MySQL `GET_LOCK('lilg_migrations', 120)` in `runMigrations()`.
+- **Rate limit** — Redis fixed-window Lua counter (`idp:rl:*`); fail-open on Redis errors; same `rateLimit({ max, windowMs, keyFn })` signature.
+- **Schedulers** — `withSchedLock` (`src/utils/sched-lock.ts`) wraps attendance-iga, access-request-expiry, and connector-health ticks (interval + boot-time).
+- **Verified** — `ensureSamlKeys()` returns when PEM env vars set; `ensureOidcKeys()` reuses SAML key when SAML enabled.
 
 ### `1cb6cec` — 2026-07-28 — Lifecycle report includes FSM / Attendance IGA transitions
 

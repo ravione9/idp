@@ -13,7 +13,7 @@ import { getClientIp, getPublicOrigin, isRequestSecure } from './utils/request-c
 import logger from './utils/logger.js';
 import { closePool, queryOne } from './db/connection.js';
 import { redis as sessionRedis } from './auth/session-store.js';
-import { runMigrations } from './db/migrate.js';
+import { maybeRunBootMigrations } from './db/migrate-boot.js';
 import { rateLimit } from './auth/rate-limit.js';
 import { registerHttpsServer, getPortalTlsState, buildTlsCertChain } from './services/portal-tls.js';
 
@@ -307,7 +307,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
   try {
-    await runMigrations();
+    await maybeRunBootMigrations(config.app.skipMigrationsOnBoot);
   } catch (err) {
     logger.fatal({ err }, 'Database migrations failed — refusing to start');
     process.exit(1);

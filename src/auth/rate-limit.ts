@@ -1,53 +1,40 @@
 /**
- * Tiny in-process rate limiter for /auth endpoints.
- * Uses a sliding window keyed by IP+email.
- *
- * For multi-instance deployments later, replace with Redis-backed counters.
+ * Redis-backed rate limiter for /auth endpoints — cluster-safe across pods.
+ * Falls open (allows the request) if Redis is unreachable: an IdP hard-down
+ * because the rate limiter can't reach Redis is worse than one unthrottled window.
  */
 import { Request, Response, NextFunction } from 'express';
+import { redis } from './session-store.js';
+import logger from '../utils/logger.js';
 
-interface Bucket {
-  count: number;
-  reset: number;
-}
-
-const buckets = new Map<string, Bucket>();
-
-function evict(): void {
-  const now = Date.now();
-  for (const [key, b] of buckets) {
-    if (b.reset <= now) buckets.delete(key);
-  }
-}
-
-setInterval(evict, 60_000).unref();
+// Atomic INCR + set-expiry-on-first-hit
+const LUA = `
+  local c = redis.call('INCR', KEYS[1])
+  if c == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+  local ttl = redis.call('PTTL', KEYS[1])
+  return {c, ttl}
+`;
 
 export function rateLimit(opts: { max: number; windowMs: number; keyFn?: (req: Request) => string }) {
   const { max, windowMs } = opts;
   const keyFn = opts.keyFn ?? ((req: Request) => req.ip ?? 'unknown');
 
   return (req: Request, res: Response, next: NextFunction): void => {
-    const key = keyFn(req);
-    const now = Date.now();
-    const existing = buckets.get(key);
-
-    if (!existing || existing.reset <= now) {
-      buckets.set(key, { count: 1, reset: now + windowMs });
-      next();
-      return;
-    }
-
-    if (existing.count >= max) {
-      const retry = Math.ceil((existing.reset - now) / 1000);
-      res.set('Retry-After', String(retry));
-      res.status(429).json({
-        error:      'Too many requests',
-        retryAfter: retry,
-      });
-      return;
-    }
-
-    existing.count += 1;
-    next();
+    void (async () => {
+      const key = `idp:rl:${keyFn(req)}`;
+      try {
+        const [count, pttl] = (await redis.eval(LUA, 1, key, String(windowMs))) as [number, number];
+        if (count > max) {
+          const retry = Math.max(1, Math.ceil(pttl / 1000));
+          res.set('Retry-After', String(retry));
+          res.status(429).json({ error: 'Too many requests', retryAfter: retry });
+          return;
+        }
+        next();
+      } catch (err) {
+        logger.warn({ err }, 'Rate limiter Redis error — failing open');
+        next();
+      }
+    })();
   };
 }

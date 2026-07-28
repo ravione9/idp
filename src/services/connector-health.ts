@@ -11,6 +11,7 @@
 import { google } from 'googleapis';
 import { execute, query, queryOne } from '../db/connection.js';
 import logger from '../utils/logger.js';
+import { withSchedLock } from '../utils/sched-lock.js';
 import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import {
   buildGoogleJwtAuth,
@@ -307,37 +308,40 @@ async function testGoogle(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
   }
 }
 
+async function connectorHealthTick(): Promise<void> {
+  try {
+    const rows = await query<{ id: string; name: string; status: string }>(
+      `SELECT id, name, status FROM connectors
+        WHERE status IN ('CONFIGURED', 'CONNECTED', 'ACTIVE', 'ERROR')
+        ORDER BY updated_at ASC
+        LIMIT 20`,
+      [],
+    );
+    for (const row of rows) {
+      try {
+        const result = await runConnectorConnectivityTest(row.id);
+        logger.info(
+          { connectorId: row.id, name: row.name, ok: result.success, status: result.connectorStatus },
+          'Connector health check',
+        );
+      } catch (err) {
+        logger.warn({ connectorId: row.id, err }, 'Connector health check failed');
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, 'Connector health scheduler tick failed');
+  }
+}
+
 /** Periodic re-test of non-disabled connectors so Active/Error stays honest. */
 export function startConnectorHealthScheduler(): void {
   if (healthTimer) return;
-  const tick = async () => {
-    try {
-      const rows = await query<{ id: string; name: string; status: string }>(
-        `SELECT id, name, status FROM connectors
-          WHERE status IN ('CONFIGURED', 'CONNECTED', 'ACTIVE', 'ERROR')
-          ORDER BY updated_at ASC
-          LIMIT 20`,
-        [],
-      );
-      for (const row of rows) {
-        try {
-          const result = await runConnectorConnectivityTest(row.id);
-          logger.info(
-            { connectorId: row.id, name: row.name, ok: result.success, status: result.connectorStatus },
-            'Connector health check',
-          );
-        } catch (err) {
-          logger.warn({ connectorId: row.id, err }, 'Connector health check failed');
-        }
-      }
-    } catch (err) {
-      logger.error({ err }, 'Connector health scheduler tick failed');
-    }
-  };
+  const lockTtlMs = Math.floor(HEALTH_INTERVAL_MS * 0.9);
+  const lockedTick = () => withSchedLock('connector-health', lockTtlMs, connectorHealthTick);
 
   // First run shortly after boot, then every 15 minutes
-  setTimeout(() => { void tick(); }, 60_000).unref();
-  healthTimer = setInterval(() => { void tick(); }, HEALTH_INTERVAL_MS);
+  setTimeout(() => { void lockedTick(); }, 60_000).unref();
+  healthTimer = setInterval(() => { void lockedTick(); }, HEALTH_INTERVAL_MS);
   healthTimer.unref();
   logger.info({ intervalMs: HEALTH_INTERVAL_MS }, 'Connector health scheduler started');
 }

@@ -1,4 +1,5 @@
 import logger from '../../utils/logger.js';
+import { withSchedLock } from '../../utils/sched-lock.js';
 import {
   listAttendanceIgaConfigs,
   configIsDue,
@@ -12,9 +13,11 @@ const runningByConfig = new Set<number>();
 /** Single 60s tick — each enabled config runs when its own interval is due. */
 export function startAttendanceIgaScheduler(): void {
   if (timer) clearInterval(timer);
-  timer = setInterval(() => { void tickAll(); }, 60_000);
+  timer = setInterval(() => {
+    void withSchedLock('attendance-iga', 55_000, tickAll);
+  }, 60_000);
   logger.info('Attendance IGA multi-config scheduler started (60s tick)');
-  void tickAll();
+  void withSchedLock('attendance-iga', 55_000, tickAll);
 }
 
 async function tickAll(): Promise<void> {
