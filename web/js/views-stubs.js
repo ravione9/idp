@@ -8424,12 +8424,14 @@ export async function viewAttendanceIga(content) {
     <div id="aig-stats" class="stat-grid aap-stats">${loading()}</div>
     <div class="cfg-tab-bar inline-tabs aig-tabs">
       <button type="button" class="cfg-tab inline-tab active" data-tab="dash">Overview</button>
+      <button type="button" class="cfg-tab inline-tab" data-tab="policy">Policy</button>
       <button type="button" class="cfg-tab inline-tab" data-tab="config">Configuration</button>
       <button type="button" class="cfg-tab inline-tab" data-tab="imports">Import History</button>
       <button type="button" class="cfg-tab inline-tab" data-tab="approvals">Approvals</button>
       <button type="button" class="cfg-tab inline-tab" data-tab="executions">Executions</button>
     </div>
     <div id="tab-dash"></div>
+    <div id="tab-policy" style="display:none"></div>
     <div id="tab-config" style="display:none"></div>
     <div id="tab-imports" style="display:none"></div>
     <div id="tab-approvals" style="display:none"></div>
@@ -8661,45 +8663,30 @@ export async function viewAttendanceIga(content) {
     return `<div class="form-group aig-field ${extraClass}"><label class="form-label" for="${id}">${label}</label>${controlHtml}${hint ? `<span class="form-hint">${hint}</span>` : ''}</div>`;
   }
 
-  async function loadConfig() {
-    const area = wrap.querySelector('#tab-config');
+  async function loadPolicy() {
+    const area = wrap.querySelector('#tab-policy');
     area.innerHTML = loading();
     try {
       const c = await api.attendanceIgaConfig(selectedConfigId);
       configCache = c;
-      const s = c.sftp_config || {};
-      const ac = c.api_config || {};
       const scope = c.employee_scope || { departments: [], employment_types: [] };
       const deptsVal = (scope.departments || []).join(', ');
       const empTypes = new Set(scope.employment_types || []);
-      const hasToken = Boolean(c.api_auth_config?.token);
-      const hasKey = Boolean(s.privateKey);
-      const src = c.source_type || 'REST_API';
-      const tz = ac.timezone || s.timezone || 'Asia/Kolkata';
-      const offset = ac.dateOffsetDays ?? s.dateOffsetDays ?? 0;
-      const lookback = ac.lookbackDays ?? s.lookbackDays ?? 1;
       const idField = c.identifier_field === 'EMPLOYEE_CODE' ? 'EMPLOYEE_ID' : (c.identifier_field || 'EMPLOYEE_ID');
       const actionMode = c.emergency_mode ? 'emergency' : (c.approval_enabled ? 'approval' : 'auto');
-      const sftpAfter = s.archiveDir ? 'archive' : (s.deleteAfterFetch ? 'delete' : 'keep');
 
       area.innerHTML = `
         <div class="aig-settings">
-          <aside class="aig-settings-nav">
-            <div class="aig-settings-nav-label">Settings</div>
-            <button type="button" class="aig-nav-item active" data-section="general"><span class="aig-nav-title">General</span><span class="aig-nav-desc">Source, schedule, scope</span></button>
-            <button type="button" class="aig-nav-item" data-section="api"><span class="aig-nav-title">Truein API</span><span class="aig-nav-desc">Token &amp; endpoint</span></button>
-            <button type="button" class="aig-nav-item" data-section="sftp"><span class="aig-nav-title">SFTP</span><span class="aig-nav-desc">Daily CSV file</span></button>
-            <button type="button" class="aig-nav-item" data-section="manual"><span class="aig-nav-title">Manual Import</span><span class="aig-nav-desc">One-off CSV</span></button>
-          </aside>
-          <div class="aig-settings-main">
+          <div class="aig-settings-main" style="max-width:920px">
             <div class="aig-settings-scroll">
-              <section class="aig-section active" data-section="general">
+              <section class="aig-section active">
                 <div class="aig-section-head">
-                  <h3>General</h3>
-                  <p>Name this revoke policy, choose API or SFTP, and limit which employees it can act on.</p>
+                  <h3>Revoke policy</h3>
+                  <p>Who this policy applies to, when it runs, and how access is revoked. Configure Truein API / SFTP under <strong>Configuration</strong>.</p>
                 </div>
                 <div class="aig-field-grid">
                   ${aigField('aig-name', 'Policy name', `<input class="form-input" id="aig-name" value="${esc(c.name || '')}" placeholder="Store no-punch revoke">`)}
+                  ${aigField('aig-enabled', 'Status', `<select class="form-select" id="aig-enabled"><option value="1" ${c.enabled?'selected':''}>Enabled</option><option value="0" ${!c.enabled?'selected':''}>Disabled</option></select>`)}
                   <div class="span-2">${aigField('aig-depts', 'Departments (scope)', `<input class="form-input" id="aig-depts" value="${esc(deptsVal)}" placeholder="Retail, Store Ops — leave blank for all">`, 'Comma-separated. Matched against employee department. Blank = all departments.')}</div>
                   <div class="span-2"><div class="form-group aig-field"><label class="form-label">Employment types (scope)</label>
                     <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:0.35rem">
@@ -8709,6 +8696,80 @@ export async function viewAttendanceIga(content) {
                     </div>
                     <span class="form-hint">Leave all unchecked to include every employment type.</span>
                   </div></div>
+                  ${aigField('aig-poll', 'Schedule', `<select class="form-select" id="aig-poll"><option value="15m" ${c.polling_interval==='15m'?'selected':''}>Every 15 minutes</option><option value="5m" ${c.polling_interval==='5m'?'selected':''}>Every 5 minutes</option><option value="1h" ${c.polling_interval==='1h'?'selected':''}>Hourly</option><option value="1d" ${c.polling_interval==='1d'?'selected':''}>Daily</option><option value="manual" ${c.polling_interval==='manual'?'selected':''}>Manual only</option></select>`, 'Prefer a run after punch cutoff.')}
+                  ${aigField('aig-id-field', 'Match employees by', `<select class="form-select" id="aig-id-field"><option value="EMPLOYEE_ID" ${idField==='EMPLOYEE_ID'?'selected':''}>Employee ID</option><option value="EMAIL" ${idField==='EMAIL'?'selected':''}>Email</option><option value="USERNAME" ${idField==='USERNAME'?'selected':''}>Username</option></select>`)}
+                  ${aigField('aig-cutoff', 'Punch cutoff', `<input class="form-input" id="aig-cutoff" type="time" value="${esc(String(c.cutoff_time||'10:00:00').slice(0,5))}">`, 'No punch after this time may trigger suspend.')}
+                  ${aigField('aig-days', 'Consecutive absences', `<input class="form-input" id="aig-days" type="number" min="1" max="30" value="${esc(String(c.consecutive_days??3))}">`, 'Working days without punch before disable.')}
+                  <div class="span-2">${aigField('aig-action-mode', 'Action mode', `<select class="form-select" id="aig-action-mode"><option value="auto" ${actionMode==='auto'?'selected':''}>Auto-execute actions</option><option value="approval" ${actionMode==='approval'?'selected':''}>Require approval first</option><option value="emergency" ${actionMode==='emergency'?'selected':''}>Emergency — bypass approval</option></select>`, 'Auto runs connector actions; Approval queues them first.')}</div>
+                </div>
+              </section>
+            </div>
+            <div class="aig-settings-footer">
+              <div id="aig-policy-err"></div>
+              <button class="btn btn-primary" id="aig-save-policy">Save policy</button>
+            </div>
+          </div>
+        </div>`;
+
+      area.querySelector('#aig-save-policy').addEventListener('click', async () => {
+        const errBox = area.querySelector('#aig-policy-err');
+        try {
+          const mode = area.querySelector('#aig-action-mode').value;
+          const cutoff = area.querySelector('#aig-cutoff').value;
+          const depts = (area.querySelector('#aig-depts')?.value || '')
+            .split(',').map((x) => x.trim()).filter(Boolean);
+          const employment_types = [...area.querySelectorAll('.aig-emp-type:checked')].map((el) => el.value);
+          await api.updateAttendanceIgaConfig({
+            name: area.querySelector('#aig-name')?.value.trim() || c.name,
+            employee_scope: { departments: depts, employment_types },
+            enabled: Number(area.querySelector('#aig-enabled').value),
+            polling_interval: area.querySelector('#aig-poll').value,
+            cutoff_time: cutoff.length === 5 ? cutoff + ':00' : cutoff,
+            consecutive_days: Number(area.querySelector('#aig-days').value),
+            approval_enabled: mode === 'approval' ? 1 : 0,
+            emergency_mode: mode === 'emergency' ? 1 : 0,
+            identifier_field: area.querySelector('#aig-id-field').value,
+          }, selectedConfigId);
+          configCache = null;
+          errBox.innerHTML = '<div class="alert alert-success">Policy saved.</div>';
+          await refreshConfigList();
+          await loadStats(); await loadStatusBar();
+        } catch (e) { errBox.innerHTML = errHtml(e.message); }
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  async function loadConfig() {
+    const area = wrap.querySelector('#tab-config');
+    area.innerHTML = loading();
+    try {
+      const c = await api.attendanceIgaConfig(selectedConfigId);
+      configCache = c;
+      const s = c.sftp_config || {};
+      const ac = c.api_config || {};
+      const hasToken = Boolean(c.api_auth_config?.token);
+      const hasKey = Boolean(s.privateKey);
+      const src = c.source_type || 'REST_API';
+      const tz = ac.timezone || s.timezone || 'Asia/Kolkata';
+      const offset = ac.dateOffsetDays ?? s.dateOffsetDays ?? 0;
+      const lookback = ac.lookbackDays ?? s.lookbackDays ?? 1;
+      const sftpAfter = s.archiveDir ? 'archive' : (s.deleteAfterFetch ? 'delete' : 'keep');
+
+      area.innerHTML = `
+        <div class="aig-settings">
+          <aside class="aig-settings-nav">
+            <div class="aig-settings-nav-label">Data source</div>
+            <button type="button" class="aig-nav-item active" data-section="source"><span class="aig-nav-title">Source</span><span class="aig-nav-desc">API, SFTP, or both</span></button>
+            <button type="button" class="aig-nav-item" data-section="api"><span class="aig-nav-title">Truein API</span><span class="aig-nav-desc">Token &amp; endpoint</span></button>
+            <button type="button" class="aig-nav-item" data-section="sftp"><span class="aig-nav-title">SFTP</span><span class="aig-nav-desc">Daily CSV file</span></button>
+            <button type="button" class="aig-nav-item" data-section="manual"><span class="aig-nav-title">Manual Import</span><span class="aig-nav-desc">One-off CSV</span></button>
+          </aside>
+          <div class="aig-settings-main">
+            <div class="aig-settings-scroll">
+              <section class="aig-section active" data-section="source">
+                <div class="aig-section-head">
+                  <h3>Attendance source</h3>
+                  <p>Choose how this policy fetches punches. Connection details are under Truein API and SFTP. Scope and schedule are on the <strong>Policy</strong> tab.</p>
                 </div>
                 <div class="aig-source-cards">
                   <label class="aig-source-card ${src==='REST_API'?'active':''}"><input type="radio" name="aig-source" value="REST_API" ${src==='REST_API'?'checked':''}><strong>Truein API</strong><span>Fetch daily attendance with Bearer token + date</span></label>
@@ -8717,23 +8778,17 @@ export async function viewAttendanceIga(content) {
                   <label class="aig-source-card ${src==='FILE_UPLOAD'?'active':''}"><input type="radio" name="aig-source" value="FILE_UPLOAD" ${src==='FILE_UPLOAD'?'checked':''}><strong>Manual only</strong><span>Scheduler off — CSV upload when needed</span></label>
                 </div>
                 <input type="hidden" id="aig-source" value="${esc(src)}">
-                <div class="aig-field-grid">
-                  ${aigField('aig-enabled', 'Module', `<select class="form-select" id="aig-enabled"><option value="1" ${c.enabled?'selected':''}>Enabled</option><option value="0" ${!c.enabled?'selected':''}>Disabled</option></select>`)}
-                  ${aigField('aig-poll', 'Schedule', `<select class="form-select" id="aig-poll"><option value="15m" ${c.polling_interval==='15m'?'selected':''}>Every 15 minutes</option><option value="5m" ${c.polling_interval==='5m'?'selected':''}>Every 5 minutes</option><option value="1h" ${c.polling_interval==='1h'?'selected':''}>Hourly</option><option value="1d" ${c.polling_interval==='1d'?'selected':''}>Daily</option><option value="manual" ${c.polling_interval==='manual'?'selected':''}>Manual only</option></select>`, 'Prefer a run after punch cutoff.')}
-                  ${aigField('aig-timezone', 'Timezone', `<input class="form-input" id="aig-timezone" value="${esc(tz)}">`, 'Shared by API date, SFTP filename, weekend & cutoff checks.')}
+                <div class="aig-field-grid" style="margin-top:1.25rem">
+                  ${aigField('aig-timezone', 'Timezone', `<input class="form-input" id="aig-timezone" value="${esc(tz)}">`, 'Used for API date, SFTP filename, and weekend checks.')}
                   ${aigField('aig-date-offset', 'Attendance date', `<select class="form-select" id="aig-date-offset"><option value="0" ${Number(offset)===0?'selected':''}>Today</option><option value="-1" ${Number(offset)===-1?'selected':''}>Yesterday</option></select>`, 'Which calendar day to fetch.')}
                   ${aigField('aig-lookback', 'Retry previous days', `<input class="form-input" id="aig-lookback" type="number" min="0" max="7" value="${esc(String(lookback))}">`, 'If today\'s feed is empty, try N prior days.')}
-                  ${aigField('aig-id-field', 'Match employees by', `<select class="form-select" id="aig-id-field"><option value="EMPLOYEE_ID" ${idField==='EMPLOYEE_ID'?'selected':''}>Employee ID</option><option value="EMAIL" ${idField==='EMAIL'?'selected':''}>Email</option><option value="USERNAME" ${idField==='USERNAME'?'selected':''}>Username</option></select>`)}
-                  ${aigField('aig-cutoff', 'Punch cutoff', `<input class="form-input" id="aig-cutoff" type="time" value="${esc(String(c.cutoff_time||'10:00:00').slice(0,5))}">`, 'No punch after this time may trigger suspend.')}
-                  ${aigField('aig-days', 'Consecutive absences', `<input class="form-input" id="aig-days" type="number" min="1" max="30" value="${esc(String(c.consecutive_days??3))}">`, 'Working days without punch before disable.')}
-                  <div class="span-2">${aigField('aig-action-mode', 'Action mode', `<select class="form-select" id="aig-action-mode"><option value="auto" ${actionMode==='auto'?'selected':''}>Auto-execute actions</option><option value="approval" ${actionMode==='approval'?'selected':''}>Require approval first</option><option value="emergency" ${actionMode==='emergency'?'selected':''}>Emergency — bypass approval</option></select>`, 'Replaces separate approval + emergency toggles.')}</div>
                 </div>
               </section>
 
               <section class="aig-section" data-section="api">
                 <div class="aig-section-head">
                   <h3>Truein API</h3>
-                  <p>Bearer token authentication. Date is applied automatically from General settings.</p>
+                  <p>Bearer token authentication. Date uses timezone and attendance date from Source.</p>
                 </div>
                 <div class="aig-field-grid">
                   ${aigField('aig-api-url', 'Base URL', `<input class="form-input" id="aig-api-url" value="${esc(c.api_url||ac.baseUrl||'')}" placeholder="https://api.truein.com">`, 'From Truein support.')}
@@ -8755,7 +8810,7 @@ export async function viewAttendanceIga(content) {
               <section class="aig-section" data-section="sftp">
                 <div class="aig-section-head">
                   <h3>SFTP</h3>
-                  <p>Download a dated CSV. Filename tokens use the timezone and date from General.</p>
+                  <p>Download a dated CSV. Filename tokens use timezone and attendance date from Source.</p>
                 </div>
                 <div class="aig-field-grid">
                   ${aigField('aig-sftp-host', 'Host', `<input class="form-input" id="aig-sftp-host" value="${esc(s.host||'')}" placeholder="sftp.company.com">`)}
@@ -8776,12 +8831,12 @@ export async function viewAttendanceIga(content) {
               <section class="aig-section" data-section="manual">
                 <div class="aig-section-head">
                   <h3>Manual CSV import</h3>
-                  <p>One-off import when HR sends a file outside the scheduled feed.</p>
+                  <p>One-off import when HR sends a file outside the scheduled feed. Match columns to the Policy “Match employees by” field.</p>
                 </div>
                 <div class="aig-csv-box">
                   <label class="form-label" for="aig-csv">Attendance CSV</label>
                   <textarea class="form-textarea" id="aig-csv" rows="8" placeholder="employee_id,email,date,in_time&#10;E001,user@company.com,2026-07-18,09:15"></textarea>
-                  <span class="form-hint">Header row required. Columns must match the employee match field in General.</span>
+                  <span class="form-hint">Header row required.</span>
                   <div class="aig-inline-actions">
                     <button class="btn btn-secondary" id="aig-upload-run">Import CSV &amp; run pipeline</button>
                   </div>
@@ -8832,24 +8887,10 @@ export async function viewAttendanceIga(content) {
       area.querySelector('#aig-save-config').addEventListener('click', async () => {
         const errBox = area.querySelector('#aig-cfg-err');
         try {
-          const mode = area.querySelector('#aig-action-mode').value;
           const sftpPayload = buildSftpPayload(area, s);
           const apiPayload = buildApiPayload(area, c);
-          const cutoff = area.querySelector('#aig-cutoff').value;
-          const depts = (area.querySelector('#aig-depts')?.value || '')
-            .split(',').map((x) => x.trim()).filter(Boolean);
-          const employment_types = [...area.querySelectorAll('.aig-emp-type:checked')].map((el) => el.value);
           await api.updateAttendanceIgaConfig({
-            name: area.querySelector('#aig-name')?.value.trim() || c.name,
-            employee_scope: { departments: depts, employment_types },
-            enabled: Number(area.querySelector('#aig-enabled').value),
             source_type: area.querySelector('#aig-source').value,
-            polling_interval: area.querySelector('#aig-poll').value,
-            cutoff_time: cutoff.length === 5 ? cutoff + ':00' : cutoff,
-            consecutive_days: Number(area.querySelector('#aig-days').value),
-            approval_enabled: mode === 'approval' ? 1 : 0,
-            emergency_mode: mode === 'emergency' ? 1 : 0,
-            identifier_field: area.querySelector('#aig-id-field').value,
             ...apiPayload,
             ...(sftpPayload === null ? { sftp_config: null } : (sftpPayload ? { sftp_config: sftpPayload } : {})),
           }, selectedConfigId);
@@ -8933,15 +8974,18 @@ export async function viewAttendanceIga(content) {
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
 
+  const aigTabIds = ['dash', 'policy', 'config', 'imports', 'approvals', 'executions'];
+
   wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach(tab => {
     tab.addEventListener('click', async () => {
       wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       const name = tab.dataset.tab;
-      ['dash','config','imports','approvals','executions'].forEach(id => {
+      aigTabIds.forEach(id => {
         wrap.querySelector(`#tab-${id}`).style.display = id === name ? '' : 'none';
       });
       if (name === 'dash') await loadDash();
+      if (name === 'policy') await loadPolicy();
       if (name === 'config') await loadConfig();
       if (name === 'imports') await loadImports();
       if (name === 'approvals') await loadApprovals();
@@ -8971,6 +9015,7 @@ export async function viewAttendanceIga(content) {
     setSelectedConfig(e.target.value);
     await loadStatusBar(); await loadStats(); await loadDash();
     const activeTab = wrap.querySelector('.aig-tabs .cfg-tab.active')?.dataset.tab;
+    if (activeTab === 'policy') await loadPolicy();
     if (activeTab === 'config') await loadConfig();
     if (activeTab === 'imports') await loadImports();
   });
@@ -8982,10 +9027,10 @@ export async function viewAttendanceIga(content) {
       const r = await api.createAttendanceIgaConfig({ name: name.trim(), cloneFromId: selectedConfigId });
       setSelectedConfig(r.id);
       await refreshConfigList();
-      await loadStatusBar(); await loadStats(); await loadDash(); await loadConfig();
-      wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'config'));
-      ['dash','config','imports','approvals','executions'].forEach((id) => {
-        wrap.querySelector(`#tab-${id}`).style.display = id === 'config' ? '' : 'none';
+      await loadStatusBar(); await loadStats(); await loadDash(); await loadPolicy();
+      wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'policy'));
+      aigTabIds.forEach((id) => {
+        wrap.querySelector(`#tab-${id}`).style.display = id === 'policy' ? '' : 'none';
       });
     } catch (e) { alert(e.message); }
   });
@@ -8998,7 +9043,11 @@ export async function viewAttendanceIga(content) {
       const r = await api.createAttendanceIgaConfig({ name: name.trim(), cloneFromId: selectedConfigId });
       setSelectedConfig(r.id);
       await refreshConfigList();
-      await loadStatusBar(); await loadStats(); await loadConfig();
+      await loadStatusBar(); await loadStats(); await loadPolicy();
+      wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'policy'));
+      aigTabIds.forEach((id) => {
+        wrap.querySelector(`#tab-${id}`).style.display = id === 'policy' ? '' : 'none';
+      });
     } catch (e) { alert(e.message); }
   });
 

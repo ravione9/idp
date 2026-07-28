@@ -774,7 +774,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
 - `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=govReports&tab=mfa`, `/?v=groups&tab=tags`)
 
-**Attendance IGA admin console** (`/?v=attendanceIga`) — policy picker (+ New / Clone / Delete; Default undeletable) + tabs: Overview · Configuration · Import History · Approvals · Executions. Each policy has its own source (Truein API and/or SFTP), schedule, and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation (leave/holidays/exclusions for that `config_id`) → optional approval → connector actions → audit + rollback.
+**Attendance IGA admin console** (`/?v=attendanceIga`) — policy picker (+ New / Clone / Delete; Default undeletable) + tabs: Overview · **Policy** (name, dept/type scope, schedule, cutoff, action mode) · **Configuration** (source + Truein API + SFTP + manual CSV) · Import History · Approvals · Executions. Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
 
 ---
 
@@ -1028,6 +1028,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-28 — Attendance IGA: separate Policy vs Configuration tabs
+
+**Why** — Scope/schedule sat next to API/SFTP credentials; operators need a clear Policy tab and a feed Configuration tab.
+
+**What changed:**
+
+- **Admin UI** — top tabs: Overview · Policy · Configuration · …; Policy = name/scope/schedule/actions; Configuration = source + Truein API + SFTP + manual CSV.
 
 ### `9ab776d` — 2026-07-28 — Multiple Attendance IGA revoke policies (API/SFTP + dept/type scope)
 
