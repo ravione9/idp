@@ -8403,7 +8403,9 @@ function aigStatusBadge(enabled, status) {
   return '<span class="badge badge-info">Idle</span>';
 }
 
-export async function viewAttendanceIga(content) {
+export async function viewAttendanceIga(content, initialTab = 'dash') {
+  const aigTabIds = ['dash', 'policy', 'config', 'imports', 'approvals', 'executions'];
+  const startTab = aigTabIds.includes(initialTab) ? initialTab : 'dash';
   content.replaceChildren(el(`<div class="aig-page">
     ${header('Attendance IGA', 'Multiple revoke policies — each with its own API/SFTP source, schedule, and employee scope', `
       <div class="aig-actions">
@@ -8420,19 +8422,19 @@ export async function viewAttendanceIga(content) {
     <div id="aig-status-bar" class="aig-status-bar">${loading()}</div>
     <div id="aig-stats" class="stat-grid aap-stats">${loading()}</div>
     <div class="cfg-tab-bar inline-tabs aig-tabs">
-      <button type="button" class="cfg-tab inline-tab active" data-tab="dash">Overview</button>
-      <button type="button" class="cfg-tab inline-tab" data-tab="policy">Policy</button>
-      <button type="button" class="cfg-tab inline-tab" data-tab="config">Configuration</button>
-      <button type="button" class="cfg-tab inline-tab" data-tab="imports">Import History</button>
-      <button type="button" class="cfg-tab inline-tab" data-tab="approvals">Approvals</button>
-      <button type="button" class="cfg-tab inline-tab" data-tab="executions">Executions</button>
+      <button type="button" class="cfg-tab inline-tab${startTab === 'dash' ? ' active' : ''}" data-tab="dash">Overview</button>
+      <button type="button" class="cfg-tab inline-tab${startTab === 'policy' ? ' active' : ''}" data-tab="policy">Policy</button>
+      <button type="button" class="cfg-tab inline-tab${startTab === 'config' ? ' active' : ''}" data-tab="config">Configuration</button>
+      <button type="button" class="cfg-tab inline-tab${startTab === 'imports' ? ' active' : ''}" data-tab="imports">Import History</button>
+      <button type="button" class="cfg-tab inline-tab${startTab === 'approvals' ? ' active' : ''}" data-tab="approvals">Approvals</button>
+      <button type="button" class="cfg-tab inline-tab${startTab === 'executions' ? ' active' : ''}" data-tab="executions">Executions</button>
     </div>
-    <div id="tab-dash"></div>
-    <div id="tab-policy" style="display:none"></div>
-    <div id="tab-config" style="display:none"></div>
-    <div id="tab-imports" style="display:none"></div>
-    <div id="tab-approvals" style="display:none"></div>
-    <div id="tab-executions" style="display:none"></div>
+    <div id="tab-dash" style="${startTab === 'dash' ? '' : 'display:none'}"></div>
+    <div id="tab-policy" style="${startTab === 'policy' ? '' : 'display:none'}"></div>
+    <div id="tab-config" style="${startTab === 'config' ? '' : 'display:none'}"></div>
+    <div id="tab-imports" style="${startTab === 'imports' ? '' : 'display:none'}"></div>
+    <div id="tab-approvals" style="${startTab === 'approvals' ? '' : 'display:none'}"></div>
+    <div id="tab-executions" style="${startTab === 'executions' ? '' : 'display:none'}"></div>
   </div>`));
   const wrap = content.firstChild;
   let configCache = null;
@@ -8722,11 +8724,7 @@ export async function viewAttendanceIga(content) {
           await refreshConfigList();
           await loadStatusBar();
           await loadStats();
-          wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'config'));
-          aigTabIds.forEach((id) => {
-            wrap.querySelector(`#tab-${id}`).style.display = id === 'config' ? '' : 'none';
-          });
-          await loadConfig();
+          await showAigTab('config');
         });
       });
       area.querySelectorAll('.aig-pol-clone').forEach((btn) => {
@@ -9137,23 +9135,23 @@ export async function viewAttendanceIga(content) {
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
 
-  const aigTabIds = ['dash', 'policy', 'config', 'imports', 'approvals', 'executions'];
-
-  wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach(tab => {
-    tab.addEventListener('click', async () => {
-      wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const name = tab.dataset.tab;
-      aigTabIds.forEach(id => {
-        wrap.querySelector(`#tab-${id}`).style.display = id === name ? '' : 'none';
-      });
-      if (name === 'dash') await loadDash();
-      if (name === 'policy') await loadPolicy();
-      if (name === 'config') await loadConfig();
-      if (name === 'imports') await loadImports();
-      if (name === 'approvals') await loadApprovals();
-      if (name === 'executions') await loadExecutions();
+  async function showAigTab(name) {
+    const tab = aigTabIds.includes(name) ? name : 'dash';
+    wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
+    aigTabIds.forEach((id) => {
+      wrap.querySelector(`#tab-${id}`).style.display = id === tab ? '' : 'none';
     });
+    syncAppUrl('attendanceIga', tab, 'dash');
+    if (tab === 'dash') await loadDash();
+    if (tab === 'policy') await loadPolicy();
+    if (tab === 'config') await loadConfig();
+    if (tab === 'imports') await loadImports();
+    if (tab === 'approvals') await loadApprovals();
+    if (tab === 'executions') await loadExecutions();
+  }
+
+  wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((tabBtn) => {
+    tabBtn.addEventListener('click', () => { void showAigTab(tabBtn.dataset.tab); });
   });
 
   async function runPipeline(source, label) {
@@ -9186,7 +9184,7 @@ export async function viewAttendanceIga(content) {
   await refreshConfigList();
   await loadStatusBar();
   await loadStats();
-  await loadDash();
+  await showAigTab(startTab);
 }
 /* ---------- VPN / RADIUS ---------- */
 export async function viewRadiusVpn(content, initialTab = 'overview') {

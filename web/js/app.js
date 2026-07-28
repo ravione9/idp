@@ -400,6 +400,7 @@ const ROUTE_DEFAULT_TABS = {
   directorySync:   'sources',
   workflowLibrary: 'definitions',
   groups:          'directory',
+  attendanceIga:   'dash',
 };
 
 /** Old nav keys that now point at a single live page (bookmarks / deep links). */
@@ -471,7 +472,7 @@ async function navigate(key, opts = {}) {
     else if (key === 'settings') await route.view(me, content, viewTab);
     else if (key === 'home') await route.view(me, content, viewTab);
     else await route.view(me, content);
-  } else if (key === 'audit' || key === 'govReports' || key === 'radiusVpn' || key === 'workflowLibrary' || key === 'groups') {
+  } else if (key === 'audit' || key === 'govReports' || key === 'radiusVpn' || key === 'workflowLibrary' || key === 'groups' || key === 'attendanceIga') {
     await route.view(content, viewTab);
   } else if (key === 'directorySync') {
     await route.view(content, viewTab, me);
