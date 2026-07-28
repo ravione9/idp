@@ -1047,7 +1047,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### _(uncommitted)_ — 2026-07-28 — Multi-replica K8s safety (migrations, rate limit, sched locks)
+### `cb73263` — 2026-07-28 — Multi-replica K8s safety (migrations, rate limit, sched locks)
 
 **Why** — Running multiple API replicas on Kubernetes must not race migrations, under-enforce login rate limits, or duplicate in-process scheduler work, while docker-compose (no new env vars) stays behavior-compatible.
 
