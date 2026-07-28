@@ -1029,7 +1029,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-28 — Attendance IGA tab sticky on refresh
+### `81e34a1` — 2026-07-28 — Attendance IGA tab sticky on refresh
 
 **Why** — Sub-tabs always reset to Overview after refresh.
 
