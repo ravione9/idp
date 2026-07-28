@@ -1029,7 +1029,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-28 — Attendance IGA Policy tab matches App Access style
+### `fa00431` — 2026-07-28 — Attendance IGA Policy tab matches App Access style
 
 **Why** — In-page stepper felt unlike other admin policy UIs (App Access / Adaptive Auth).
 
