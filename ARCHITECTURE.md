@@ -1029,7 +1029,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-28 — Attendance IGA policy: missed-punch / consecutive action options
+### `2458426` — 2026-07-28 — Attendance IGA policy: missed-punch / consecutive action options
 
 **Why** — Operators need to choose suspend vs disable/deprovision (and optional app revoke) per policy, not only buried rule defaults.
 
