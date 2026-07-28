@@ -472,6 +472,7 @@ router.get('/mfa-coverage', asyncHandler(async (req: Request, res: Response) => 
 
 // ---------------------------------------------------------------------------
 // GET /lifecycle — joiner/mover/leaver evidence
+// Combines admin lifecycle_events + FSM state_transitions (Attendance IGA, etc.)
 // ---------------------------------------------------------------------------
 router.get('/lifecycle', asyncHandler(async (req: Request, res: Response) => {
   const limit = wantCsv(req) ? MAX_EXPORT : parseLimit(req.query['limit']);
@@ -481,47 +482,91 @@ router.get('/lifecycle', asyncHandler(async (req: Request, res: Response) => {
   const q = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
   const eventType = typeof req.query['eventType'] === 'string' ? req.query['eventType'].trim().toUpperCase() : '';
 
-  const where: string[] = ['1=1'];
-  const params: unknown[] = [];
-  if (from) { where.push('le.ts >= ?'); params.push(from); }
-  if (to) { where.push('le.ts <= ?'); params.push(to); }
-  if (eventType) { where.push('le.event_type = ?'); params.push(eventType); }
-  if (q) {
-    where.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR le.emp_id LIKE ? OR le.initiated_by LIKE ?)');
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+  const leWhere: string[] = ['1=1'];
+  const stWhere: string[] = ['1=1'];
+  const leParams: unknown[] = [];
+  const stParams: unknown[] = [];
+
+  if (from) {
+    leWhere.push('le.ts >= ?');
+    stWhere.push('st.ts >= ?');
+    leParams.push(from);
+    stParams.push(from);
   }
-  const whereSql = where.join(' AND ');
+  if (to) {
+    leWhere.push('le.ts <= ?');
+    stWhere.push('st.ts <= ?');
+    leParams.push(to);
+    stParams.push(to);
+  }
+  if (eventType) {
+    leWhere.push('le.event_type = ?');
+    leParams.push(eventType);
+    // Mapped event type for FSM rows (same labels as admin lifecycle_events)
+    stWhere.push(`(
+      CASE
+        WHEN st.to_state LIKE 'SUSPENDED%' THEN 'SUSPEND'
+        WHEN st.to_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'TERMINATE'
+        WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%' THEN 'UNSUSPEND'
+        WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'REHIRE'
+        ELSE 'MOVER'
+      END
+    ) = ?`);
+    stParams.push(eventType);
+  }
+  if (q) {
+    leWhere.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR le.emp_id LIKE ? OR le.initiated_by LIKE ?)');
+    leParams.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    stWhere.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR st.emp_id LIKE ? OR st.actor_id LIKE ? OR st.reason_code LIKE ?)');
+    stParams.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+  }
+
+  const unionSql = `
+    SELECT CONCAT('L', le.id) AS id, le.emp_id, e.full_name, e.email_corp, le.event_type,
+           le.old_state, le.new_state, le.reason, le.initiated_by, le.ts, 'admin' AS source
+      FROM lifecycle_events le
+      LEFT JOIN employees e ON e.emp_id = le.emp_id
+     WHERE ${leWhere.join(' AND ')}
+    UNION ALL
+    SELECT CONCAT('S', st.id) AS id, st.emp_id, e.full_name, e.email_corp,
+           CASE
+             WHEN st.to_state LIKE 'SUSPENDED%' THEN 'SUSPEND'
+             WHEN st.to_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'TERMINATE'
+             WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%' THEN 'UNSUSPEND'
+             WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'REHIRE'
+             ELSE 'MOVER'
+           END AS event_type,
+           st.from_state AS old_state, st.to_state AS new_state,
+           st.reason_code AS reason, st.actor_id AS initiated_by, st.ts, 'fsm' AS source
+      FROM state_transitions st
+      LEFT JOIN employees e ON e.emp_id = st.emp_id
+     WHERE ${stWhere.join(' AND ')}
+  `;
 
   const totalRow = await queryOne<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM lifecycle_events le
-     LEFT JOIN employees e ON e.emp_id = le.emp_id
-     WHERE ${whereSql}`,
-    params,
+    `SELECT COUNT(*) AS n FROM (${unionSql}) u`,
+    [...leParams, ...stParams],
   );
 
   const rows = await query<{
-    id: number; emp_id: string; full_name: string | null; email_corp: string | null;
+    id: string; emp_id: string; full_name: string | null; email_corp: string | null;
     event_type: string; old_state: string | null; new_state: string | null;
-    reason: string | null; initiated_by: string; ts: string;
+    reason: string | null; initiated_by: string; ts: string; source: string;
   }>(
-    `SELECT le.id, le.emp_id, e.full_name, e.email_corp, le.event_type,
-            le.old_state, le.new_state, le.reason, le.initiated_by, le.ts
-     FROM lifecycle_events le
-     LEFT JOIN employees e ON e.emp_id = le.emp_id
-     WHERE ${whereSql}
-     ORDER BY le.ts DESC
+    `SELECT * FROM (${unionSql}) u
+     ORDER BY u.ts DESC
      LIMIT ? OFFSET ?`,
-    [...params, limit, offset],
+    [...leParams, ...stParams, limit, offset],
   );
 
   if (wantCsv(req)) {
     return sendCsv(
       res,
       'lifecycle-events.csv',
-      ['ID', 'Emp ID', 'Name', 'Email', 'Event', 'Old State', 'New State', 'Reason', 'Initiated By', 'Timestamp'],
+      ['ID', 'Emp ID', 'Name', 'Email', 'Event', 'Old State', 'New State', 'Reason', 'Initiated By', 'Source', 'Timestamp'],
       rows.map((r) => [
         r.id, r.emp_id, r.full_name, r.email_corp, r.event_type,
-        r.old_state, r.new_state, r.reason, r.initiated_by, r.ts,
+        r.old_state, r.new_state, r.reason, r.initiated_by, r.source, r.ts,
       ]),
     );
   }

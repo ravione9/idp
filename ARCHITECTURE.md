@@ -1029,6 +1029,22 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### TBD — 2026-07-28 — Lifecycle report includes FSM / Attendance IGA transitions
+
+**Why** — Identity & Access → Lifecycle only read `lifecycle_events` (admin suspend/terminate). Attendance IGA writes `state_transitions`, so the report stayed empty.
+
+**What changed:**
+
+- **`GET /api/admin/reports/lifecycle`** — UNION of `lifecycle_events` + mapped `state_transitions` (SUSPEND / UNSUSPEND / TERMINATE / REHIRE / MOVER).
+
+### TBD — 2026-07-28 — Attendance IGA revoke actions: No action option
+
+**Why** — Some policies should detect attendance gaps without suspending or disabling anyone.
+
+**What changed:**
+
+- **Admin UI / API** — Revoke action presets include **No action** (empty `actions_json`; pipeline skips execution).
+
 ### `2458426` — 2026-07-28 — Attendance IGA policy: missed-punch / consecutive action options
 
 **Why** — Operators need to choose suspend vs disable/deprovision (and optional app revoke) per policy, not only buried rule defaults.

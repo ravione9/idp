@@ -90,8 +90,8 @@ const attendanceActionSchema = z.enum([
 ]);
 
 const punchRuleActionsSchema = z.object({
-  no_punch_today: z.array(attendanceActionSchema).min(1).max(6),
-  no_punch_consecutive: z.array(attendanceActionSchema).min(1).max(6),
+  no_punch_today: z.array(attendanceActionSchema).max(6),
+  no_punch_consecutive: z.array(attendanceActionSchema).max(6),
 }).optional();
 
 const configSchema = z.object({

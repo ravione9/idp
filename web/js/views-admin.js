@@ -3058,12 +3058,15 @@ export async function viewGovReports(content, initialTab = 'inventory') {
             <tbody>${rows.map((row) => `<tr>
               <td class="muted">${fmtDate(row.ts)}</td>
               <td class="cell-strong">${esc(row.full_name || row.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(row.email_corp || '')}</span></td>
-              <td><span class="badge badge-info">${esc(row.event_type)}</span></td>
+              <td><span class="badge badge-info">${esc(row.event_type)}</span>${row.source === 'fsm' ? ' <span class="badge badge-neutral">FSM</span>' : ''}</td>
               <td class="muted">${esc(row.old_state || '—')} → ${esc(row.new_state || '—')}</td>
               <td class="muted">${esc(row.initiated_by || '—')}</td>
               <td class="muted truncate" title="${esc(row.reason || '')}">${esc(row.reason || '—')}</td>
             </tr>`).join('')}</tbody></table></div>${pagerHtml(r.meta, s.offset, s.limit)}`
-        : `<div class="card empty-state">No lifecycle events in this range</div>`;
+        : `<div class="card empty-state">
+            <p>No lifecycle events in this range.</p>
+            <p class="muted" style="margin-top:0.5rem;font-size:0.85rem">Includes admin suspend/terminate and FSM changes (Attendance IGA suspend/disable, movers). Run Attendance IGA or use Users → Suspend to generate events.</p>
+          </div>`;
       area.querySelector('.gov-prev')?.addEventListener('click', () => { s.offset = Math.max(0, s.offset - s.limit); void loadLifecycle(); });
       area.querySelector('.gov-next')?.addEventListener('click', () => { s.offset += s.limit; void loadLifecycle(); });
     } catch (err) {

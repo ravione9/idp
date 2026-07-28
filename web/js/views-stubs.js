@@ -8763,6 +8763,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
   }
 
   const AIG_PUNCH_PRESETS = {
+    NONE: { label: 'No action', actions: [] },
     SUSPEND: { label: 'Suspend user (block SSO)', actions: ['SUSPEND_USER'] },
     SUSPEND_SESSIONS: { label: 'Suspend user + revoke sessions', actions: ['SUSPEND_USER', 'REVOKE_SESSIONS'] },
     DISABLE: { label: 'Disable / deprovision user', actions: ['DISABLE_USER'] },
@@ -8771,14 +8772,16 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
   };
 
   function aigActionsToPreset(actions) {
-    const key = JSON.stringify([...(actions || [])].map(String).sort());
+    const list = [...(actions || [])].map(String);
+    if (list.length === 0) return 'NONE';
+    const key = JSON.stringify(list.slice().sort());
     for (const [id, p] of Object.entries(AIG_PUNCH_PRESETS)) {
       if (JSON.stringify([...p.actions].sort()) === key) return id;
     }
-    if ((actions || []).includes('DISABLE_USER') && (actions || []).includes('REMOVE_ALL_APPS')) return 'DISABLE_APPS';
-    if ((actions || []).includes('DISABLE_USER')) return 'DISABLE';
-    if ((actions || []).includes('SUSPEND_USER') && (actions || []).includes('REVOKE_SESSIONS')) return 'SUSPEND_SESSIONS';
-    if ((actions || []).includes('REMOVE_ALL_APPS')) return 'REVOKE_APPS';
+    if (list.includes('DISABLE_USER') && list.includes('REMOVE_ALL_APPS')) return 'DISABLE_APPS';
+    if (list.includes('DISABLE_USER')) return 'DISABLE';
+    if (list.includes('SUSPEND_USER') && list.includes('REVOKE_SESSIONS')) return 'SUSPEND_SESSIONS';
+    if (list.includes('REMOVE_ALL_APPS')) return 'REVOKE_APPS';
     return 'SUSPEND';
   }
 
@@ -8871,7 +8874,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         </div>
 
         <h3 style="font-size:0.9rem;margin:1.25rem 0 0.75rem">Revoke actions</h3>
-        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">Choose what happens when attendance rules match. Suspend blocks SSO; disable/deprovision is stronger; app revoke removes application assignments.</p>
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">Choose what happens when attendance rules match. <strong>No action</strong> only records the evaluation. Suspend blocks SSO; disable/deprovision is stronger; app revoke removes application assignments.</p>
         <div class="form-2col">
           <div class="form-group"><label class="form-label">Missed punch (today after cutoff)</label>
             <select class="form-select" id="aig-miss-punch">${aigPunchPresetOptions(missPreset)}</select></div>
@@ -8919,8 +8922,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         emergency_mode: mode === 'emergency' ? 1 : 0,
         identifier_field: bd.querySelector('#aig-id-field').value,
         punch_rule_actions: {
-          no_punch_today: AIG_PUNCH_PRESETS[missKey]?.actions || ['SUSPEND_USER'],
-          no_punch_consecutive: AIG_PUNCH_PRESETS[consecKey]?.actions || ['DISABLE_USER'],
+          no_punch_today: AIG_PUNCH_PRESETS[missKey]?.actions ?? ['SUSPEND_USER'],
+          no_punch_consecutive: AIG_PUNCH_PRESETS[consecKey]?.actions ?? ['DISABLE_USER'],
         },
       };
       try {
