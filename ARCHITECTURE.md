@@ -1029,7 +1029,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-28 — Attendance IGA: separate Policy vs Configuration tabs
+### `3d11397` — 2026-07-28 — Attendance IGA: separate Policy vs Configuration tabs
 
 **Why** — Scope/schedule sat next to API/SFTP credentials; operators need a clear Policy tab and a feed Configuration tab.
 
