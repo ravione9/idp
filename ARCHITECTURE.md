@@ -1029,7 +1029,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-28 — Multiple Attendance IGA revoke policies (API/SFTP + dept/type scope)
+### `9ab776d` — 2026-07-28 — Multiple Attendance IGA revoke policies (API/SFTP + dept/type scope)
 
 **Why** — One global Attendance IGA config could not cover Store (SFTP) vs Corporate (Truein API) with different revoke rules and populations.
 
