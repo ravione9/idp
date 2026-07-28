@@ -8689,9 +8689,9 @@ export async function viewAttendanceIga(content) {
                   ${aigField('aig-enabled', 'Status', `<select class="form-select" id="aig-enabled"><option value="1" ${c.enabled?'selected':''}>Enabled</option><option value="0" ${!c.enabled?'selected':''}>Disabled</option></select>`)}
                   <div class="span-2">${aigField('aig-depts', 'Departments (scope)', `<input class="form-input" id="aig-depts" value="${esc(deptsVal)}" placeholder="Retail, Store Ops — leave blank for all">`, 'Comma-separated. Matched against employee department. Blank = all departments.')}</div>
                   <div class="span-2"><div class="form-group aig-field"><label class="form-label">Employment types (scope)</label>
-                    <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:0.35rem">
+                    <div class="aig-emp-type-row" style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:0.5rem;align-items:center">
                       ${['CORPORATE','STORE','PLANT','DC'].map((t) =>
-                        `<label class="form-check"><input type="checkbox" class="aig-emp-type" value="${t}" ${empTypes.has(t) ? 'checked' : ''}> ${t}</label>`,
+                        `<label class="form-check-row" style="margin:0;gap:0.4rem;white-space:nowrap"><input type="checkbox" class="form-check aig-emp-type" value="${t}" ${empTypes.has(t) ? 'checked' : ''}> ${t}</label>`,
                       ).join('')}
                     </div>
                     <span class="form-hint">Leave all unchecked to include every employment type.</span>
