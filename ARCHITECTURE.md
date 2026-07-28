@@ -1029,7 +1029,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-28 — Lifecycle report includes FSM / Attendance IGA transitions
+### `1cb6cec` — 2026-07-28 — Lifecycle report includes FSM / Attendance IGA transitions
 
 **Why** — Identity & Access → Lifecycle only read `lifecycle_events` (admin suspend/terminate). Attendance IGA writes `state_transitions`, so the report stayed empty.
 
