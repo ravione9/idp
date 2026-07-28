@@ -25,7 +25,7 @@ import { getOutboxQueueDepth } from '../utils/outbox.js';
 import logger from '../utils/logger.js';
 import { timingSafeEqualString } from '../utils/timing-safe.js';
 import { runAttendanceIgaPipeline } from '../services/attendance-iga/orchestrator.js';
-import { loadAttendanceIgaConfig } from '../services/attendance-iga/config.js';
+import { isAnyAttendanceIgaEnabled } from '../services/attendance-iga/config.js';
 
 const router  = Router();
 const fsm     = new EmployeeStateMachine();
@@ -179,8 +179,8 @@ router.post('/ingest/truein', async (req: Request, res: Response): Promise<void>
   try {
     // When Attendance IGA owns Truein, skip legacy ingest unless explicitly forced.
     try {
-      const iga = await loadAttendanceIgaConfig();
-      if (iga.enabled && !forceLegacy) {
+      const igaEnabled = await isAnyAttendanceIgaEnabled();
+      if (igaEnabled && !forceLegacy) {
         log.info({ durationMs: Date.now() - started }, 'Legacy Truein ingest skipped — Attendance IGA enabled');
         res.json({
           success: true,
@@ -356,8 +356,7 @@ router.post('/risk-scan', async (_req: Request, res: Response): Promise<void> =>
   try {
     // Attendance IGA owns attendance-based suspensions when enabled — avoid double-suspend.
     try {
-      const iga = await loadAttendanceIgaConfig();
-      if (iga.enabled) {
+      if (await isAnyAttendanceIgaEnabled()) {
         res.json({
           success: true,
           skipped: true,
@@ -506,9 +505,11 @@ router.get('/admin/health/queue', async (_req: Request, res: Response) => {
 router.post('/attendance-iga/run', async (req: Request, res: Response): Promise<void> => {
   try {
     const source = (req.body?.source as 'REST_API' | 'FILE_UPLOAD' | 'SFTP' | 'BOTH' | 'MANUAL') ?? 'REST_API';
+    const configId = req.body?.configId != null ? Number(req.body.configId) : 1;
     const result = await runAttendanceIgaPipeline({
       source,
       initiatedBy: 'internal-scheduler',
+      configId: Number.isFinite(configId) ? configId : 1,
       ...(req.body?.csvText !== undefined ? { csvText: req.body.csvText as string } : {}),
       emergencyMode: Boolean(req.body?.emergencyMode),
     });

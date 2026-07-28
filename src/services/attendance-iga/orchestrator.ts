@@ -5,7 +5,7 @@ import { fetchAttendanceFromApi, parseCsvToStaging } from './fetcher.js';
 import { fetchAttendanceFromTruein } from './truein-client.js';
 import { fetchAttendanceFromSftp } from './sftp-fetcher.js';
 import { nowInTimezone } from './date-template.js';
-import { loadAttendanceIgaConfig, updateSyncStatus, resolveActions, updateSftpLastFile } from './config.js';
+import { loadAttendanceIgaConfig, updateSyncStatus, resolveActions, updateSftpLastFile, employeeMatchesScope } from './config.js';
 import {
   executeAttendanceActions,
   notifyAttendanceAction,
@@ -48,8 +48,10 @@ export async function runAttendanceIgaPipeline(params: {
   initiatedBy: string;
   csvText?: string | undefined;
   emergencyMode?: boolean | undefined;
+  configId?: number | undefined;
 }): Promise<PipelineResult> {
-  const config = await loadAttendanceIgaConfig();
+  const configId = params.configId ?? 1;
+  const config = await loadAttendanceIgaConfig(configId);
   const importRunId = uuidv4();
   const report: ImportReport = {
     totalRecords: 0,
@@ -61,9 +63,9 @@ export async function runAttendanceIgaPipeline(params: {
   };
 
   await execute(
-    `INSERT INTO attendance_iga_import_runs (id, source, status, initiated_by)
-     VALUES (?, ?, 'RUNNING', ?)`,
-    [importRunId, params.source, params.initiatedBy],
+    `INSERT INTO attendance_iga_import_runs (id, config_id, source, status, initiated_by)
+     VALUES (?, ?, ?, 'RUNNING', ?)`,
+    [importRunId, configId, params.source, params.initiatedBy],
   );
 
   try {
@@ -98,7 +100,7 @@ export async function runAttendanceIgaPipeline(params: {
         sftpConfig: config.sftp_config,
         fileMapping: config.file_mapping_json,
       });
-      await updateSftpLastFile(sftpResult.remoteFile);
+      await updateSftpLastFile(sftpResult.remoteFile, configId);
       stagingRows.push(...sftpResult.rows);
     }
 
@@ -116,14 +118,14 @@ export async function runAttendanceIgaPipeline(params: {
     const importSources: AttendanceSource[] = ['REST_API', 'SFTP', 'BOTH', 'FILE_UPLOAD'];
     if (importSources.includes(params.source) && report.successful === 0) {
       const msg = 'No valid attendance records imported — rule evaluation skipped to protect users';
-      logger.warn({ importRunId, source: params.source }, msg);
+      logger.warn({ importRunId, source: params.source, configId }, msg);
       await finalizeRun(importRunId, 'PARTIAL', report, {
         usersProcessed: 0,
         usersSuspended: 0,
         usersDisabled: 0,
         appsRemoved: 0,
       });
-      await updateSyncStatus('PARTIAL', msg);
+      await updateSyncStatus('PARTIAL', msg, configId);
       return {
         importRunId,
         status: 'PARTIAL',
@@ -137,7 +139,7 @@ export async function runAttendanceIgaPipeline(params: {
 
     await runActivityAggregate();
 
-    const rules = await loadActiveRules();
+    const rules = await loadActiveRules(configId);
     const evaluations = await evaluateAllEmployees(importRunId, config, rules, report);
 
     const emergency = params.emergencyMode ?? config.emergency_mode === 1;
@@ -187,7 +189,7 @@ export async function runAttendanceIgaPipeline(params: {
       usersDisabled: disabled,
       appsRemoved,
     });
-    await updateSyncStatus(status === 'COMPLETED' ? 'OK' : 'PARTIAL');
+    await updateSyncStatus(status === 'COMPLETED' ? 'OK' : 'PARTIAL', undefined, configId);
 
     return {
       importRunId,
@@ -206,7 +208,7 @@ export async function runAttendanceIgaPipeline(params: {
         WHERE id = ?`,
       [message.slice(0, 4000), importRunId],
     );
-    await updateSyncStatus('FAILED', message);
+    await updateSyncStatus('FAILED', message, configId);
     await notifyAdminsApiFailure(config, message);
     return {
       importRunId,
@@ -381,18 +383,18 @@ async function runActivityAggregate(): Promise<void> {
   );
 }
 
-async function loadActiveRules(): Promise<RuleRow[]> {
+async function loadActiveRules(configId: number): Promise<RuleRow[]> {
   return query<RuleRow>(
     `SELECT id, rule_key, name, rule_type, condition_json, actions_json, priority
-       FROM attendance_iga_rules WHERE active = 1 ORDER BY priority ASC`,
-    [],
+       FROM attendance_iga_rules WHERE active = 1 AND config_id = ? ORDER BY priority ASC`,
+    [configId],
   );
 }
 
-async function loadExclusions(): Promise<{ type: string; value: string }[]> {
+async function loadExclusions(configId: number): Promise<{ type: string; value: string }[]> {
   return query<{ type: string; value: string }>(
-    `SELECT exclusion_type AS type, value FROM attendance_iga_exclusions WHERE active = 1`,
-    [],
+    `SELECT exclusion_type AS type, value FROM attendance_iga_exclusions WHERE active = 1 AND config_id = ?`,
+    [configId],
   );
 }
 
@@ -413,7 +415,7 @@ async function evaluateAllEmployees(
        FROM employees WHERE ilg_state NOT IN ('DEPROVISIONED')`,
     [],
   );
-  const exclusions = await loadExclusions();
+  const exclusions = await loadExclusions(config.id);
   const results: RuleEvaluation[] = [];
   const tz = resolveConfigTimezone(config);
   const clock = nowInTimezone(tz);
@@ -421,6 +423,8 @@ async function evaluateAllEmployees(
   const nowMinutes = clock.minutes;
 
   for (const emp of employees) {
+    if (!employeeMatchesScope(emp, config.employee_scope)) continue;
+
     const skip = await evaluateIgnoreRules(emp, rules, exclusions, today, clock.dayOfWeek);
     if (skip) {
       await storeEvaluation(importRunId, emp.emp_id, skip.ruleKey, skip.ruleName, skip.attendanceStatus, null, skip.skippedReason, []);
@@ -660,7 +664,11 @@ export async function processApprovalDecision(params: {
   if (params.decision !== 'APPROVE') return;
 
   const actions = JSON.parse(row.actions_json) as AttendanceAction[];
-  const config = await loadAttendanceIgaConfig();
+  const run = await queryOne<{ config_id: number }>(
+    `SELECT config_id FROM attendance_iga_import_runs WHERE id = ?`,
+    [row.import_run_id],
+  );
+  const config = await loadAttendanceIgaConfig(run?.config_id ?? 1);
   const result = await executeAttendanceActions({
     empId: row.emp_id,
     actions,
@@ -741,31 +749,41 @@ function resolveConfigTimezone(config: AttendanceIgaConfig): string {
   return apiTz || sftpTz || 'Asia/Kolkata';
 }
 
-export async function getAttendanceIgaDashboard(): Promise<Record<string, unknown>> {
-  const config = await loadAttendanceIgaConfig().catch(() => null);
+export async function getAttendanceIgaDashboard(configId?: number): Promise<Record<string, unknown>> {
+  const id = configId ?? 1;
+  const config = await loadAttendanceIgaConfig(id).catch(() => null);
   const todayImports = await queryOne<{ n: number }>(
     `SELECT COUNT(*) AS n FROM attendance_iga_import_runs
-      WHERE DATE(started_at) = CURDATE()`,
-    [],
+      WHERE DATE(started_at) = CURDATE() AND config_id = ?`,
+    [id],
   );
   const latestRun = await queryOne<Record<string, unknown>>(
-    `SELECT * FROM attendance_iga_import_runs ORDER BY started_at DESC LIMIT 1`,
-    [],
+    `SELECT * FROM attendance_iga_import_runs WHERE config_id = ? ORDER BY started_at DESC LIMIT 1`,
+    [id],
   );
   const pendingApprovals = await queryOne<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM attendance_iga_approvals WHERE status = 'PENDING'`,
-    [],
+    `SELECT COUNT(*) AS n FROM attendance_iga_approvals a
+       JOIN attendance_iga_import_runs r ON r.id = a.import_run_id
+      WHERE a.status = 'PENDING' AND r.config_id = ?`,
+    [id],
   );
   const failedExecutions = await queryOne<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM attendance_iga_executions WHERE status = 'FAILED' AND DATE(executed_at) = CURDATE()`,
-    [],
+    `SELECT COUNT(*) AS n FROM attendance_iga_executions x
+       JOIN attendance_iga_import_runs r ON r.id = x.import_run_id
+      WHERE x.status = 'FAILED' AND DATE(x.executed_at) = CURDATE() AND r.config_id = ?`,
+    [id],
   );
   const rollbackCount = await queryOne<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM attendance_iga_rollback_log WHERE DATE(rolled_back_at) = CURDATE()`,
-    [],
+    `SELECT COUNT(*) AS n FROM attendance_iga_rollback_log rl
+       JOIN attendance_iga_executions x ON x.id = rl.execution_id
+       JOIN attendance_iga_import_runs r ON r.id = x.import_run_id
+      WHERE DATE(rl.rolled_back_at) = CURDATE() AND r.config_id = ?`,
+    [id],
   );
 
   return {
+    configId: id,
+    configName: config?.name ?? null,
     enabled: config?.enabled ?? 0,
     lastSyncAt: config?.last_sync_at ?? null,
     lastSyncStatus: config?.last_sync_status ?? null,

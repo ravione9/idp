@@ -9,8 +9,18 @@ export type AttendanceAction =
   | 'REMOVE_ROLES'
   | 'REMOVE_LICENSES';
 
+export interface EmployeeScope {
+  /** Empty = all departments. Match against employees.dept_id (case-insensitive). */
+  departments: string[];
+  /** Empty = all types. Match against employees.employment_type (CORPORATE/STORE/PLANT/DC). */
+  employment_types: string[];
+}
+
 export interface AttendanceIgaConfig {
   id: number;
+  name: string;
+  slug: string;
+  employee_scope: EmployeeScope;
   enabled: number;
   source_type: 'REST_API' | 'FILE_UPLOAD' | 'SFTP' | 'BOTH';
   api_provider: 'GENERIC' | 'TRUIN';

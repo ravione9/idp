@@ -9,7 +9,12 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, execute } from '../db/connection.js';
-import { loadAttendanceIgaConfig } from '../services/attendance-iga/config.js';
+import {
+  loadAttendanceIgaConfig,
+  listAttendanceIgaConfigs,
+  createAttendanceIgaConfig,
+  deleteAttendanceIgaConfig,
+} from '../services/attendance-iga/config.js';
 import {
   getAttendanceIgaDashboard,
   processApprovalDecision,
@@ -26,6 +31,17 @@ router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('governance'
 function actor(req: Request): string {
   return (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'SYSTEM';
 }
+
+function configIdFromReq(req: Request, fallback = 1): number {
+  const q = req.query['configId'] ?? req.body?.configId ?? req.params['configId'];
+  const n = Number(q ?? fallback);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+const employeeScopeSchema = z.object({
+  departments: z.array(z.string().max(100)).max(200).optional(),
+  employment_types: z.array(z.enum(['CORPORATE', 'STORE', 'PLANT', 'DC'])).max(10).optional(),
+}).optional();
 
 const sftpConfigSchema = z.object({
   host: z.string().min(1).max(255),
@@ -83,10 +99,13 @@ const configSchema = z.object({
   notify_channels: z.array(z.string()).optional(),
   notify_recipients: z.array(z.string()).optional(),
   connector_actions: z.array(z.string()).optional(),
+  name: z.string().min(1).max(150).optional(),
+  slug: z.string().min(1).max(80).optional(),
+  employee_scope: employeeScopeSchema,
 });
 
-router.get('/dashboard', asyncHandler(async (_req, res) => {
-  res.json(await getAttendanceIgaDashboard());
+router.get('/dashboard', asyncHandler(async (req, res) => {
+  res.json(await getAttendanceIgaDashboard(configIdFromReq(req)));
 }));
 
 function redactAttendanceConfig(config: Awaited<ReturnType<typeof loadAttendanceIgaConfig>>) {
@@ -121,17 +140,58 @@ function redactAttendanceConfig(config: Awaited<ReturnType<typeof loadAttendance
   };
 }
 
-router.get('/config', asyncHandler(async (_req, res) => {
-  res.json(redactAttendanceConfig(await loadAttendanceIgaConfig()));
+router.get('/configs', asyncHandler(async (_req, res) => {
+  const configs = await listAttendanceIgaConfigs();
+  res.json({ data: configs.map((c) => redactAttendanceConfig(c)) });
 }));
 
-router.get('/sftp/preview', asyncHandler(async (_req, res) => {
-  const config = await loadAttendanceIgaConfig();
+router.post('/configs', asyncHandler(async (req, res) => {
+  const name = String(req.body?.name ?? '').trim();
+  if (!name) {
+    res.status(400).json({ error: 'name is required' });
+    return;
+  }
+  const scope = req.body?.employee_scope as { departments?: string[]; employment_types?: string[] } | undefined;
+  const created = await createAttendanceIgaConfig({
+    name,
+    slug: typeof req.body?.slug === 'string' ? req.body.slug : undefined,
+    cloneFromId: req.body?.cloneFromId != null ? Number(req.body.cloneFromId) : 1,
+    // Omit scope on clone so rules/settings inherit; empty arrays mean "all employees".
+    ...(scope
+      ? {
+          employee_scope: {
+            departments: scope.departments ?? [],
+            employment_types: scope.employment_types ?? [],
+          },
+        }
+      : {}),
+    createdBy: actor(req),
+  });
+  res.status(201).json(created);
+}));
+
+router.delete('/configs/:id', asyncHandler(async (req, res) => {
+  const id = Number(req.params['id']);
+  try {
+    await deleteAttendanceIgaConfig(id);
+    res.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(msg.includes('Cannot delete') || msg.includes('not found') ? 409 : 500).json({ error: msg });
+  }
+}));
+
+router.get('/config', asyncHandler(async (req, res) => {
+  res.json(redactAttendanceConfig(await loadAttendanceIgaConfig(configIdFromReq(req))));
+}));
+
+router.get('/sftp/preview', asyncHandler(async (req, res) => {
+  const config = await loadAttendanceIgaConfig(configIdFromReq(req));
   res.json(previewSftpPaths(config.sftp_config));
 }));
 
 router.get('/api/preview', asyncHandler(async (req, res) => {
-  const config = await loadAttendanceIgaConfig();
+  const config = await loadAttendanceIgaConfig(configIdFromReq(req));
   const offset = parseInt((req.query['offset'] as string) ?? '0', 10);
   if (config.api_provider === 'TRUIN') {
     res.json(previewTrueinRequest(config, offset));
@@ -149,7 +209,7 @@ router.get('/api/preview', asyncHandler(async (req, res) => {
 }));
 
 router.post('/api/test', asyncHandler(async (req, res) => {
-  const saved = await loadAttendanceIgaConfig();
+  const saved = await loadAttendanceIgaConfig(configIdFromReq(req));
   const draft = (req.body ?? {}) as Record<string, unknown>;
   // Merge form draft over saved config so Test works before Save.
   const config = {
@@ -217,7 +277,8 @@ router.put('/config', asyncHandler(async (req, res) => {
     return;
   }
   const d = parsed.data;
-  const current = await loadAttendanceIgaConfig();
+  const id = configIdFromReq(req);
+  const current = await loadAttendanceIgaConfig(id);
 
   // Preserve Bearer token when UI omits it (blank password field).
   let authConfig = d.api_auth_config;
@@ -232,8 +293,18 @@ router.put('/config', asyncHandler(async (req, res) => {
     ? 'sftp_config = NULL'
     : 'sftp_config = COALESCE(?, sftp_config)';
 
+  const scopeJson = d.employee_scope
+    ? JSON.stringify({
+      departments: d.employee_scope.departments ?? [],
+      employment_types: d.employee_scope.employment_types ?? [],
+    })
+    : null;
+
   await execute(
     `UPDATE attendance_iga_config SET
+       name = COALESCE(?, name),
+       slug = COALESCE(?, slug),
+       employee_scope = COALESCE(?, employee_scope),
        enabled = COALESCE(?, enabled),
        source_type = COALESCE(?, source_type),
        api_provider = COALESCE(?, api_provider),
@@ -256,8 +327,11 @@ router.put('/config', asyncHandler(async (req, res) => {
        notify_recipients = COALESCE(?, notify_recipients),
        connector_actions = COALESCE(?, connector_actions),
        updated_by = ?
-     WHERE id = 1`,
+     WHERE id = ?`,
     [
+      d.name ?? null,
+      d.slug ?? null,
+      scopeJson,
       d.enabled ?? null,
       d.source_type ?? null,
       d.api_provider ?? null,
@@ -280,13 +354,17 @@ router.put('/config', asyncHandler(async (req, res) => {
       d.notify_recipients ? JSON.stringify(d.notify_recipients) : null,
       d.connector_actions ? JSON.stringify(d.connector_actions) : null,
       actor(req),
+      id,
     ],
   );
   res.json({ success: true });
 }));
 
-router.get('/rules', asyncHandler(async (_req, res) => {
-  const rows = await query(`SELECT * FROM attendance_iga_rules ORDER BY priority ASC`, []);
+router.get('/rules', asyncHandler(async (req, res) => {
+  const rows = await query(
+    `SELECT * FROM attendance_iga_rules WHERE config_id = ? ORDER BY priority ASC`,
+    [configIdFromReq(req)],
+  );
   res.json({ data: rows });
 }));
 
@@ -306,8 +384,11 @@ router.put('/rules/:id', asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-router.get('/exclusions', asyncHandler(async (_req, res) => {
-  const rows = await query(`SELECT * FROM attendance_iga_exclusions WHERE active = 1 ORDER BY exclusion_type, value`, []);
+router.get('/exclusions', asyncHandler(async (req, res) => {
+  const rows = await query(
+    `SELECT * FROM attendance_iga_exclusions WHERE active = 1 AND config_id = ? ORDER BY exclusion_type, value`,
+    [configIdFromReq(req)],
+  );
   res.json({ data: rows });
 }));
 
@@ -320,11 +401,12 @@ router.post('/exclusions', asyncHandler(async (req, res) => {
     return;
   }
   const id = uuidv4();
+  const configId = configIdFromReq(req);
   await execute(
-    `INSERT INTO attendance_iga_exclusions (id, exclusion_type, value, notes)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO attendance_iga_exclusions (id, config_id, exclusion_type, value, notes)
+     VALUES (?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE active = 1, notes = VALUES(notes)`,
-    [id, exclusion_type, value, notes ?? null],
+    [id, configId, exclusion_type, value, notes ?? null],
   );
   res.status(201).json({ id });
 }));
@@ -336,9 +418,10 @@ router.delete('/exclusions/:id', asyncHandler(async (req, res) => {
 
 router.get('/imports', asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt((req.query['limit'] as string) ?? '20', 10), 100);
+  const configId = configIdFromReq(req);
   const rows = await query(
-    `SELECT * FROM attendance_iga_import_runs ORDER BY started_at DESC LIMIT ?`,
-    [limit],
+    `SELECT * FROM attendance_iga_import_runs WHERE config_id = ? ORDER BY started_at DESC LIMIT ?`,
+    [configId, limit],
   );
   res.json({ data: rows });
 }));
@@ -358,6 +441,7 @@ router.post('/run', asyncHandler(async (req, res) => {
   const result = await runAttendanceIgaPipeline({
     source,
     initiatedBy: actor(req),
+    configId: configIdFromReq(req),
     ...(csvText !== undefined ? { csvText } : {}),
     emergencyMode,
   });

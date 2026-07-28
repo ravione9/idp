@@ -8405,13 +8405,21 @@ function aigStatusBadge(enabled, status) {
 
 export async function viewAttendanceIga(content) {
   content.replaceChildren(el(`<div class="aig-page">
-    ${header('Attendance IGA', 'Automated access governance driven by daily punch-in compliance', `
+    ${header('Attendance IGA', 'Multiple revoke policies — each with its own API/SFTP source, schedule, and employee scope', `
       <div class="aig-actions">
         <button class="btn btn-secondary" id="aig-run-sftp">Run SFTP Import</button>
         <button class="btn btn-secondary" id="aig-run-api">Run API Import</button>
         <button class="btn btn-primary" id="aig-run-manual">Evaluate Rules</button>
       </div>
     `)}
+    <div id="aig-config-bar" class="aig-config-bar" style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin:0 0 1rem;padding:0.75rem 1rem;background:var(--surface,#f8fafc);border:1px solid var(--border,#e2e8f0);border-radius:8px">
+      <label class="muted" style="font-size:0.85rem;font-weight:600">Policy</label>
+      <select class="form-select" id="aig-config-select" style="min-width:220px"></select>
+      <button type="button" class="btn btn-sm btn-secondary" id="aig-config-new">+ New</button>
+      <button type="button" class="btn btn-sm btn-secondary" id="aig-config-clone">Clone</button>
+      <button type="button" class="btn btn-sm btn-danger" id="aig-config-delete" title="Cannot delete Default">Delete</button>
+      <span class="muted" style="font-size:0.8rem;margin-left:auto" id="aig-config-hint">Each policy can use API or SFTP and target selected departments / employment types.</span>
+    </div>
     <div id="aig-status-bar" class="aig-status-bar">${loading()}</div>
     <div id="aig-stats" class="stat-grid aap-stats">${loading()}</div>
     <div class="cfg-tab-bar inline-tabs aig-tabs">
@@ -8429,17 +8437,43 @@ export async function viewAttendanceIga(content) {
   </div>`));
   const wrap = content.firstChild;
   let configCache = null;
+  let selectedConfigId = Number(localStorage.getItem('aig_config_id') || 1) || 1;
+  let configList = [];
+
+  async function refreshConfigList() {
+    const r = await api.attendanceIgaConfigs();
+    configList = r.data || [];
+    if (!configList.find((c) => c.id === selectedConfigId)) {
+      selectedConfigId = configList[0]?.id || 1;
+    }
+    const sel = wrap.querySelector('#aig-config-select');
+    sel.innerHTML = configList.map((c) =>
+      `<option value="${c.id}" ${c.id === selectedConfigId ? 'selected' : ''}>${esc(c.name)} (${esc(c.source_type || '—')})${c.enabled ? '' : ' · off'}</option>`,
+    ).join('');
+    wrap.querySelector('#aig-config-delete').disabled = selectedConfigId === 1;
+  }
+
+  function setSelectedConfig(id) {
+    selectedConfigId = Number(id) || 1;
+    localStorage.setItem('aig_config_id', String(selectedConfigId));
+    configCache = null;
+  }
 
   async function loadStatusBar() {
     try {
-      const c = configCache || await api.attendanceIgaConfig();
+      const c = configCache || await api.attendanceIgaConfig(selectedConfigId);
       configCache = c;
+      const scope = c.employee_scope || {};
+      const depts = (scope.departments || []).join(', ') || 'all depts';
+      const types = (scope.employment_types || []).join(', ') || 'all types';
       wrap.querySelector('#aig-status-bar').innerHTML = `
         <div class="aig-status-left">
           ${aigStatusBadge(c.enabled, c.last_sync_status)}
           <div class="aig-status-meta">
-            Source <strong>${esc(c.source_type || '—')}</strong>
+            <strong>${esc(c.name || 'Default')}</strong>
+            · Source <strong>${esc(c.source_type || '—')}</strong>
             · Polling <strong>${esc(c.polling_interval || 'manual')}</strong>
+            · Scope <strong>${esc(depts)}</strong> / <strong>${esc(types)}</strong>
             ${c.last_sync_at ? ` · Last sync <strong>${fmtDate(c.last_sync_at)}</strong>` : ' · <span class="text-dim">Never synced</span>'}
             ${c.sftp_last_file ? ` · File <strong>${esc(c.sftp_last_file)}</strong>` : ''}
           </div>
@@ -8452,7 +8486,7 @@ export async function viewAttendanceIga(content) {
 
   async function loadStats() {
     try {
-      const d = await api.attendanceIgaDashboard();
+      const d = await api.attendanceIgaDashboard(selectedConfigId);
       wrap.querySelector('#aig-stats').innerHTML = [
         statCard('refresh', 'Today\'s Imports', d.todayImports ?? 0, d.lastSyncAt ? `Synced ${fmtDate(d.lastSyncAt)}` : 'No sync yet', 'primary'),
         statCard('users', 'Users Suspended', d.latestRun?.users_suspended ?? 0, 'latest run', 'warning'),
@@ -8470,7 +8504,7 @@ export async function viewAttendanceIga(content) {
     const area = wrap.querySelector('#tab-dash');
     area.innerHTML = loading();
     try {
-      const d = await api.attendanceIgaDashboard();
+      const d = await api.attendanceIgaDashboard(selectedConfigId);
       const run = d.latestRun || {};
       const statusBadge = s => ({ COMPLETED: 'badge-success', PARTIAL: 'badge-warning', FAILED: 'badge-danger', RUNNING: 'badge-info' }[s] || 'badge-neutral');
       area.innerHTML = `<div class="aig-dash-grid">
@@ -8545,6 +8579,7 @@ export async function viewAttendanceIga(content) {
       api_method: method,
       api_auth_type: 'BEARER',
       api_auth_config: tokenInput ? { token: tokenInput } : {},
+      configId: selectedConfigId,
       api_config: {
         endpoint: area.querySelector('#aig-api-endpoint')?.value.trim() || '/api/attendance/daily',
         dateParam: area.querySelector('#aig-api-date-param')?.value.trim() || 'date',
@@ -8630,10 +8665,13 @@ export async function viewAttendanceIga(content) {
     const area = wrap.querySelector('#tab-config');
     area.innerHTML = loading();
     try {
-      const c = await api.attendanceIgaConfig();
+      const c = await api.attendanceIgaConfig(selectedConfigId);
       configCache = c;
       const s = c.sftp_config || {};
       const ac = c.api_config || {};
+      const scope = c.employee_scope || { departments: [], employment_types: [] };
+      const deptsVal = (scope.departments || []).join(', ');
+      const empTypes = new Set(scope.employment_types || []);
       const hasToken = Boolean(c.api_auth_config?.token);
       const hasKey = Boolean(s.privateKey);
       const src = c.source_type || 'REST_API';
@@ -8648,7 +8686,7 @@ export async function viewAttendanceIga(content) {
         <div class="aig-settings">
           <aside class="aig-settings-nav">
             <div class="aig-settings-nav-label">Settings</div>
-            <button type="button" class="aig-nav-item active" data-section="general"><span class="aig-nav-title">General</span><span class="aig-nav-desc">Source, schedule, rules</span></button>
+            <button type="button" class="aig-nav-item active" data-section="general"><span class="aig-nav-title">General</span><span class="aig-nav-desc">Source, schedule, scope</span></button>
             <button type="button" class="aig-nav-item" data-section="api"><span class="aig-nav-title">Truein API</span><span class="aig-nav-desc">Token &amp; endpoint</span></button>
             <button type="button" class="aig-nav-item" data-section="sftp"><span class="aig-nav-title">SFTP</span><span class="aig-nav-desc">Daily CSV file</span></button>
             <button type="button" class="aig-nav-item" data-section="manual"><span class="aig-nav-title">Manual Import</span><span class="aig-nav-desc">One-off CSV</span></button>
@@ -8658,7 +8696,19 @@ export async function viewAttendanceIga(content) {
               <section class="aig-section active" data-section="general">
                 <div class="aig-section-head">
                   <h3>General</h3>
-                  <p>Choose how attendance is imported, when the job runs, and how access actions are approved.</p>
+                  <p>Name this revoke policy, choose API or SFTP, and limit which employees it can act on.</p>
+                </div>
+                <div class="aig-field-grid">
+                  ${aigField('aig-name', 'Policy name', `<input class="form-input" id="aig-name" value="${esc(c.name || '')}" placeholder="Store no-punch revoke">`)}
+                  <div class="span-2">${aigField('aig-depts', 'Departments (scope)', `<input class="form-input" id="aig-depts" value="${esc(deptsVal)}" placeholder="Retail, Store Ops — leave blank for all">`, 'Comma-separated. Matched against employee department. Blank = all departments.')}</div>
+                  <div class="span-2"><div class="form-group aig-field"><label class="form-label">Employment types (scope)</label>
+                    <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:0.35rem">
+                      ${['CORPORATE','STORE','PLANT','DC'].map((t) =>
+                        `<label class="form-check"><input type="checkbox" class="aig-emp-type" value="${t}" ${empTypes.has(t) ? 'checked' : ''}> ${t}</label>`,
+                      ).join('')}
+                    </div>
+                    <span class="form-hint">Leave all unchecked to include every employment type.</span>
+                  </div></div>
                 </div>
                 <div class="aig-source-cards">
                   <label class="aig-source-card ${src==='REST_API'?'active':''}"><input type="radio" name="aig-source" value="REST_API" ${src==='REST_API'?'checked':''}><strong>Truein API</strong><span>Fetch daily attendance with Bearer token + date</span></label>
@@ -8786,7 +8836,12 @@ export async function viewAttendanceIga(content) {
           const sftpPayload = buildSftpPayload(area, s);
           const apiPayload = buildApiPayload(area, c);
           const cutoff = area.querySelector('#aig-cutoff').value;
+          const depts = (area.querySelector('#aig-depts')?.value || '')
+            .split(',').map((x) => x.trim()).filter(Boolean);
+          const employment_types = [...area.querySelectorAll('.aig-emp-type:checked')].map((el) => el.value);
           await api.updateAttendanceIgaConfig({
+            name: area.querySelector('#aig-name')?.value.trim() || c.name,
+            employee_scope: { departments: depts, employment_types },
             enabled: Number(area.querySelector('#aig-enabled').value),
             source_type: area.querySelector('#aig-source').value,
             polling_interval: area.querySelector('#aig-poll').value,
@@ -8797,16 +8852,17 @@ export async function viewAttendanceIga(content) {
             identifier_field: area.querySelector('#aig-id-field').value,
             ...apiPayload,
             ...(sftpPayload === null ? { sftp_config: null } : (sftpPayload ? { sftp_config: sftpPayload } : {})),
-          });
+          }, selectedConfigId);
           configCache = null;
           errBox.innerHTML = '<div class="alert alert-success">Configuration saved.</div>';
+          await refreshConfigList();
           await loadStats(); await loadStatusBar();
         } catch (e) { errBox.innerHTML = errHtml(e.message); }
       });
       area.querySelector('#aig-upload-run').addEventListener('click', async () => {
         const errBox = area.querySelector('#aig-cfg-err');
         try {
-          const r = await api.runAttendanceIga({ source: 'FILE_UPLOAD', csvText: area.querySelector('#aig-csv').value });
+          const r = await api.runAttendanceIga({ source: 'FILE_UPLOAD', csvText: area.querySelector('#aig-csv').value, configId: selectedConfigId });
           errBox.innerHTML = `<div class="alert alert-success">Import ${esc(r.status)} — ${esc(String(r.report?.successful??0))} ok, ${esc(String(r.report?.failed??0))} failed</div>`;
           await loadStats(); await loadImports(); await loadDash();
         } catch (e) { errBox.innerHTML = errHtml(e.message); }
@@ -8818,7 +8874,7 @@ export async function viewAttendanceIga(content) {
     const area = wrap.querySelector('#tab-imports');
     area.innerHTML = loading();
     try {
-      const rows = norm(await api.attendanceIgaImports());
+      const rows = norm(await api.attendanceIgaImports(20, selectedConfigId));
       const statusBadge = s => ({ COMPLETED: 'badge-success', PARTIAL: 'badge-warning', FAILED: 'badge-danger', RUNNING: 'badge-info' }[s] || 'badge-neutral');
       area.innerHTML = `
         <div class="aap-actions"><div><h3 class="section-title">Import History</h3><p class="subtitle">Staging validation results for each pipeline run.</p></div></div>
@@ -8895,7 +8951,7 @@ export async function viewAttendanceIga(content) {
 
   async function runPipeline(source, label) {
     try {
-      const r = await api.runAttendanceIga({ source });
+      const r = await api.runAttendanceIga({ source, configId: selectedConfigId });
       alert(`${label}: ${r.status}\n${r.report?.successful ?? 0} records imported · ${r.executions ?? 0} actions · ${r.approvalsCreated ?? 0} approvals`);
       await loadStats(); await loadStatusBar(); await loadDash(); await loadImports();
     } catch (e) { alert(e.message); }
@@ -8905,12 +8961,59 @@ export async function viewAttendanceIga(content) {
   wrap.querySelector('#aig-run-sftp').addEventListener('click', () => runPipeline('SFTP', 'SFTP import'));
   wrap.querySelector('#aig-run-manual').addEventListener('click', async () => {
     try {
-      const r = await api.runAttendanceIga({ source: 'MANUAL', emergencyMode: false });
+      const r = await api.runAttendanceIga({ source: 'MANUAL', emergencyMode: false, configId: selectedConfigId });
       alert(`Rule evaluation ${r.status}: ${r.evaluations} employees evaluated`);
       await loadStats(); await loadDash();
     } catch (e) { alert(e.message); }
   });
 
+  wrap.querySelector('#aig-config-select').addEventListener('change', async (e) => {
+    setSelectedConfig(e.target.value);
+    await loadStatusBar(); await loadStats(); await loadDash();
+    const activeTab = wrap.querySelector('.aig-tabs .cfg-tab.active')?.dataset.tab;
+    if (activeTab === 'config') await loadConfig();
+    if (activeTab === 'imports') await loadImports();
+  });
+
+  wrap.querySelector('#aig-config-new').addEventListener('click', async () => {
+    const name = prompt('Name for the new revoke policy:', 'Store revoke');
+    if (!name?.trim()) return;
+    try {
+      const r = await api.createAttendanceIgaConfig({ name: name.trim(), cloneFromId: selectedConfigId });
+      setSelectedConfig(r.id);
+      await refreshConfigList();
+      await loadStatusBar(); await loadStats(); await loadDash(); await loadConfig();
+      wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'config'));
+      ['dash','config','imports','approvals','executions'].forEach((id) => {
+        wrap.querySelector(`#tab-${id}`).style.display = id === 'config' ? '' : 'none';
+      });
+    } catch (e) { alert(e.message); }
+  });
+
+  wrap.querySelector('#aig-config-clone').addEventListener('click', async () => {
+    const cur = configList.find((c) => c.id === selectedConfigId);
+    const name = prompt('Clone as:', `${cur?.name || 'Policy'} (copy)`);
+    if (!name?.trim()) return;
+    try {
+      const r = await api.createAttendanceIgaConfig({ name: name.trim(), cloneFromId: selectedConfigId });
+      setSelectedConfig(r.id);
+      await refreshConfigList();
+      await loadStatusBar(); await loadStats(); await loadConfig();
+    } catch (e) { alert(e.message); }
+  });
+
+  wrap.querySelector('#aig-config-delete').addEventListener('click', async () => {
+    if (selectedConfigId === 1) { alert('Cannot delete the Default policy.'); return; }
+    if (!confirm('Delete this policy and its rules/exclusions? Import history stays for audit.')) return;
+    try {
+      await api.deleteAttendanceIgaConfig(selectedConfigId);
+      setSelectedConfig(1);
+      await refreshConfigList();
+      await loadStatusBar(); await loadStats(); await loadDash();
+    } catch (e) { alert(e.message); }
+  });
+
+  await refreshConfigList();
   await loadStatusBar();
   await loadStats();
   await loadDash();

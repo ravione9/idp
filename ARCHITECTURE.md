@@ -476,10 +476,10 @@ To add a new migration:
 | `abac_policies`, `role_bindings` | Legacy authorization model (will fold into `business_roles` + `entitlements`) |
 | `workflow_definitions` | **(007)** Workflow library definitions (`steps_json`, `trigger_event`) — backs `/api/admin/workflows` |
 | `workflow_runs` | **(028)** Execution history for workflow_definitions (status, step progress, errors) |
-| `attendance_iga_config` | **(029, 030)** Singleton config: source (REST API / SFTP / file upload), API auth, SFTP credentials (`sftp_config`), polling interval, cutoff, approval, connector actions |
-| `attendance_iga_rules` | **(029)** Configurable rules A–H (action + ignore types) with priority |
-| `attendance_iga_exclusions` | **(029)** VIP users, departments, individual employees to skip |
-| `attendance_iga_import_runs` | **(029)** Import run metadata + aggregate report counters |
+| `attendance_iga_config` | **(029, 030, 052)** Named revoke policies (not singleton): `name`/`slug`, `employee_scope` JSON (`departments[]` + `employment_types[]`; empty = all), per-policy source (REST API / SFTP / BOTH / file upload), schedule, cutoff, approval, connector actions. Row `id=1` is **Default** (undeletable). |
+| `attendance_iga_rules` | **(029, 052)** Configurable rules A–H per `config_id` (`uk_att_rule_config_key`) |
+| `attendance_iga_exclusions` | **(029, 052)** VIP / department / employee exclusions per `config_id` |
+| `attendance_iga_import_runs` | **(029, 052)** Import run metadata + aggregate counters; `config_id` ties run to policy |
 | `attendance_iga_staging` | **(029)** Temporary validated attendance rows per import run |
 | `attendance_iga_evaluations` | **(029)** Rule engine output per employee per run |
 | `attendance_iga_approvals` | **(029)** Optional approval queue (approve / reject / skip) before execution |
@@ -651,12 +651,15 @@ To add a new migration:
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/workflows/definitions[/:id]` | Workflow library CRUD (trigger event + ordered steps) |
 | `GET` | `/api/admin/workflows/runs` | Workflow execution history |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/workflows/triggers[/:id]` | Event trigger CRUD (webhook / Slack / email on platform events) |
-| `GET` | `/api/admin/attendance-iga/dashboard` | Attendance IGA dashboard stats (imports, suspensions, approvals, connector health) |
-| `GET`/`PUT` | `/api/admin/attendance-iga/config` | Read/update attendance source, rules config, approval, notifications |
-| `GET`/`PUT` | `/api/admin/attendance-iga/rules[/:id]` | List/update rule definitions (A–H) |
-| `GET`/`POST`/`DELETE` | `/api/admin/attendance-iga/exclusions[/:id]` | VIP / department / employee exclusions |
-| `GET` | `/api/admin/attendance-iga/imports[/:id/staging]` | Import run history + staging rows |
-| `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (REST API, CSV upload, or evaluation-only) |
+| `GET` | `/api/admin/attendance-iga/configs` | List Attendance IGA revoke policies |
+| `POST` | `/api/admin/attendance-iga/configs` | Create policy (`name`, optional `cloneFromId`, optional `employee_scope`) |
+| `DELETE` | `/api/admin/attendance-iga/configs/:id` | Delete policy (id=1 Default forbidden); drops its rules/exclusions |
+| `GET` | `/api/admin/attendance-iga/dashboard?configId=` | Dashboard stats for one policy |
+| `GET`/`PUT` | `/api/admin/attendance-iga/config?configId=` | Read/update source, scope, schedule, approval, notifications |
+| `GET`/`PUT` | `/api/admin/attendance-iga/rules[/:id]?configId=` | List/update rule definitions (A–H) for a policy |
+| `GET`/`POST`/`DELETE` | `/api/admin/attendance-iga/exclusions[/:id]?configId=` | VIP / department / employee exclusions |
+| `GET` | `/api/admin/attendance-iga/imports[/:id/staging]?configId=` | Import run history + staging rows |
+| `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (`configId`, REST API / SFTP / CSV / evaluate-only) |
 | `GET`/`POST` | `/api/admin/attendance-iga/approvals[/:id/decision]` | Pending approvals; approve / reject / skip |
 | `GET`/`POST` | `/api/admin/attendance-iga/executions[/:id/rollback]` | Execution audit + rollback |
 | `GET` | `/api/admin/attendance-iga/rollbacks` | Rollback history |
@@ -696,12 +699,12 @@ To add a new migration:
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/internal/saml` | Programmatic SP registration |
-| `POST` | `/api/internal/attendance-iga/run` | Attendance IGA pipeline (scheduler / Airflow; same body as admin `/run`) |
-| `POST` | `/api/internal/risk-scan` | Legacy attendance risk FSM scan — **skipped when Attendance IGA `enabled=1`** (IGA owns suspensions) |
+| `POST` | `/api/internal/attendance-iga/run` | Attendance IGA pipeline (scheduler / Airflow; body may include `configId`, default 1) |
+| `POST` | `/api/internal/risk-scan` | Legacy attendance risk FSM scan — **skipped when any Attendance IGA config is `enabled=1`** |
 | `POST` | `/api/internal/ingest/truein` | Legacy Truein ingest into `attendance_events` — prefer Attendance IGA when enabled |
 | Various | `/api/internal/*` | Airflow / automation hooks |
 
-**Attendance ownership:** when Attendance IGA is enabled, use that pipeline for Truein/SFTP fetch + suspensions. Keep Airflow on `/attendance-iga/run`; do not also schedule `/risk-scan` for the same attendance gap policy.
+**Attendance ownership:** when any Attendance IGA policy is enabled, that pipeline owns Truein/SFTP fetch + suspensions. In-process scheduler ticks every 60s and runs each due enabled policy independently. Keep Airflow on `/attendance-iga/run` (optional `configId`); do not also schedule `/risk-scan` for the same attendance gap policy.
 
 ---
 
@@ -771,7 +774,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
 - `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=govReports&tab=mfa`, `/?v=groups&tab=tags`)
 
-**Attendance IGA admin console** (`/?v=attendanceIga`) — tabs: Dashboard · Configuration · Import History · Approvals · Executions. Pipeline: fetch attendance (REST API with exponential-backoff retry, or CSV upload) → staging validation → employee match (employee ID → email → username) → rule evaluation (uses `leave_records`, `holiday_calendar`, exclusions) → optional approval → connector actions (suspend, disable, revoke sessions, remove apps/groups/roles) → audit + notification → rollback restores snapshot.
+**Attendance IGA admin console** (`/?v=attendanceIga`) — policy picker (+ New / Clone / Delete; Default undeletable) + tabs: Overview · Configuration · Import History · Approvals · Executions. Each policy has its own source (Truein API and/or SFTP), schedule, and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation (leave/holidays/exclusions for that `config_id`) → optional approval → connector actions → audit + rollback.
 
 ---
 
@@ -1025,6 +1028,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-28 — Multiple Attendance IGA revoke policies (API/SFTP + dept/type scope)
+
+**Why** — One global Attendance IGA config could not cover Store (SFTP) vs Corporate (Truein API) with different revoke rules and populations.
+
+**What changed:**
+
+- **Migration `052`** — `attendance_iga_config.name`/`slug`/`employee_scope`; `config_id` on rules, exclusions, import_runs; unique keys per config; id AUTO_INCREMENT; existing row becomes Default.
+- **Services** — list/create/delete configs; scheduler runs each due enabled policy; evaluation skips employees outside `employee_scope` (departments **and** employment types).
+- **API** — `GET/POST /configs`, `DELETE /configs/:id`; `configId` on config/run/rules/exclusions/imports/dashboard; internal run accepts `configId`.
+- **Admin UI** — policy picker, clone/new/delete, General scope fields (comma departments + CORPORATE/STORE/PLANT/DC checkboxes).
 
 ### `e6eb27b` — 2026-07-27 — Fix access request approve not granting app access
 
