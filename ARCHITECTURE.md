@@ -1037,7 +1037,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 - **`GET /api/admin/reports/lifecycle`** — UNION of `lifecycle_events` + mapped `state_transitions` (SUSPEND / UNSUSPEND / TERMINATE / REHIRE / MOVER).
 
-### TBD — 2026-07-28 — Attendance IGA revoke actions: No action option
+### `1cb6cec` — 2026-07-28 — Attendance IGA revoke actions: No action option
 
 **Why** — Some policies should detect attendance gaps without suspending or disabling anyone.
 
