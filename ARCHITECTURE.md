@@ -1029,7 +1029,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-28 — Attendance IGA: Policy create/edit wizard
+### `86fc5a9` — 2026-07-28 — Attendance IGA: Policy create/edit wizard
 
 **Why** — Operators need a guided create/edit flow (scope → source → schedule → approval), not one long form.
 
