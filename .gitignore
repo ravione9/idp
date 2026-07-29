@@ -15,3 +15,6 @@ coverage/
 .claude/
 
 COMMIT_MSG.txt
+
+# Word lock files
+~$*.docx
