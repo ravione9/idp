@@ -1049,7 +1049,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-30 — Fix SAML resume “Could not complete SSO”
+### `0331420` — 2026-07-30 — Fix SAML resume “Could not complete SSO”
 
 **Why** — After Google/local login, `/saml/resume/<id>` showed “Could not complete SSO”: resume built a fake request with `{...req}`, which drops Express methods (`req.get`, etc.) and breaks assertion issuance. Pending Redis keys were also deleted before assertion succeeded, so retries expired immediately.
 
