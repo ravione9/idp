@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Lenskart IdP — Identity & Access Management</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/favicon.svg" />
+  <meta name="theme-color" content="#0a1628" />
+  <script>
+    (function () {
+      var k = 'idp_theme', t = localStorage.getItem(k) || 'light';
+      var ok = ['light', 'dark', 'midnight', 'ocean', 'slate', 'sand', 'violet'].indexOf(t) >= 0;
+      document.documentElement.setAttribute('data-theme', ok ? t : 'light');
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/styles.css?v=2026-07-21-samlmeta1" />
+</head>
+<body>
+  <div id="app">
+    <div class="loading-row">
+      <span class="spinner" style="margin:0 auto 0.75rem;display:block"></span>
+      Loading…
+    </div>
+  </div>
+  <script>
+    function showBootError(msg) {
+      var app = document.getElementById('app');
+      if (!app || app.querySelector('.shell, .auth-shell')) return;
+      app.innerHTML = '<div style="padding:2rem;max-width:520px;margin:2rem auto;font-family:system-ui,sans-serif">'
+        + '<h2 style="margin:0 0 0.5rem">Portal failed to load</h2>'
+        + '<p style="color:#5f6b80;margin:0 0 1rem">Try a hard refresh (Ctrl+Shift+R). If this persists, purge CDN cache or contact your administrator.</p>'
+        + '<pre style="background:#fee2e2;color:#991b1b;padding:0.75rem;border-radius:6px;overflow:auto;font-size:0.8rem;white-space:pre-wrap;word-break:break-word">'
+        + msg + '</pre></div>';
+    }
+    window.addEventListener('error', function (e) {
+      if (!e.filename || e.filename.indexOf('/js/') === -1) return;
+      showBootError(e.message || 'Script error');
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var msg = e.reason && (e.reason.message || String(e.reason));
+      if (msg && /\/js\//.test(msg)) showBootError(msg);
+    });
+  </script>
+  <!-- Bump IDP_ASSET_V on every frontend deploy so all ES modules reload together -->
+  <script type="importmap" id="idp-importmap"></script>
+  <script>
+    (function () {
+      var v = '2026-07-30-sec1';
+      var mods = ['api', 'api-admin', 'ui', 'icons', 'theme', 'views-end-user', 'views-admin', 'views-stubs'];
+      var scope = {};
+      for (var i = 0; i < mods.length; i++) {
+        scope['./' + mods[i] + '.js'] = '/js/' + mods[i] + '.js?v=' + v;
+      }
+      document.getElementById('idp-importmap').textContent = JSON.stringify({ scopes: { '/js/': scope } });
+      var boot = document.createElement('script');
+      boot.type = 'module';
+      boot.src = '/js/app.js?v=' + v;
+      document.body.appendChild(boot);
+    })();
+  </script>
+</body>
+</html>

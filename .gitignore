@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.env
+.env.local
+*.pem
+*.key
+*.crt
+idp-dev.key
+idp-dev.crt
+.DS_Store
+*.log
+coverage/
+.idea/
+.vscode/
+.claude/
+
+COMMIT_MSG.txt
+
+# Word lock files
+~$*.docx

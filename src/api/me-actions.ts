@@ -1,0 +1,420 @@
+/**
+ * Self-service endpoints for the authenticated user:
+ *   - change own password
+ *   - list active sessions
+ *   - revoke a session
+ *   - MFA status / enrollment / disable
+ */
+import { Router, Request, Response } from 'express';
+import { z } from 'zod';
+import qrcode from 'qrcode';
+import { requireAuth } from '../auth/middleware.js';
+import { query, queryOne } from '../db/connection.js';
+import { hashPassword, verifyLocalPassword } from '../services/local-admin.js';
+import { clearSessionCookie, SESSION_REDIS_PREFIX } from '../auth/session.js';
+import { redis } from '../auth/session-store.js';
+import {
+  confirmEnrollment,
+  disableMfa,
+  getMfaStatus,
+  regenerateBackupCodes,
+  startEnrollment,
+  verifyAnyMfaCode,
+} from '../auth/mfa.js';
+import { clearMfaDeviceTrustCookie } from '../auth/mfa-device-trust.js';
+import {
+  confirmEmailOtpEnrollment,
+  confirmSmsOtpEnrollment,
+  disableOtpMethod,
+  sendEmailOtp,
+  sendSmsOtp,
+} from '../auth/mfa-otp.js';
+import {
+  deleteWebAuthnCredential,
+  getWebAuthnRegistrationOptions,
+  listWebAuthnCredentialsForUser,
+  resolveWebAuthnOrigin,
+  verifyWebAuthnRegistration,
+} from '../auth/mfa-webauthn.js';
+import type { RegistrationResponseJSON } from '@simplewebauthn/server';
+import { enforcePasswordPolicy } from '../services/password-policy.js';
+import { recordBrowserAppSignals } from '../services/app-discovery.js';
+import logger from '../utils/logger.js';
+
+const router = Router();
+
+router.use(requireAuth);
+
+// ---------------------------------------------------------------------------
+// POST /browser-app-signals — domains from portal session or history extension.
+// HTTP disk cache is not readable by browsers/extensions; History API is used instead.
+// ---------------------------------------------------------------------------
+const browserSignalsSchema = z.object({
+  domains: z.array(z.object({
+    domain: z.string().min(3).max(255),
+    signalType: z.string().max(40).optional(),
+    hitCount: z.number().int().min(1).max(10_000).optional(),
+  })).min(1).max(200),
+  source: z.string().max(40).optional(),
+  /** When true (default for extension-history), write into discovered_apps immediately. */
+  ingest: z.boolean().optional(),
+});
+
+router.post('/browser-app-signals', async (req: Request, res: Response): Promise<void> => {
+  const parsed = browserSignalsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+  const fromExtension = parsed.data.source === 'extension-history';
+  const ingest = parsed.data.ingest ?? fromExtension;
+  const result = await recordBrowserAppSignals(
+    req.user!.empId,
+    parsed.data.domains.map((d) => {
+      const row: { domain: string; signalType?: string; hitCount?: number } = { domain: d.domain };
+      if (d.signalType !== undefined) row.signalType = d.signalType;
+      else if (fromExtension) row.signalType = 'history';
+      if (d.hitCount !== undefined) row.hitCount = d.hitCount;
+      return row;
+    }),
+    { ingest },
+  );
+  if (fromExtension) {
+    logger.info(
+      {
+        empId: req.user!.empId,
+        accepted: result.accepted,
+        skipped: result.skipped,
+        inventoryCreated: result.inventoryCreated,
+        inventoryUpdated: result.inventoryUpdated,
+        catalogMatched: result.catalogMatched,
+      },
+      'Browser history discovery signals received',
+    );
+  }
+  res.json({ success: true, ...result });
+});
+
+// ---------------------------------------------------------------------------
+// PUT /password — change own password (local accounts only)
+// ---------------------------------------------------------------------------
+const changePwSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword:     z.string().min(10).max(128),
+});
+
+router.put('/password', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const parsed = changePwSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const account = await queryOne<{ id: number; password_hash: string }>(
+    'SELECT id, password_hash FROM local_accounts WHERE emp_id = ? AND active = 1',
+    [user.empId],
+  );
+  if (!account) {
+    res.status(403).json({ error: 'Password change is only available for local accounts' });
+    return;
+  }
+
+  const ok = await verifyLocalPassword(parsed.data.currentPassword, account.password_hash);
+  if (!ok) {
+    res.status(401).json({ error: 'Current password is incorrect' });
+    return;
+  }
+
+  if (parsed.data.currentPassword === parsed.data.newPassword) {
+    res.status(400).json({ error: 'New password must differ from current' });
+    return;
+  }
+
+  const policyErr = await enforcePasswordPolicy(parsed.data.newPassword, { accountId: account.id });
+  if (policyErr) {
+    res.status(400).json({ error: policyErr, code: 'PASSWORD_POLICY' });
+    return;
+  }
+
+  const newHash = await hashPassword(parsed.data.newPassword);
+  await query(
+    `INSERT INTO local_password_history (account_id, password_hash, changed_by)
+     VALUES (?, ?, ?)`,
+    [account.id, account.password_hash, user.empId],
+  );
+  await query('UPDATE local_accounts SET password_hash = ? WHERE id = ?', [newHash, account.id]);
+
+  logger.info({ empId: user.empId }, 'Password changed');
+  res.json({ success: true });
+});
+
+// ---------------------------------------------------------------------------
+// GET /sessions — list active sessions for current user
+// ---------------------------------------------------------------------------
+router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const rows = await query<Record<string, unknown>>(
+    `SELECT session_id, iss, created_at, last_active_at, expires_at, ip,
+            device_info, geo_location, revoked_at
+       FROM idp_sessions
+      WHERE emp_id = ? AND expires_at > UTC_TIMESTAMP() AND revoked_at IS NULL
+      ORDER BY last_active_at DESC`,
+    [user.empId],
+  );
+  const data = rows.map((r) => ({
+    ...r,
+    isCurrent: r['session_id'] === user.sessionId,
+  }));
+  res.json({ data });
+});
+
+
+// ---------------------------------------------------------------------------
+// DELETE /sessions/:id — revoke a session
+// ---------------------------------------------------------------------------
+router.delete('/sessions/:id', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing session id' });
+    return;
+  }
+
+  const row = await queryOne<{ session_id: string }>(
+    'SELECT session_id FROM idp_sessions WHERE session_id = ? AND emp_id = ?',
+    [id, user.empId],
+  );
+  if (!row) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+
+  await query(
+    'UPDATE idp_sessions SET revoked_at = UTC_TIMESTAMP() WHERE session_id = ?',
+    [id],
+  );
+  await redis.del(`${SESSION_REDIS_PREFIX}${id}`);
+
+  // If revoking the current session, clear cookie too
+  if (id === user.sessionId) {
+    clearSessionCookie(res);
+  }
+
+  logger.info({ empId: user.empId, sessionId: id }, 'Session revoked by user');
+  res.json({ success: true });
+});
+
+// ---------------------------------------------------------------------------
+// MFA endpoints
+// ---------------------------------------------------------------------------
+
+router.get('/mfa', async (req: Request, res: Response): Promise<void> => {
+  const status = await getMfaStatus(req.user!.empId);
+  res.json(status);
+});
+
+router.post('/mfa/enroll', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const result = await startEnrollment(user.empId, user.email);
+  const qrDataUrl = await qrcode.toDataURL(result.otpauthUrl, { margin: 1, width: 220 });
+  res.json({
+    secret:     result.secret,
+    otpauthUrl: result.otpauthUrl,
+    qrDataUrl,
+  });
+});
+
+const confirmSchema = z.object({ code: z.string().regex(/^\d{6}$/) });
+
+router.post('/mfa/confirm', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const parsed = confirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Code must be 6 digits' });
+    return;
+  }
+  try {
+    const { backupCodes } = await confirmEnrollment(user.empId, parsed.data.code);
+    res.json({ success: true, backupCodes });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Verification failed' });
+  }
+});
+
+const stepUpSchema = z.object({
+  currentPassword: z.string().min(1).optional(),
+  code:            z.string().min(6).max(8),
+});
+
+async function requireMfaStepUp(req: Request, res: Response): Promise<boolean> {
+  const user = req.user!;
+  const parsed = stepUpSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Password (local accounts) and a current TOTP/backup code are required' });
+    return false;
+  }
+
+  if (user.iss === 'local' || parsed.data.currentPassword) {
+    const account = await queryOne<{ password_hash: string }>(
+      'SELECT password_hash FROM local_accounts WHERE emp_id = ? AND active = 1',
+      [user.empId],
+    );
+    if (!account) {
+      res.status(403).json({ error: 'Password confirmation is required for this account' });
+      return false;
+    }
+    if (!parsed.data.currentPassword) {
+      res.status(400).json({ error: 'Current password is required' });
+      return false;
+    }
+    const ok = await verifyLocalPassword(parsed.data.currentPassword, account.password_hash);
+    if (!ok) {
+      res.status(401).json({ error: 'Current password is incorrect' });
+      return false;
+    }
+  }
+
+  const totpOk = await verifyAnyMfaCode(user.empId, parsed.data.code);
+  if (!totpOk) {
+    res.status(401).json({ error: 'Invalid verification code' });
+    return false;
+  }
+  return true;
+}
+
+router.post('/mfa/disable', async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireMfaStepUp(req, res))) return;
+  await disableMfa(req.user!.empId);
+  clearMfaDeviceTrustCookie(res);
+  res.json({ success: true });
+});
+
+router.post('/mfa/regenerate-codes', async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireMfaStepUp(req, res))) return;
+  try {
+    const codes = await regenerateBackupCodes(req.user!.empId);
+    res.json({ backupCodes: codes });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Failed' });
+  }
+});
+
+router.post('/mfa/email/send', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  try {
+    const result = await sendEmailOtp(user.empId, 'enroll');
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Could not send email code' });
+  }
+});
+
+router.post('/mfa/email/confirm', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const parsed = confirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Code must be 6 digits' });
+    return;
+  }
+  try {
+    await confirmEmailOtpEnrollment(user.empId, parsed.data.code);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Verification failed' });
+  }
+});
+
+router.post('/mfa/email/disable', async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireMfaStepUp(req, res))) return;
+  await disableOtpMethod(req.user!.empId, 'email_otp');
+  res.json({ success: true });
+});
+
+router.post('/mfa/sms/send', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  try {
+    const result = await sendSmsOtp(user.empId, 'enroll');
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Could not send SMS code' });
+  }
+});
+
+router.post('/mfa/sms/confirm', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const parsed = confirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Code must be 6 digits' });
+    return;
+  }
+  try {
+    await confirmSmsOtpEnrollment(user.empId, parsed.data.code);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Verification failed' });
+  }
+});
+
+router.post('/mfa/sms/disable', async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireMfaStepUp(req, res))) return;
+  await disableOtpMethod(req.user!.empId, 'sms_otp');
+  res.json({ success: true });
+});
+
+router.post('/mfa/webauthn/register/options', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const origin = resolveWebAuthnOrigin(req);
+  try {
+    const { options, challengeId } = await getWebAuthnRegistrationOptions(user.empId, user.email, origin);
+    res.json({ options, challengeId });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'WebAuthn unavailable' });
+  }
+});
+
+const webauthnRegisterSchema = z.object({
+  challengeId: z.string().uuid(),
+  response:    z.record(z.unknown()),
+  name:        z.string().max(150).optional(),
+});
+
+router.post('/mfa/webauthn/register/verify', async (req: Request, res: Response): Promise<void> => {
+  const user = req.user!;
+  const parsed = webauthnRegisterSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid WebAuthn registration payload' });
+    return;
+  }
+  const origin = resolveWebAuthnOrigin(req);
+  try {
+    await verifyWebAuthnRegistration(
+      user.empId,
+      parsed.data.challengeId,
+      parsed.data.response as unknown as RegistrationResponseJSON,
+      origin,
+      parsed.data.name,
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Registration failed' });
+  }
+});
+
+router.get('/mfa/webauthn/credentials', async (req: Request, res: Response): Promise<void> => {
+  const creds = await listWebAuthnCredentialsForUser(req.user!.empId);
+  res.json({ data: creds });
+});
+
+router.delete('/mfa/webauthn/credentials/:id', async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireMfaStepUp(req, res))) return;
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing credential id' });
+    return;
+  }
+  await deleteWebAuthnCredential(req.user!.empId, id);
+  res.json({ success: true });
+});
+
+export default router;

@@ -1,0 +1,11 @@
+# Local override when 8080/443 are already in use (e.g. helpdesk nginx).
+# Usage: docker compose -f docker-compose.dev.yml -f docker-compose.local.yml up -d --build
+services:
+  lilg-api:
+    ports: !override
+      - "8081:8080"
+      - "8444:8443"
+    # Live-mount UI so local web/ edits show without rebuilding the image
+    volumes:
+      - saml-keys:/app/data/saml
+      - ./web:/app/web:ro

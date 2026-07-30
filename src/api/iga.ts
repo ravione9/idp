@@ -1,0 +1,1288 @@
+/**
+ * IGA + Multi-protocol AM API surface.
+ *
+ * This is the foundation for the platform vision documented in ARCHITECTURE.md.
+ * Read endpoints are wired against the new tables (003_iga_foundation.sql).
+ * Write endpoints exist as scaffolds that return 501 NOT_IMPLEMENTED until
+ * the corresponding service layer is built.
+ *
+ * Each domain (applications, connectors, entitlements, access requests,
+ * reviews, SoD, risk, reports) is mounted under /api/iga/<domain>.
+ */
+import { Router, Request, Response } from 'express';
+import { z } from 'zod';
+import { v4 as uuidv4 } from 'uuid';
+import { requireAuth } from '../auth/middleware.js';
+import { requireRole, requirePortalModule } from '../auth/rbac.js';
+import { execute, query, queryOne } from '../db/connection.js';
+import { safeQuery } from '../db/safe-query.js';
+import logger from '../utils/logger.js';
+import { asyncHandler } from '../utils/async-handler.js';
+import { triggerConnectorSync } from '../services/connector-dispatcher.js';
+import { runConnectorConnectivityTest } from '../services/connector-health.js';
+import { harvestConnectorEntitlements } from '../services/entitlement-harvest.js';
+import { fulfillEntitlementOnTarget } from '../services/entitlement-fulfillment.js';
+import { submitAccessRequest, processDecision, repairAccessRequestFulfillment } from '../services/access-request-workflow.js';
+import {
+  explainJitCatalogForUser,
+  expireStaleAccessRequests,
+  listJitRequestableAppsForUser,
+} from '../services/app-access-policy.js';
+import { createCampaign, submitReviewDecision } from '../services/access-review.js';
+import { evaluateSodForGrant } from '../services/sod-evaluator.js';
+
+const router = Router();
+
+// All routes here require an authenticated session. Per-route role checks
+// are applied below where stricter access is needed.
+router.use(requireAuth);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function paginate(req: Request, defaultLimit = 50, maxLimit = 200): { limit: number; offset: number } {
+  const limit = Math.min(parseInt((req.query['limit'] as string) ?? String(defaultLimit), 10), maxLimit);
+  const offset = parseInt((req.query['offset'] as string) ?? '0', 10);
+  return { limit, offset };
+}
+
+// ===========================================================================
+// /applications — protocol-agnostic application catalog
+// ===========================================================================
+const appSchema = z.object({
+  slug:        z.string().min(1).max(80).regex(/^[a-z0-9-]+$/),
+  name:        z.string().min(1).max(150),
+  description: z.string().max(2000).optional(),
+  iconUrl:     z.union([z.string().url(), z.literal('')]).optional().transform((v) => (v ? v : undefined)),
+  category:    z.string().max(50).optional(),
+  ownerEmpId:  z.string().max(20).optional(),
+  visibility:  z.enum(['PUBLIC', 'RESTRICTED']).default('PUBLIC'),
+  ssoEnabled:  z.boolean().default(true),
+  provisioning: z.boolean().default(false),
+});
+
+router.get('/applications', asyncHandler(async (req: Request, res: Response) => {
+  const { limit, offset } = paginate(req);
+  const rows = await safeQuery<Record<string, unknown>>(
+    `SELECT a.id, a.slug, a.name, a.description, a.icon_url, a.category,
+            a.owner_emp_id, a.visibility, a.sso_enabled, a.provisioning,
+            a.risk_score, a.active, a.created_at, a.updated_at,
+            (SELECT COUNT(*) FROM app_protocol_configs c WHERE c.app_id = a.id AND c.active = 1) AS protocol_count
+       FROM applications a
+      ORDER BY a.sort_order ASC, a.name ASC
+      LIMIT ? OFFSET ?`,
+    [limit, offset],
+  );
+  res.json({ data: rows, total: rows.length, limit, offset });
+}));
+
+/** JIT Request Access catalog — only requestable apps the caller may request. */
+router.get('/requestable-applications', asyncHandler(async (req: Request, res: Response) => {
+  const empId = req.user!.empId;
+  const explain = String(req.query['explain'] ?? '') === '1' || String(req.query['explain'] ?? '').toLowerCase() === 'true';
+  if (explain) {
+    const result = await explainJitCatalogForUser(empId);
+    res.json({ data: result.available, hidden: result.hidden });
+    return;
+  }
+  const apps = await listJitRequestableAppsForUser(empId);
+  res.json({ data: apps });
+}));
+
+router.post(
+  '/applications',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('applications'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = appSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const id = uuidv4();
+    try {
+      await execute(
+        `INSERT INTO applications
+           (id, slug, name, description, icon_url, category, owner_emp_id,
+            visibility, sso_enabled, provisioning)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          parsed.data.slug,
+          parsed.data.name,
+          parsed.data.description ?? null,
+          parsed.data.iconUrl ?? null,
+          parsed.data.category ?? null,
+          parsed.data.ownerEmpId ?? null,
+          parsed.data.visibility,
+          parsed.data.ssoEnabled ? 1 : 0,
+          parsed.data.provisioning ? 1 : 0,
+        ],
+      );
+      logger.info({ id, slug: parsed.data.slug }, 'Application registered');
+      res.status(201).json({ id, slug: parsed.data.slug });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Insert failed';
+      if (msg.includes('Duplicate')) {
+        res.status(409).json({ error: 'Slug already in use' });
+        return;
+      }
+      res.status(400).json({ error: msg });
+    }
+  }),
+);
+
+router.get('/applications/:id', asyncHandler(async (req: Request, res: Response) => {
+  const app = await queryOne<Record<string, unknown>>(
+    `SELECT * FROM applications WHERE id = ? OR slug = ?`,
+    [req.params['id'], req.params['id']],
+  );
+  if (!app) {
+    res.status(404).json({ error: 'Application not found' });
+    return;
+  }
+  const protocols = await safeQuery<Record<string, unknown>>(
+    `SELECT id, protocol, active, created_at FROM app_protocol_configs WHERE app_id = ?`,
+    [app['id']],
+  );
+  res.json({ ...app, protocols });
+}));
+
+// PUT /applications/:id — update an existing application
+router.put(
+  '/applications/:id',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('applications'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const app = await queryOne<{ id: string }>(
+      `SELECT id FROM applications WHERE id = ? OR slug = ?`, [id, id],
+    );
+    if (!app) { res.status(404).json({ error: 'Application not found' }); return; }
+
+    const parsed = appSchema.partial().safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const d = parsed.data;
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+    if (d.name        !== undefined) { setClauses.push('name = ?');        values.push(d.name); }
+    if (d.description !== undefined) { setClauses.push('description = ?'); values.push(d.description); }
+    if (d.iconUrl     !== undefined) { setClauses.push('icon_url = ?');    values.push(d.iconUrl); }
+    if (d.category    !== undefined) { setClauses.push('category = ?');    values.push(d.category); }
+    if (d.visibility  !== undefined) { setClauses.push('visibility = ?');  values.push(d.visibility); }
+    if (d.ssoEnabled  !== undefined) { setClauses.push('sso_enabled = ?'); values.push(d.ssoEnabled ? 1 : 0); }
+    if (d.provisioning!== undefined) { setClauses.push('provisioning = ?');values.push(d.provisioning ? 1 : 0); }
+    if ('active' in req.body)         { setClauses.push('active = ?');      values.push(req.body['active'] ? 1 : 0); }
+    if (!setClauses.length) { res.json({ updated: false }); return; }
+    setClauses.push('updated_at = UTC_TIMESTAMP()');
+    values.push(app.id);
+    await execute(`UPDATE applications SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    logger.info({ id: app.id }, 'Application updated');
+    res.json({ updated: true });
+  }),
+);
+
+// DELETE /applications/:id — remove an application
+router.delete(
+  '/applications/:id',
+  requireRole('SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const app = await queryOne<{ id: string }>(
+      `SELECT id FROM applications WHERE id = ? OR slug = ?`, [id, id],
+    );
+    if (!app) { res.status(404).json({ error: 'Application not found' }); return; }
+    await execute(`DELETE FROM applications WHERE id = ?`, [app.id]);
+    logger.info({ id: app.id }, 'Application deleted');
+    res.json({ deleted: true });
+  }),
+);
+
+// ===========================================================================
+// /connectors — pluggable target system adapters
+// ===========================================================================
+router.get(
+  '/connectors',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { limit, offset } = paginate(req);
+    const rows = await safeQuery<Record<string, unknown>>(
+      `SELECT id, name, slug, connector_type, direction, sync_mode, sync_schedule,
+              status, last_sync_at, last_error, last_health_check_at, last_health_ok,
+              created_at, updated_at
+         FROM connectors
+        ORDER BY name ASC
+        LIMIT ? OFFSET ?`,
+      [limit, offset],
+    );
+    res.json({ data: rows, total: rows.length, limit, offset });
+  }),
+);
+
+const connectorSchema = z.object({
+  name:          z.string().min(1).max(150),
+  slug:          z.string().min(1).max(80).regex(/^[a-z0-9-]+$/),
+  connectorType: z.string().min(1).max(50),
+  direction:     z.enum(['INBOUND', 'OUTBOUND', 'BIDIRECTIONAL']).default('BIDIRECTIONAL'),
+  syncMode:      z.enum(['FULL', 'INCREMENTAL', 'RECONCILE']).default('INCREMENTAL'),
+  syncSchedule:  z.string().max(100).optional(),
+  configJson:    z.record(z.unknown()).optional(),
+});
+
+router.post(
+  '/connectors',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = connectorSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const id = uuidv4();
+    try {
+      await execute(
+        `INSERT INTO connectors
+           (id, name, slug, connector_type, direction, sync_mode, sync_schedule,
+            status, config_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'CONFIGURED', ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())`,
+        [
+          id,
+          parsed.data.name,
+          parsed.data.slug,
+          parsed.data.connectorType,
+          parsed.data.direction,
+          parsed.data.syncMode,
+          parsed.data.syncSchedule ?? null,
+          JSON.stringify(parsed.data.configJson ?? {}),
+        ],
+      );
+      logger.info({ id, slug: parsed.data.slug }, 'Connector registered');
+      res.status(201).json({ id, slug: parsed.data.slug });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Insert failed';
+      if (msg.includes('Duplicate')) {
+        res.status(409).json({ error: 'Slug already in use' });
+        return;
+      }
+      res.status(400).json({ error: msg });
+    }
+  }),
+);
+
+router.get(
+  '/connectors/:id/runs',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { limit, offset } = paginate(req);
+    const rows = await safeQuery<Record<string, unknown>>(
+      `SELECT id, run_type, status, started_at, ended_at,
+              items_processed, items_succeeded, items_failed, error_summary
+         FROM connector_runs
+        WHERE connector_id = ?
+        ORDER BY started_at DESC
+        LIMIT ? OFFSET ?`,
+      [req.params['id'], limit, offset],
+    );
+    res.json({ data: rows, limit, offset });
+  }),
+);
+
+/** Harvest entitlements from every AD/Google connector (must be before :id routes). */
+router.post(
+  '/connectors/harvest-entitlements-all',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const connectors = await query<{ id: string; name: string; connector_type: string; status: string }>(
+      `SELECT id, name, connector_type, status FROM connectors
+        WHERE UPPER(connector_type) IN ('AD','LDAP','GOOGLE','GOOGLE_WORKSPACE')
+           OR slug IN ('active-directory','google-workspace')
+        ORDER BY name`,
+      [],
+    );
+    const results: Array<Record<string, unknown>> = [];
+    for (const c of connectors) {
+      try {
+        const r = await harvestConnectorEntitlements(c.id, req.user!.empId);
+        results.push({ ...r, ok: true });
+      } catch (err) {
+        results.push({
+          connectorId: c.id,
+          connectorName: c.name,
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    res.json({
+      connectors: results.length,
+      harvested: results.reduce((n, r) => n + (Number(r['harvested']) || 0), 0),
+      updated: results.reduce((n, r) => n + (Number(r['updated']) || 0), 0),
+      results,
+    });
+  }),
+);
+
+router.post(
+  '/connectors/:id/sync',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const connectorId = req.params['id']!;
+    const triggeredBy = req.user!.empId;
+    try {
+      const ref = await triggerConnectorSync(connectorId, triggeredBy);
+      res.json(ref);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === 'Connector not found') {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg === 'Connector is not connected — run Test Connection successfully first') {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
+
+/** Harvest app/directory roles (groups) into the IGA entitlements catalog (OIG-style). */
+router.post(
+  '/connectors/:id/harvest-entitlements',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    try {
+      const result = await harvestConnectorEntitlements(req.params['id']!, req.user!.empId);
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === 'Connector not found') {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg.includes('not connected') || msg.includes('not supported')) {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
+
+
+// GET /connectors/:id — get single connector with config
+router.get(
+  '/connectors/:id',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const row = await queryOne<Record<string, unknown>>(
+      `SELECT id, name, slug, connector_type, direction, sync_mode, sync_schedule,
+              status, config_json, last_sync_at, last_error, created_at, updated_at
+         FROM connectors WHERE id = ?`,
+      [req.params['id']],
+    );
+    if (!row) { res.status(404).json({ error: 'Not found' }); return; }
+    // Parse config_json but strip secrets before returning
+    try {
+      const cfg = typeof row['config_json'] === 'string'
+        ? JSON.parse(row['config_json'] as string)
+        : (row['config_json'] ?? {});
+      // Redact secret fields
+      const safe: Record<string, unknown> = { ...cfg };
+      for (const k of ['bindPassword', 'password', 'secret', 'apiKey', 'serviceAccountKey', 'clientSecret']) {
+        if (k in safe) safe[k] = '••••••••';
+      }
+      row['config'] = safe;
+    } catch { row['config'] = {}; }
+    delete row['config_json'];
+    res.json(row);
+  }),
+);
+
+// PUT /connectors/:id — update connector
+router.put(
+  '/connectors/:id',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { name, syncMode, syncSchedule, configJson, status } = req.body as {
+      name?: string;
+      syncMode?: string;
+      syncSchedule?: string;
+      configJson?: Record<string, unknown>;
+      status?: string;
+    };
+
+    // Merge config_json: load existing, patch non-redacted fields
+    if (configJson) {
+      const existing = await queryOne<{ config_json: string }>(
+        `SELECT config_json FROM connectors WHERE id = ?`, [req.params['id']],
+      );
+      if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
+      const rawCfg = existing.config_json;
+      const existingCfg: Record<string, unknown> =
+        typeof rawCfg === 'string'
+          ? JSON.parse(rawCfg || '{}')
+          : ((rawCfg as Record<string, unknown>) ?? {});
+      const merged: Record<string, unknown> = { ...existingCfg };
+      for (const [k, v] of Object.entries(configJson)) {
+        // Don't overwrite secret fields with redaction placeholder
+        if (typeof v === 'string' && v === '••••••••') continue;
+        // Empty string = explicitly clear (e.g. Sync Scope OU / users / groups)
+        if (v === '' || v === null) {
+          // Keep Workspace domains on Google connectors — clearing them breaks portal Google sign-in
+          // when OIDC hosted domains are sourced from the connector.
+          if (k === 'customerDomain' || k === 'customerDomains') continue;
+          delete merged[k];
+          continue;
+        }
+        merged[k] = v;
+      }
+      await execute(
+        `UPDATE connectors SET
+           name          = COALESCE(?, name),
+           sync_mode     = COALESCE(?, sync_mode),
+           sync_schedule = COALESCE(?, sync_schedule),
+           status        = COALESCE(?, status),
+           config_json   = ?,
+           updated_at    = UTC_TIMESTAMP()
+         WHERE id = ?`,
+        [name ?? null, syncMode ?? null, syncSchedule ?? null, status ?? null,
+         JSON.stringify(merged), req.params['id']],
+      );
+    } else {
+      await execute(
+        `UPDATE connectors SET
+           name          = COALESCE(?, name),
+           sync_mode     = COALESCE(?, sync_mode),
+           sync_schedule = COALESCE(?, sync_schedule),
+           status        = COALESCE(?, status),
+           updated_at    = UTC_TIMESTAMP()
+         WHERE id = ?`,
+        [name ?? null, syncMode ?? null, syncSchedule ?? null, status ?? null, req.params['id']],
+      );
+    }
+    res.json({ success: true });
+  }),
+);
+
+// DELETE /connectors/:id — remove connector
+router.delete(
+  '/connectors/:id',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    await execute(`DELETE FROM connectors WHERE id = ?`, [req.params['id']]);
+    res.json({ success: true });
+  }),
+);
+
+// POST /connectors/:id/test — test connectivity; Active only after success
+router.post(
+  '/connectors/:id/test',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const result = await runConnectorConnectivityTest(req.params['id']!);
+    if (result.statusCode === 404) {
+      res.status(404).json({ error: result.message, code: result.code });
+      return;
+    }
+    const body: Record<string, unknown> = {
+      success: result.success,
+      message: result.message,
+      status: result.connectorStatus,
+    };
+    if (result.code) body['code'] = result.code;
+    if (result.warnings) body['warnings'] = result.warnings;
+    if (result.info) body['info'] = result.info;
+    if (result.ouSuggestions) body['ouSuggestions'] = result.ouSuggestions;
+    if (result.detail) body['detail'] = result.detail;
+    res.status(result.statusCode).json(body);
+  }),
+);
+
+// ===========================================================================
+// /entitlements — granular permissions
+// ===========================================================================
+// Any authenticated user may browse entitlements for Request Access catalog.
+router.get(
+  '/entitlements',
+  asyncHandler(async (req: Request, res: Response) => {
+    const { limit, offset } = paginate(req);
+    const appId = req.query['appId'] as string | undefined;
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (appId) { where.push('e.app_id = ?'); params.push(appId); }
+    const connectorId = req.query['connectorId'] as string | undefined;
+    if (connectorId) { where.push('e.connector_id = ?'); params.push(connectorId); }
+    const activeOnly = String(req.query['active'] ?? '1') !== '0';
+    if (activeOnly) where.push('e.active = 1');
+
+    // Request Access must not list directory-harvested groups.
+    // Admin catalog: ?requestable=all | harvested-only: ?requestable=0
+    const reqFlag = String(req.query['requestable'] ?? '1').toLowerCase();
+    if (reqFlag === 'all' || reqFlag === '*') {
+      /* no filter */
+    } else if (reqFlag === '0' || reqFlag === 'false') {
+      where.push('(e.requestable = 0 OR (e.connector_id IS NOT NULL AND e.external_id IS NOT NULL AND e.external_id != \'\'))');
+    } else {
+      // default + requestable=1 — curated / app entitlements only
+      where.push('(e.requestable = 1 AND NOT (e.connector_id IS NOT NULL AND e.external_id IS NOT NULL AND e.external_id != \'\'))');
+    }
+
+    const rows = await safeQuery<Record<string, unknown>>(
+      `SELECT e.id, e.app_id, e.connector_id, e.name, e.slug, e.type, e.description,
+              e.risk_score, e.is_birthright, e.requires_review, e.external_id, e.metadata,
+              e.active, e.requestable, e.created_at, e.last_harvested_at,
+              a.name AS app_name, c.name AS connector_name, c.connector_type
+         FROM entitlements e
+         LEFT JOIN applications a ON a.id = e.app_id
+         LEFT JOIN connectors c ON c.id = e.connector_id
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        ORDER BY e.name ASC
+        LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    );
+    res.json({ data: rows, limit, offset });
+  }),
+);
+
+router.get('/entitlements/me', asyncHandler(async (req: Request, res: Response) => {
+  const empId = req.user!.empId;
+  const rows = await safeQuery<Record<string, unknown>>(
+    `SELECT ue.id, ue.entitlement_id, ue.source, ue.granted_at, ue.expires_at, ue.last_used_at,
+            e.name AS entitlement_name, e.type, e.risk_score,
+            a.name AS app_name, a.slug AS app_slug, a.icon_url
+       FROM user_entitlements ue
+       JOIN entitlements e ON e.id = ue.entitlement_id
+       LEFT JOIN applications a ON a.id = e.app_id
+      WHERE ue.emp_id = ? AND ue.revoked_at IS NULL
+      ORDER BY ue.granted_at DESC`,
+    [empId],
+  );
+  res.json({ data: rows });
+}));
+
+// Requestable business roles (end-user catalog — no admin role required)
+router.get('/roles', asyncHandler(async (_req: Request, res: Response) => {
+  const rows = await safeQuery<Record<string, unknown>>(
+    `SELECT id, name, description, risk_score, active
+       FROM business_roles
+      WHERE active = 1
+      ORDER BY name ASC`,
+    [],
+  );
+  res.json({ data: rows });
+}));
+
+// ===========================================================================
+// /access-requests — request workflow
+// ===========================================================================
+router.get('/access-requests', asyncHandler(async (req: Request, res: Response) => {
+  const empId = req.user!.empId;
+  const scope = (req.query['scope'] as string) ?? 'mine';
+  const statusFilter = (req.query['status'] as string) || '';
+  const { limit, offset } = paginate(req);
+
+  // Auto-wipe expired requests + their pending approvals before listing queues
+  await expireStaleAccessRequests().catch(() => 0);
+
+  let where = '';
+  const params: unknown[] = [];
+
+  if (scope === 'mine') {
+    where = 'WHERE ar.requester_emp_id = ?';
+    params.push(empId);
+  } else if (scope === 'tasks') {
+    // Only live PENDING requests — expired ones are wiped from approver queues
+    where = `WHERE ar.status = 'PENDING'
+      AND EXISTS (
+      SELECT 1 FROM access_request_approvals a
+       WHERE a.request_id = ar.id
+         AND a.approver_emp_id = ?
+         AND a.decision = 'PENDING'
+    )`;
+    params.push(empId);
+  } else if (scope === 'all') {
+    if (!['ADMIN', 'SUPER_ADMIN'].includes(req.user!.role)) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    where = 'WHERE 1=1';
+  }
+
+  if (statusFilter && ['PENDING', 'APPROVED', 'REJECTED', 'FULFILLED', 'CANCELLED', 'EXPIRED'].includes(statusFilter)) {
+    where += where ? ' AND ar.status = ?' : 'WHERE ar.status = ?';
+    params.push(statusFilter);
+  }
+
+  const rows = await safeQuery<Record<string, unknown>>(
+    `SELECT ar.id, ar.requester_emp_id, ar.target_emp_id, ar.item_type,
+            ar.item_ids, ar.justification, ar.status, ar.created_at,
+            ar.decided_at, ar.fulfilled_at, ar.sla_due_at,
+            r.full_name AS requester_name, t.full_name AS target_name,
+            (SELECT GROUP_CONCAT(DISTINCT a.approver_emp_id ORDER BY a.level SEPARATOR ', ')
+               FROM access_request_approvals a
+              WHERE a.request_id = ar.id AND a.decision = 'PENDING'
+            ) AS pending_approvers
+       FROM access_requests ar
+       LEFT JOIN employees r ON r.emp_id = ar.requester_emp_id
+       LEFT JOIN employees t ON t.emp_id = ar.target_emp_id
+       ${where}
+       ORDER BY ar.created_at DESC
+       LIMIT ? OFFSET ?`,
+    [...params, limit, offset],
+  );
+  res.json({ data: rows, limit, offset });
+}));
+
+const accessRequestSchema = z.object({
+  targetEmpId:   z.string().min(1).max(20).optional(),
+  // UI historically sent APP; normalize to APP_ACCESS.
+  itemType:      z.enum(['ENTITLEMENT', 'ROLE', 'APP_ACCESS', 'APP']),
+  itemIds:       z.array(z.string()).min(1),
+  justification: z.string().min(1).max(2000),
+});
+
+router.post(
+  '/access-requests',
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = accessRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const requesterEmpId = req.user!.empId;
+    const itemType = parsed.data.itemType === 'APP' ? 'APP_ACCESS' : parsed.data.itemType;
+    const targetEmpId = parsed.data.targetEmpId?.trim() || requesterEmpId;
+    try {
+      const reqId = await submitAccessRequest({
+        requesterEmpId,
+        targetEmpId,
+        itemType,
+        itemIds:        parsed.data.itemIds,
+        justification:  parsed.data.justification,
+      });
+      res.status(201).json({ id: reqId });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('not found') || msg.includes('not active')) {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg.includes('SoD')) {
+        res.status(422).json({ error: msg, code: 'SOD_VIOLATION' });
+        return;
+      }
+      if (
+        msg.includes('not eligible')
+        || msg.includes('not enabled for Request Access')
+        || msg.includes('already have access')
+        || msg.includes('not permitted to request')
+        || msg.includes('No active access request workflow')
+      ) {
+        res.status(403).json({ error: msg, code: 'REQUEST_NOT_ALLOWED' });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
+
+const decisionSchema = z.object({
+  decision: z.enum(['APPROVE', 'REJECT']),
+  comment:  z.string().max(2000).optional(),
+  /** ADMIN / SUPER_ADMIN only — approve/reject without being the assigned approver. */
+  adminOverride: z.boolean().optional(),
+});
+
+router.post(
+  '/access-requests/:id/decision',
+  asyncHandler(async (req: Request, res: Response) => {
+    const requestId = req.params['id']!;
+    const parsed = decisionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+
+    const adminOverride = parsed.data.adminOverride === true;
+    if (adminOverride && !['ADMIN', 'SUPER_ADMIN'].includes(req.user!.role)) {
+      res.status(403).json({ error: 'Admin override requires ADMIN or SUPER_ADMIN' });
+      return;
+    }
+
+    try {
+      await processDecision(
+        requestId,
+        req.user!.empId,
+        parsed.data.decision,
+        parsed.data.comment,
+        { adminOverride },
+      );
+      res.json({ success: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('not found')) {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg.includes('not in PENDING') || msg.includes('No pending approval')) {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
+
+/** Re-provision grants for APPROVED/FULFILLED requests that never received an assignment. */
+router.post(
+  '/access-requests/:id/fulfill',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const requestId = req.params['id']!;
+    try {
+      const result = await repairAccessRequestFulfillment(requestId, req.user!.empId);
+      res.json({ success: true, ...result });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('not found')) {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg.includes('must be APPROVED') || msg.includes('no app id')) {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
+
+// ===========================================================================
+// /access-reviews — certification campaigns
+// ===========================================================================
+router.get(
+  '/access-reviews',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { limit, offset } = paginate(req);
+    const rows = await safeQuery<Record<string, unknown>>(
+      `SELECT id, name, description, scope, reviewer_kind, start_date, end_date,
+              status, created_by, created_at,
+              (SELECT COUNT(*) FROM access_review_items i WHERE i.campaign_id = c.id) AS item_count,
+              (SELECT COUNT(*) FROM access_review_items i WHERE i.campaign_id = c.id AND i.decision = 'PENDING') AS pending_count
+         FROM access_review_campaigns c
+        ORDER BY start_date DESC
+        LIMIT ? OFFSET ?`,
+      [limit, offset],
+    );
+    res.json({ data: rows, limit, offset });
+  }),
+);
+
+// GET /access-reviews/:id/items — all items for a campaign (admin)
+router.get(
+  '/access-reviews/:id/items',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const campaignId = req.params['id']!;
+    const rows = await safeQuery<Record<string, unknown>>(
+      `SELECT i.id, i.campaign_id, i.emp_id, e.full_name AS subject_name, e.email_corp AS subject_email,
+              i.entitlement_id, ent.name AS entitlement_name, ent.app_id,
+              i.role_id, br.name AS role_name,
+              i.reviewer_emp_id, rev.full_name AS reviewer_name,
+              i.decision, i.comment, i.decided_at, i.created_at
+         FROM access_review_items i
+         LEFT JOIN employees e   ON e.emp_id = i.emp_id
+         LEFT JOIN employees rev ON rev.emp_id = i.reviewer_emp_id
+         LEFT JOIN entitlements ent ON ent.id = i.entitlement_id
+         LEFT JOIN business_roles br ON br.id = i.role_id
+        WHERE i.campaign_id = ?
+        ORDER BY i.decision ASC, e.full_name ASC`,
+      [campaignId],
+    );
+    res.json({ data: rows });
+  }),
+);
+
+router.get('/access-reviews/me', asyncHandler(async (req: Request, res: Response) => {
+  const empId = req.user!.empId;
+  const rows = await safeQuery<Record<string, unknown>>(
+    `SELECT i.id, i.campaign_id, c.name AS campaign_name, c.end_date,
+            i.emp_id, e.full_name AS subject_name,
+            i.entitlement_id, ent.name AS entitlement_name,
+            i.role_id, br.name AS role_name,
+            i.decision, i.decided_at
+       FROM access_review_items i
+       JOIN access_review_campaigns c ON c.id = i.campaign_id
+       LEFT JOIN employees e   ON e.emp_id = i.emp_id
+       LEFT JOIN entitlements ent ON ent.id = i.entitlement_id
+       LEFT JOIN business_roles br ON br.id = i.role_id
+      WHERE i.reviewer_emp_id = ? AND i.decision = 'PENDING'
+        AND c.status = 'ACTIVE'
+      ORDER BY c.end_date ASC`,
+    [empId],
+  );
+  res.json({ data: rows });
+}));
+
+const campaignSchema = z.object({
+  name:         z.string().min(1).max(200),
+  description:  z.string().max(2000).optional(),
+  scope:        z.enum(['ALL_USERS', 'APP_SPECIFIC', 'ROLE_SPECIFIC', 'HIGH_RISK']),
+  reviewerKind: z.enum(['MANAGER', 'APP_OWNER', 'ROLE_OWNER']),
+  startDate:    z.string().min(1),
+  endDate:      z.string().min(1),
+  appId:        z.string().optional(),
+  roleId:       z.string().optional(),
+});
+
+router.post(
+  '/access-reviews',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = campaignSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const campaignParams = {
+      name:         parsed.data.name,
+      scope:        parsed.data.scope,
+      reviewerKind: parsed.data.reviewerKind,
+      startDate:    parsed.data.startDate,
+      endDate:      parsed.data.endDate,
+      ...(parsed.data.description !== undefined ? { description: parsed.data.description } : {}),
+      ...(parsed.data.appId !== undefined ? { appId: parsed.data.appId } : {}),
+      ...(parsed.data.roleId !== undefined ? { roleId: parsed.data.roleId } : {}),
+    };
+    const campaignId = await createCampaign(campaignParams, req.user!.empId);
+    res.status(201).json({ id: campaignId });
+  }),
+);
+
+// POST /access-reviews/:id/items/:itemId/decision
+const reviewDecisionSchema = z.object({
+  decision: z.enum(['CERTIFY', 'REVOKE', 'EXCEPTION']),
+  comment:  z.string().max(2000).optional(),
+});
+
+router.post(
+  '/access-reviews/:id/items/:itemId/decision',
+  asyncHandler(async (req: Request, res: Response) => {
+    const { itemId } = req.params as { itemId: string };
+    const parsed = reviewDecisionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    try {
+      await submitReviewDecision(itemId, req.user!.empId, parsed.data.decision, parsed.data.comment);
+      res.json({ success: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('not found')) {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg.includes('does not match') || msg.includes('already decided')) {
+        res.status(409).json({ error: msg });
+        return;
+      }
+      throw err;
+    }
+  }),
+);
+
+// ===========================================================================
+// /sod-policies — Segregation of Duties
+// ===========================================================================
+router.get(
+  '/sod-policies',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
+  asyncHandler(async (_req: Request, res: Response) => {
+    const rows = await safeQuery<Record<string, unknown>>(
+      `SELECT id, name, description, severity, enforcement, conflict_groups, active, created_at
+         FROM sod_policies
+        ORDER BY severity DESC, name ASC`,
+      [],
+    );
+    res.json({ data: rows });
+  }),
+);
+
+router.get(
+  '/sod-violations',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const status = (req.query['status'] as string) ?? 'OPEN';
+    const rows = await safeQuery<Record<string, unknown>>(
+      `SELECT v.id, v.policy_id, p.name AS policy_name, p.severity,
+              v.emp_id, e.full_name AS emp_name, e.email_corp,
+              v.conflicting_ents, v.detected_at, v.status, v.exception_until
+         FROM sod_violations v
+         JOIN sod_policies p ON p.id = v.policy_id
+         LEFT JOIN employees e ON e.emp_id = v.emp_id
+        WHERE v.status = ?
+        ORDER BY p.severity DESC, v.detected_at DESC`,
+      [status],
+    );
+    res.json({ data: rows });
+  }),
+);
+
+// POST /sod-violations/:id/remediate — mark violation as RESOLVED
+router.post(
+  '/sod-violations/:id/remediate',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const id = req.params['id']!;
+    const result = await execute(
+      `UPDATE sod_violations SET status='RESOLVED', exception_until=NULL WHERE id=? AND status='OPEN'`,
+      [id],
+    );
+    if ((result as { affectedRows?: number }).affectedRows === 0) {
+      res.status(404).json({ error: 'Violation not found or already resolved' });
+      return;
+    }
+    res.json({ success: true });
+  }),
+);
+
+// ===========================================================================
+// /risk — risk scoring
+// ===========================================================================
+router.get(
+  '/risk/dashboard',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('governance'),
+  asyncHandler(async (_req: Request, res: Response) => {
+    const [topRisk, denied24h, mfa24h] = await Promise.all([
+      safeQuery<Record<string, unknown>>(
+        `SELECT r.emp_id, e.full_name, e.email_corp, r.score, r.factors, r.updated_at
+           FROM risk_scores r
+           JOIN employees e ON e.emp_id = r.emp_id
+          WHERE r.score >= 50
+          ORDER BY r.score DESC
+          LIMIT 25`,
+        [],
+      ),
+      queryOne<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM login_risk_events
+          WHERE decision IN ('DENY','BLOCK')
+            AND ts > DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 DAY)`,
+        [],
+      ).catch(() => ({ n: 0 })),
+      queryOne<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM login_risk_events
+          WHERE decision = 'MFA'
+            AND ts > DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 DAY)`,
+        [],
+      ).catch(() => ({ n: 0 })),
+    ]);
+    res.json({
+      topRisk,
+      counters: {
+        deniedLast24h:    denied24h?.n ?? 0,
+        mfaChallengeLast24h: mfa24h?.n ?? 0,
+      },
+    });
+  }),
+);
+
+// ===========================================================================
+// /reports — compliance reports (evidence snapshots)
+// ===========================================================================
+router.get(
+  '/reports',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('reports'),
+  asyncHandler(async (_req: Request, res: Response) => {
+    const rows = await safeQuery<Record<string, unknown>>(
+      `SELECT id, name, framework, generated_by, generated_at, period_start, period_end, artifact_url,
+              CASE WHEN payload IS NOT NULL THEN 1 ELSE 0 END AS has_payload
+         FROM compliance_reports
+        ORDER BY generated_at DESC
+        LIMIT 100`,
+      [],
+    );
+    res.json({ data: rows });
+  }),
+);
+
+router.get(
+  '/reports/:id',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('reports'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const row = await queryOne<Record<string, unknown>>(
+      `SELECT id, name, framework, generated_by, generated_at, period_start, period_end,
+              artifact_url, payload
+         FROM compliance_reports WHERE id = ? LIMIT 1`,
+      [req.params['id']],
+    );
+    if (!row) {
+      res.status(404).json({ error: 'Report not found' });
+      return;
+    }
+    if (String(req.query['export'] || '') === 'json') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="compliance-${row['framework']}-${String(row['id']).slice(0, 8)}.json"`,
+      );
+      res.send(JSON.stringify(row, null, 2));
+      return;
+    }
+    res.json({ data: row });
+  }),
+);
+
+const reportSchema = z.object({
+  name:        z.string().min(1).max(200),
+  framework:   z.enum(['SOX', 'GDPR', 'HIPAA', 'PCI', 'ISO27001', 'CUSTOM']).or(z.string().min(1).max(80)),
+  periodStart: z.string().min(1),
+  periodEnd:   z.string().min(1),
+});
+
+router.post(
+  '/reports',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('reports'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = reportSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+
+    let periodStart = parsed.data.periodStart.trim();
+    let periodEnd = parsed.data.periodEnd.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(periodStart)) periodStart = `${periodStart} 00:00:00`;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(periodEnd)) periodEnd = `${periodEnd} 23:59:59`;
+
+    const [ssoCount, auditCount, failedLogins, successLogins, topActions, topApps, integrity] = await Promise.all([
+      queryOne<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM saml_assertion_log WHERE ts >= ? AND ts <= ?`,
+        [periodStart, periodEnd],
+      ).catch(() => ({ n: 0 })),
+      queryOne<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM audit_log WHERE ts >= ? AND ts <= ?`,
+        [periodStart, periodEnd],
+      ).catch(() => ({ n: 0 })),
+      queryOne<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM auth_attempts WHERE success = 0 AND ts >= ? AND ts <= ?`,
+        [periodStart, periodEnd],
+      ).catch(() => ({ n: 0 })),
+      queryOne<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM auth_attempts WHERE success = 1 AND ts >= ? AND ts <= ?`,
+        [periodStart, periodEnd],
+      ).catch(() => ({ n: 0 })),
+      query<{ action: string; count: number }>(
+        `SELECT action, COUNT(*) AS count FROM audit_log
+          WHERE ts >= ? AND ts <= ? GROUP BY action ORDER BY count DESC LIMIT 25`,
+        [periodStart, periodEnd],
+      ).catch(() => []),
+      query<{ app: string; count: number }>(
+        `SELECT sp.name AS app, COUNT(al.id) AS count
+           FROM saml_assertion_log al
+           JOIN saml_service_providers sp ON sp.id = al.sp_id
+          WHERE al.ts >= ? AND al.ts <= ?
+          GROUP BY sp.id, sp.name ORDER BY count DESC LIMIT 25`,
+        [periodStart, periodEnd],
+      ).catch(() => []),
+      import('../utils/audit-log.js').then((m) => m.verifyChain(2000)).catch(() => ({
+        valid: false, firstInvalidId: null, checked: 0,
+      })),
+    ]);
+
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      framework: parsed.data.framework,
+      period: { start: periodStart, end: periodEnd },
+      controls: {
+        accessLogging: true,
+        tamperEvidentAuditChain: true,
+        ssoAssertionLogging: true,
+        authAttemptLogging: true,
+      },
+      evidence: {
+        ssoAssertions: Number(ssoCount?.n ?? 0),
+        systemAuditEvents: Number(auditCount?.n ?? 0),
+        failedLogins: Number(failedLogins?.n ?? 0),
+        successfulLogins: Number(successLogins?.n ?? 0),
+        topAuditActions: topActions,
+        topSsoApps: topApps,
+        auditChainIntegrity: integrity,
+      },
+      notes: [
+        'Evidence aggregated from saml_assertion_log, audit_log, and auth_attempts.',
+        'Export detailed rows from Audit & SSO Reports with matching date filters.',
+      ],
+    };
+
+    const id = uuidv4();
+    const artifactUrl = `/api/iga/reports/${id}?export=json`;
+    await execute(
+      `INSERT INTO compliance_reports
+         (id, name, framework, generated_by, generated_at, period_start, period_end, payload, artifact_url)
+       VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), ?, ?, ?, ?)`,
+      [
+        id,
+        parsed.data.name,
+        parsed.data.framework,
+        req.user!.empId,
+        periodStart.slice(0, 10),
+        periodEnd.slice(0, 10),
+        JSON.stringify(payload),
+        artifactUrl,
+      ],
+    );
+    logger.info({ id, framework: parsed.data.framework }, 'Compliance evidence report generated');
+    res.status(201).json({ id, artifactUrl, data: payload });
+  }),
+);
+
+// ===========================================================================
+// /entitlements/:entId/grant — direct grant with SoD pre-check
+// ===========================================================================
+const grantSchema = z.object({
+  empId:     z.string().min(1).max(20),
+  grantedBy: z.string().min(1).max(20).optional(),
+});
+
+router.post(
+  '/entitlements/:entId/grant',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('access_model'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { entId } = req.params as { entId: string };
+    const parsed = grantSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+
+    const { empId, grantedBy } = parsed.data;
+
+    // Verify entitlement exists
+    const ent = await queryOne<{ id: string }>(
+      'SELECT id FROM entitlements WHERE id = ? AND active = 1',
+      [entId],
+    );
+    if (!ent) {
+      res.status(404).json({ error: 'Entitlement not found or inactive' });
+      return;
+    }
+
+    // SoD pre-check
+    const sodResult = await evaluateSodForGrant(empId, entId);
+    const blockingViolations = sodResult.violations.filter(
+      (v) => v.severity === 'CRITICAL' || v.severity === 'HIGH',
+    );
+    if (blockingViolations.length > 0) {
+      res.status(422).json({
+        error:      'SoD policy violation blocks this grant',
+        code:       'SOD_VIOLATION',
+        violations: blockingViolations,
+      });
+      return;
+    }
+
+    // Grant (BIGINT AUTO_INCREMENT id)
+    const actor = grantedBy ?? req.user!.empId;
+    await execute(
+      `INSERT IGNORE INTO user_entitlements
+         (emp_id, entitlement_id, source, granted_by, granted_at)
+       VALUES (?, ?, 'MANUAL', ?, UTC_TIMESTAMP())`,
+      [empId, entId, actor],
+    );
+
+    const provision = await fulfillEntitlementOnTarget(empId, entId, 'GRANT', actor);
+
+    logger.info({ empId, entId, grantedBy: actor, provision }, 'Entitlement granted directly');
+    res.status(201).json({ empId, entitlementId: entId, provision });
+  }),
+);
+
+// ===========================================================================
+// /sod-policies — CRUD for SoD policy authoring
+// ===========================================================================
+
+// POST /sod-policies — create
+router.post('/sod-policies', requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('governance'), asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as {
+    name: string; description?: string; severity?: string;
+    enforcement?: string; conflict_groups?: unknown[]; conflictGroups?: unknown[];
+  };
+  const conflict_groups = body.conflict_groups ?? body.conflictGroups ?? [];
+  const id = uuidv4();
+  const createdBy = req.user?.empId ?? 'system';
+  await execute(
+    `INSERT INTO sod_policies (id, name, description, severity, enforcement, conflict_groups, active, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+    [id, body.name, body.description ?? null, body.severity ?? 'MEDIUM', body.enforcement ?? 'ALERT', JSON.stringify(conflict_groups), createdBy],
+  );
+  res.status(201).json({ id });
+}));
+
+// PUT /sod-policies/:id — partial update (toggle-active must not wipe other columns)
+router.put('/sod-policies/:id', requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('governance'), asyncHandler(async (req: Request, res: Response) => {
+  const existing = await queryOne<Record<string, unknown>>(
+    `SELECT * FROM sod_policies WHERE id = ?`,
+    [req.params['id']],
+  );
+  if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
+
+  const body = req.body as {
+    name?: string; description?: string; severity?: string;
+    enforcement?: string; conflict_groups?: unknown[]; conflictGroups?: unknown[];
+    active?: number | boolean;
+  };
+  const conflictGroups = body.conflict_groups ?? body.conflictGroups;
+  const name = body.name ?? (existing['name'] as string);
+  const description = body.description !== undefined ? body.description : (existing['description'] as string | null);
+  const severity = body.severity ?? (existing['severity'] as string);
+  const enforcement = body.enforcement ?? (existing['enforcement'] as string);
+  const groupsJson = conflictGroups !== undefined
+    ? JSON.stringify(conflictGroups)
+    : (typeof existing['conflict_groups'] === 'string'
+      ? existing['conflict_groups'] as string
+      : JSON.stringify(existing['conflict_groups'] ?? []));
+  const active = body.active !== undefined
+    ? (body.active ? 1 : 0)
+    : Number(existing['active'] ?? 1);
+
+  await execute(
+    `UPDATE sod_policies SET name=?, description=?, severity=?, enforcement=?, conflict_groups=?, active=? WHERE id=?`,
+    [name, description ?? null, severity, enforcement, groupsJson, active, req.params['id']],
+  );
+  res.json({ success: true });
+}));
+
+// DELETE /sod-policies/:id
+router.delete('/sod-policies/:id', requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('governance'), asyncHandler(async (req: Request, res: Response) => {
+  await execute('DELETE FROM sod_policies WHERE id = ?', [req.params['id']]);
+  res.json({ success: true });
+}));
+
+export default router;
