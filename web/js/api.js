@@ -32,7 +32,7 @@ export const api = {
 
 const f = api.fetch;
 Object.assign(api, {
-  me:               () => f('/api/me'),
+  me:               (opts = {}) => f('/api/me', opts),
   apps:             () => f('/api/apps'),
   diagz:            () => f('/diagz'),
   dashboard:        () => f('/api/admin/dashboard'),

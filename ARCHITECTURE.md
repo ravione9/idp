@@ -1049,6 +1049,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### _(uncommitted)_ — 2026-07-30 — Fix SP-initiated SAML → Google hang
+
+**Why** — App SSO (SAML) → Google account chooser left the browser spinning: login waited on `/api/me` before showing MFA, and Google callback post-auth gates could stall the redirect off `accounts.google.com`.
+
+**What changed:**
+
+- **Login UI** — if `mfa_challenge` / `enroll_challenge` present, skip session check; `/api/me` short-circuit has 3s abort.
+- **Google callback** — 8s budget on MFA/adaptive gates (fail-open); `303` redirects toward `/login` or `/saml/resume/...`.
+- **SAML resume** — Redis/assertion errors return HTML instead of hanging/opaque JSON.
+
 ### `a9396b7` — 2026-07-30 — Fix login/MFA hang (Redis rate-limit + OTP input)
 
 **Why** — After Redis-backed rate limiting, MFA Verify and Google login could hang when Redis was slow/reconnecting; MFA `type=password` also invited password-manager interference.

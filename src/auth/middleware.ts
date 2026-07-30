@@ -371,18 +371,51 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     const ip = getClientIp(req);
     const userAgent = req.get('user-agent') ?? '';
 
-    // Same MFA + adaptive gates as local password login
-    const [mfa, adaptive, mfaRequirements] = await Promise.all([
-      getMfaStatus(emp.emp_id),
-      evaluateAdaptiveAuth({
-        ip,
-        email,
-        userAgent,
-        role: sessionRole,
-        empId: emp.emp_id,
-      }),
-      getMfaRequirementContext(emp.emp_id),
-    ]);
+    // Bound post-auth gates — SP-initiated SAML returnTo=/saml/resume/... must not leave
+    // the browser spinning on accounts.google.com waiting for this callback.
+    const gatesDeadlineMs = 8_000;
+    let mfa: Awaited<ReturnType<typeof getMfaStatus>>;
+    let adaptive: Awaited<ReturnType<typeof evaluateAdaptiveAuth>>;
+    let mfaRequirements: Awaited<ReturnType<typeof getMfaRequirementContext>>;
+    try {
+      [mfa, adaptive, mfaRequirements] = await Promise.race([
+        Promise.all([
+          getMfaStatus(emp.emp_id),
+          evaluateAdaptiveAuth({
+            ip,
+            email,
+            userAgent,
+            role: sessionRole,
+            empId: emp.emp_id,
+          }),
+          getMfaRequirementContext(emp.emp_id),
+        ]),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('google post-auth gates timeout')), gatesDeadlineMs);
+        }),
+      ]);
+    } catch (gateErr) {
+      logger.warn({ err: gateErr, empId: emp.emp_id, returnTo }, 'Google post-auth gates timed out — fail-open adaptive ALLOW');
+      mfa = await getMfaStatus(emp.emp_id).catch(() => ({
+        enrolled: false,
+        enabled: false,
+        remainingBackupCodes: 0,
+        lastUsedAt: null,
+        methods: [],
+        allowedMethods: ['totp'] as const,
+        methodDetails: {},
+      })) as Awaited<ReturnType<typeof getMfaStatus>>;
+      adaptive = { action: 'ALLOW', matchedPolicies: [], riskScore: 0, signals: ['gates_timeout'] };
+      mfaRequirements = await getMfaRequirementContext(emp.emp_id).catch(() => ({
+        required: false,
+        graceActive: false,
+        gracePeriodHours: 24,
+        rememberDeviceHours: 0,
+        excludedByGroup: false,
+        enforceByGroup: false,
+        enforceByUser: false,
+      })) as Awaited<ReturnType<typeof getMfaRequirementContext>>;
+    }
 
     if (adaptive.action === 'BLOCK') {
       logger.warn({ empId: emp.emp_id, ip, signals: adaptive.signals }, 'Google login blocked by adaptive auth');
@@ -426,7 +459,8 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
           email,
           return_to: returnTo,
         });
-        res.redirect(`/login?${params.toString()}`);
+        // 303 — leave Google's spinner immediately (important for SAML resume returnTo)
+        res.redirect(303, `/login?${params.toString()}`);
         return;
       }
 
@@ -456,7 +490,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
         returnTo,
         mfa_methods: availableMethods.join(','),
       });
-      res.redirect(`/login?${params.toString()}`);
+      res.redirect(303, `/login?${params.toString()}`);
       return;
     }
 
@@ -476,7 +510,8 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     if (deviceTrusted && mfaRequirements.rememberDeviceHours > 0) {
       setMfaDeviceTrustCookie(res, emp.emp_id, mfaRequirements.rememberDeviceHours, userAgent);
     }
-    res.redirect(returnTo);
+    // Prefer 303 so browsers leave accounts.google.com promptly toward /saml/resume/...
+    res.redirect(303, returnTo);
   } catch (err) {
     const axiosData = (err as { response?: { data?: { error?: string; error_description?: string } } })
       ?.response?.data;

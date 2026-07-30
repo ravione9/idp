@@ -85,6 +85,13 @@ export function renderLogin() {
   const pendingEnrollChallenge = loginParams.get('enroll_challenge');
   const pendingEmail = loginParams.get('email') || '';
 
+  // Google / MFA return already carries a challenge — never block on /api/me
+  // (a hung Redis session lookup left the page stuck on "Checking session…" and
+  // broke SP-initiated SAML → Google → MFA).
+  if (pendingMfaChallenge || pendingEnrollChallenge) {
+    return renderLoginForm();
+  }
+
   // If the portal session is already valid, never re-prompt password/MFA —
   // continue straight to the SSO resume/launch (or home).
   const shell = el(`
@@ -93,9 +100,13 @@ export function renderLogin() {
         <div class="auth-card"><p class="muted" style="text-align:center">Checking session…</p></div>
       </main>
     </div>`);
-  void api.me().then(() => {
+  const meAc = new AbortController();
+  const meTimer = setTimeout(() => meAc.abort(), 3_000);
+  void api.me({ signal: meAc.signal }).then(() => {
+    clearTimeout(meTimer);
     location.replace(returnTo);
   }).catch(() => {
+    clearTimeout(meTimer);
     const root = document.getElementById('app');
     if (root) root.replaceChildren(renderLoginForm());
   });

@@ -240,9 +240,18 @@ async function issueAssertion(
       relayState: query['RelayState'] ?? body['RelayState'],
       spEntityId,
     });
-    await redis.set(`${PENDING_SSO_PREFIX}${pendingId}`, payload, 'EX', PENDING_SSO_TTL_S);
-    const returnTo = encodeURIComponent(`/saml/resume/${pendingId}`);
-    res.redirect(`/login?returnTo=${returnTo}`);
+    try {
+      await redis.set(`${PENDING_SSO_PREFIX}${pendingId}`, payload, 'EX', PENDING_SSO_TTL_S);
+    } catch (err) {
+      logger.error({ err }, 'Failed to store pending SAML SSO in Redis');
+      res.status(503).type('html').send(
+        '<!doctype html><title>SSO unavailable</title><h1>Sign-in temporarily unavailable</h1>'
+        + '<p>Please retry from the application in a moment.</p>',
+      );
+      return;
+    }
+    // Do not pre-encode — Express/res.redirect encodes query values once.
+    res.redirect(303, `/login?returnTo=${encodeURIComponent(`/saml/resume/${pendingId}`)}`);
     return;
   }
 
@@ -347,17 +356,31 @@ router.get('/resume/:pendingId', async (req: Request, res: Response): Promise<vo
     return;
   }
 
-  if (!(await requireSessionOrLogin(req, res, `/saml/resume/${req.params['pendingId']}`))) {
+  const pendingId = req.params['pendingId'] ?? '';
+  if (!(await requireSessionOrLogin(req, res, `/saml/resume/${pendingId}`))) {
     return;
   }
 
-  const raw = await redis.get(`${PENDING_SSO_PREFIX}${req.params['pendingId']}`);
+  let raw: string | null;
+  try {
+    raw = await redis.get(`${PENDING_SSO_PREFIX}${pendingId}`);
+  } catch (err) {
+    logger.error({ err, pendingId }, 'Redis error loading pending SAML SSO');
+    res.status(503).type('html').send(
+      '<!doctype html><title>SSO unavailable</title><h1>Sign-in temporarily unavailable</h1>'
+      + '<p>Please restart login from the application.</p>',
+    );
+    return;
+  }
   if (!raw) {
-    res.status(410).json({ error: 'SSO session expired; restart login from the application' });
+    res.status(410).type('html').send(
+      '<!doctype html><title>SSO expired</title><h1>SSO session expired</h1>'
+      + '<p>Please restart login from the application.</p>',
+    );
     return;
   }
 
-  await redis.del(`${PENDING_SSO_PREFIX}${req.params['pendingId']}`);
+  await redis.del(`${PENDING_SSO_PREFIX}${pendingId}`).catch(() => undefined);
 
   const pending = JSON.parse(raw) as {
     binding: 'redirect' | 'post';
@@ -374,7 +397,17 @@ router.get('/resume/:pendingId', async (req: Request, res: Response): Promise<vo
     user:  req.user,
   } as Request;
 
-  await issueAssertion(fakeReq, res, pending.binding, pending.spEntityId);
+  try {
+    await issueAssertion(fakeReq, res, pending.binding, pending.spEntityId);
+  } catch (err) {
+    logger.error({ err, pendingId }, 'SAML resume assertion failed');
+    if (!res.headersSent) {
+      res.status(500).type('html').send(
+        '<!doctype html><title>SSO failed</title><h1>Could not complete SSO</h1>'
+        + '<p>Please restart login from the application.</p>',
+      );
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
