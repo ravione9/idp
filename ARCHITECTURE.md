@@ -1055,7 +1055,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-30 — Security findings IDP-01 … IDP-06
+### `27e55bd` — 2026-07-30 — Security findings IDP-01 … IDP-06
 
 **Why** — Penetration-test findings: unauthenticated local-admin status disclosure, weak PKCE/OIDC advertising, public admin API surface in JS, cookie/SameSite questions, Express `X-Powered-By`.
 
