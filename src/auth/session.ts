@@ -87,14 +87,27 @@ export async function createSession(params: {
   return sessionId;
 }
 
+const SESSION_COOKIE_BASE = {
+  httpOnly: true as const,
+  sameSite: 'lax' as const,
+  path:     '/',
+};
+
 export function setSessionCookie(res: Response, sessionId: string, ttlHours: number): void {
   const maxAge = Math.max(1_000, Math.floor(ttlHours * 3600 * 1000));
+  // IDP-05 — application session cookie is SameSite=Lax (not None).
+  // Cloudflare bot cookies (__cf_bm / _cfuvid) are outside this app's control.
   res.cookie(COOKIE_NAME, signSessionId(sessionId), {
-    httpOnly: true,
-    secure:   config.session.cookieSecure,
-    sameSite: 'lax',
+    ...SESSION_COOKIE_BASE,
+    secure: config.session.cookieSecure,
     maxAge,
-    path:     '/',
+  });
+}
+
+export function clearSessionCookie(res: Response): void {
+  res.clearCookie(COOKIE_NAME, {
+    ...SESSION_COOKIE_BASE,
+    secure: config.session.cookieSecure,
   });
 }
 

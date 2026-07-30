@@ -184,7 +184,9 @@ Google OIDC credentials are resolved in this order:
   - **Idle** (`default_session_hours`) — session ends after this many hours with no activity; sliding window refreshes `expires_at` / cookie on each authenticated request.
   - **Absolute** (`session_absolute_hours`) — hard cap from login; never exceeded even with activity.
   - Initial TTL = `min(idle, absolute)`.
-- Cookie flags: `HttpOnly`, `SameSite=Lax`. `Secure` is on in production but **off** when `COOKIE_SECURE=false` (dev plain HTTP).
+- Cookie flags: `HttpOnly`, `SameSite=Lax` (never `None`). `Secure` is on in production but **off** when `COOKIE_SECURE=false` (dev plain HTTP). Cloudflare edge cookies (`__cf_bm`, `_cfuvid`) are not set by this app.
+- `X-Powered-By` is disabled (`app.disable('x-powered-by')`).
+- Admin SPA modules (`/js/api-admin.js`, `/js/views-admin.js`, `/js/views-stubs.js`) require a portal session; public `/js/api.js` exposes only end-user / auth helpers.
 - Portal SPA runs a client idle watchdog (logs out when the tab is idle); server still enforces idle/absolute on every auth check.
 - Each session records **public IP** (`ip`), **device** (`device_info`), and **location** (`geo_location`). Gmail-style attribution — no workstation agent required:
   1. **`device_info`** — parsed from the `User-Agent` at login time (e.g. `Chrome · Windows 10/11`). Always populated synchronously.
@@ -377,10 +379,12 @@ This IdP is also an OpenID Provider. Relying parties register in `oidc_clients` 
 |---|---|
 | `GET /.well-known/openid-configuration` | Discovery document |
 | `GET /.well-known/jwks.json` | Public JWKS (RS256) |
-| `GET /oauth/authorize` | Authorization Code + PKCE; unauthenticated users → login → `/oauth/resume/:id` |
+| `GET /oauth/authorize` | Authorization Code + **S256 PKCE**; unauthenticated users → login → `/oauth/resume/:id` |
 | `GET /oauth/resume/:pendingId` | Resume authorize after portal sign-in |
 | `POST /oauth/token` | `authorization_code` and `refresh_token` grants; issues JWT access + ID tokens |
 | `GET\|POST /oauth/userinfo` | Bearer access-token claims |
+
+**Discovery hardening:** `code_challenge_methods_supported` is **`S256` only** (plain PKCE rejected). `token_endpoint_auth_methods_supported` advertises `client_secret_basic` and `client_secret_post` only. Registered **PUBLIC** clients still use `token_endpoint_auth_method=none` with **mandatory S256 PKCE** (not advertised in discovery).
 
 **Admin registry:** `GET/POST/PUT/DELETE /api/admin/oidc-clients`, `POST …/rotate-secret` (module: `authentication`). Secrets are bcrypt-hashed; plaintext shown once on create/rotate. Auth codes and refresh tokens are hashed in `oauth_tokens`; access/ID tokens are short-lived JWTs (not stored).
 
@@ -585,7 +589,9 @@ To add a new migration:
 | `POST` | `/api/admin/directory/google/sync-now` | Synchronous incremental Google sync |
 | `POST` | `/api/admin/directory/google/full-sync` | Full Google directory resync |
 | `GET` | `/api/admin/directory/google/logs` | Sync runs + directory audit |
-| `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD |
+| `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD (**SUPER_ADMIN** session; includes `/status`) |
+| `GET` | `/auth/local/bootstrap-status` | Public boolean `{ bootstrapEnabled }` only (no admin count) |
+| `POST` | `/auth/local/bootstrap` | First SUPER_ADMIN via `LOCAL_BOOTSTRAP_TOKEN` (rate-limited) |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; list includes `request_access` JIT flag) |
 | `POST` | `/api/admin/saml-apps/:id/enable-request-access` | Enable IGA JIT for one SAML SP (mirror + default workflow + `requestable`) |
 | `POST` | `/api/admin/saml-apps/enable-request-access-all` | Enable IGA JIT for every active SAML SP |
@@ -1048,6 +1054,19 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-30 — Security findings IDP-01 … IDP-06
+
+**Why** — Penetration-test findings: unauthenticated local-admin status disclosure, weak PKCE/OIDC advertising, public admin API surface in JS, cookie/SameSite questions, Express `X-Powered-By`.
+
+**What changed:**
+
+- **IDP-01** — `GET /api/admin/local-users/status` requires SUPER_ADMIN; login uses `GET /auth/local/bootstrap-status` (boolean only) + `POST /auth/local/bootstrap`.
+- **IDP-02** — OIDC discovery / authorize / token accept **S256 PKCE only** (plain rejected).
+- **IDP-03** — Discovery no longer advertises `token_endpoint_auth_methods_supported: none`; public clients still work with `none` + mandatory S256 PKCE.
+- **IDP-04** — Split `web/js/api-admin.js`; gate admin JS behind session; `app.js` lazy-loads admin modules after auth.
+- **IDP-05** — Confirmed/enforced app session cookie `SameSite=Lax` via `clearSessionCookie` helper (CF cookies out of app control).
+- **IDP-06** — `app.disable('x-powered-by')`.
 
 ### `0331420` — 2026-07-30 — Fix SAML resume “Could not complete SSO”
 

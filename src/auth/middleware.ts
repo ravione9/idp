@@ -24,6 +24,7 @@ import {
   verifySessionCookie,
   createSession,
   setSessionCookie,
+  clearSessionCookie,
   cacheSessionUser,
 } from './session.js';
 import { getSessionPolicy, getSessionCreateTtlHours } from '../services/session-policy.js';
@@ -244,7 +245,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
         res.status(401).json({ error: 'Invalid session cookie', code: 'BAD_SIGNATURE' });
         return;
       }
-      res.clearCookie(COOKIE_NAME);
+      clearSessionCookie(res);
       res.status(401).json({ error: 'Session expired or revoked', code: 'SESSION_EXPIRED' });
       return;
     }
@@ -555,7 +556,7 @@ export async function logoutHandler(req: Request, res: Response): Promise<void> 
     }
   }
 
-  res.clearCookie(COOKIE_NAME);
+  clearSessionCookie(res);
 
   const iss = req.user?.iss ?? 'local';
   if (iss === 'local') {

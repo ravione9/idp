@@ -90,10 +90,11 @@ router.get('/.well-known/openid-configuration', (req: Request, res: Response) =>
     grant_types_supported: ['authorization_code', 'refresh_token'],
     subject_types_supported: ['public'],
     id_token_signing_alg_values_supported: ['RS256'],
+    // IDP-03 — advertise confidential-client methods only. Public clients still
+    // authenticate with client_id + mandatory S256 PKCE (token_endpoint_auth_method=none).
     token_endpoint_auth_methods_supported: [
       'client_secret_basic',
       'client_secret_post',
-      'none',
     ],
     scopes_supported: ['openid', 'email', 'profile', 'offline_access'],
     claims_supported: [
@@ -101,7 +102,8 @@ router.get('/.well-known/openid-configuration', (req: Request, res: Response) =>
       'email', 'email_verified', 'name', 'preferred_username',
       'given_name', 'family_name', 'emp_id', 'role',
     ],
-    code_challenge_methods_supported: ['S256', 'plain'],
+    // IDP-02 — RFC 9700 deprecates plain PKCE; S256 only.
+    code_challenge_methods_supported: ['S256'],
     request_parameter_supported: false,
     request_uri_parameter_supported: false,
   });
@@ -122,7 +124,7 @@ const authorizeQuerySchema = z.object({
   state: z.string().optional(),
   nonce: z.string().optional(),
   code_challenge: z.string().optional(),
-  code_challenge_method: z.enum(['S256', 'plain']).optional(),
+  code_challenge_method: z.enum(['S256']).optional(),
 });
 
 async function completeAuthorize(
@@ -143,6 +145,13 @@ async function completeAuthorize(
     oauthErrorRedirect(res, params.redirect_uri, 'invalid_request', 'PKCE code_challenge is required', params.state);
     return;
   }
+  if (params.code_challenge) {
+    const method = params.code_challenge_method ?? 'S256';
+    if (method !== 'S256') {
+      oauthErrorRedirect(res, params.redirect_uri, 'invalid_request', 'Only S256 PKCE is supported', params.state);
+      return;
+    }
+  }
 
   const claims = await loadUserClaims(empId, scopes);
   if (!claims) {
@@ -159,7 +168,7 @@ async function completeAuthorize(
   if (params.nonce) codeParams.nonce = params.nonce;
   if (params.code_challenge) {
     codeParams.pkceChallenge = params.code_challenge;
-    codeParams.pkceMethod = params.code_challenge_method ?? 'plain';
+    codeParams.pkceMethod = 'S256';
   }
   const code = await issueAuthorizationCode(codeParams);
 
@@ -271,8 +280,12 @@ async function authenticateTokenClient(
       return { error: 'invalid_client', description: 'Invalid client credentials' };
     }
   } else if (method === 'none') {
-    if (client.clientType !== 'PUBLIC' && clientSecret) {
-      // ignore extra secret for public
+    // Public clients only — must use PKCE S256 (enforced on authorization_code grant).
+    if (client.clientType !== 'PUBLIC') {
+      return { error: 'invalid_client', description: 'Client authentication required' };
+    }
+    if (clientSecret) {
+      return { error: 'invalid_client', description: 'Public clients must not send client_secret' };
     }
   } else {
     // private_key_jwt not yet supported — fall back to secret if provided
@@ -324,9 +337,11 @@ router.post('/oauth/token', asyncHandler(async (req: Request, res: Response) => 
     }
 
     const needsPkce = client.requirePkce || client.clientType === 'PUBLIC' || !!stored.pkceChallenge;
-    if (needsPkce && !verifyPkce(stored.pkceMethod, stored.pkceChallenge, codeVerifier)) {
-      tokenError(res, 400, 'invalid_grant', 'PKCE verification failed');
-      return;
+    if (needsPkce) {
+      if (!stored.pkceChallenge || !verifyPkce(stored.pkceMethod, stored.pkceChallenge, codeVerifier)) {
+        tokenError(res, 400, 'invalid_grant', 'PKCE verification failed');
+        return;
+      }
     }
 
     const scope = stored.scope ?? 'openid';

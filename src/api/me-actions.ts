@@ -11,7 +11,7 @@ import qrcode from 'qrcode';
 import { requireAuth } from '../auth/middleware.js';
 import { query, queryOne } from '../db/connection.js';
 import { hashPassword, verifyLocalPassword } from '../services/local-admin.js';
-import { COOKIE_NAME, SESSION_REDIS_PREFIX } from '../auth/session.js';
+import { clearSessionCookie, SESSION_REDIS_PREFIX } from '../auth/session.js';
 import { redis } from '../auth/session-store.js';
 import {
   confirmEnrollment,
@@ -198,7 +198,7 @@ router.delete('/sessions/:id', async (req: Request, res: Response): Promise<void
 
   // If revoking the current session, clear cookie too
   if (id === user.sessionId) {
-    res.clearCookie(COOKIE_NAME, { path: '/' });
+    clearSessionCookie(res);
   }
 
   logger.info({ empId: user.empId, sessionId: id }, 'Session revoked by user');

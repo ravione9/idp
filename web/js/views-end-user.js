@@ -459,7 +459,7 @@ export function renderLogin() {
   wireEmailForm(root.querySelector('#step-email'));
   showAuthErrorFromUrl(root.querySelector('#login-error'));
 
-  api.adminStatus().then((s) => {
+  api.bootstrapStatus().then((s) => {
     if (!s.bootstrapEnabled) return;
     const card = el(`
       <div class="auth-card" style="margin-top:1.5rem">

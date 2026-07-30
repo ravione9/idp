@@ -1,4 +1,4 @@
-import { api } from './api.js';
+import { api } from './api-admin.js';
 import { el, esc, escAttrJson, fmtDate, persistSearch, syncAppUrl } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 

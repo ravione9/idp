@@ -26,7 +26,10 @@ import internalSamlRouter from './api/internal-saml.js';
 import samlRouter from './api/saml.js';
 import appsRouter from './api/apps.js';
 import meRouter from './api/me.js';
-import adminLocalUsersRouter from './api/admin-local-users.js';
+import adminLocalUsersRouter, {
+  bootstrapAdminHandler,
+  bootstrapStatusHandler,
+} from './api/admin-local-users.js';
 import adminSamlAppsRouter from './api/admin-saml-apps.js';
 import adminAppDiscoveryRouter from './api/admin-app-discovery.js';
 import extensionDownloadRouter from './api/extension-download.js';
@@ -70,6 +73,7 @@ import {
   googleCallbackHandler,
   logoutHandler,
   requireAuth,
+  resolveSession,
 } from './auth/middleware.js';
 import { googleLoginHandler } from './auth/login-routes.js';
 import { localLoginHandler, localLoginMfaEnrollConfirmHandler, localLoginMfaEnrollDeferHandler, localLoginMfaEnrollHandler, localLoginMfaSendOtpHandler, localLoginMfaVerifyHandler, localLoginMfaWebAuthnOptionsHandler, localLoginMfaWebAuthnVerifyHandler } from './auth/local-auth.js';
@@ -87,6 +91,8 @@ const app = express();
 
 // Trust X-Forwarded-* from Cloudflare WAF / ALB / NGINX (required for req.secure, cookies, OAuth)
 app.set('trust proxy', config.app.trustProxy);
+// IDP-06 — do not advertise Express via X-Powered-By
+app.disable('x-powered-by');
 
 // ---------------------------------------------------------------------------
 // Request logging
@@ -176,6 +182,9 @@ app.post('/auth/local/login/mfa-webauthn/verify', loginRateLimiter, (req, res) =
 app.post('/auth/local/login/mfa-enroll',         loginRateLimiter, (req, res) => { void localLoginMfaEnrollHandler(req, res); });
 app.post('/auth/local/login/mfa-enroll/confirm', loginRateLimiter, (req, res) => { void localLoginMfaEnrollConfirmHandler(req, res); });
 app.post('/auth/local/login/mfa-enroll/defer',    loginRateLimiter, (req, res) => { void localLoginMfaEnrollDeferHandler(req, res); });
+// First-time setup (IDP-01) — minimal public surface; not under /api/admin/*
+app.get('/auth/local/bootstrap-status', (req, res) => { void bootstrapStatusHandler(req, res); });
+app.post('/auth/local/bootstrap', loginRateLimiter, (req, res) => { void bootstrapAdminHandler(req, res); });
 
 // ---------------------------------------------------------------------------
 // SAML IdP (enterprise application SSO)
@@ -256,6 +265,28 @@ app.get('/favicon.svg', (_req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'public, max-age=86400');
   res.type('image/svg+xml');
   res.sendFile(FAVICON_PATH);
+});
+
+// IDP-04 — admin JS (API surface + admin views) requires a portal session.
+const ADMIN_JS = new Set([
+  '/js/api-admin.js',
+  '/js/views-admin.js',
+  '/js/views-stubs.js',
+]);
+app.get(Array.from(ADMIN_JS), async (req: Request, res: Response, next: NextFunction) => {
+  const user = await resolveSession(req, res);
+  if (!user) {
+    res.status(401).type('text/plain').send('Authentication required');
+    return;
+  }
+  const filePath = path.join(WEB_ROOT, req.path);
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('CDN-Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  res.type('application/javascript');
+  res.sendFile(filePath, (err) => {
+    if (err) next(err);
+  });
 });
 
 // Static assets — disable long-lived caching so deployed UI changes show up

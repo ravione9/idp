@@ -114,11 +114,10 @@ export function verifyPkce(
 ): boolean {
   if (!challenge) return true; // client did not use PKCE
   if (!verifier) return false;
-  if ((method ?? 'plain').toLowerCase() === 's256') {
-    const computed = crypto.createHash('sha256').update(verifier).digest('base64url');
-    return computed === challenge;
-  }
-  return verifier === challenge;
+  // IDP-02 — reject plain PKCE (verifier === challenge).
+  if ((method ?? '').toLowerCase() !== 's256') return false;
+  const computed = crypto.createHash('sha256').update(verifier).digest('base64url');
+  return computed === challenge;
 }
 
 export async function issueRefreshToken(params: {

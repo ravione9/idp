@@ -2,6 +2,7 @@
  * Admin Central — manage local administrator accounts
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../auth/middleware.js';
@@ -16,17 +17,6 @@ import {
 import logger from '../utils/logger.js';
 
 const router = Router();
-
-// ---------------------------------------------------------------------------
-// GET /status — public; used by login page to show bootstrap form
-// ---------------------------------------------------------------------------
-router.get('/status', async (_req: Request, res: Response): Promise<void> => {
-  const count = await countLocalAdmins();
-  res.json({
-    localAdminCount: count,
-    bootstrapEnabled: count === 0 && Boolean(config.app.localBootstrapToken),
-  });
-});
 
 const createSchema = z.object({
   fullName: z.string().min(1).max(255),
@@ -43,10 +33,26 @@ const bootstrapSchema = z.object({
   token:    z.string().min(8),
 });
 
-// ---------------------------------------------------------------------------
-// POST /bootstrap — first local super admin (only when none exist)
-// ---------------------------------------------------------------------------
-router.post('/bootstrap', async (req: Request, res: Response): Promise<void> => {
+function tokenMatches(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Public bootstrap probe for the login page — only returns a boolean,
+ * never the local-admin count (IDP-01).
+ */
+export async function bootstrapStatusHandler(_req: Request, res: Response): Promise<void> {
+  const count = await countLocalAdmins();
+  res.json({
+    bootstrapEnabled: count === 0 && Boolean(config.app.localBootstrapToken),
+  });
+}
+
+/** First-time SUPER_ADMIN creation — gated by LOCAL_BOOTSTRAP_TOKEN. */
+export async function bootstrapAdminHandler(req: Request, res: Response): Promise<void> {
   const bootstrapToken = config.app.localBootstrapToken;
   if (!bootstrapToken) {
     res.status(403).json({ error: 'Bootstrap is disabled' });
@@ -59,7 +65,7 @@ router.post('/bootstrap', async (req: Request, res: Response): Promise<void> => 
     return;
   }
 
-  if (parsed.data.token !== bootstrapToken) {
+  if (!tokenMatches(parsed.data.token, bootstrapToken)) {
     res.status(403).json({ error: 'Invalid bootstrap token' });
     return;
   }
@@ -85,6 +91,20 @@ router.post('/bootstrap', async (req: Request, res: Response): Promise<void> => 
     const msg = err instanceof Error ? err.message : 'Bootstrap failed';
     res.status(400).json({ error: msg });
   }
+}
+
+// All remaining routes require SUPER_ADMIN session.
+router.use(requireAuth, requireRole('SUPER_ADMIN'));
+
+// ---------------------------------------------------------------------------
+// GET /status — authenticated admin diagnostics (count + bootstrap flag)
+// ---------------------------------------------------------------------------
+router.get('/status', async (_req: Request, res: Response): Promise<void> => {
+  const count = await countLocalAdmins();
+  res.json({
+    localAdminCount: count,
+    bootstrapEnabled: count === 0 && Boolean(config.app.localBootstrapToken),
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -92,8 +112,6 @@ router.post('/bootstrap', async (req: Request, res: Response): Promise<void> => 
 // ---------------------------------------------------------------------------
 router.get(
   '/',
-  requireAuth,
-  requireRole('SUPER_ADMIN'),
   async (_req: Request, res: Response): Promise<void> => {
     const data = await listLocalAdmins();
     res.json({ data });
@@ -105,8 +123,6 @@ router.get(
 // ---------------------------------------------------------------------------
 router.post(
   '/',
-  requireAuth,
-  requireRole('SUPER_ADMIN'),
   async (req: Request, res: Response): Promise<void> => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -137,8 +153,6 @@ router.post(
 // ---------------------------------------------------------------------------
 router.delete(
   '/:id',
-  requireAuth,
-  requireRole('SUPER_ADMIN'),
   async (req: Request, res: Response): Promise<void> => {
     const id = parseInt(req.params['id'] ?? '', 10);
     if (Number.isNaN(id)) {

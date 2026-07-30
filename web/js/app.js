@@ -12,25 +12,31 @@ import {
 } from './views-end-user.js';
 import { reportBrowserAppSignals } from './browser-discovery.js';
 import { startSessionWatchdog } from './session-watchdog.js';
-import {
-  viewDashboard, viewSamlApps, viewIgaApps, viewUsers, viewAdmins,
-  viewReviews, viewAccessRequests, viewSod, viewRisk, viewAuth, viewAudit, viewReports,
-  viewReportsHub, viewGovReports, viewApplications,
-} from './views-admin.js';
-import {
-  viewGroups, viewBulkUsers, viewSystemUsers, viewIdentityProfiles,
-  viewMfaMethods, viewAdaptiveAuth, viewPasswordPolicies,
-  viewDirectorySync,
-  viewRoles, viewBirthright, viewEntitlementCatalog, viewAppAccessPolicy,
-  viewPamResources, viewPamSessions, viewPamVault,
-  viewWorkflowLibrary, viewNotifications,
-  viewGeneralSettings, viewBranding, viewLicense, viewTickets, viewSystemHealth,
-  viewAttendanceIga, viewRadiusVpn,
-} from './views-stubs.js';
+
+/* IDP-04 — admin views / api-admin.js are session-gated; load only after auth. */
+let adminModulesPromise = null;
+async function ensureAdminModules() {
+  if (!adminModulesPromise) {
+    adminModulesPromise = Promise.all([
+      import('./api-admin.js'),
+      import('./views-admin.js'),
+      import('./views-stubs.js'),
+    ]).then(([, admin, stubs]) => ({ ...admin, ...stubs }));
+  }
+  return adminModulesPromise;
+}
+
+async function resolveView(route) {
+  if (typeof route.view === 'function') return route.view;
+  const mods = await ensureAdminModules();
+  const fn = mods[route.viewKey];
+  if (typeof fn !== 'function') throw new Error(`Admin view missing: ${route.viewKey}`);
+  return fn;
+}
 
 /* ----------------------------------------------------------------
    ROUTES — every navigable destination, indexed by key.
-   key             → { primary, group?, label, admin?, super?, view }
+   key             → { primary, group?, label, admin?, super?, view | viewKey }
    primary         workspace section (home/request/tasks/reviews/admin/settings)
    group           heading inside the admin sidebar (only when primary === 'admin')
    ---------------------------------------------------------------- */
@@ -46,64 +52,64 @@ const ROUTES = {
   settings: { primary: 'settings', label: 'Security',       icon: 'shield',       view: viewSettings },
 
   /* ── Admin > Dashboard ── */
-  dashboard: { primary: 'admin', group: 'Overview', label: 'Dashboard', icon: 'dashboard', admin: true, module: 'overview', view: viewDashboard },
+  dashboard: { primary: 'admin', group: 'Overview', label: 'Dashboard', icon: 'dashboard', admin: true, module: 'overview', viewKey: 'viewDashboard' },
 
   /* ── Admin > Identity ── */
-  users:            { primary: 'admin', group: 'Identity', label: 'Users / Identities',  icon: 'user',         admin: true, module: 'identity_users', view: viewUsers },
-  groups:           { primary: 'admin', group: 'Identity', label: 'Groups',              icon: 'users',        admin: true, module: 'identity_groups', view: viewGroups },
-  bulkUsers:        { primary: 'admin', group: 'Identity', label: 'Bulk User Import',    icon: 'refresh',      admin: true, module: 'identity_users', view: viewBulkUsers },
-  admins:           { primary: 'admin', group: 'Identity', label: 'Administrators',      icon: 'userShield',   admin: true, module: 'administrators', view: viewAdmins },
-  identityProfiles: { primary: 'admin', group: 'Identity', label: 'Identity Profiles',   icon: 'identityCard', admin: true, module: 'identity_users', view: viewIdentityProfiles },
+  users:            { primary: 'admin', group: 'Identity', label: 'Users / Identities',  icon: 'user',         admin: true, module: 'identity_users', viewKey: 'viewUsers' },
+  groups:           { primary: 'admin', group: 'Identity', label: 'Groups',              icon: 'users',        admin: true, module: 'identity_groups', viewKey: 'viewGroups' },
+  bulkUsers:        { primary: 'admin', group: 'Identity', label: 'Bulk User Import',    icon: 'refresh',      admin: true, module: 'identity_users', viewKey: 'viewBulkUsers' },
+  admins:           { primary: 'admin', group: 'Identity', label: 'Administrators',      icon: 'userShield',   admin: true, module: 'administrators', viewKey: 'viewAdmins' },
+  identityProfiles: { primary: 'admin', group: 'Identity', label: 'Identity Profiles',   icon: 'identityCard', admin: true, module: 'identity_users', viewKey: 'viewIdentityProfiles' },
   /* systemUsers / PAM — not available yet (hidden) */
 
   /* ── Admin > Authentication ── */
-  ssoConfig:          { primary: 'admin', group: 'Authentication', label: 'SSO Configuration',   icon: 'key',         admin: true, module: 'authentication', view: viewAuth },
-  mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', icon: 'fingerprint', admin: true, module: 'authentication', view: viewMfaMethods },
-  adaptiveAuth:       { primary: 'admin', group: 'Authentication', label: 'Adaptive Auth',       icon: 'adaptive',    admin: true, module: 'authentication', view: viewAdaptiveAuth },
-  passwordPolicies:   { primary: 'admin', group: 'Authentication', label: 'Password Policies',   icon: 'lock',        admin: true, module: 'authentication', view: viewPasswordPolicies },
-  radiusVpn:          { primary: 'admin', group: 'Authentication', label: 'VPN / RADIUS',        icon: 'server',      admin: true, module: 'authentication', view: viewRadiusVpn },
+  ssoConfig:          { primary: 'admin', group: 'Authentication', label: 'SSO Configuration',   icon: 'key',         admin: true, module: 'authentication', viewKey: 'viewAuth' },
+  mfaMethods:         { primary: 'admin', group: 'Authentication', label: 'Strong Auth Methods', icon: 'fingerprint', admin: true, module: 'authentication', viewKey: 'viewMfaMethods' },
+  adaptiveAuth:       { primary: 'admin', group: 'Authentication', label: 'Adaptive Auth',       icon: 'adaptive',    admin: true, module: 'authentication', viewKey: 'viewAdaptiveAuth' },
+  passwordPolicies:   { primary: 'admin', group: 'Authentication', label: 'Password Policies',   icon: 'lock',        admin: true, module: 'authentication', viewKey: 'viewPasswordPolicies' },
+  radiusVpn:          { primary: 'admin', group: 'Authentication', label: 'VPN / RADIUS',        icon: 'server',      admin: true, module: 'authentication', viewKey: 'viewRadiusVpn' },
 
   /* ── Admin > Applications ── */
-  applications: { primary: 'admin', group: 'Applications', label: 'Applications', icon: 'catalog', admin: true, module: 'applications', view: viewApplications },
+  applications: { primary: 'admin', group: 'Applications', label: 'Applications', icon: 'catalog', admin: true, module: 'applications', viewKey: 'viewApplications' },
 
   /* ── Admin > Connections ── */
-  directorySync: { primary: 'admin', group: 'Connections', label: 'Directory Sync', icon: 'refresh', admin: true, module: 'connections', view: viewDirectorySync },
+  directorySync: { primary: 'admin', group: 'Connections', label: 'Directory Sync', icon: 'refresh', admin: true, module: 'connections', viewKey: 'viewDirectorySync' },
 
   /* ── Admin > Access Model ── */
-  roles:            { primary: 'admin', group: 'Access Model', label: 'Business Roles',            icon: 'tag',      admin: true, module: 'access_model', view: viewRoles },
-  entitlementCatalog: { primary: 'admin', group: 'Access Model', label: 'Entitlements Catalog',    icon: 'list',     admin: true, module: 'access_model', view: viewEntitlementCatalog },
-  birthright:       { primary: 'admin', group: 'Access Model', label: 'Birthright Rules',          icon: 'triangle', admin: true, module: 'access_model', view: viewBirthright },
-  appAccessPolicy:  { primary: 'admin', group: 'Access Model', label: 'Application Access Policy', icon: 'key',      admin: true, module: 'access_model', view: viewAppAccessPolicy },
+  roles:            { primary: 'admin', group: 'Access Model', label: 'Business Roles',            icon: 'tag',      admin: true, module: 'access_model', viewKey: 'viewRoles' },
+  entitlementCatalog: { primary: 'admin', group: 'Access Model', label: 'Entitlements Catalog',    icon: 'list',     admin: true, module: 'access_model', viewKey: 'viewEntitlementCatalog' },
+  birthright:       { primary: 'admin', group: 'Access Model', label: 'Birthright Rules',          icon: 'triangle', admin: true, module: 'access_model', viewKey: 'viewBirthright' },
+  appAccessPolicy:  { primary: 'admin', group: 'Access Model', label: 'Application Access Policy', icon: 'key',      admin: true, module: 'access_model', viewKey: 'viewAppAccessPolicy' },
 
   /* Privileged Access — SUPER_ADMIN only (vault encrypts with SESSION_SECRET AES-GCM) */
-  pamResources: { primary: 'admin', group: 'Privileged Access', label: 'Privileged Resources', icon: 'server',   admin: true, super: true, view: viewPamResources },
-  pamSessions:  { primary: 'admin', group: 'Privileged Access', label: 'Privileged Sessions',  icon: 'activity', admin: true, super: true, view: viewPamSessions },
-  pamVault:     { primary: 'admin', group: 'Privileged Access', label: 'Credential Vault',     icon: 'vault',    admin: true, super: true, view: viewPamVault },
-  systemUsers:  { primary: 'admin', group: 'Privileged Access', label: 'System / Privileged',  icon: 'userCog',  admin: true, super: true, view: viewSystemUsers },
+  pamResources: { primary: 'admin', group: 'Privileged Access', label: 'Privileged Resources', icon: 'server',   admin: true, super: true, viewKey: 'viewPamResources' },
+  pamSessions:  { primary: 'admin', group: 'Privileged Access', label: 'Privileged Sessions',  icon: 'activity', admin: true, super: true, viewKey: 'viewPamSessions' },
+  pamVault:     { primary: 'admin', group: 'Privileged Access', label: 'Credential Vault',     icon: 'vault',    admin: true, super: true, viewKey: 'viewPamVault' },
+  systemUsers:  { primary: 'admin', group: 'Privileged Access', label: 'System / Privileged',  icon: 'userCog',  admin: true, super: true, viewKey: 'viewSystemUsers' },
 
   /* ── Admin > Identity Governance ── */
-  reviews: { primary: 'admin', group: 'Identity Governance', label: 'Certifications',        icon: 'certificate', admin: true, module: 'governance', view: viewReviews },
-  accessRequests: { primary: 'admin', group: 'Identity Governance', label: 'Access Requests', icon: 'check', admin: true, module: 'governance', view: viewAccessRequests },
-  sod:     { primary: 'admin', group: 'Identity Governance', label: 'Segregation of Duties', icon: 'split',       admin: true, module: 'governance', view: viewSod },
-  risk:    { primary: 'admin', group: 'Identity Governance', label: 'Risk',                  icon: 'alert',       admin: true, module: 'governance', view: viewRisk },
-  attendanceIga: { primary: 'admin', group: 'Identity Governance', label: 'Attendance IGA', icon: 'activity', admin: true, module: 'governance', view: viewAttendanceIga },
+  reviews: { primary: 'admin', group: 'Identity Governance', label: 'Certifications',        icon: 'certificate', admin: true, module: 'governance', viewKey: 'viewReviews' },
+  accessRequests: { primary: 'admin', group: 'Identity Governance', label: 'Access Requests', icon: 'check', admin: true, module: 'governance', viewKey: 'viewAccessRequests' },
+  sod:     { primary: 'admin', group: 'Identity Governance', label: 'Segregation of Duties', icon: 'split',       admin: true, module: 'governance', viewKey: 'viewSod' },
+  risk:    { primary: 'admin', group: 'Identity Governance', label: 'Risk',                  icon: 'alert',       admin: true, module: 'governance', viewKey: 'viewRisk' },
+  attendanceIga: { primary: 'admin', group: 'Identity Governance', label: 'Attendance IGA', icon: 'activity', admin: true, module: 'governance', viewKey: 'viewAttendanceIga' },
 
   /* ── Admin > Workflows & Automation ── */
-  workflowLibrary: { primary: 'admin', group: 'Workflows', label: 'Workflows', icon: 'flow', admin: true, module: 'workflows', view: viewWorkflowLibrary },
-  notifications:   { primary: 'admin', group: 'Workflows', label: 'Notifications', icon: 'bell', admin: true, module: 'workflows', view: viewNotifications },
+  workflowLibrary: { primary: 'admin', group: 'Workflows', label: 'Workflows', icon: 'flow', admin: true, module: 'workflows', viewKey: 'viewWorkflowLibrary' },
+  notifications:   { primary: 'admin', group: 'Workflows', label: 'Notifications', icon: 'bell', admin: true, module: 'workflows', viewKey: 'viewNotifications' },
 
   /* ── Admin > Reports ── */
-  reportHub:   { primary: 'admin', group: 'Reports', label: 'Overview',            icon: 'dashboard',   admin: true, module: 'reports', view: viewReportsHub },
-  govReports:  { primary: 'admin', group: 'Reports', label: 'Identity & Access',   icon: 'key',         admin: true, module: 'reports', view: viewGovReports },
-  audit:       { primary: 'admin', group: 'Reports', label: 'Audit & SSO Reports', icon: 'list',        admin: true, module: 'reports', view: viewAudit },
-  reports:     { primary: 'admin', group: 'Reports', label: 'Compliance Reports', icon: 'certificate', admin: true, module: 'reports', view: viewReports },
+  reportHub:   { primary: 'admin', group: 'Reports', label: 'Overview',            icon: 'dashboard',   admin: true, module: 'reports', viewKey: 'viewReportsHub' },
+  govReports:  { primary: 'admin', group: 'Reports', label: 'Identity & Access',   icon: 'key',         admin: true, module: 'reports', viewKey: 'viewGovReports' },
+  audit:       { primary: 'admin', group: 'Reports', label: 'Audit & SSO Reports', icon: 'list',        admin: true, module: 'reports', viewKey: 'viewAudit' },
+  reports:     { primary: 'admin', group: 'Reports', label: 'Compliance Reports', icon: 'certificate', admin: true, module: 'reports', viewKey: 'viewReports' },
 
   /* ── Admin > Settings ── */
-  generalSettings:  { primary: 'admin', group: 'Settings', label: 'General',         icon: 'cog',         admin: true, module: 'settings', view: viewGeneralSettings },
-  branding:         { primary: 'admin', group: 'Settings', label: 'Branding & Login', icon: 'paint',       admin: true, module: 'settings', view: viewBranding },
-  license:          { primary: 'admin', group: 'Settings', label: 'License',         icon: 'certificate', admin: true, module: 'administrators', view: viewLicense },
-  tickets:          { primary: 'admin', group: 'Settings', label: 'Tickets',         icon: 'ticket',      admin: true, module: 'settings', view: viewTickets },
-  systemHealth:     { primary: 'admin', group: 'Settings', label: 'System Health',   icon: 'pulse',       admin: true, module: 'settings', view: viewSystemHealth },
+  generalSettings:  { primary: 'admin', group: 'Settings', label: 'General',         icon: 'cog',         admin: true, module: 'settings', viewKey: 'viewGeneralSettings' },
+  branding:         { primary: 'admin', group: 'Settings', label: 'Branding & Login', icon: 'paint',       admin: true, module: 'settings', viewKey: 'viewBranding' },
+  license:          { primary: 'admin', group: 'Settings', label: 'License',         icon: 'certificate', admin: true, module: 'administrators', viewKey: 'viewLicense' },
+  tickets:          { primary: 'admin', group: 'Settings', label: 'Tickets',         icon: 'ticket',      admin: true, module: 'settings', viewKey: 'viewTickets' },
+  systemHealth:     { primary: 'admin', group: 'Settings', label: 'System Health',   icon: 'pulse',       admin: true, module: 'settings', viewKey: 'viewSystemHealth' },
 };
 
 /* Order of groups in the admin sidebar */
@@ -465,19 +471,20 @@ async function navigate(key, opts = {}) {
 
   const content = document.getElementById('content');
   const viewTab = tab || ROUTE_DEFAULT_TABS[key] || null;
+  const view = await resolveView(route);
 
   const needsMe = new Set(['home', 'settings', 'applications']);
   if (needsMe.has(key)) {
-    if (key === 'applications') await route.view(me, content, state.appsTab);
-    else if (key === 'settings') await route.view(me, content, viewTab);
-    else if (key === 'home') await route.view(me, content, viewTab);
-    else await route.view(me, content);
+    if (key === 'applications') await view(me, content, state.appsTab);
+    else if (key === 'settings') await view(me, content, viewTab);
+    else if (key === 'home') await view(me, content, viewTab);
+    else await view(me, content);
   } else if (key === 'audit' || key === 'govReports' || key === 'radiusVpn' || key === 'workflowLibrary' || key === 'groups' || key === 'attendanceIga') {
-    await route.view(content, viewTab);
+    await view(content, viewTab);
   } else if (key === 'directorySync') {
-    await route.view(content, viewTab, me);
+    await view(content, viewTab, me);
   } else {
-    await route.view(content);
+    await view(content);
   }
 }
 
@@ -518,6 +525,10 @@ async function main() {
 
     root.replaceChildren(buildShell());
     startSessionWatchdog(state.me);
+    // Prefetch gated admin modules for portal admins (keeps nav snappy).
+    if (isPortalAdmin(state.me)) {
+      ensureAdminModules().catch(() => {});
+    }
     await navigate(state.current, { tab: params.get('tab') });
 
     /* Background: portal browser signals for App Discovery (not HTTP disk cache) */
