@@ -1049,7 +1049,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### _(uncommitted)_ — 2026-07-30 — Fix SP-initiated SAML → Google hang
+### `94ed822` — 2026-07-30 — Fix SP-initiated SAML → Google hang
 
 **Why** — App SSO (SAML) → Google account chooser left the browser spinning: login waited on `/api/me` before showing MFA, and Google callback post-auth gates could stall the redirect off `accounts.google.com`.
 
