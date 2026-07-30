@@ -1049,7 +1049,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### _(uncommitted)_ — 2026-07-30 — Checkmarx remediation (SCA + IaC + secrets)
+### `71ad805` — 2026-07-30 — Checkmarx remediation (SCA + IaC + secrets)
 
 **Why** — Checkmarx scan on `import-main` reported High/Medium issues in npm SCA, Docker/IaC, and hardcoded compose secrets (SAST was clean).
 
