@@ -1,0 +1,52 @@
+# -----------------------------------------------------------------------------
+# Production overlay — Cloudflare WAF proxied at https://idp.lenskart.com
+#
+# Cloudflare orange-cloud connects to origin on port 80 (HTTP) by default.
+# We map host :80 → container :8080 so the IdP is reachable without a reverse proxy.
+#
+#   cp env.prod.example .env && nano .env
+#   bash scripts/deploy-prod.sh
+# -----------------------------------------------------------------------------
+
+services:
+  lilg-api:
+    container_name: idp-api
+    environment:
+      PUBLIC_BASE_URL: https://idp.lenskart.com
+      SAML_IDP_BASE_URL: https://idp.lenskart.com
+      SAML_IDP_ENTITY_ID: https://idp.lenskart.com/saml/metadata
+      COOKIE_SECURE: "true"
+      TRUST_PROXY: "true"
+      SAML_KEY_DIR: /app/data/saml
+      HTTPS_PORT: 8443
+      ACME_WEBROOT: /app/acme-webroot
+    volumes:
+      - ./acme-webroot:/app/acme-webroot
+      - saml-keys:/app/data/saml
+    ports:
+      # Cloudflare Flexible SSL → origin HTTP :80
+      - "0.0.0.0:80:8080"
+      # Cloudflare Full SSL → origin HTTPS :443 (after Origin Certificate uploaded)
+      - "0.0.0.0:443:8443"
+      # Local health checks
+      - "0.0.0.0:8080:8080"
+    # !reset: dev compose merges depends_on — must drop localstack or compose fails
+    depends_on: !reset
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      start_period: 120s
+      retries: 12
+
+  mysql:
+    container_name: idp-mysql
+
+  redis:
+    container_name: idp-redis
+
+  lilg-worker:
+    container_name: idp-worker
+    environment:
+      TRUST_PROXY: "true"
