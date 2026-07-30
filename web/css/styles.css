@@ -804,6 +804,12 @@ button { font-family: inherit; cursor: pointer; }
 }
 .field .hint { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.3rem; }
 
+/* OTP fields: mask digits without type=password (avoids password-manager hangs on login/MFA). */
+input.otp-masked {
+  -webkit-text-security: disc;
+  letter-spacing: 0.15em;
+}
+
 /* Modern form-* aliases used by admin views */
 .form-group { margin-bottom: 1rem; }
 .form-group:last-child { margin-bottom: 0; }

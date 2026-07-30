@@ -205,7 +205,7 @@ export function renderLogin() {
         <p class="subtitle" style="margin-top:0.75rem;text-align:center">Or enter this secret: <code>${esc(r.secret)}</code></p>
         <form id="enroll-confirm-form" style="margin-top:1rem">
           <div class="field"><label>6-digit code</label>
-            <input name="code" type="password" required inputmode="numeric" autocomplete="one-time-code" maxlength="16" spellcheck="false" placeholder="••••••" autofocus />
+            <input name="code" class="otp-masked" type="text" required inputmode="numeric" autocomplete="one-time-code" maxlength="16" spellcheck="false" autocapitalize="off" data-lpignore="true" data-1p-ignore="true" placeholder="••••••" autofocus />
           </div>
           <button type="submit" class="btn btn-primary btn-block btn-lg">Verify and sign in</button>
         </form>
@@ -253,7 +253,7 @@ export function renderLogin() {
         <div id="mfa-error"></div>
         <form id="mfa-form">
           <div class="field"><label>Verification code</label>
-            <input id="mfa-code" name="code" type="password" required inputmode="numeric" autocomplete="one-time-code" enterkeyhint="done" maxlength="16" spellcheck="false" autocapitalize="off" placeholder="••••••" />
+            <input id="mfa-code" name="code" class="otp-masked" type="text" required inputmode="numeric" autocomplete="one-time-code" enterkeyhint="done" maxlength="16" spellcheck="false" autocapitalize="off" data-lpignore="true" data-1p-ignore="true" placeholder="••••••" />
             <p class="hint">${esc(hint)}</p></div>
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
             ${methods.has('email_otp') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-send-email">Email me a code</button>' : ''}
@@ -278,15 +278,26 @@ export function renderLogin() {
         merr.innerHTML = `<div class="alert alert-error">Enter the full code from your authenticator app.</div>`;
         return;
       }
+      if (btn.disabled) return;
       btn.disabled = true;
+      const prevLabel = btn.textContent;
+      btn.textContent = 'Verifying…';
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 15_000);
       try {
-        const r = await api.localLoginMfa(challengeId, code);
+        const r = await api.localLoginMfa(challengeId, code, { signal: ac.signal });
         location.href = r?.redirect || returnTo || '/';
       } catch (err) {
-        merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+        const msg = err?.name === 'AbortError'
+          ? 'Verification timed out — check your connection and try again.'
+          : (err.message || 'Verification failed');
+        merr.innerHTML = `<div class="alert alert-error">${esc(msg)}</div>`;
         btn.disabled = false;
+        btn.textContent = prevLabel || 'Verify';
         codeInput.value = '';
         codeInput.focus();
+      } finally {
+        clearTimeout(timer);
       }
     });
     card.querySelector('#mfa-send-email')?.addEventListener('click', async () => {
@@ -1235,7 +1246,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
           <img src="${esc(r.qrDataUrl)}" alt="" style="background:white;padding:0.5rem;border-radius:8px;max-width:220px" />
           <p class="subtitle" style="margin-top:0.75rem">Secret: <code>${esc(r.secret)}</code></p>
           <form id="mfa-confirm" style="margin-top:1rem">
-            <div class="field"><label>6-digit code</label><input name="code" type="password" required inputmode="numeric" autocomplete="one-time-code" maxlength="16" spellcheck="false" placeholder="••••••" /></div>
+            <div class="field"><label>6-digit code</label><input name="code" class="otp-masked" type="text" required inputmode="numeric" autocomplete="one-time-code" maxlength="16" spellcheck="false" autocapitalize="off" data-lpignore="true" data-1p-ignore="true" placeholder="••••••" /></div>
             <button class="btn btn-primary" type="submit">Verify and enable</button>
           </form>
           <div id="mfa-confirm-result"></div>
@@ -1268,7 +1279,7 @@ export async function viewSettings(me, content, initialTab = 'profile') {
         const r = await sendFn();
         msgEl.innerHTML = `<form class="mfa-otp-confirm" style="margin-top:0.65rem">
           <div class="field"><label>Enter 6-digit code</label>
-            <input name="code" type="password" required inputmode="numeric" autocomplete="one-time-code" maxlength="16" spellcheck="false" placeholder="••••••" />
+            <input name="code" class="otp-masked" type="text" required inputmode="numeric" autocomplete="one-time-code" maxlength="16" spellcheck="false" autocapitalize="off" data-lpignore="true" data-1p-ignore="true" placeholder="••••••" />
           </div>
           ${r.devCode ? `<p class="form-hint">Dev code: <code>${esc(r.devCode)}</code></p>` : ''}
           <button class="btn btn-primary btn-sm" type="submit">Confirm</button>

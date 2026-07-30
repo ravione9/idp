@@ -74,8 +74,12 @@ Object.assign(api, {
 
   localLogin: (email, password, returnTo) =>
     f('/auth/local/login', { method: 'POST', body: JSON.stringify({ email, password, ...(returnTo ? { returnTo } : {}) }) }),
-  localLoginMfa:    (challengeId, code) =>
-    f('/auth/local/login/mfa-verify', { method: 'POST', body: JSON.stringify({ challengeId, code: String(code || '').replace(/\s+/g, '').trim() }) }),
+  localLoginMfa:    (challengeId, code, opts = {}) =>
+    f('/auth/local/login/mfa-verify', {
+      method: 'POST',
+      body: JSON.stringify({ challengeId, code: String(code || '').replace(/\s+/g, '').trim() }),
+      ...opts,
+    }),
   localLoginMfaEnroll: (enrollChallengeId) =>
     f('/auth/local/login/mfa-enroll', { method: 'POST', body: JSON.stringify({ enrollChallengeId }) }),
   localLoginMfaEnrollConfirm: (enrollChallengeId, code) =>

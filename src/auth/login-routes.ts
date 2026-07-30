@@ -22,9 +22,20 @@ function safeReturnTo(raw: string | undefined): string {
   return raw;
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(label)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (err: unknown) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
 export async function googleLoginHandler(req: Request, res: Response): Promise<void> {
   try {
-    const oidc = await getGoogleOidcConfig();
+    // Bound DB/config lookup so "Continue with Google" never hangs the browser.
+    const oidc = await withTimeout(getGoogleOidcConfig(), 5_000, 'google oidc config timeout');
     if (!isGoogleOidcConfigured(oidc)) {
       redirectLoginAuthError(res, 'google_not_configured', safeReturnTo(req.query['returnTo'] as string | undefined));
       return;

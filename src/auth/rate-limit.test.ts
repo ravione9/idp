@@ -73,4 +73,19 @@ describe('rateLimit (Redis fixed-window)', () => {
     expect(res.status).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
+
+  it('fails open when Redis is slow (timeout)', async () => {
+    mockEval.mockImplementation(() => new Promise(() => { /* never resolves */ }));
+    const mw = rateLimit({ max: 10, windowMs: 60_000 });
+    const req = { ip: '8.8.8.8' } as Request;
+    const res = mockRes();
+    const next = jest.fn() as NextFunction;
+
+    mw(req, res, next);
+    await new Promise((r) => setTimeout(r, 350));
+
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
+  });
 });

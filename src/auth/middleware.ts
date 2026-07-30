@@ -286,7 +286,12 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
   }
 
   try {
-    const oidc = await getGoogleOidcConfig();
+    const oidc = await Promise.race([
+      getGoogleOidcConfig(),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('google oidc config timeout')), 5_000);
+      }),
+    ]);
     if (!isGoogleOidcConfigured(oidc)) {
       redirectLoginAuthError(res, 'google_not_configured', returnTo);
       return;
@@ -314,11 +319,16 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
 
     const { id_token } = tokenRes.data;
 
-    // Verify id_token
-    const { payload } = await jwtVerify(id_token, googleJwks, {
-      issuer:   ['accounts.google.com', 'https://accounts.google.com'],
-      audience: oidc.clientId,
-    });
+    // Verify id_token (bound JWKS fetch — createRemoteJWKSet can hang without a budget)
+    const { payload } = await Promise.race([
+      jwtVerify(id_token, googleJwks, {
+        issuer:   ['accounts.google.com', 'https://accounts.google.com'],
+        audience: oidc.clientId,
+      }),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('google id_token verify timeout')), 10_000);
+      }),
+    ]);
 
     const hd = typeof payload['hd'] === 'string' ? payload['hd'].trim().toLowerCase() : '';
     if (hd && !oidc.hostedDomains.includes(hd)) {

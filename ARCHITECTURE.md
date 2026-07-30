@@ -1049,6 +1049,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### _(uncommitted)_ — 2026-07-30 — Fix login/MFA hang (Redis rate-limit + OTP input)
+
+**Why** — After Redis-backed rate limiting, MFA Verify and Google login could hang when Redis was slow/reconnecting; MFA `type=password` also invited password-manager interference.
+
+**What changed:**
+
+- **Rate limit** — 250ms Redis budget then fail-open; Redis client `connectTimeout`/`commandTimeout` 2s.
+- **OTP UI** — `type=text` + CSS disc mask (`otp-masked`); ignore password managers; 15s client abort on Verify.
+- **Google OIDC** — timeouts on config lookup and id_token/JWKS verify so redirects cannot stall indefinitely.
+
 ### `71ad805` — 2026-07-30 — Checkmarx remediation (SCA + IaC + secrets)
 
 **Why** — Checkmarx scan on `import-main` reported High/Medium issues in npm SCA, Docker/IaC, and hardcoded compose secrets (SAST was clean).
