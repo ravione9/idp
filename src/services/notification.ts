@@ -96,6 +96,9 @@ export async function deliverEmail(
     auth: smtp.user
       ? { user: smtp.user, pass: smtp.pass }
       : undefined,
+    // Sandbox untrusted message fields (attachments/paths/URLs) if ever passed.
+    disableFileAccess: true,
+    disableUrlAccess:  true,
   });
 
   await transporter.sendMail({
@@ -103,6 +106,8 @@ export async function deliverEmail(
     to: recipientEmail,
     subject,
     text: body,
+    disableFileAccess: true,
+    disableUrlAccess:  true,
   });
 }
 

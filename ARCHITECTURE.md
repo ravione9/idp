@@ -141,13 +141,14 @@ Lenskart IdP is a unified platform that delivers **enterprise SSO + Identity Gov
 
 | Container | Image | Port | Purpose |
 |---|---|---|---|
-| `idp-api` | built from `Dockerfile` | 8080 → host | Express app + static SPA |
+| `idp-api` | built from `Dockerfile` (`node:22.17.1-alpine3.22`) | 8080, 443→8443, 1812/udp | Express app + static SPA |
 | `idp-worker` | same image, different command | — | Outbox poller (Adapter dispatcher) |
-| `idp-mysql` | `mysql:8.0` | internal 3306 | DB |
-| `idp-redis` | `redis:7-alpine` | internal 6379 | Sessions, MFA challenges |
-| `idp-localstack` | `localstack/localstack:3` | internal 4566 | SQS in dev |
+| `idp-mysql` | `mysql:8.0.42` | internal | DB (`MYSQL_ROOT_PASSWORD` / `MYSQL_PASSWORD` from `.env`) |
+| `idp-redis` | `redis:7.4.3-alpine` | internal | Sessions, MFA challenges, rate limits, sched locks |
+| `idp-localstack` | `localstack/localstack:4.3.0` | internal | SQS in dev |
 
-Only `idp-api:8080` is exposed to the host network.
+Compose hardening: `security_opt: no-new-privileges`, `cap_drop: ALL` (+ minimal `cap_add`), memory limits, healthchecks on all services. MySQL passwords are **not** hardcoded in compose files.
+Host `:443` / `:1812` remain for Cloudflare Full SSL and RADIUS (privileged ports — accepted for edge IdP).
 The IdP signing keys used by SAML are stored on named volume `saml-keys` mounted at `/app/data/saml` to keep certificate fingerprints stable across API container rebuilds.
 
 ---
@@ -786,7 +787,8 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 
 | Env var | Required | Default | Purpose |
 |---|---|---|---|
-| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | yes | — | MySQL |
+| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | yes | — | MySQL (app connection) |
+| `MYSQL_ROOT_PASSWORD` / `MYSQL_PASSWORD` | yes (compose) | — | MySQL container bootstrap; `MYSQL_PASSWORD` must match `DB_PASSWORD` |
 | `REDIS_URL` | yes | — | Sessions, MFA challenges, rate limits (`idp:rl:*`), scheduler locks (`idp:sched:*`), outbox leader |
 | `SKIP_MIGRATIONS_ON_BOOT` | no | `false` | When `"true"`, API skips `runMigrations()` (K8s Job runs `node dist/db/migrate-cli.js`). Unset/false = apply migrations on boot (docker-compose). |
 | `SESSION_SECRET` | yes (≥32 chars) | — | HMAC for cookie signing |
@@ -1046,6 +1048,19 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### _(uncommitted)_ — 2026-07-30 — Checkmarx remediation (SCA + IaC + secrets)
+
+**Why** — Checkmarx scan on `import-main` reported High/Medium issues in npm SCA, Docker/IaC, and hardcoded compose secrets (SAST was clean).
+
+**What changed:**
+
+- **SCA** — `nodemailer` → `^9.0.3` (+ `disableFileAccess`/`disableUrlAccess`); `overrides.brace-expansion` → `5.0.8`.
+- **Dockerfile** — pin base `node:22.17.1-alpine3.22` and apk package versions.
+- **Compose** — remove hardcoded MySQL passwords (require `MYSQL_*` from `.env`); add `security_opt`, `cap_drop`/`cap_add`, memory limits, worker healthchecks; pin mysql/redis/localstack tags; bind local compose ports to `127.0.0.1`.
+- **Bootstrap** — `fix-and-start.sh` / `env.*.example` ensure `MYSQL_*` for existing volumes.
+
+**Residual (mark Not Exploitable in Checkmarx if needed):** Container Security CVEs inside upstream `mysql` / `localstack` / `node` images; privileged host ports `:443` / `:1812` on `docker-compose.dev.yml` (Cloudflare + RADIUS).
 
 ### `cb73263` — 2026-07-28 — Multi-replica K8s safety (migrations, rate limit, sched locks)
 

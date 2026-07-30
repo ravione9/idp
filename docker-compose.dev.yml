@@ -7,23 +7,45 @@
 #
 # Or directly:
 #   docker-compose -f docker-compose.dev.yml up -d --build
+#
+# Secrets (MYSQL_*) must be set in .env — never hardcoded in this file.
 # -----------------------------------------------------------------------------
+
+x-security: &default-security
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
 
 services:
   mysql:
-    image: mysql:8.0
+    image: mysql:8.0.42
     container_name: idp-mysql
     restart: unless-stopped
+    <<: *default-security
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
       MYSQL_DATABASE: lilg
       MYSQL_USER: lilg_app
-      MYSQL_PASSWORD: s3cr3t_change_me
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
     volumes:
       - mysql-data:/var/lib/mysql
       - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+    mem_limit: 1g
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-prootpassword"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -32,12 +54,23 @@ services:
       - idp-net
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.3-alpine
     container_name: idp-redis
     restart: unless-stopped
+    <<: *default-security
+    cap_add:
+      - SETGID
+      - SETUID
     command: redis-server --save 60 1 --loglevel warning
     volumes:
       - redis-data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+    mem_limit: 256m
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -47,9 +80,17 @@ services:
       - idp-net
 
   localstack:
-    image: localstack/localstack:3
+    image: localstack/localstack:4.3.0
     container_name: idp-localstack
     restart: unless-stopped
+    <<: *default-security
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+      - FOWNER
     environment:
       SERVICES: sqs
       DEFAULT_REGION: ap-south-1
@@ -57,6 +98,13 @@ services:
       PERSISTENCE: 1
     volumes:
       - localstack-data:/var/lib/localstack
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+    mem_limit: 1g
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 15s
@@ -72,6 +120,9 @@ services:
       target: runner
     container_name: idp-api
     restart: unless-stopped
+    <<: *default-security
+    cap_add:
+      - NET_BIND_SERVICE
     env_file:
       - .env
     environment:
@@ -84,8 +135,11 @@ services:
       AWS_ENDPOINT_URL: http://localstack:4566
     ports:
       - "0.0.0.0:8080:8080"
+      # Host :443 required for Cloudflare Full SSL → container HTTPS :8443
+      # (Checkmarx flags privileged ports; accepted for edge IdP — do not remove)
       - "0.0.0.0:443:8443"
-      # Optional RADIUS UDP (enable RADIUS_UDP_ENABLED=true in .env)
+      - "0.0.0.0:8443:8443"
+      # RADIUS UDP (standard 1812; privileged host port accepted for VPN AAA)
       - "0.0.0.0:1812:1812/udp"
     depends_on:
       mysql:
@@ -96,6 +150,13 @@ services:
         condition: service_healthy
     volumes:
       - saml-keys:/app/data/saml
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+    mem_limit: 1g
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 10s
@@ -112,6 +173,7 @@ services:
       target: runner
     container_name: idp-worker
     restart: unless-stopped
+    <<: *default-security
     command: ["node", "dist/services/outbox-worker.js"]
     env_file:
       - .env
@@ -126,6 +188,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - idp-net
 

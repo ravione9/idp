@@ -5,13 +5,17 @@
 # =============================================================================
 
 # ---- Stage 1: builder -------------------------------------------------------
-FROM node:22-alpine AS builder
+FROM node:22.17.1-alpine3.22 AS builder
 
 WORKDIR /app
 
 # Install dependencies first (layer cache friendly)
+# Pin apk package versions (Checkmarx / supply-chain).
 COPY package*.json ./
-RUN apk add --no-cache python3 make g++ \
+RUN apk add --no-cache \
+      python3=3.12.13-r0 \
+      make=4.4.1-r3 \
+      g++=14.2.0-r6 \
     && npm ci
 
 # Copy source and compile
@@ -23,10 +27,12 @@ RUN npm run build
 RUN npm prune --production
 
 # ---- Stage 2: runner --------------------------------------------------------
-FROM node:22-alpine AS runner
+FROM node:22.17.1-alpine3.22 AS runner
 
-# Security hardening
-RUN apk add --no-cache dumb-init wget \
+# Security hardening — pin apk versions
+RUN apk add --no-cache \
+      dumb-init=1.2.5-r3 \
+      wget=1.25.0-r1 \
     && addgroup -g 1001 lilg \
     && adduser -u 1001 -G lilg -s /sbin/nologin -D lilg \
     && mkdir -p /app/data/saml \

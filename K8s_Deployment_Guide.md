@@ -77,6 +77,110 @@ aws elasticache create-replication-group \
 
 Transit encryption on → use `rediss://` in `REDIS_URL`.
 
+### 1.2-ALT / 1.3-ALT — In-cluster MySQL & Redis (no RDS/ElastiCache)
+
+Use these instead of §1.2/§1.3 when the data tier must live inside the cluster (multi-client installs, non-AWS clients, or cost). **Never raw StatefulSets** — a hand-rolled MySQL StatefulSet has no failover logic; use operators.
+
+#### MySQL — Percona XtraDB Cluster Operator (3-node synchronous cluster)
+
+No app changes: `DB_HOST` just points at the HAProxy Service the operator creates.
+
+```bash
+helm repo add percona https://percona.github.io/percona-helm-charts
+helm install pxc-operator percona/pxc-operator -n idp
+```
+
+```yaml
+# k8s/mysql-cluster.yaml
+apiVersion: pxc.percona.com/v1
+kind: PerconaXtraDBCluster
+metadata:
+  name: lilg-db
+  namespace: idp
+spec:
+  crVersion: "1.15.0"
+  secretsName: lilg-db-secrets          # operator generates users incl. root if absent
+  pxc:
+    size: 3                             # one per AZ — quorum survives any single node/AZ loss
+    image: percona/percona-xtradb-cluster:8.0.36
+    affinity:
+      antiAffinityTopologyKey: topology.kubernetes.io/zone
+    resources:
+      requests: { cpu: "1", memory: 4Gi }
+      limits:   { memory: 6Gi }
+    volumeSpec:
+      persistentVolumeClaim:
+        storageClassName: gp3           # any SSD class on other clouds/on-prem
+        resources: { requests: { storage: 100Gi } }
+  haproxy:
+    enabled: true                       # single stable write endpoint for the app
+    size: 2
+    affinity:
+      antiAffinityTopologyKey: topology.kubernetes.io/zone
+  backup:
+    image: percona/percona-xtradb-cluster-operator:1.15.0-pxc8.0-backup
+    schedule:
+      - name: nightly
+        schedule: "0 21 * * *"          # 02:30 IST
+        keep: 7
+        storageName: s3-backup
+    storages:
+      s3-backup:                        # any S3-compatible target (AWS S3, MinIO on-prem)
+        type: s3
+        s3:
+          bucket: lilg-db-backups
+          region: ap-south-1
+          credentialsSecret: lilg-backup-s3
+  pmm:
+    enabled: false                      # optional: Percona monitoring
+```
+
+App config change (only values, not code):
+
+```yaml
+# lilg-config ConfigMap
+DB_HOST: "lilg-db-haproxy.idp.svc.cluster.local"
+```
+
+Create the app user via the operator's root secret:
+
+```bash
+kubectl -n idp exec lilg-db-pxc-0 -c pxc -- mysql -uroot -p"$(kubectl -n idp get secret lilg-db-secrets -o jsonpath='{.data.root}' | base64 -d)" \
+  -e "CREATE USER 'lilg_app'@'%' IDENTIFIED BY '<pw>'; GRANT ALL ON lilg.* TO 'lilg_app'@'%'; CREATE DATABASE IF NOT EXISTS lilg;"
+```
+
+Failover behavior: synchronous (Galera) replication, so any node can fail with zero data loss; HAProxy re-routes in seconds. This is *better* RPO than RDS Multi-AZ, at the cost of you owning upgrades and backup verification.
+
+#### Redis — Bitnami chart with persistence (pragmatic default)
+
+Redis in this app is cache + locks + MFA challenges — sessions are also in MySQL, and the rate limiter/scheduler locks **fail open** by design. So a ~30–60 s Redis blip on pod rescheduling is tolerable, which permits the simple topology:
+
+```bash
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm install lilg-redis bitnami/redis -n idp \
+  --set architecture=replication \
+  --set auth.enabled=true --set auth.password=<pw> \
+  --set master.persistence.enabled=true --set master.persistence.size=8Gi \
+  --set master.persistence.storageClass=gp3 \
+  --set replica.replicaCount=2 \
+  --set master.podAntiAffinityPreset=hard
+```
+
+```yaml
+# lilg-config ConfigMap
+REDIS_URL: "redis://:<pw>@lilg-redis-master.idp.svc.cluster.local:6379/0"
+```
+
+If the master pod dies, Kubernetes reschedules it and replays the AOF from its PVC — MTTR comparable to an ElastiCache failover. **True sub-second failover (Sentinel)** is possible but requires a small code change: `config.ts` validates `REDIS_URL` as a URL, while ioredis Sentinel needs a `{ sentinels: [...], name: ... }` options object — add an optional `REDIS_SENTINEL_HOSTS`/`REDIS_MASTER_NAME` config path if a client contract demands it. Don't start there; the simple topology is operationally proportionate to how this app uses Redis.
+
+#### Ops you now own (vs managed)
+
+- **Backup restore drills** — test the PXC S3 restore quarterly; an untested backup is a hope, not a backup.
+- **Version upgrades** — operator handles rolling PXC upgrades, but you schedule/supervise them.
+- **Disk monitoring** — alert at 70% PVC usage; expand via PVC resize (gp3/most CSI drivers support online expansion).
+- **Quorum awareness** — never run PXC with 2 nodes (split-brain); scale 3 → 5, never 3 → 2.
+- **Node group sizing** — DB pods need dedicated headroom; consider a separate node group with taints so API autoscaling never evicts DB pods.
+
 ### 1.4 SQS queues
 
 ```bash

@@ -7,13 +7,19 @@ cd "$(dirname "$0")/.."
 source "$(dirname "$0")/compose-lib.sh"
 idp_ensure_compose_v2
 idp_compose_init
-DB_PASS="${DB_PASSWORD:-s3cr3t_change_me}"
-
 echo "==> [1/6] Ensure .env exists with required keys..."
 if [[ ! -f .env ]]; then
   cp env.dev.example .env
   echo "    Created .env from env.dev.example"
 fi
+
+# Load DB / MySQL passwords from .env for later steps
+set -a
+# shellcheck disable=SC1091
+source <(grep -E '^(DB_PASSWORD|MYSQL_ROOT_PASSWORD|MYSQL_PASSWORD)=' .env | sed 's/\r$//' || true)
+set +a
+DB_PASS="${DB_PASSWORD:-s3cr3t_change_me}"
+MYSQL_ROOT_PASS="${MYSQL_ROOT_PASSWORD:-rootpassword}"
 
 # Append master admin block if missing (safe — does not overwrite existing file)
 if ! grep -q '^MASTER_ADMIN_EMAIL=' .env 2>/dev/null; then
@@ -25,6 +31,18 @@ MASTER_ADMIN_PASSWORD=ChangeMe_Admin123!
 MASTER_ADMIN_FULL_NAME=LILG Master Administrator
 EOF
   echo "    Added MASTER_ADMIN_* to .env"
+fi
+
+# MySQL container passwords (compose no longer hardcodes these). Keep legacy defaults
+# so existing mysql-data volumes continue to authenticate.
+if ! grep -q '^MYSQL_ROOT_PASSWORD=' .env 2>/dev/null; then
+  echo 'MYSQL_ROOT_PASSWORD=rootpassword' >> .env
+  echo "    Added MYSQL_ROOT_PASSWORD to .env (legacy volume default — rotate in prod)"
+fi
+if ! grep -q '^MYSQL_PASSWORD=' .env 2>/dev/null; then
+  _db_pass="$(grep '^DB_PASSWORD=' .env 2>/dev/null | cut -d= -f2- || true)"
+  echo "MYSQL_PASSWORD=${_db_pass:-s3cr3t_change_me}" >> .env
+  echo "    Added MYSQL_PASSWORD to .env"
 fi
 
 # SESSION_SECRET must be 32+ chars or API exits immediately on boot
@@ -44,9 +62,17 @@ docker ps -a --format '{{.Names}}' | grep -E '^idp-|_idp-|^lilg-api$' | xargs -r
 echo "==> [3/6] Build and start all services..."
 "${IDP_COMPOSE[@]}" up -d --build
 
+# Re-load after possible MYSQL_* appends above
+set -a
+# shellcheck disable=SC1091
+source <(grep -E '^(DB_PASSWORD|MYSQL_ROOT_PASSWORD|MYSQL_PASSWORD)=' .env | sed 's/\r$//' || true)
+set +a
+DB_PASS="${DB_PASSWORD:-s3cr3t_change_me}"
+MYSQL_ROOT_PASS="${MYSQL_ROOT_PASSWORD:-rootpassword}"
+
 echo "==> [4/6] Wait for MySQL..."
 for i in $(seq 1 36); do
-  if docker exec idp-mysql mysqladmin ping -h 127.0.0.1 -u root -prootpassword --silent 2>/dev/null; then
+  if docker exec idp-mysql mysqladmin ping -h 127.0.0.1 -u root -p"${MYSQL_ROOT_PASS}" --silent 2>/dev/null; then
     echo "    MySQL is up."
     break
   fi

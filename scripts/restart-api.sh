@@ -12,6 +12,16 @@ if [[ ! -f .env ]]; then
   cp env.dev.example .env
   echo "Created .env from env.dev.example — set MASTER_ADMIN_* and secrets."
 fi
+# Ensure MySQL compose secrets exist (no longer hardcoded in docker-compose*.yml)
+if [[ -f .env ]] && ! grep -q '^MYSQL_ROOT_PASSWORD=' .env 2>/dev/null; then
+  echo 'MYSQL_ROOT_PASSWORD=rootpassword' >> .env
+  echo "Added MYSQL_ROOT_PASSWORD to .env (legacy volume default)"
+fi
+if [[ -f .env ]] && ! grep -q '^MYSQL_PASSWORD=' .env 2>/dev/null; then
+  _db_pass="$(grep '^DB_PASSWORD=' .env 2>/dev/null | cut -d= -f2- || true)"
+  echo "MYSQL_PASSWORD=${_db_pass:-s3cr3t_change_me}" >> .env
+  echo "Added MYSQL_PASSWORD to .env"
+fi
 
 echo "==> Building lilg-api..."
 "${IDP_COMPOSE[@]}" build lilg-api
