@@ -1049,7 +1049,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### _(uncommitted)_ — 2026-07-30 — Fix login/MFA hang (Redis rate-limit + OTP input)
+### `a9396b7` — 2026-07-30 — Fix login/MFA hang (Redis rate-limit + OTP input)
 
 **Why** — After Redis-backed rate limiting, MFA Verify and Google login could hang when Redis was slow/reconnecting; MFA `type=password` also invited password-manager interference.
 
