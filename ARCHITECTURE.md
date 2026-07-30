@@ -314,7 +314,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 | `GET  /saml/resume/:pendingId` | Resume SP-initiated SSO after portal sign-in (pending `AuthnRequest` in Redis) |
 | `GET  /saml/launch/:slug` | IdP-initiated launch (browser → app tile click) |
 
-**Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which replays the stored request and posts the SAML assertion to the SP ACS. **If a portal session cookie is already present**, `/saml/sso` and `/saml/launch/:slug` reuse it (no second MFA). The login page also short-circuits to `returnTo` when `/api/me` succeeds.
+**Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which temporarily applies the stored `query`/`body` on the live Express request (does **not** clone via `{...req}`), issues the assertion, and only then deletes the Redis key (so a failed resume can retry within the TTL). **If a portal session cookie is already present**, `/saml/sso` and `/saml/launch/:slug` reuse it (no second MFA). The login page also short-circuits to `returnTo` when `/api/me` succeeds. Browser navigations get HTML error pages (not JSON) when SP resolution or assertion fails.
 
 **Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map` (never an empty `AttributeStatement` — that fails `saml-schema-protocol-2.0.xsd`). Default attributes include `email`/`mail` and `displayName` for auto-provisioning SPs (e.g. SentinelOne). samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it. **IdP-initiated** (portal tile) responses omit `InResponseTo` entirely. Template tag replacement matches `="{Tag}"` for attributes and treats `{InResponseToAttr}` / statement blocks as raw XML — samlify’s optional-leading-quote replacer must not be used here (it turns SP-initiated `InResponseTo` into `&quot;…&quot;` and fails XSD).
 
@@ -1048,6 +1048,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-30 — Fix SAML resume “Could not complete SSO”
+
+**Why** — After Google/local login, `/saml/resume/<id>` showed “Could not complete SSO”: resume built a fake request with `{...req}`, which drops Express methods (`req.get`, etc.) and breaks assertion issuance. Pending Redis keys were also deleted before assertion succeeded, so retries expired immediately.
+
+**What changed:**
+
+- **`/saml/resume/:pendingId`** — replay stored AuthnRequest on the live `req` (swap/restore `query`/`body`); delete Redis pending only after 2xx assertion; surface assertion error detail in HTML.
+- **`issueAssertion`** — HTML error pages when `Accept: text/html` (SP unknown, employee missing, assertion throw).
 
 ### `94ed822` — 2026-07-30 — Fix SP-initiated SAML → Google hang
 

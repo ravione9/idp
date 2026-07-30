@@ -255,19 +255,46 @@ async function issueAssertion(
     return;
   }
 
+  const wantsHtml = (req.get('accept') ?? '').includes('text/html');
+
   const resolved = await resolveSpFromRequest(req, spEntityIdHint);
   if ('error' in resolved) {
+    if (wantsHtml) {
+      sendSsoDeniedPage(res, {
+        title: 'Could not complete SSO',
+        message: resolved.error,
+        code: `HTTP_${resolved.status}`,
+      });
+      return;
+    }
     res.status(resolved.status).json({ error: resolved.error });
     return;
   }
 
   const emp = await getEmployeeForSaml(user.empId);
   if (!emp) {
+    if (wantsHtml) {
+      sendSsoDeniedPage(res, {
+        title: 'Could not complete SSO',
+        message: 'Employee record not found',
+        code: 'EMP_NOT_FOUND',
+      });
+      return;
+    }
     res.status(403).json({ error: 'Employee record not found' });
     return;
   }
 
   if (!canReceiveSamlAssertion(emp)) {
+    if (wantsHtml) {
+      sendSsoDeniedPage(res, {
+        title: 'SSO not permitted',
+        message: 'SSO is not permitted for your account state.',
+        code: 'STATE_DENIED',
+        detail: `ilg_state=${emp.ilg_state}; hrms_status=${emp.hrms_status}`,
+      });
+      return;
+    }
     res.status(403).json({
       error:       'SSO not permitted for your account state',
       ilg_state:   emp.ilg_state,
@@ -324,7 +351,17 @@ async function issueAssertion(
     logger.info({ empId: emp.emp_id, sp: resolved.sp.slug }, 'SAML SP-initiated assertion issued');
     sendLoginForm(res, html);
   } catch (err) {
-    logger.error({ err, empId: user.empId }, 'SAML assertion failed');
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err, empId: user.empId, message }, 'SAML assertion failed');
+    if (wantsHtml) {
+      sendSsoDeniedPage(res, {
+        title: 'Could not complete SSO',
+        message: 'Failed to issue SAML assertion.',
+        detail: message.slice(0, 240),
+        code: 'ASSERTION_FAILED',
+      });
+      return;
+    }
     res.status(500).json({ error: 'Failed to issue SAML assertion' });
   }
 }
@@ -380,33 +417,52 @@ router.get('/resume/:pendingId', async (req: Request, res: Response): Promise<vo
     return;
   }
 
-  await redis.del(`${PENDING_SSO_PREFIX}${pendingId}`).catch(() => undefined);
-
-  const pending = JSON.parse(raw) as {
+  let pending: {
     binding: 'redirect' | 'post';
     query?:  Record<string, string>;
     body?:   Record<string, string>;
     relayState?: string;
     spEntityId?: string | null;
   };
+  try {
+    pending = JSON.parse(raw) as typeof pending;
+  } catch (err) {
+    logger.error({ err, pendingId }, 'Corrupt pending SAML SSO payload');
+    await redis.del(`${PENDING_SSO_PREFIX}${pendingId}`).catch(() => undefined);
+    res.status(500).type('html').send(
+      '<!doctype html><title>SSO failed</title><h1>Could not complete SSO</h1>'
+      + '<p>Please restart login from the application.</p>',
+    );
+    return;
+  }
 
-  const fakeReq = {
-    ...req,
-    query: pending.query ?? {},
-    body:  pending.body ?? {},
-    user:  req.user,
-  } as Request;
+  // Do NOT spread Express req ({...req} drops methods like req.get and breaks samlify).
+  // Replay the stored AuthnRequest on the live request, then restore.
+  const prevQuery = req.query;
+  const prevBody = req.body;
+  req.query = pending.query ?? {};
+  req.body = pending.body ?? {};
 
   try {
-    await issueAssertion(fakeReq, res, pending.binding, pending.spEntityId);
+    await issueAssertion(req, res, pending.binding, pending.spEntityId);
+    // Only consume pending SSO after assertion HTML was issued (2xx).
+    // Keep the key on 4xx/5xx so a refresh can retry within the TTL.
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      await redis.del(`${PENDING_SSO_PREFIX}${pendingId}`).catch(() => undefined);
+    }
   } catch (err) {
-    logger.error({ err, pendingId }, 'SAML resume assertion failed');
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err, pendingId, message }, 'SAML resume assertion failed');
     if (!res.headersSent) {
       res.status(500).type('html').send(
         '<!doctype html><title>SSO failed</title><h1>Could not complete SSO</h1>'
-        + '<p>Please restart login from the application.</p>',
+        + `<p>Please restart login from the application.</p>`
+        + `<p style="color:#666;font-size:13px">${escHtml(message).slice(0, 240)}</p>`,
       );
     }
+  } finally {
+    req.query = prevQuery;
+    req.body = prevBody;
   }
 });
 
