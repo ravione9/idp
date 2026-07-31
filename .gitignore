@@ -5,6 +5,8 @@ dist/
 *.pem
 *.key
 *.crt
+*.vault.json
+.saml-idp-keys/
 idp-dev.key
 idp-dev.crt
 .DS_Store
