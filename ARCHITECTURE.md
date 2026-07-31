@@ -1055,7 +1055,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-31 — Attendance IGA evaluation mode (daily vs consecutive)
+### `ae5c2c1` — 2026-07-31 — Attendance IGA evaluation mode (daily vs consecutive)
 
 **Why** — Policies need to choose daily live punch evaluation vs only acting on users who have not punched for N consecutive days (and only consume that N-day punch feed).
 
