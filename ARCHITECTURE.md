@@ -1055,6 +1055,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### TBD — 2026-07-31 — Attendance IGA evaluation mode (daily vs consecutive)
+
+**Why** — Policies need to choose daily live punch evaluation vs only acting on users who have not punched for N consecutive days (and only consume that N-day punch feed).
+
+**What changed:**
+
+- **Migration `054`** — `attendance_iga_config.evaluation_mode` (`DAILY_LIVE` | `CONSECUTIVE_ABSENT`).
+- **Rules** — consecutive mode skips `NO_PUNCH_TODAY`; Truein/SFTP lookback uses the N-day window and merges all days.
+- **Policy UI** — evaluation mode + 3/5/7 (or custom) absent-day window.
+
 ### `ab07758` — 2026-07-31 — Attendance IGA Executions filters + bulk rollback
 
 **Why** — Ops needed to filter executions, bulk-rollback mistaken suspensions, and see why a suspend/disable failed.

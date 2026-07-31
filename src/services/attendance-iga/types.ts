@@ -37,6 +37,12 @@ export interface AttendanceIgaConfig {
   file_mapping_json: Record<string, string> | null;
   identifier_field: IdentifierField;
   cutoff_time: string;
+  /**
+   * DAILY_LIVE — evaluate today's missed punch after cutoff (plus consecutive rules).
+   * CONSECUTIVE_ABSENT — skip same-day rule; only act when absent for `consecutive_days`
+   * and fetch/consume that many days of punch data.
+   */
+  evaluation_mode: 'DAILY_LIVE' | 'CONSECUTIVE_ABSENT';
   consecutive_days: number;
   approval_enabled: number;
   emergency_mode: number;

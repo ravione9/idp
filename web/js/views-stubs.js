@@ -8803,6 +8803,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     const poll = existing?.polling_interval || 'manual';
     const cutoff = String(existing?.cutoff_time || '10:00:00').slice(0, 5);
     const days = existing?.consecutive_days ?? 3;
+    const evalMode = existing?.evaluation_mode === 'CONSECUTIVE_ABSENT' ? 'CONSECUTIVE_ABSENT' : 'DAILY_LIVE';
     const punch = existing?.punch_rule_actions || {
       no_punch_today: ['SUSPEND_USER'],
       no_punch_consecutive: ['DISABLE_USER'],
@@ -8867,18 +8868,40 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
               <option value="EMAIL" ${idField==='EMAIL'?'selected':''}>Email</option>
               <option value="USERNAME" ${idField==='USERNAME'?'selected':''}>Username</option>
             </select></div>
-          <div class="form-group"><label class="form-label">Punch cutoff</label>
+        </div>
+
+        <h3 style="font-size:0.9rem;margin:1.25rem 0 0.75rem">Attendance evaluation data</h3>
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">Choose whether this policy uses <strong>today’s live punch</strong> or only people who have <strong>not punched for N consecutive days</strong> (API/SFTP then consumes that N-day window).</p>
+        <div class="form-group">
+          <label class="form-label">Evaluation mode</label>
+          <select class="form-select" id="aig-eval-mode">
+            <option value="DAILY_LIVE" ${evalMode==='DAILY_LIVE'?'selected':''}>Daily live punch (today after cutoff)</option>
+            <option value="CONSECUTIVE_ABSENT" ${evalMode==='CONSECUTIVE_ABSENT'?'selected':''}>Not punched for N consecutive days only</option>
+          </select>
+        </div>
+        <div class="form-2col">
+          <div class="form-group aig-daily-only"><label class="form-label">Punch cutoff (daily mode)</label>
             <input class="form-input" id="aig-cutoff" type="time" value="${esc(cutoff)}"></div>
-          <div class="form-group"><label class="form-label">Consecutive absences</label>
-            <input class="form-input" id="aig-days" type="number" min="1" max="30" value="${esc(String(days))}"></div>
+          <div class="form-group"><label class="form-label">Absent-day window</label>
+            <select class="form-select" id="aig-days">
+              <option value="3" ${Number(days)===3?'selected':''}>3 days</option>
+              <option value="5" ${Number(days)===5?'selected':''}>5 days</option>
+              <option value="7" ${Number(days)===7?'selected':''}>7 days</option>
+              <option value="custom" ${![3,5,7].includes(Number(days))?'selected':''}>Custom…</option>
+            </select>
+            <p class="muted" style="font-size:0.75rem;margin:0.35rem 0 0">In consecutive mode the feed pulls this many days of punch data.</p></div>
+        </div>
+        <div class="form-group aig-custom-days" style="${[3,5,7].includes(Number(days))?'display:none':''}">
+          <label class="form-label">Custom absent days (1–30)</label>
+          <input class="form-input" id="aig-days-custom" type="number" min="1" max="30" value="${esc(String(days))}">
         </div>
 
         <h3 style="font-size:0.9rem;margin:1.25rem 0 0.75rem">Revoke actions</h3>
         <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">Choose what happens when attendance rules match. <strong>No action</strong> only records the evaluation. Suspend blocks SSO; disable/deprovision is stronger; app revoke removes application assignments.</p>
         <div class="form-2col">
-          <div class="form-group"><label class="form-label">Missed punch (today after cutoff)</label>
+          <div class="form-group aig-daily-only"><label class="form-label">Missed punch (today after cutoff)</label>
             <select class="form-select" id="aig-miss-punch">${aigPunchPresetOptions(missPreset)}</select></div>
-          <div class="form-group"><label class="form-label">Consecutive absences</label>
+          <div class="form-group"><label class="form-label">Consecutive absences (N-day window)</label>
             <select class="form-select" id="aig-consec-punch">${aigPunchPresetOptions(consecPreset)}</select></div>
         </div>
 
@@ -8898,6 +8921,20 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       </div>
     </div>`);
 
+    const syncEvalModeUi = () => {
+      const consec = bd.querySelector('#aig-eval-mode').value === 'CONSECUTIVE_ABSENT';
+      bd.querySelectorAll('.aig-daily-only').forEach((el) => { el.style.display = consec ? 'none' : ''; });
+    };
+    const syncDaysUi = () => {
+      const custom = bd.querySelector('#aig-days').value === 'custom';
+      const box = bd.querySelector('.aig-custom-days');
+      if (box) box.style.display = custom ? '' : 'none';
+    };
+    bd.querySelector('#aig-eval-mode').addEventListener('change', syncEvalModeUi);
+    bd.querySelector('#aig-days').addEventListener('change', syncDaysUi);
+    syncEvalModeUi();
+    syncDaysUi();
+
     bd.querySelector('#aig-pol-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#aig-pol-save').addEventListener('click', async () => {
       const errEl = bd.querySelector('#aig-pol-err');
@@ -8910,6 +8947,11 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       const cutoffVal = bd.querySelector('#aig-cutoff').value;
       const missKey = bd.querySelector('#aig-miss-punch').value;
       const consecKey = bd.querySelector('#aig-consec-punch').value;
+      const evalModeVal = bd.querySelector('#aig-eval-mode').value;
+      const daysSel = bd.querySelector('#aig-days').value;
+      const daysVal = daysSel === 'custom'
+        ? (Number(bd.querySelector('#aig-days-custom')?.value) || 3)
+        : (Number(daysSel) || 3);
       const payload = {
         name,
         employee_scope: { departments: depts, employment_types },
@@ -8917,7 +8959,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         source_type: bd.querySelector('#aig-source').value,
         polling_interval: bd.querySelector('#aig-poll').value,
         cutoff_time: cutoffVal.length === 5 ? cutoffVal + ':00' : cutoffVal,
-        consecutive_days: Number(bd.querySelector('#aig-days').value) || 3,
+        evaluation_mode: evalModeVal,
+        consecutive_days: Math.min(30, Math.max(1, daysVal)),
         approval_enabled: mode === 'approval' ? 1 : 0,
         emergency_mode: mode === 'emergency' ? 1 : 0,
         identifier_field: bd.querySelector('#aig-id-field').value,
@@ -9201,12 +9244,18 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
           <div style="display:flex;flex-wrap:wrap;gap:0.75rem 1.5rem;align-items:center;margin-bottom:0.65rem">
             <strong>${esc(policy.name || 'Policy')}</strong>
             <span class="badge ${policy.enabled ? 'badge-success' : 'badge-danger'}">${policy.enabled ? 'ENABLED' : 'DISABLED'}</span>
-            <span class="muted" style="font-size:0.82rem">Cutoff ${esc(policy.cutoff_time || '—')}</span>
-            <span class="muted" style="font-size:0.82rem">Disable after <strong>${esc(String(policy.consecutive_days ?? '—'))}</strong> consecutive absent days</span>
+            <span class="badge badge-info">${policy.evaluation_mode === 'CONSECUTIVE_ABSENT' ? 'Consecutive absent only' : 'Daily live punch'}</span>
+            ${policy.evaluation_mode === 'CONSECUTIVE_ABSENT'
+              ? `<span class="muted" style="font-size:0.82rem">Window <strong>${esc(String(policy.consecutive_days ?? '—'))}</strong> days (feed consumes this range)</span>`
+              : `<span class="muted" style="font-size:0.82rem">Cutoff ${esc(policy.cutoff_time || '—')}</span>
+                 <span class="muted" style="font-size:0.82rem">Also consecutive ≥ <strong>${esc(String(policy.consecutive_days ?? '—'))}</strong> days</span>`}
           </div>
           <div class="muted" style="font-size:0.8rem;line-height:1.5">
-            <div><strong>NO_PUNCH_TODAY</strong> → ${esc(todayActs)}</div>
-            <div><strong>NO_PUNCH_CONSECUTIVE</strong> (≥${esc(String(policy.consecutive_days ?? 3))} days) → ${esc(consecActs)}</div>
+            ${policy.evaluation_mode === 'CONSECUTIVE_ABSENT'
+              ? `<div><strong>NO_PUNCH_CONSECUTIVE</strong> (≥${esc(String(policy.consecutive_days ?? 3))} days) → ${esc(consecActs)}</div>
+                 <div>Daily missed-punch rule is off for this policy.</div>`
+              : `<div><strong>NO_PUNCH_TODAY</strong> → ${esc(todayActs)}</div>
+                 <div><strong>NO_PUNCH_CONSECUTIVE</strong> (≥${esc(String(policy.consecutive_days ?? 3))} days) → ${esc(consecActs)}</div>`}
           </div>
         </div>
         <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">

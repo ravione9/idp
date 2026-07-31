@@ -79,7 +79,11 @@ export async function fetchAttendanceFromTruein(config: AttendanceIgaConfig): Pr
     throw new Error('Truein base URL is not configured');
   }
 
-  const lookback = tc.lookbackDays ?? 1;
+  const consecutiveMode = config.evaluation_mode === 'CONSECUTIVE_ABSENT';
+  // Consecutive mode: pull full N-day window. Daily mode: keep configured lookback (stop on first hit).
+  const lookback = consecutiveMode
+    ? Math.max(0, Number(config.consecutive_days || 3) - 1)
+    : (tc.lookbackDays ?? 1);
   const baseOffset = tc.dateOffsetDays ?? 0;
   const mapping = { ...TRUIN_DEFAULT_MAPPING, ...(config.file_mapping_json ?? {}) };
   const allRows: StagingRow[] = [];
@@ -88,7 +92,7 @@ export async function fetchAttendanceFromTruein(config: AttendanceIgaConfig): Pr
   for (let i = 0; i <= lookback; i++) {
     const offset = baseOffset - i;
     const preview = previewTrueinRequest(config, offset);
-    logger.info({ date: preview.date, url: preview.url, offset }, 'Fetching Truein attendance');
+    logger.info({ date: preview.date, url: preview.url, offset, consecutiveMode }, 'Fetching Truein attendance');
 
     const rows = await fetchAttendanceFromApi({
       apiUrl: preview.url,
@@ -111,7 +115,8 @@ export async function fetchAttendanceFromTruein(config: AttendanceIgaConfig): Pr
       allRows.push(row);
     }
 
-    if (rows.length > 0) break;
+    // Daily live: first non-empty day is enough. Consecutive: merge every day in the window.
+    if (rows.length > 0 && !consecutiveMode) break;
   }
 
   // Empty feed is not a hard failure — orchestrator skips rule evaluation safely.

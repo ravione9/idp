@@ -38,6 +38,7 @@ function mapConfigRow(row: Record<string, unknown>): AttendanceIgaConfig {
     file_mapping_json: parseJsonField<Record<string, string>>(row['file_mapping_json']),
     identifier_field: (row['identifier_field'] as AttendanceIgaConfig['identifier_field']) ?? 'EMPLOYEE_ID',
     cutoff_time: String(row['cutoff_time'] ?? '10:00:00'),
+    evaluation_mode: row['evaluation_mode'] === 'CONSECUTIVE_ABSENT' ? 'CONSECUTIVE_ABSENT' : 'DAILY_LIVE',
     consecutive_days: Number(row['consecutive_days'] ?? 3),
     approval_enabled: Number(row['approval_enabled'] ?? 0),
     emergency_mode: Number(row['emergency_mode'] ?? 0),
@@ -127,9 +128,9 @@ export async function createAttendanceIgaConfig(params: {
        (name, slug, employee_scope, enabled, source_type, api_provider, api_url, api_method,
         api_auth_type, api_auth_config, api_headers, api_body_template, api_config,
         sftp_config, polling_interval, file_mapping_json, identifier_field, cutoff_time,
-        consecutive_days, approval_enabled, emergency_mode, notify_channels, notify_recipients,
-        connector_actions, updated_by)
-     VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        evaluation_mode, consecutive_days, approval_enabled, emergency_mode, notify_channels,
+        notify_recipients, connector_actions, updated_by)
+     VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       slug,
@@ -148,6 +149,7 @@ export async function createAttendanceIgaConfig(params: {
       source?.file_mapping_json ? JSON.stringify(source.file_mapping_json) : null,
       source?.identifier_field ?? 'EMPLOYEE_ID',
       source?.cutoff_time ?? '10:00:00',
+      source?.evaluation_mode ?? 'DAILY_LIVE',
       source?.consecutive_days ?? 3,
       source?.approval_enabled ?? 0,
       source?.emergency_mode ?? 0,
@@ -288,6 +290,18 @@ export function scheduledPipelineSource(
     case 'BOTH': return 'BOTH';
     default: return null;
   }
+}
+
+/** Days of punch feed to pull: consecutive mode uses the policy window; daily uses API lookback. */
+export function attendanceFetchLookbackDays(config: AttendanceIgaConfig): number {
+  if (config.evaluation_mode === 'CONSECUTIVE_ABSENT') {
+    return Math.max(0, Number(config.consecutive_days || 3) - 1);
+  }
+  const apiCfg = (config.api_config ?? {}) as { lookbackDays?: number };
+  const sftp = config.sftp_config;
+  if (typeof apiCfg.lookbackDays === 'number' && apiCfg.lookbackDays >= 0) return apiCfg.lookbackDays;
+  if (typeof sftp?.lookbackDays === 'number' && sftp.lookbackDays >= 0) return sftp.lookbackDays;
+  return 1;
 }
 
 export function pollingIntervalMs(interval: AttendanceIgaConfig['polling_interval']): number | null {
