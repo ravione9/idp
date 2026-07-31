@@ -9159,11 +9159,21 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
 
+  const execFilters = { q: '', status: '', rule: '', rolledBack: '', action: '' };
+
   async function loadExecutions() {
     const area = wrap.querySelector('#tab-executions');
     area.innerHTML = loading();
     try {
-      const resp = await api.attendanceIgaExecutions(50, selectedConfigId);
+      const resp = await api.attendanceIgaExecutions({
+        configId: selectedConfigId,
+        limit: 200,
+        q: execFilters.q || undefined,
+        status: execFilters.status || undefined,
+        rule: execFilters.rule || undefined,
+        rolledBack: execFilters.rolledBack,
+        action: execFilters.action || undefined,
+      });
       const rows = norm(resp);
       const policy = resp?.policy || {};
       const exceptions = Array.isArray(resp?.exceptions) ? resp.exceptions : [];
@@ -9176,11 +9186,17 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       const todayActs = (policy.actions?.no_punch_today || []).join(', ') || 'SUSPEND_USER';
       const consecActs = (policy.actions?.no_punch_consecutive || []).join(', ') || 'DISABLE_USER';
       const exTypeLabel = (t) => ({ VIP_USER: 'VIP', EMPLOYEE: 'Employee', DEPARTMENT: 'Department' }[t] || t);
+      const rollbackable = rows.filter(r => !r.rolled_back);
       area.innerHTML = `
-        <div class="aap-actions"><div>
-          <h3 class="section-title">Action Executions</h3>
-          <p class="subtitle">Audit trail of suspend / disable actions. Pipeline refuses to run while the policy is off.</p>
-        </div></div>
+        <div class="aap-actions" style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start">
+          <div>
+            <h3 class="section-title">Action Executions</h3>
+            <p class="subtitle">Audit trail of suspend / disable actions. Pipeline refuses to run while the policy is off.</p>
+          </div>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <button type="button" class="btn btn-secondary btn-sm" id="aig-bulk-rb" disabled>Bulk rollback (0)</button>
+          </div>
+        </div>
         <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
           <div style="display:flex;flex-wrap:wrap;gap:0.75rem 1.5rem;align-items:center;margin-bottom:0.65rem">
             <strong>${esc(policy.name || 'Policy')}</strong>
@@ -9205,19 +9221,112 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
           </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><p>No exception users configured for this policy.</p></div></td></tr>'}
           </tbody></table></div>
         </div>
+        <form id="aig-exec-filters" class="card" style="margin-bottom:1rem;padding:0.85rem 1rem;display:flex;flex-wrap:wrap;gap:0.65rem;align-items:end">
+          <div class="field" style="margin:0;min-width:160px;flex:1">
+            <label>Search</label>
+            <input name="q" class="form-input" placeholder="Name, emp id, email" value="${esc(execFilters.q)}" />
+          </div>
+          <div class="field" style="margin:0;min-width:120px">
+            <label>Status</label>
+            <select name="status" class="form-select">
+              <option value="">All</option>
+              <option value="SUCCESS" ${execFilters.status==='SUCCESS'?'selected':''}>Success</option>
+              <option value="PARTIAL" ${execFilters.status==='PARTIAL'?'selected':''}>Partial</option>
+              <option value="FAILED" ${execFilters.status==='FAILED'?'selected':''}>Failed</option>
+            </select>
+          </div>
+          <div class="field" style="margin:0;min-width:140px">
+            <label>Rule</label>
+            <select name="rule" class="form-select">
+              <option value="">All</option>
+              <option value="NO_PUNCH_TODAY" ${execFilters.rule==='NO_PUNCH_TODAY'?'selected':''}>NO_PUNCH_TODAY</option>
+              <option value="NO_PUNCH_CONSECUTIVE" ${execFilters.rule==='NO_PUNCH_CONSECUTIVE'?'selected':''}>NO_PUNCH_CONSECUTIVE</option>
+              <option value="TERMINATED" ${execFilters.rule==='TERMINATED'?'selected':''}>TERMINATED</option>
+            </select>
+          </div>
+          <div class="field" style="margin:0;min-width:130px">
+            <label>Action</label>
+            <select name="action" class="form-select">
+              <option value="">All</option>
+              <option value="SUSPEND" ${execFilters.action==='SUSPEND'?'selected':''}>Suspend</option>
+              <option value="DISABLE" ${execFilters.action==='DISABLE'?'selected':''}>Disable</option>
+              <option value="FAILED" ${execFilters.action==='FAILED'?'selected':''}>Failed / partial</option>
+            </select>
+          </div>
+          <div class="field" style="margin:0;min-width:130px">
+            <label>Rollback</label>
+            <select name="rolledBack" class="form-select">
+              <option value="">All</option>
+              <option value="0" ${execFilters.rolledBack==='0'?'selected':''}>Not rolled back</option>
+              <option value="1" ${execFilters.rolledBack==='1'?'selected':''}>Rolled back</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">Apply filters</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="aig-exec-clear">Clear</button>
+        </form>
+        <div class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">${rows.length} result(s)${rollbackable.length ? ` · ${rollbackable.length} can be rolled back` : ''}</div>
         <div class="table-wrap"><table><thead><tr>
-          <th>Time</th><th>Employee</th><th>Rule</th><th>Absent days</th><th>Policy action</th><th>Status</th><th></th>
+          <th style="width:2rem"><input type="checkbox" id="aig-exec-all" title="Select all rollbackable" ${rollbackable.length ? '' : 'disabled'} /></th>
+          <th>Time</th><th>Employee</th><th>Rule</th><th>Absent days</th><th>Policy action</th><th>Status</th><th>Failure detail</th><th></th>
         </tr></thead><tbody>
-        ${rows.length ? rows.map(r => `<tr>
+        ${rows.length ? rows.map(r => `<tr class="${r.failed ? 'row-warn' : ''}">
+          <td>${r.rolled_back ? '' : `<input type="checkbox" class="aig-exec-cb" value="${esc(r.id)}" />`}</td>
           <td class="muted">${fmtDate(r.executed_at)}</td>
           <td class="cell-strong">${esc(r.full_name||r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}</div></td>
           <td><span class="badge badge-neutral">${esc(r.rule_key)}</span></td>
           <td>${r.absent_days != null ? `<strong>${esc(String(r.absent_days))}</strong>` : '—'}</td>
           <td>${actionBadge(r.policy_action)}</td>
-          <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td>
+          <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span>${r.failed && r.status === 'SUCCESS' ? '' : ''}</td>
+          <td style="max-width:240px;font-size:0.78rem">${r.failure_reason
+            ? `<span class="badge badge-danger">Failed</span> <span class="muted" title="${esc(r.failure_reason)}">${esc(String(r.failure_reason).slice(0, 160))}</span>`
+            : '<span class="muted">—</span>'}</td>
           <td>${r.rolled_back ? '<span class="badge badge-neutral">Rolled back</span>' : `<button class="btn btn-sm btn-secondary aig-rb" data-id="${esc(r.id)}">Rollback</button>`}</td>
-        </tr>`).join('') : '<tr><td colspan="7"><div class="empty-state"><p>No executions yet.</p></div></td></tr>'}
+        </tr>`).join('') : '<tr><td colspan="9"><div class="empty-state"><p>No executions match these filters.</p></div></td></tr>'}
         </tbody></table></div>`;
+
+      const bulkBtn = area.querySelector('#aig-bulk-rb');
+      const syncBulk = () => {
+        const n = area.querySelectorAll('.aig-exec-cb:checked').length;
+        bulkBtn.disabled = n === 0;
+        bulkBtn.textContent = `Bulk rollback (${n})`;
+      };
+      area.querySelector('#aig-exec-all')?.addEventListener('change', (e) => {
+        area.querySelectorAll('.aig-exec-cb').forEach((cb) => { cb.checked = e.target.checked; });
+        syncBulk();
+      });
+      area.querySelectorAll('.aig-exec-cb').forEach((cb) => cb.addEventListener('change', syncBulk));
+      bulkBtn?.addEventListener('click', async () => {
+        const ids = [...area.querySelectorAll('.aig-exec-cb:checked')].map((cb) => cb.value);
+        if (!ids.length) return;
+        if (!confirm(`Rollback ${ids.length} execution(s) and restore prior access?`)) return;
+        bulkBtn.disabled = true;
+        try {
+          const r = await api.bulkRollbackAttendanceIgaExecutions(ids, selectedConfigId);
+          alert(`Bulk rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed`);
+          await loadExecutions();
+          await loadStats();
+        } catch (e) { alert(e.message); bulkBtn.disabled = false; syncBulk(); }
+      });
+
+      area.querySelector('#aig-exec-filters')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        execFilters.q = String(fd.get('q') || '').trim();
+        execFilters.status = String(fd.get('status') || '');
+        execFilters.rule = String(fd.get('rule') || '');
+        execFilters.action = String(fd.get('action') || '');
+        execFilters.rolledBack = String(fd.get('rolledBack') || '');
+        void loadExecutions();
+      });
+      area.querySelector('#aig-exec-clear')?.addEventListener('click', () => {
+        execFilters.q = '';
+        execFilters.status = '';
+        execFilters.rule = '';
+        execFilters.action = '';
+        execFilters.rolledBack = '';
+        void loadExecutions();
+      });
+
       area.querySelectorAll('.aig-rb').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Restore access from rollback snapshot?')) return;

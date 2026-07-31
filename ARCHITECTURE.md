@@ -672,7 +672,7 @@ To add a new migration:
 | `GET` | `/api/admin/attendance-iga/imports[/:id/staging]?configId=` | Import run history + staging rows |
 | `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (`configId`, REST API / SFTP / CSV / evaluate-only) |
 | `GET`/`POST` | `/api/admin/attendance-iga/approvals[/:id/decision]` | Pending approvals; approve / reject / skip |
-| `GET`/`POST` | `/api/admin/attendance-iga/executions[/:id/rollback]?configId=` | Execution audit (+ policy summary, absent days, exception list) + rollback; pipeline refuses runs when policy `enabled=0` |
+| `GET`/`POST` | `/api/admin/attendance-iga/executions[…]?configId=` | Execution audit (filters, failure detail, policy/exceptions) + single/`bulk-rollback`; pipeline refuses runs when policy `enabled=0` |
 | `GET` | `/api/admin/attendance-iga/rollbacks` | Rollback history |
 
 ### 8.5 IGA + multi-protocol AM (live read APIs; write paths return 501 until service layer ships)
@@ -1054,6 +1054,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-31 — Attendance IGA Executions filters + bulk rollback
+
+**Why** — Ops needed to filter executions, bulk-rollback mistaken suspensions, and see why a suspend/disable failed.
+
+**What changed:**
+
+- **`GET …/executions`** — query filters `q`, `status`, `rule`, `rolledBack`, `action` (SUSPEND/DISABLE/FAILED); returns `error_message` / `failure_reason`.
+- **`POST …/executions/bulk-rollback`** — rollback up to 100 selected execution IDs for the active policy.
+- **Executions UI** — filter bar, checkboxes + Bulk rollback, **Failure detail** column.
 
 ### `4b46f56` — 2026-07-31 — Attendance IGA: disabled-policy guard + richer Executions
 

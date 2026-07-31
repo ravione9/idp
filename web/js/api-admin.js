@@ -169,8 +169,23 @@ Object.assign(api, {
   runAttendanceIga:       (data) => f('/api/admin/attendance-iga/run', { method: 'POST', body: JSON.stringify(data) }),
   attendanceIgaApprovals: (status = 'PENDING') => f(`/api/admin/attendance-iga/approvals?status=${encodeURIComponent(status)}`),
   attendanceIgaApprovalDecision: (id, data) => f(`/api/admin/attendance-iga/approvals/${id}/decision`, { method: 'POST', body: JSON.stringify(data) }),
-  attendanceIgaExecutions: (limit = 50, configId = 1) => f(`/api/admin/attendance-iga/executions?limit=${limit}&configId=${configId}`),
+  attendanceIgaExecutions: (params = {}) => {
+    const q = new URLSearchParams();
+    q.set('configId', String(params.configId ?? 1));
+    q.set('limit', String(params.limit ?? 100));
+    if (params.q) q.set('q', params.q);
+    if (params.status) q.set('status', params.status);
+    if (params.rule) q.set('rule', params.rule);
+    if (params.rolledBack != null && params.rolledBack !== '') q.set('rolledBack', String(params.rolledBack));
+    if (params.action) q.set('action', params.action);
+    return f(`/api/admin/attendance-iga/executions?${q}`);
+  },
   rollbackAttendanceIgaExecution: (id) => f(`/api/admin/attendance-iga/executions/${id}/rollback`, { method: 'POST' }),
+  bulkRollbackAttendanceIgaExecutions: (ids, configId = 1) =>
+    f('/api/admin/attendance-iga/executions/bulk-rollback', {
+      method: 'POST',
+      body: JSON.stringify({ ids, configId }),
+    }),
   attendanceIgaRollbacks: () => f('/api/admin/attendance-iga/rollbacks'),
 
   // Tickets,

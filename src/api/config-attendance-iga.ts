@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
-import { query, execute } from '../db/connection.js';
+import { query, queryOne, execute } from '../db/connection.js';
 import {
   loadAttendanceIgaConfig,
   listAttendanceIgaConfigs,
@@ -506,8 +506,44 @@ router.post('/approvals/:id/decision', asyncHandler(async (req, res) => {
 }));
 
 router.get('/executions', asyncHandler(async (req, res) => {
-  const limit = Math.min(parseInt((req.query['limit'] as string) ?? '50', 10), 200);
+  const limit = Math.min(parseInt((req.query['limit'] as string) ?? '100', 10), 500);
   const configId = configIdFromReq(req);
+  const q = String(req.query['q'] ?? '').trim().slice(0, 120);
+  const statusFilter = String(req.query['status'] ?? '').trim().toUpperCase();
+  const ruleFilter = String(req.query['rule'] ?? '').trim().slice(0, 50);
+  const rolledBackRaw = String(req.query['rolledBack'] ?? '').trim();
+  const actionFilter = String(req.query['action'] ?? '').trim().toUpperCase(); // SUSPEND | DISABLE | FAILED
+
+  const where: string[] = ['r.config_id = ?'];
+  const params: unknown[] = [configId];
+
+  if (q) {
+    where.push('(e.full_name LIKE ? OR e.emp_id LIKE ? OR e.email_corp LIKE ?)');
+    const like = `%${q}%`;
+    params.push(like, like, like);
+  }
+  if (statusFilter && ['SUCCESS', 'FAILED', 'PARTIAL'].includes(statusFilter)) {
+    where.push('x.status = ?');
+    params.push(statusFilter);
+  }
+  if (ruleFilter) {
+    where.push('x.rule_key = ?');
+    params.push(ruleFilter);
+  }
+  if (rolledBackRaw === '1' || rolledBackRaw === '0') {
+    where.push('x.rolled_back = ?');
+    params.push(Number(rolledBackRaw));
+  }
+  if (actionFilter === 'FAILED') {
+    where.push(`(x.status IN ('FAILED','PARTIAL') OR (x.error_message IS NOT NULL AND x.error_message <> ''))`);
+  } else if (actionFilter === 'SUSPEND') {
+    where.push(`(x.actions_taken LIKE '%SUSPEND_USER%')`);
+  } else if (actionFilter === 'DISABLE') {
+    where.push(`(x.actions_taken LIKE '%DISABLE_USER%')`);
+  }
+
+  params.push(limit);
+
   const [config, punchActions, exceptions, rows] = await Promise.all([
     loadAttendanceIgaConfig(configId),
     getPunchRuleActions(configId),
@@ -538,6 +574,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
       eval_attendance_status: string | null;
       actions_taken: unknown;
       status: string;
+      error_message: string | null;
       rolled_back: number;
       executed_at: Date;
       executed_by: string;
@@ -547,7 +584,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
       `SELECT x.id, x.emp_id, e.full_name, e.dept_id, x.rule_key,
               x.absent_days, x.attendance_status,
               ev.attendance_status AS eval_attendance_status,
-              x.actions_taken, x.status, x.rolled_back, x.executed_at, x.executed_by,
+              x.actions_taken, x.status, x.error_message, x.rolled_back, x.executed_at, x.executed_by,
               c.name AS policy_name, c.consecutive_days
          FROM attendance_iga_executions x
          JOIN employees e ON e.emp_id = x.emp_id
@@ -557,10 +594,10 @@ router.get('/executions', asyncHandler(async (req, res) => {
            ON ev.import_run_id = x.import_run_id
           AND ev.emp_id = x.emp_id
           AND ev.rule_key = x.rule_key
-        WHERE r.config_id = ?
+        WHERE ${where.join(' AND ')}
         ORDER BY x.executed_at DESC
         LIMIT ?`,
-      [configId, limit],
+      params,
     ),
   ]);
 
@@ -584,17 +621,30 @@ router.get('/executions', asyncHandler(async (req, res) => {
       : actions.includes('SUSPEND_USER')
         ? 'SUSPEND'
         : actions[0] ?? null;
+    const failed = row.status === 'FAILED' || row.status === 'PARTIAL' || Boolean(row.error_message);
     return {
       ...row,
       absent_days: absentDays,
       attendance_status: status,
       policy_action: policyAction,
       actions_list: actions,
+      failed,
+      failure_reason: row.error_message
+        || (row.status === 'FAILED' ? 'Suspend/disable failed' : null)
+        || (row.status === 'PARTIAL' ? 'Partial failure during action execution' : null),
     };
   });
 
   res.json({
     data,
+    filters: {
+      q: q || null,
+      status: statusFilter || null,
+      rule: ruleFilter || null,
+      rolledBack: rolledBackRaw === '' ? null : rolledBackRaw,
+      action: actionFilter || null,
+      limit,
+    },
     policy: {
       id: config.id,
       name: config.name,
@@ -604,6 +654,49 @@ router.get('/executions', asyncHandler(async (req, res) => {
       actions: punchActions,
     },
     exceptions,
+  });
+}));
+
+router.post('/executions/bulk-rollback', asyncHandler(async (req, res) => {
+  const idsRaw = req.body?.ids;
+  if (!Array.isArray(idsRaw) || idsRaw.length === 0) {
+    res.status(400).json({ error: 'ids array required' });
+    return;
+  }
+  const ids = [...new Set(idsRaw.map((id) => String(id)).filter(Boolean))].slice(0, 100);
+  const configId = configIdFromReq(req);
+  const byActor = actor(req);
+  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+
+  for (const id of ids) {
+    const owned = await queryOne<{ id: string; rolled_back: number }>(
+      `SELECT x.id, x.rolled_back
+         FROM attendance_iga_executions x
+         JOIN attendance_iga_import_runs r ON r.id = x.import_run_id
+        WHERE x.id = ? AND r.config_id = ?`,
+      [id, configId],
+    );
+    if (!owned) {
+      results.push({ id, ok: false, error: 'Not found for this policy' });
+      continue;
+    }
+    if (owned.rolled_back) {
+      results.push({ id, ok: false, error: 'Already rolled back' });
+      continue;
+    }
+    try {
+      await rollbackExecution(id, byActor);
+      results.push({ id, ok: true });
+    } catch (err) {
+      results.push({ id, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  res.json({
+    success: results.every((r) => r.ok),
+    rolledBack: results.filter((r) => r.ok).length,
+    failed: results.filter((r) => !r.ok).length,
+    results,
   });
 }));
 
