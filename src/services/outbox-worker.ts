@@ -39,11 +39,27 @@ interface OutboxRow {
 // ---------------------------------------------------------------------------
 const redis = new Redis(config.redis.url, { lazyConnect: true, maxRetriesPerRequest: 3 });
 
-const adapterRegistry: Record<string, BaseAdapter> = {
-  GOOGLE: new GoogleAdapter(redis, config.google.saKeyJson),
-  ZOHO:   new ZohoAdapter(redis, config.zoho.clientId, config.zoho.clientSecret, config.zoho.scimBaseUrl),
-  AD:     new ADAdapter(redis, config.ad.url, config.ad.bindDn, config.ad.bindPassword, config.ad.baseDn),
-};
+/** Build adapters only when env credentials exist (portal connectors may supply them later). */
+function buildAdapterRegistry(): Record<string, BaseAdapter> {
+  const registry: Record<string, BaseAdapter> = {
+    ZOHO: new ZohoAdapter(redis, config.zoho.clientId, config.zoho.clientSecret, config.zoho.scimBaseUrl),
+  };
+  if (config.google.saKeyJson.trim()) {
+    registry['GOOGLE'] = new GoogleAdapter(redis, config.google.saKeyJson);
+  }
+  if (config.ad.url.trim() && config.ad.bindDn.trim() && config.ad.baseDn.trim()) {
+    registry['AD'] = new ADAdapter(
+      redis,
+      config.ad.url,
+      config.ad.bindDn,
+      config.ad.bindPassword,
+      config.ad.baseDn,
+    );
+  }
+  return registry;
+}
+
+const adapterRegistry: Record<string, BaseAdapter> = buildAdapterRegistry();
 
 // ---------------------------------------------------------------------------
 // Leader election

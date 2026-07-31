@@ -1066,6 +1066,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `TBD` — 2026-07-31 — Optional Google/AD/HRMS env for portal-first K8s boot
+
+**Why** — Multiverse pods configure Google OIDC / AD / HRMS from the portal; requiring them in Vault blocked boot. Redis TLS AUTH URLs also failed strict `z.string().url()`.
+
+**What changed:**
+
+- **`src/config.ts`** — `GOOGLE_*`, `AD_*`, `HRMS_*` optional at boot; `REDIS_URL` accepts `redis://` / `rediss://` (encode special chars in password).
+- **`src/services/outbox-worker.ts`** — register Google/AD adapters only when env credentials present.
+- **`src/services/ad-auth.ts`** — clear error when AD host missing.
+
 ### `09ed6be` — 2026-07-31 — Multiverse prod values + 15y SAML keys for Vault
 
 **Why** — Production cutover on `lk-multiverse-platform-eks` (`idp.lenskart.com`) needs a commit-ready Helm values overlay, Vault key checklist, and offline 15-year SAML signing material (not in-pod auto-keygen).
