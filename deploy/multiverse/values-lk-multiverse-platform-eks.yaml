@@ -6,9 +6,7 @@
 #     -f ./multiverse/idp/values-lk-multiverse-platform-eks.yaml \
 #     --set image.tag=<git-sha>
 #
-# Secrets: stored in Vault at multiverse/config/idp (KV v1).
-# Pods use Vault Agent Injector — must SOURCE /vault/secrets/idp.env into process env
-# (IDP is Node; unlike CCMS it does NOT read the file). See vault-agent-idp-fix.yaml.
+# Secrets: Vault KV v1 at multiverse/config/idp — app loads at boot via VAULT_* env (same as ccms-playground).
 # Live-infra: vault role idp bound to idp-sa in it-idp.
 
 ingress_api_version: networking.k8s.io/v1
@@ -115,7 +113,6 @@ deployment:
 
 terminationGracePeriodSeconds: 35
 
-# Non-secret config only — secrets live in Vault multiverse/config/idp
 envvars:
   SKIP_MIGRATIONS_ON_BOOT: "true"
   NODE_ENV: production
@@ -132,12 +129,14 @@ envvars:
   DB_NAME: "idp"
   SQS_HRMS_EVENTS_URL: "https://sqs.ap-south-1.amazonaws.com/964059510816/idp-prod-sqs.fifo"
   SQS_CELERY_BROKER_URL: "https://sqs.ap-south-1.amazonaws.com/964059510816/idp-prod-sqs.fifo"
-
-# Vault Agent Injector (platform standard for Node apps)
-vault:
-  enabled: true
-  role: idp
-  path: multiverse/config/idp
+  VAULT_ENABLED: "true"
+  VAULT_ROLE: idp
+  VAULT_DEFAULT_CONTEXT: idp
+  VAULT_BACKEND: multiverse/config
+  VAULT_URI: http://vault.infra.svc.cluster.local:8200
+  VAULT_AUTHENTICATION: KUBERNETES
+  VAULT_KUBERNETES-PATH: kubernetes
+  VAULT_SERVICE-ACCOUNT-TOKEN-FILE: /var/run/secrets/kubernetes.io/serviceaccount/token
 
 ingress:
   ingressClassName: alb
