@@ -6,7 +6,8 @@
 #     -f ./multiverse/idp/values-lk-multiverse-platform-eks.yaml \
 #     --set image.tag=<git-sha>
 #
-# Secrets: Vault KV v1 at multiverse/config/idp — app loads at boot via VAULT_* env (same as ccms-playground).
+# Secrets: Vault KV v1 at multiverse/config/idp — CCMS-style VAULT_* env (app calls Vault at boot).
+# Requires idp image with src/vault/load-secrets.ts.
 # Live-infra: vault role idp bound to idp-sa in it-idp.
 
 ingress_api_version: networking.k8s.io/v1
