@@ -1055,23 +1055,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-07-31 — Attendance IGA Import History: zero-data = no actions
+### `0f021d7` — 2026-07-31 — Attendance IGA Executions date groups/export + Import History clarity
 
-**Why** — FAILED imports with Total/OK/Failed all `0` looked like empty pipeline noise; ops need to see that no feed was loaded and no suspend/disable ran.
-
-**What changed:**
-
-- **Import History UI** — Outcome + Detail columns; when totals are 0, label as policy-off / no connection / empty feed (no policy actions). Surfaces `error_message` from the run.
-- Asset cache bump `2026-07-31-aiga5`.
-
-### `pending` — 2026-07-31 — Attendance IGA Executions: date groups + CSV export
-
-**Why** — Ops need to review suspend/disable actions by calendar day and export filtered results.
+**Why** — Ops need to review suspend/disable actions by calendar day, export filtered results, and understand that FAILED imports with Total=0 mean no feed/connection and no policy actions.
 
 **What changed:**
 
 - **`GET …/executions`** — `from`/`to` date filters; response includes `groups[]` (per-day counts + items); `export=csv` returns a downloadable CSV (higher limit).
 - **Executions UI** — date section headers with day stats, From/To filters, **Export CSV**, select-by-day for bulk rollback.
+- **Import History UI** — Outcome + Detail columns; when totals are 0, label as policy-off / no connection / empty feed (no policy actions). Surfaces `error_message` from the run.
+- Asset cache bump `2026-07-31-aiga5`.
 
 ### `ae5c2c1` — 2026-07-31 — Attendance IGA evaluation mode (daily vs consecutive)
 
