@@ -1066,7 +1066,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `e9b2fbb` — 2026-07-31 — Optional Google/AD/HRMS env for portal-first K8s boot
+### `a611239` — 2026-07-31 — Optional Google/AD/HRMS env for portal-first K8s boot
 
 **Why** — Multiverse pods configure Google OIDC / AD / HRMS from the portal; requiring them in Vault blocked boot. Redis TLS AUTH URLs also failed strict `z.string().url()`.
 
