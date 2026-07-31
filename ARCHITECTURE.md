@@ -1055,7 +1055,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-31 — Attendance IGA: disabled-policy guard + richer Executions
+### `4b46f56` — 2026-07-31 — Attendance IGA: disabled-policy guard + richer Executions
 
 **Why** — Users were suspended by the hourly scheduler even after ops assumed the policy was off; Executions tab lacked policy disable context, absent-day counts, and the exception list.
 
