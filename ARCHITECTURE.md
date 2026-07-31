@@ -880,7 +880,18 @@ Target topology is multi-replica API behind a load balancer with shared MySQL + 
 | Rate limiting | Redis fixed-window (`src/auth/rate-limit.ts`); fails open if Redis down |
 | In-process schedulers | Redis `SET NX PX` via `withSchedLock` (`src/utils/sched-lock.ts`) — attendance-iga, access-request-expiry, connector-health; lock expires (not released early) |
 | Outbox drain | Existing Redis leader election in `src/services/outbox-worker.ts` |
-| SAML/OIDC signing keys | Inject `SAML_IDP_PRIVATE_KEY_PEM` + `SAML_IDP_CERT_PEM` (Secret); `ensureSamlKeys()` short-circuits; `ensureOidcKeys()` reuses SAML key when SAML is enabled |
+| SAML/OIDC signing keys | Inject `SAML_IDP_PRIVATE_KEY_PEM` + `SAML_IDP_CERT_PEM` from Vault (Agent Injector → process env on Multiverse; or External Secrets elsewhere); `ensureSamlKeys()` short-circuits; `ensureOidcKeys()` reuses SAML key when SAML is enabled |
+
+**Lenskart Multiverse (prod EKS):** Helm values overlay and Vault key template live in this repo at `deploy/multiverse/` for copy into `multiverse-application-helm` — `values-lk-multiverse-platform-eks.yaml` (ns `it-idp`, host `idp.lenskart.com`, RDS + ElastiCache + SQS FIFO) and `vault-multiverse-config-idp.template.env` (KV v1 `multiverse/config/idp`, role `idp`, SA `idp-sa`). EC2/docker-compose config is unchanged.
+
+**Production SAML key generation (K8s / Vault):** do **not** rely on in-pod `ensureSamlKeys()` auto-generation (3-year validity, per-replica risk). Generate once offline with **15-year** validity and load into Vault:
+
+```bash
+bash scripts/generate-saml-idp-keys.sh
+# optional: bash scripts/generate-saml-idp-keys.sh /secure/out idp.lenskart.com
+```
+
+Writes (gitignored under `.saml-idp-keys/` by default): `saml-idp.key`, `saml-idp.crt`, `saml-signing.vault.json` (`privateKeyPem` + `certPem`). For Multiverse, put PEM values into Vault path `multiverse/config/idp` as `SAML_IDP_PRIVATE_KEY_PEM` / `SAML_IDP_CERT_PEM`. Dev/EC2 3-year helper remains `scripts/gen-saml-dev-keys.sh`.
 
 Single-instance docker-compose leaves `SKIP_MIGRATIONS_ON_BOOT` unset and always wins scheduler locks — behavior unchanged aside from rate limits now using Redis (already required).
 
@@ -1054,6 +1065,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `TBD` — 2026-07-31 — Multiverse prod values + 15y SAML keys for Vault
+
+**Why** — Production cutover on `lk-multiverse-platform-eks` (`idp.lenskart.com`) needs a commit-ready Helm values overlay, Vault key checklist, and offline 15-year SAML signing material (not in-pod auto-keygen).
+
+**What changed:**
+
+- **`deploy/multiverse/values-lk-multiverse-platform-eks.yaml`** — Multiverse chart values: RDS `idp-prod-mysql…`, Redis TLS primary node, SQS FIFO, Vault Agent path `multiverse/config/idp`, internal ALB + ACM.
+- **`deploy/multiverse/vault-multiverse-config-idp.template.env`** — Vault secret key template (placeholders only).
+- **`scripts/generate-saml-idp-keys.sh`** — openssl RSA-2048 self-signed cert (default CN `idp.lenskart.com`, 5475 days); writes key/cert + `saml-signing.vault.json`; does not patch `.env`.
+- **`.gitignore`** — `.saml-idp-keys/`, `*.vault.json`.
+- **§11.2** — Multiverse + Vault Agent notes; EC2 config unchanged.
 
 ### `0f021d7` — 2026-07-31 — Attendance IGA Executions date groups/export + Import History clarity
 
