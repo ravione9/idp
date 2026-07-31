@@ -1066,7 +1066,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `09ed6be` — 2026-07-31 — Multiverse prod values + 15y SAML keys for Vault
+### `7922fc9` — 2026-07-31 — Multiverse prod values + 15y SAML keys for Vault
 
 **Why** — Production cutover on `lk-multiverse-platform-eks` (`idp.lenskart.com`) needs a commit-ready Helm values overlay, Vault key checklist, and offline 15-year SAML signing material (not in-pod auto-keygen).
 
