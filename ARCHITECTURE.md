@@ -1055,7 +1055,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### TBD — 2026-07-31 — Attendance IGA Executions filters + bulk rollback
+### `ab07758` — 2026-07-31 — Attendance IGA Executions filters + bulk rollback
 
 **Why** — Ops needed to filter executions, bulk-rollback mistaken suspensions, and see why a suspend/disable failed.
 
