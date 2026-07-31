@@ -672,7 +672,7 @@ To add a new migration:
 | `GET` | `/api/admin/attendance-iga/imports[/:id/staging]?configId=` | Import run history + staging rows |
 | `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (`configId`, REST API / SFTP / CSV / evaluate-only) |
 | `GET`/`POST` | `/api/admin/attendance-iga/approvals[/:id/decision]` | Pending approvals; approve / reject / skip |
-| `GET`/`POST` | `/api/admin/attendance-iga/executions[/:id/rollback]` | Execution audit + rollback |
+| `GET`/`POST` | `/api/admin/attendance-iga/executions[/:id/rollback]?configId=` | Execution audit (+ policy summary, absent days, exception list) + rollback; pipeline refuses runs when policy `enabled=0` |
 | `GET` | `/api/admin/attendance-iga/rollbacks` | Rollback history |
 
 ### 8.5 IGA + multi-protocol AM (live read APIs; write paths return 501 until service layer ships)
@@ -1054,6 +1054,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### TBD — 2026-07-31 — Attendance IGA: disabled-policy guard + richer Executions
+
+**Why** — Users were suspended by the hourly scheduler even after ops assumed the policy was off; Executions tab lacked policy disable context, absent-day counts, and the exception list.
+
+**What changed:**
+
+- **Pipeline guard** — `runAttendanceIgaPipeline` (and approval execute) refuse all import/suspend/disable work when `attendance_iga_config.enabled ≠ 1` (covers scheduler, manual Run, and internal API).
+- **Migration `053`** — `attendance_iga_executions.absent_days` + `attendance_status`.
+- **`GET /api/admin/attendance-iga/executions`** — scoped by `configId`; returns `policy` (enabled, consecutive_days, punch actions), `exceptions` (VIP/employee/dept), and per-row `absent_days` / `policy_action` (SUSPEND vs DISABLE).
+- **Executions UI** — policy summary, exception users table, Absent days + Policy action columns.
 
 ### `27e55bd` — 2026-07-30 — Security findings IDP-01 … IDP-06
 

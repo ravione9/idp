@@ -53,6 +53,8 @@ export async function executeAttendanceActions(params: {
   importRunId: string;
   executedBy: string;
   approvalId?: string;
+  absentDays?: number | null;
+  attendanceStatus?: string | null;
 }): Promise<{ executionId: string; status: 'SUCCESS' | 'FAILED' | 'PARTIAL'; snapshot: RollbackSnapshot }> {
   const executionId = uuidv4();
   const snapshot = await captureRollbackSnapshot(params.empId);
@@ -164,15 +166,18 @@ export async function executeAttendanceActions(params: {
 
   await execute(
     `INSERT INTO attendance_iga_executions
-       (id, import_run_id, approval_id, emp_id, rule_key, actions_taken, connector_used,
-        apps_removed, groups_removed, roles_removed, rollback_json, status, error_message, executed_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, import_run_id, approval_id, emp_id, rule_key, absent_days, attendance_status,
+        actions_taken, connector_used, apps_removed, groups_removed, roles_removed,
+        rollback_json, status, error_message, executed_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       executionId,
       params.importRunId,
       params.approvalId ?? null,
       params.empId,
       params.ruleKey,
+      params.absentDays ?? null,
+      params.attendanceStatus ?? null,
       JSON.stringify(actionsTaken),
       connectorUsed,
       JSON.stringify(appsRemoved),

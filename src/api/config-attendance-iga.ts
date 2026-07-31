@@ -507,14 +507,104 @@ router.post('/approvals/:id/decision', asyncHandler(async (req, res) => {
 
 router.get('/executions', asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt((req.query['limit'] as string) ?? '50', 10), 200);
-  const rows = await query(
-    `SELECT x.*, e.full_name, e.dept_id
-       FROM attendance_iga_executions x
-       JOIN employees e ON e.emp_id = x.emp_id
-      ORDER BY x.executed_at DESC LIMIT ?`,
-    [limit],
-  );
-  res.json({ data: rows });
+  const configId = configIdFromReq(req);
+  const [config, punchActions, exceptions, rows] = await Promise.all([
+    loadAttendanceIgaConfig(configId),
+    getPunchRuleActions(configId),
+    query<{
+      id: string;
+      exclusion_type: string;
+      value: string;
+      notes: string | null;
+      full_name: string | null;
+      email_corp: string | null;
+    }>(
+      `SELECT x.id, x.exclusion_type, x.value, x.notes, e.full_name, e.email_corp
+         FROM attendance_iga_exclusions x
+         LEFT JOIN employees e ON e.emp_id = x.value
+          AND x.exclusion_type IN ('VIP_USER', 'EMPLOYEE')
+        WHERE x.active = 1 AND x.config_id = ?
+        ORDER BY x.exclusion_type, x.value`,
+      [configId],
+    ),
+    query<{
+      id: string;
+      emp_id: string;
+      full_name: string;
+      dept_id: string | null;
+      rule_key: string;
+      absent_days: number | null;
+      attendance_status: string | null;
+      eval_attendance_status: string | null;
+      actions_taken: unknown;
+      status: string;
+      rolled_back: number;
+      executed_at: Date;
+      executed_by: string;
+      policy_name: string;
+      consecutive_days: number;
+    }>(
+      `SELECT x.id, x.emp_id, e.full_name, e.dept_id, x.rule_key,
+              x.absent_days, x.attendance_status,
+              ev.attendance_status AS eval_attendance_status,
+              x.actions_taken, x.status, x.rolled_back, x.executed_at, x.executed_by,
+              c.name AS policy_name, c.consecutive_days
+         FROM attendance_iga_executions x
+         JOIN employees e ON e.emp_id = x.emp_id
+         JOIN attendance_iga_import_runs r ON r.id = x.import_run_id
+         JOIN attendance_iga_config c ON c.id = r.config_id
+         LEFT JOIN attendance_iga_evaluations ev
+           ON ev.import_run_id = x.import_run_id
+          AND ev.emp_id = x.emp_id
+          AND ev.rule_key = x.rule_key
+        WHERE r.config_id = ?
+        ORDER BY x.executed_at DESC
+        LIMIT ?`,
+      [configId, limit],
+    ),
+  ]);
+
+  const data = rows.map((row) => {
+    const status = row.attendance_status ?? row.eval_attendance_status;
+    const match = status?.match(/no_punch_(\d+)/);
+    let absentDays = row.absent_days;
+    if (absentDays == null) {
+      if (row.rule_key === 'NO_PUNCH_TODAY') absentDays = 1;
+      else if (match) absentDays = Number(match[1]);
+      else if (row.rule_key === 'NO_PUNCH_CONSECUTIVE') absentDays = row.consecutive_days;
+    }
+    const actions = Array.isArray(row.actions_taken)
+      ? row.actions_taken.map(String)
+      : (() => {
+          try { return JSON.parse(String(row.actions_taken ?? '[]')) as string[]; }
+          catch { return []; }
+        })();
+    const policyAction = actions.includes('DISABLE_USER')
+      ? 'DISABLE'
+      : actions.includes('SUSPEND_USER')
+        ? 'SUSPEND'
+        : actions[0] ?? null;
+    return {
+      ...row,
+      absent_days: absentDays,
+      attendance_status: status,
+      policy_action: policyAction,
+      actions_list: actions,
+    };
+  });
+
+  res.json({
+    data,
+    policy: {
+      id: config.id,
+      name: config.name,
+      enabled: config.enabled === 1,
+      consecutive_days: config.consecutive_days,
+      cutoff_time: config.cutoff_time,
+      actions: punchActions,
+    },
+    exceptions,
+  });
 }));
 
 router.post('/executions/:id/rollback', asyncHandler(async (req, res) => {

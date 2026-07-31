@@ -169,7 +169,7 @@ Object.assign(api, {
   runAttendanceIga:       (data) => f('/api/admin/attendance-iga/run', { method: 'POST', body: JSON.stringify(data) }),
   attendanceIgaApprovals: (status = 'PENDING') => f(`/api/admin/attendance-iga/approvals?status=${encodeURIComponent(status)}`),
   attendanceIgaApprovalDecision: (id, data) => f(`/api/admin/attendance-iga/approvals/${id}/decision`, { method: 'POST', body: JSON.stringify(data) }),
-  attendanceIgaExecutions: (limit = 50) => f(`/api/admin/attendance-iga/executions?limit=${limit}`),
+  attendanceIgaExecutions: (limit = 50, configId = 1) => f(`/api/admin/attendance-iga/executions?limit=${limit}&configId=${configId}`),
   rollbackAttendanceIgaExecution: (id) => f(`/api/admin/attendance-iga/executions/${id}/rollback`, { method: 'POST' }),
   attendanceIgaRollbacks: () => f('/api/admin/attendance-iga/rollbacks'),
 

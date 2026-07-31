@@ -117,6 +117,8 @@ export interface RuleEvaluation {
   ruleKey: string;
   ruleName: string;
   attendanceStatus: string;
+  /** Consecutive calendar days without punch that triggered the rule (1 for same-day). */
+  absentDays: number | null;
   actionRecommended: string | null;
   skippedReason: string | null;
   actions: AttendanceAction[];

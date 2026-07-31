@@ -9163,18 +9163,61 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     const area = wrap.querySelector('#tab-executions');
     area.innerHTML = loading();
     try {
-      const rows = norm(await api.attendanceIgaExecutions());
+      const resp = await api.attendanceIgaExecutions(50, selectedConfigId);
+      const rows = norm(resp);
+      const policy = resp?.policy || {};
+      const exceptions = Array.isArray(resp?.exceptions) ? resp.exceptions : [];
       const statusBadge = s => ({ SUCCESS: 'badge-success', PARTIAL: 'badge-warning', FAILED: 'badge-danger' }[s] || 'badge-neutral');
+      const actionBadge = (pa) => {
+        if (pa === 'DISABLE') return '<span class="badge badge-danger">Disable (policy)</span>';
+        if (pa === 'SUSPEND') return '<span class="badge badge-warning">Suspend (policy)</span>';
+        return pa ? `<span class="badge badge-neutral">${esc(pa)}</span>` : '—';
+      };
+      const todayActs = (policy.actions?.no_punch_today || []).join(', ') || 'SUSPEND_USER';
+      const consecActs = (policy.actions?.no_punch_consecutive || []).join(', ') || 'DISABLE_USER';
+      const exTypeLabel = (t) => ({ VIP_USER: 'VIP', EMPLOYEE: 'Employee', DEPARTMENT: 'Department' }[t] || t);
       area.innerHTML = `
-        <div class="aap-actions"><div><h3 class="section-title">Action Executions</h3><p class="subtitle">Audit trail of suspend, disable, and access removal actions.</p></div></div>
-        <div class="table-wrap"><table><thead><tr><th>Time</th><th>Employee</th><th>Rule</th><th>Status</th><th>Actions</th><th></th></tr></thead><tbody>
+        <div class="aap-actions"><div>
+          <h3 class="section-title">Action Executions</h3>
+          <p class="subtitle">Audit trail of suspend / disable actions. Pipeline refuses to run while the policy is off.</p>
+        </div></div>
+        <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
+          <div style="display:flex;flex-wrap:wrap;gap:0.75rem 1.5rem;align-items:center;margin-bottom:0.65rem">
+            <strong>${esc(policy.name || 'Policy')}</strong>
+            <span class="badge ${policy.enabled ? 'badge-success' : 'badge-danger'}">${policy.enabled ? 'ENABLED' : 'DISABLED'}</span>
+            <span class="muted" style="font-size:0.82rem">Cutoff ${esc(policy.cutoff_time || '—')}</span>
+            <span class="muted" style="font-size:0.82rem">Disable after <strong>${esc(String(policy.consecutive_days ?? '—'))}</strong> consecutive absent days</span>
+          </div>
+          <div class="muted" style="font-size:0.8rem;line-height:1.5">
+            <div><strong>NO_PUNCH_TODAY</strong> → ${esc(todayActs)}</div>
+            <div><strong>NO_PUNCH_CONSECUTIVE</strong> (≥${esc(String(policy.consecutive_days ?? 3))} days) → ${esc(consecActs)}</div>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
+          <h4 style="margin:0 0 0.5rem;font-size:0.95rem">Exception users / exclusions</h4>
+          <p class="muted" style="margin:0 0 0.65rem;font-size:0.8rem">These identities are skipped by Attendance IGA (VIP, employee, or department).</p>
+          <div class="table-wrap"><table><thead><tr><th>Type</th><th>Value</th><th>Name</th><th>Notes</th></tr></thead><tbody>
+          ${exceptions.length ? exceptions.map(ex => `<tr>
+            <td><span class="badge badge-info">${esc(exTypeLabel(ex.exclusion_type))}</span></td>
+            <td class="mono">${esc(ex.value)}</td>
+            <td>${esc(ex.full_name || '—')}</td>
+            <td class="muted">${esc(ex.notes || '—')}</td>
+          </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><p>No exception users configured for this policy.</p></div></td></tr>'}
+          </tbody></table></div>
+        </div>
+        <div class="table-wrap"><table><thead><tr>
+          <th>Time</th><th>Employee</th><th>Rule</th><th>Absent days</th><th>Policy action</th><th>Status</th><th></th>
+        </tr></thead><tbody>
         ${rows.length ? rows.map(r => `<tr>
-          <td class="muted">${fmtDate(r.executed_at)}</td><td class="cell-strong">${esc(r.full_name||r.emp_id)}</td><td>${esc(r.rule_key)}</td>
+          <td class="muted">${fmtDate(r.executed_at)}</td>
+          <td class="cell-strong">${esc(r.full_name||r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}</div></td>
+          <td><span class="badge badge-neutral">${esc(r.rule_key)}</span></td>
+          <td>${r.absent_days != null ? `<strong>${esc(String(r.absent_days))}</strong>` : '—'}</td>
+          <td>${actionBadge(r.policy_action)}</td>
           <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td>
-          <td class="muted" style="font-size:0.78rem;max-width:220px">${esc(String(r.actions_taken||''))}</td>
           <td>${r.rolled_back ? '<span class="badge badge-neutral">Rolled back</span>' : `<button class="btn btn-sm btn-secondary aig-rb" data-id="${esc(r.id)}">Rollback</button>`}</td>
-        </tr>`).join('') : '<tr><td colspan="6"><div class="empty-state"><p>No executions yet.</p></div></td></tr>'}
-      </tbody></table></div>`;
+        </tr>`).join('') : '<tr><td colspan="7"><div class="empty-state"><p>No executions yet.</p></div></td></tr>'}
+        </tbody></table></div>`;
       area.querySelectorAll('.aig-rb').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Restore access from rollback snapshot?')) return;
