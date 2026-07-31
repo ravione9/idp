@@ -178,7 +178,24 @@ Object.assign(api, {
     if (params.rule) q.set('rule', params.rule);
     if (params.rolledBack != null && params.rolledBack !== '') q.set('rolledBack', String(params.rolledBack));
     if (params.action) q.set('action', params.action);
+    if (params.from) q.set('from', params.from);
+    if (params.to) q.set('to', params.to);
+    if (params.export) q.set('export', params.export);
     return f(`/api/admin/attendance-iga/executions?${q}`);
+  },
+  attendanceIgaExecutionsExportUrl: (params = {}) => {
+    const q = new URLSearchParams();
+    q.set('configId', String(params.configId ?? 1));
+    q.set('export', 'csv');
+    q.set('limit', String(params.limit ?? 5000));
+    if (params.q) q.set('q', params.q);
+    if (params.status) q.set('status', params.status);
+    if (params.rule) q.set('rule', params.rule);
+    if (params.rolledBack != null && params.rolledBack !== '') q.set('rolledBack', String(params.rolledBack));
+    if (params.action) q.set('action', params.action);
+    if (params.from) q.set('from', params.from);
+    if (params.to) q.set('to', params.to);
+    return `/api/admin/attendance-iga/executions?${q}`;
   },
   rollbackAttendanceIgaExecution: (id) => f(`/api/admin/attendance-iga/executions/${id}/rollback`, { method: 'POST' }),
   bulkRollbackAttendanceIgaExecutions: (ids, configId = 1) =>

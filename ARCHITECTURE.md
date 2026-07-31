@@ -672,7 +672,7 @@ To add a new migration:
 | `GET` | `/api/admin/attendance-iga/imports[/:id/staging]?configId=` | Import run history + staging rows |
 | `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (`configId`, REST API / SFTP / CSV / evaluate-only) |
 | `GET`/`POST` | `/api/admin/attendance-iga/approvals[/:id/decision]` | Pending approvals; approve / reject / skip |
-| `GET`/`POST` | `/api/admin/attendance-iga/executions[…]?configId=` | Execution audit (filters, failure detail, policy/exceptions) + single/`bulk-rollback`; pipeline refuses runs when policy `enabled=0` |
+| `GET`/`POST` | `/api/admin/attendance-iga/executions[…]?configId=` | Execution audit: filters (`q`,`status`,`rule`,`rolledBack`,`action`,`from`,`to`), date `groups[]`, `export=csv`, failure detail, policy/exceptions; single/`bulk-rollback`; pipeline refuses runs when policy `enabled=0` |
 | `GET` | `/api/admin/attendance-iga/rollbacks` | Rollback history |
 
 ### 8.5 IGA + multi-protocol AM (live read APIs; write paths return 501 until service layer ships)
@@ -785,7 +785,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
 - `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=govReports&tab=mfa`, `/?v=groups&tab=tags`, `/?v=attendanceIga&tab=policy`)
 
-**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · Import History · Approvals · Executions. Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
+**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · Import History · Approvals · **Executions** (date-grouped audit, From/To filters, Export CSV, bulk rollback). Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
 
 ---
 
@@ -1054,6 +1054,24 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `pending` — 2026-07-31 — Attendance IGA Import History: zero-data = no actions
+
+**Why** — FAILED imports with Total/OK/Failed all `0` looked like empty pipeline noise; ops need to see that no feed was loaded and no suspend/disable ran.
+
+**What changed:**
+
+- **Import History UI** — Outcome + Detail columns; when totals are 0, label as policy-off / no connection / empty feed (no policy actions). Surfaces `error_message` from the run.
+- Asset cache bump `2026-07-31-aiga5`.
+
+### `pending` — 2026-07-31 — Attendance IGA Executions: date groups + CSV export
+
+**Why** — Ops need to review suspend/disable actions by calendar day and export filtered results.
+
+**What changed:**
+
+- **`GET …/executions`** — `from`/`to` date filters; response includes `groups[]` (per-day counts + items); `export=csv` returns a downloadable CSV (higher limit).
+- **Executions UI** — date section headers with day stats, From/To filters, **Export CSV**, select-by-day for bulk rollback.
 
 ### `ae5c2c1` — 2026-07-31 — Attendance IGA evaluation mode (daily vs consecutive)
 

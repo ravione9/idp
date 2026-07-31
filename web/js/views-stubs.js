@@ -9171,10 +9171,47 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     try {
       const rows = norm(await api.attendanceIgaImports(20, selectedConfigId));
       const statusBadge = s => ({ COMPLETED: 'badge-success', PARTIAL: 'badge-warning', FAILED: 'badge-danger', RUNNING: 'badge-info' }[s] || 'badge-neutral');
+      const noFeedData = (r) => Number(r.total_records || 0) === 0
+        && Number(r.successful || 0) === 0
+        && Number(r.failed || 0) === 0;
+      const outcomeNote = (r) => {
+        if (r.status === 'FAILED' && noFeedData(r)) {
+          const msg = String(r.error_message || '');
+          if (/disabled/i.test(msg)) {
+            return '<span class="badge badge-neutral">Policy off — no feed, no actions</span>';
+          }
+          if (msg) {
+            return '<span class="badge badge-danger">No connection / feed failed</span>';
+          }
+          return '<span class="badge badge-danger">No feed data — no policy actions</span>';
+        }
+        if (r.status === 'COMPLETED' && noFeedData(r)) {
+          return '<span class="badge badge-neutral">Empty feed — no actions</span>';
+        }
+        return '';
+      };
       area.innerHTML = `
-        <div class="aap-actions"><div><h3 class="section-title">Import History</h3><p class="subtitle">Staging validation results for each pipeline run.</p></div></div>
-        <div class="table-wrap aap-table"><table><thead><tr><th>Started</th><th>Source</th><th>Status</th><th>Total</th><th>OK</th><th>Failed</th><th>Dupes</th><th>Unmatched</th></tr></thead><tbody>
-        ${rows.length ? rows.map(r => `<tr><td>${fmtDate(r.started_at)}</td><td><span class="badge badge-info">${esc(r.source)}</span></td><td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td><td>${r.total_records}</td><td>${r.successful}</td><td>${r.failed}</td><td>${r.duplicates}</td><td>${r.unmatched}</td></tr>`).join('') : '<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">◎</div><p>No imports yet.</p></div></td></tr>'}
+        <div class="aap-actions"><div>
+          <h3 class="section-title">Import History</h3>
+          <p class="subtitle">Staging results per pipeline run. <strong>Total = 0</strong> means no attendance rows were loaded (policy disabled, connection/credentials failed, or empty feed) — <strong>no suspend/disable actions</strong> ran for that run.</p>
+        </div></div>
+        <div class="table-wrap aap-table"><table><thead><tr>
+          <th>Started</th><th>Source</th><th>Status</th><th>Total</th><th>OK</th><th>Failed</th><th>Dupes</th><th>Unmatched</th><th>Outcome</th><th>Detail</th>
+        </tr></thead><tbody>
+        ${rows.length ? rows.map(r => `<tr class="${r.status === 'FAILED' && noFeedData(r) ? 'row-warn' : ''}">
+          <td>${fmtDate(r.started_at)}</td>
+          <td><span class="badge badge-info">${esc(r.source)}</span></td>
+          <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td>
+          <td>${esc(String(r.total_records ?? 0))}</td>
+          <td>${esc(String(r.successful ?? 0))}</td>
+          <td>${esc(String(r.failed ?? 0))}</td>
+          <td>${esc(String(r.duplicates ?? 0))}</td>
+          <td>${esc(String(r.unmatched ?? 0))}</td>
+          <td>${outcomeNote(r) || '<span class="muted">—</span>'}</td>
+          <td style="max-width:280px;font-size:0.78rem">${r.error_message
+            ? `<span class="muted" title="${esc(r.error_message)}">${esc(String(r.error_message).slice(0, 180))}</span>`
+            : '<span class="muted">—</span>'}</td>
+        </tr>`).join('') : '<tr><td colspan="10"><div class="empty-state"><div class="empty-icon">◎</div><p>No imports yet.</p></div></td></tr>'}
       </tbody></table></div>`;
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
@@ -9202,7 +9239,24 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
 
-  const execFilters = { q: '', status: '', rule: '', rolledBack: '', action: '' };
+  const execFilters = { q: '', status: '', rule: '', rolledBack: '', action: '', from: '', to: '' };
+
+  function aigExecDateKey(raw) {
+    if (!raw) return 'unknown';
+    const s = String(raw);
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return 'unknown';
+    return d.toISOString().slice(0, 10);
+  }
+  function aigFmtDayLabel(isoDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return isoDate;
+    try {
+      return new Date(`${isoDate}T12:00:00`).toLocaleDateString(undefined, {
+        weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+      });
+    } catch { return isoDate; }
+  }
 
   async function loadExecutions() {
     const area = wrap.querySelector('#tab-executions');
@@ -9210,14 +9264,33 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     try {
       const resp = await api.attendanceIgaExecutions({
         configId: selectedConfigId,
-        limit: 200,
+        limit: 500,
         q: execFilters.q || undefined,
         status: execFilters.status || undefined,
         rule: execFilters.rule || undefined,
         rolledBack: execFilters.rolledBack,
         action: execFilters.action || undefined,
+        from: execFilters.from || undefined,
+        to: execFilters.to || undefined,
       });
       const rows = norm(resp);
+      const groups = Array.isArray(resp?.groups) && resp.groups.length
+        ? resp.groups
+        : (() => {
+            const map = new Map();
+            for (const r of rows) {
+              const k = aigExecDateKey(r.executed_at);
+              if (!map.has(k)) map.set(k, []);
+              map.get(k).push(r);
+            }
+            return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([date, items]) => ({
+              date, count: items.length, items,
+              suspended: items.filter((i) => i.policy_action === 'SUSPEND').length,
+              disabled: items.filter((i) => i.policy_action === 'DISABLE').length,
+              failed: items.filter((i) => i.failed).length,
+              rolled_back: items.filter((i) => i.rolled_back).length,
+            }));
+          })();
       const policy = resp?.policy || {};
       const exceptions = Array.isArray(resp?.exceptions) ? resp.exceptions : [];
       const statusBadge = s => ({ SUCCESS: 'badge-success', PARTIAL: 'badge-warning', FAILED: 'badge-danger' }[s] || 'badge-neutral');
@@ -9230,13 +9303,27 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       const consecActs = (policy.actions?.no_punch_consecutive || []).join(', ') || 'DISABLE_USER';
       const exTypeLabel = (t) => ({ VIP_USER: 'VIP', EMPLOYEE: 'Employee', DEPARTMENT: 'Department' }[t] || t);
       const rollbackable = rows.filter(r => !r.rolled_back);
+      const renderRow = (r) => `<tr class="${r.failed ? 'row-warn' : ''}">
+          <td>${r.rolled_back ? '' : `<input type="checkbox" class="aig-exec-cb" value="${esc(r.id)}" />`}</td>
+          <td class="muted">${fmtDate(r.executed_at)}</td>
+          <td class="cell-strong">${esc(r.full_name||r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}</div></td>
+          <td><span class="badge badge-neutral">${esc(r.rule_key)}</span></td>
+          <td>${r.absent_days != null ? `<strong>${esc(String(r.absent_days))}</strong>` : '—'}</td>
+          <td>${actionBadge(r.policy_action)}</td>
+          <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td>
+          <td style="max-width:240px;font-size:0.78rem">${r.failure_reason
+            ? `<span class="badge badge-danger">Failed</span> <span class="muted" title="${esc(r.failure_reason)}">${esc(String(r.failure_reason).slice(0, 160))}</span>`
+            : '<span class="muted">—</span>'}</td>
+          <td>${r.rolled_back ? '<span class="badge badge-neutral">Rolled back</span>' : `<button class="btn btn-sm btn-secondary aig-rb" data-id="${esc(r.id)}">Rollback</button>`}</td>
+        </tr>`;
       area.innerHTML = `
         <div class="aap-actions" style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start">
           <div>
             <h3 class="section-title">Action Executions</h3>
-            <p class="subtitle">Audit trail of suspend / disable actions. Pipeline refuses to run while the policy is off.</p>
+            <p class="subtitle">Audit trail of suspend / disable actions, grouped by date. Pipeline refuses to run while the policy is off.</p>
           </div>
-          <div style="display:flex;gap:0.5rem;align-items:center">
+          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+            <button type="button" class="btn btn-secondary btn-sm" id="aig-exec-export">Export CSV</button>
             <button type="button" class="btn btn-secondary btn-sm" id="aig-bulk-rb" disabled>Bulk rollback (0)</button>
           </div>
         </div>
@@ -9274,6 +9361,14 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
           <div class="field" style="margin:0;min-width:160px;flex:1">
             <label>Search</label>
             <input name="q" class="form-input" placeholder="Name, emp id, email" value="${esc(execFilters.q)}" />
+          </div>
+          <div class="field" style="margin:0;min-width:130px">
+            <label>From date</label>
+            <input name="from" type="date" class="form-input" value="${esc(execFilters.from)}" />
+          </div>
+          <div class="field" style="margin:0;min-width:130px">
+            <label>To date</label>
+            <input name="to" type="date" class="form-input" value="${esc(execFilters.to)}" />
           </div>
           <div class="field" style="margin:0;min-width:120px">
             <label>Status</label>
@@ -9313,25 +9408,30 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
           <button type="submit" class="btn btn-primary btn-sm">Apply filters</button>
           <button type="button" class="btn btn-secondary btn-sm" id="aig-exec-clear">Clear</button>
         </form>
-        <div class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">${rows.length} result(s)${rollbackable.length ? ` · ${rollbackable.length} can be rolled back` : ''}</div>
-        <div class="table-wrap"><table><thead><tr>
-          <th style="width:2rem"><input type="checkbox" id="aig-exec-all" title="Select all rollbackable" ${rollbackable.length ? '' : 'disabled'} /></th>
-          <th>Time</th><th>Employee</th><th>Rule</th><th>Absent days</th><th>Policy action</th><th>Status</th><th>Failure detail</th><th></th>
-        </tr></thead><tbody>
-        ${rows.length ? rows.map(r => `<tr class="${r.failed ? 'row-warn' : ''}">
-          <td>${r.rolled_back ? '' : `<input type="checkbox" class="aig-exec-cb" value="${esc(r.id)}" />`}</td>
-          <td class="muted">${fmtDate(r.executed_at)}</td>
-          <td class="cell-strong">${esc(r.full_name||r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}</div></td>
-          <td><span class="badge badge-neutral">${esc(r.rule_key)}</span></td>
-          <td>${r.absent_days != null ? `<strong>${esc(String(r.absent_days))}</strong>` : '—'}</td>
-          <td>${actionBadge(r.policy_action)}</td>
-          <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span>${r.failed && r.status === 'SUCCESS' ? '' : ''}</td>
-          <td style="max-width:240px;font-size:0.78rem">${r.failure_reason
-            ? `<span class="badge badge-danger">Failed</span> <span class="muted" title="${esc(r.failure_reason)}">${esc(String(r.failure_reason).slice(0, 160))}</span>`
-            : '<span class="muted">—</span>'}</td>
-          <td>${r.rolled_back ? '<span class="badge badge-neutral">Rolled back</span>' : `<button class="btn btn-sm btn-secondary aig-rb" data-id="${esc(r.id)}">Rollback</button>`}</td>
-        </tr>`).join('') : '<tr><td colspan="9"><div class="empty-state"><p>No executions match these filters.</p></div></td></tr>'}
-        </tbody></table></div>`;
+        <div class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">${rows.length} result(s) · ${groups.length} day(s)${rollbackable.length ? ` · ${rollbackable.length} can be rolled back` : ''}</div>
+        ${groups.length ? groups.map((g) => `
+          <div class="card" style="margin-bottom:0.85rem;padding:0;overflow:hidden" data-date-group="${esc(g.date)}">
+            <div style="display:flex;flex-wrap:wrap;gap:0.65rem 1rem;align-items:center;justify-content:space-between;padding:0.7rem 1rem;background:var(--surface,#f8fafc);border-bottom:1px solid var(--border,#e2e8f0)">
+              <div style="display:flex;flex-wrap:wrap;gap:0.5rem 0.85rem;align-items:center">
+                <strong>${esc(aigFmtDayLabel(g.date))}</strong>
+                <span class="badge badge-neutral">${esc(String(g.count))} execution(s)</span>
+                ${g.suspended ? `<span class="badge badge-warning">${esc(String(g.suspended))} suspend</span>` : ''}
+                ${g.disabled ? `<span class="badge badge-danger">${esc(String(g.disabled))} disable</span>` : ''}
+                ${g.failed ? `<span class="badge badge-danger">${esc(String(g.failed))} failed</span>` : ''}
+                ${g.rolled_back ? `<span class="badge badge-info">${esc(String(g.rolled_back))} rolled back</span>` : ''}
+              </div>
+              <label class="muted" style="font-size:0.78rem;display:flex;gap:0.35rem;align-items:center;margin:0">
+                <input type="checkbox" class="aig-exec-day" data-date="${esc(g.date)}" /> Select day
+              </label>
+            </div>
+            <div class="table-wrap" style="margin:0;border:0"><table><thead><tr>
+              <th style="width:2rem"></th>
+              <th>Time</th><th>Employee</th><th>Rule</th><th>Absent days</th><th>Policy action</th><th>Status</th><th>Failure detail</th><th></th>
+            </tr></thead><tbody>
+              ${(g.items || []).map(renderRow).join('')}
+            </tbody></table></div>
+          </div>`).join('') : '<div class="empty-state"><p>No executions match these filters.</p></div>'}
+        <div style="display:none"><input type="checkbox" id="aig-exec-all" ${rollbackable.length ? '' : 'disabled'} /></div>`;
 
       const bulkBtn = area.querySelector('#aig-bulk-rb');
       const syncBulk = () => {
@@ -9342,6 +9442,13 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       area.querySelector('#aig-exec-all')?.addEventListener('change', (e) => {
         area.querySelectorAll('.aig-exec-cb').forEach((cb) => { cb.checked = e.target.checked; });
         syncBulk();
+      });
+      area.querySelectorAll('.aig-exec-day').forEach((dayCb) => {
+        dayCb.addEventListener('change', () => {
+          const card = dayCb.closest('[data-date-group]');
+          card?.querySelectorAll('.aig-exec-cb').forEach((cb) => { cb.checked = dayCb.checked; });
+          syncBulk();
+        });
       });
       area.querySelectorAll('.aig-exec-cb').forEach((cb) => cb.addEventListener('change', syncBulk));
       bulkBtn?.addEventListener('click', async () => {
@@ -9357,10 +9464,48 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         } catch (e) { alert(e.message); bulkBtn.disabled = false; syncBulk(); }
       });
 
+      area.querySelector('#aig-exec-export')?.addEventListener('click', async () => {
+        const btn = area.querySelector('#aig-exec-export');
+        const url = api.attendanceIgaExecutionsExportUrl({
+          configId: selectedConfigId,
+          q: execFilters.q || undefined,
+          status: execFilters.status || undefined,
+          rule: execFilters.rule || undefined,
+          rolledBack: execFilters.rolledBack,
+          action: execFilters.action || undefined,
+          from: execFilters.from || undefined,
+          to: execFilters.to || undefined,
+        });
+        const filename = `attendance-iga-executions-${selectedConfigId}-${execFilters.from || 'all'}-${execFilters.to || 'all'}.csv`;
+        if (btn) btn.disabled = true;
+        try {
+          const res = await fetch(url, { credentials: 'include' });
+          if (!res.ok) {
+            let msg = res.statusText;
+            try {
+              const body = await res.json();
+              msg = body.error || body.message || msg;
+            } catch { /* ignore */ }
+            throw new Error(msg || 'Export failed');
+          }
+          const blob = await res.blob();
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(a.href);
+        } catch (e) { alert(e.message || 'Export failed'); }
+        finally { if (btn) btn.disabled = false; }
+      });
+
       area.querySelector('#aig-exec-filters')?.addEventListener('submit', (e) => {
         e.preventDefault();
         const fd = new FormData(e.target);
         execFilters.q = String(fd.get('q') || '').trim();
+        execFilters.from = String(fd.get('from') || '').trim();
+        execFilters.to = String(fd.get('to') || '').trim();
         execFilters.status = String(fd.get('status') || '');
         execFilters.rule = String(fd.get('rule') || '');
         execFilters.action = String(fd.get('action') || '');
@@ -9369,6 +9514,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       });
       area.querySelector('#aig-exec-clear')?.addEventListener('click', () => {
         execFilters.q = '';
+        execFilters.from = '';
+        execFilters.to = '';
         execFilters.status = '';
         execFilters.rule = '';
         execFilters.action = '';

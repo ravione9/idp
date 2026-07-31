@@ -509,13 +509,20 @@ router.post('/approvals/:id/decision', asyncHandler(async (req, res) => {
 }));
 
 router.get('/executions', asyncHandler(async (req, res) => {
-  const limit = Math.min(parseInt((req.query['limit'] as string) ?? '100', 10), 500);
+  const wantExportEarly = String(req.query['export'] ?? '') === 'csv';
+  const limit = Math.min(
+    parseInt((req.query['limit'] as string) ?? (wantExportEarly ? '5000' : '100'), 10),
+    wantExportEarly ? 10000 : 500,
+  );
   const configId = configIdFromReq(req);
   const q = String(req.query['q'] ?? '').trim().slice(0, 120);
   const statusFilter = String(req.query['status'] ?? '').trim().toUpperCase();
   const ruleFilter = String(req.query['rule'] ?? '').trim().slice(0, 50);
   const rolledBackRaw = String(req.query['rolledBack'] ?? '').trim();
   const actionFilter = String(req.query['action'] ?? '').trim().toUpperCase(); // SUSPEND | DISABLE | FAILED
+  const fromDate = String(req.query['from'] ?? '').trim().slice(0, 10);
+  const toDate = String(req.query['to'] ?? '').trim().slice(0, 10);
+  const wantExport = String(req.query['export'] ?? '') === 'csv';
 
   const where: string[] = ['r.config_id = ?'];
   const params: unknown[] = [configId];
@@ -543,6 +550,14 @@ router.get('/executions', asyncHandler(async (req, res) => {
     where.push(`(x.actions_taken LIKE '%SUSPEND_USER%')`);
   } else if (actionFilter === 'DISABLE') {
     where.push(`(x.actions_taken LIKE '%DISABLE_USER%')`);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+    where.push('x.executed_at >= ?');
+    params.push(`${fromDate} 00:00:00`);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+    where.push('x.executed_at < DATE_ADD(?, INTERVAL 1 DAY)');
+    params.push(toDate);
   }
 
   params.push(limit);
@@ -638,14 +653,75 @@ router.get('/executions', asyncHandler(async (req, res) => {
     };
   });
 
+  // Group by execution calendar date (UTC date part of executed_at).
+  const byDate = new Map<string, typeof data>();
+  for (const row of data) {
+    const raw = row.executed_at instanceof Date
+      ? row.executed_at.toISOString()
+      : String(row.executed_at ?? '');
+    const dateKey = raw.slice(0, 10) || 'unknown';
+    const bucket = byDate.get(dateKey) ?? [];
+    bucket.push(row);
+    byDate.set(dateKey, bucket);
+  }
+  const groups = [...byDate.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([date, items]) => ({
+      date,
+      count: items.length,
+      suspended: items.filter((i) => i.policy_action === 'SUSPEND').length,
+      disabled: items.filter((i) => i.policy_action === 'DISABLE').length,
+      failed: items.filter((i) => i.failed).length,
+      rolled_back: items.filter((i) => Number(i.rolled_back) === 1).length,
+      items,
+    }));
+
+  if (wantExport) {
+    const header = [
+      'date', 'executed_at', 'emp_id', 'full_name', 'dept_id', 'rule_key',
+      'absent_days', 'policy_action', 'status', 'failure_reason', 'rolled_back', 'executed_by',
+    ];
+    const lines = [header.join(',')];
+    const escCsv = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    for (const g of groups) {
+      for (const row of g.items) {
+        const at = row.executed_at instanceof Date
+          ? row.executed_at.toISOString()
+          : String(row.executed_at ?? '');
+        lines.push([
+          g.date,
+          at,
+          row.emp_id,
+          row.full_name,
+          row.dept_id,
+          row.rule_key,
+          row.absent_days,
+          row.policy_action,
+          row.status,
+          row.failure_reason,
+          row.rolled_back ? 1 : 0,
+          row.executed_by,
+        ].map(escCsv).join(','));
+      }
+    }
+    const filename = `attendance-iga-executions-${configId}-${fromDate || 'all'}-${toDate || 'all'}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(lines.join('\n'));
+    return;
+  }
+
   res.json({
     data,
+    groups,
     filters: {
       q: q || null,
       status: statusFilter || null,
       rule: ruleFilter || null,
       rolledBack: rolledBackRaw === '' ? null : rolledBackRaw,
       action: actionFilter || null,
+      from: fromDate || null,
+      to: toDate || null,
       limit,
     },
     policy: {
