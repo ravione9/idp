@@ -1,0 +1,168 @@
+# IDP prod — lk-multiverse-platform-eks (CCMS-style values layout)
+#
+# Chart: multiverse-application-helm/multiverse/idp
+# Install:
+#   helm upgrade -i idp ./multiverse/idp -n it-idp \
+#     -f ./multiverse/idp/values-lk-multiverse-platform-eks.yaml \
+#     --set image.tag=<git-sha>
+#
+# Secrets: stored in Vault at multiverse/config/idp (KV v1).
+# Pods use Vault Agent Injector — NOT VAULT_* env vars (IDP reads process env, unlike CCMS app).
+# Live-infra: vault role idp bound to idp-sa in it-idp.
+
+ingress_api_version: networking.k8s.io/v1
+private_ingress_host_tpl: "idp.lenskart.com"
+public_ingress_host_tpl: "idp.{{ .Values.basedomain }}"
+
+namespace: it-idp
+basedomain: lenskart.com
+env: lk-multiverse-platform-eks
+app: idp
+
+serviceAccount:
+  create: false
+  name: idp-sa
+
+sa_role_arn: ""
+
+replicas:
+  autoscale_min: 2
+
+nodeSelector:
+  autoscaling:
+    karpenter.sh/nodepool: it-idp
+
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: it-idp
+    effect: NoSchedule
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app: idp-api
+
+hpa:
+  enabled: true
+  minReplicaCount: 2
+  maxReplicaCount: 4
+  targetCPUUtilizationPercentage: 65
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+worker:
+  enabled: true
+  replicas: 2
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+
+labels:
+  component_name: idp
+  sub_component: app
+  priority: P2
+  bu: lk
+  team: multiverse
+  env: prod
+  region: mumbai
+  type: backend
+
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "250m"
+  limits:
+    memory: "1Gi"
+
+image:
+  repository: 964059510816.dkr.ecr.ap-south-1.amazonaws.com/idp
+  tag: REPLACE_ME
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+deployment:
+  container:
+    port: 8080
+  startupProbe:
+    path: /readyz
+    port: 8080
+    periodSeconds: 5
+    failureThreshold: 36
+  readinessProbe:
+    path: /readyz
+    port: 8080
+    periodSeconds: 10
+    failureThreshold: 3
+  livenessProbe:
+    path: /healthz
+    port: 8080
+    periodSeconds: 15
+    failureThreshold: 3
+
+terminationGracePeriodSeconds: 35
+
+# Non-secret config only — secrets live in Vault multiverse/config/idp
+envvars:
+  SKIP_MIGRATIONS_ON_BOOT: "true"
+  NODE_ENV: production
+  PORT: "8080"
+  PUBLIC_BASE_URL: "https://idp.lenskart.com"
+  SAML_IDP_BASE_URL: "https://idp.lenskart.com"
+  SAML_IDP_ENTITY_ID: "https://idp.lenskart.com/saml/metadata"
+  COOKIE_SECURE: "true"
+  TRUST_PROXY: "true"
+  LOG_LEVEL: info
+  AWS_REGION: ap-south-1
+  DB_HOST: "idp-prod-mysql.ch022weyithc.ap-south-1.rds.amazonaws.com"
+  DB_PORT: "3306"
+  DB_NAME: "idp"
+  SQS_HRMS_EVENTS_URL: "https://sqs.ap-south-1.amazonaws.com/964059510816/idp-prod-sqs.fifo"
+  SQS_CELERY_BROKER_URL: "https://sqs.ap-south-1.amazonaws.com/964059510816/idp-prod-sqs.fifo"
+
+# Vault Agent Injector (platform standard for Node apps)
+vault:
+  enabled: true
+  role: idp
+  path: multiverse/config/idp
+
+ingress:
+  ingressClassName: alb
+  private_enabled: true
+  public_restricted_enabled: false
+  commonannotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-port: traffic-port
+    alb.ingress.kubernetes.io/success-codes: "200"
+    helm.sh/resource-policy: keep
+    app.kubernetes.io/managed-by: helm
+    meta.helm.sh/release-name: idp
+    meta.helm.sh/release-namespace: it-idp
+  annotations:
+    private:
+      alb.ingress.kubernetes.io/scheme: internal
+      alb.ingress.kubernetes.io/group.name: lk-multiverse-platform-internal
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+      alb.ingress.kubernetes.io/ssl-redirect: "443"
+      alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-south-1:964059510816:certificate/c37bfc42-0cde-42f3-acc5-64c90dbf939f
+  paths:
+    - path: /
+      path_type: Prefix
+      service_name: idp-api
+      service_port: 80
+      is_public: false
+      is_private: true
