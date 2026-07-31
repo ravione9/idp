@@ -7,7 +7,8 @@
 #     --set image.tag=<git-sha>
 #
 # Secrets: stored in Vault at multiverse/config/idp (KV v1).
-# Pods use Vault Agent Injector — NOT VAULT_* env vars (IDP reads process env, unlike CCMS app).
+# Pods use Vault Agent Injector — must SOURCE /vault/secrets/idp.env into process env
+# (IDP is Node; unlike CCMS it does NOT read the file). See vault-agent-idp-fix.yaml.
 # Live-infra: vault role idp bound to idp-sa in it-idp.
 
 ingress_api_version: networking.k8s.io/v1

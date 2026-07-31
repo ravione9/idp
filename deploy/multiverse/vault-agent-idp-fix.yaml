@@ -1,0 +1,125 @@
+# =============================================================================
+# IDP — Vault Agent → process.env fix (Multiverse / it-idp)
+# =============================================================================
+# Symptom:
+#   vault-agent-init renders /vault/secrets/idp.env  ✓
+#   idp-api still fails: DB_HOST / REDIS_URL / … Required
+#   [saml-auto-keys] auto-generates a NEW 3y cert each pod  ✗
+#
+# Cause:
+#   Vault Agent writes a FILE. Node IDP only reads process.env.
+#   CCMS may read the file; IDP does not.
+#
+# Fix:
+#   1) Template idp.env as KEY="value" lines (shell-sourceable)
+#   2) Start Node with:  set -a; . /vault/secrets/idp.env; set +a; exec node …
+#   3) Keep non-secrets in Helm envvars (DB_HOST, SQS_*, PUBLIC_*, …)
+#   4) Put SAML PEMs in Vault (literal \n is OK — app expands them)
+#
+# Apply in multiverse-application-helm (chart templates or values override).
+# Vault path is KV v1: multiverse/config/idp  |  role: idp  |  SA: idp-sa
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# A) Pod annotations (Vault Agent Injector)
+#    Merge into API + worker Deployments (and migrate Job if it needs secrets).
+# ---------------------------------------------------------------------------
+podAnnotations:
+  vault.hashicorp.com/agent-inject: "true"
+  vault.hashicorp.com/agent-pre-populate-only: "true"
+  vault.hashicorp.com/role: "idp"
+  vault.hashicorp.com/agent-inject-secret-idp: "multiverse/config/idp"
+  # File name becomes /vault/secrets/idp.env
+  vault.hashicorp.com/agent-inject-file-idp: "idp.env"
+  # KV v1 → .Data.KEY   (if your mount is KV v2, use .Data.data.KEY)
+  vault.hashicorp.com/agent-inject-template-idp: |
+    {{- with secret "multiverse/config/idp" -}}
+    DB_USER="{{ .Data.DB_USER }}"
+    DB_PASSWORD="{{ .Data.DB_PASSWORD }}"
+    REDIS_URL="{{ .Data.REDIS_URL }}"
+    SESSION_SECRET="{{ .Data.SESSION_SECRET }}"
+    INTERNAL_TOKEN="{{ .Data.INTERNAL_TOKEN }}"
+    MASTER_ADMIN_EMAIL="{{ .Data.MASTER_ADMIN_EMAIL }}"
+    MASTER_ADMIN_PASSWORD="{{ .Data.MASTER_ADMIN_PASSWORD }}"
+    MASTER_ADMIN_FULL_NAME="{{ .Data.MASTER_ADMIN_FULL_NAME }}"
+    SAML_IDP_PRIVATE_KEY_PEM="{{ .Data.SAML_IDP_PRIVATE_KEY_PEM }}"
+    SAML_IDP_CERT_PEM="{{ .Data.SAML_IDP_CERT_PEM }}"
+    GOOGLE_CLIENT_ID="{{ .Data.GOOGLE_CLIENT_ID }}"
+    GOOGLE_CLIENT_SECRET="{{ .Data.GOOGLE_CLIENT_SECRET }}"
+    GOOGLE_HOSTED_DOMAIN="{{ .Data.GOOGLE_HOSTED_DOMAIN }}"
+    GOOGLE_SA_KEY_JSON="{{ .Data.GOOGLE_SA_KEY_JSON }}"
+    AD_URL="{{ .Data.AD_URL }}"
+    AD_BIND_DN="{{ .Data.AD_BIND_DN }}"
+    AD_BIND_PASSWORD="{{ .Data.AD_BIND_PASSWORD }}"
+    AD_BASE_DN="{{ .Data.AD_BASE_DN }}"
+    HRMS_API_BASE_URL="{{ .Data.HRMS_API_BASE_URL }}"
+    HRMS_API_KEY="{{ .Data.HRMS_API_KEY }}"
+    {{- end }}
+
+# ---------------------------------------------------------------------------
+# B) Container command — MUST source the file before Node
+#    Image ENTRYPOINT is dumb-init; override args only if chart allows.
+# ---------------------------------------------------------------------------
+# Prefer chart values keys your Multiverse chart already supports, e.g.:
+#   deployment.command / deployment.args
+#   or container.command / container.args
+#
+# Equivalent raw Deployment snippet:
+
+containerCommand:
+  - /usr/bin/dumb-init
+  - --
+containerArgs:
+  - sh
+  - -c
+  - |
+    set -euo pipefail
+    if [ ! -f /vault/secrets/idp.env ]; then
+      echo "[idp] ERROR: /vault/secrets/idp.env missing — Vault Agent did not inject secrets" >&2
+      exit 1
+    fi
+    set -a
+    # shellcheck disable=SC1091
+    . /vault/secrets/idp.env
+    set +a
+    exec node dist/index.js
+
+# Worker: same source wrapper, then the worker entrypoint your chart uses
+# (if worker is the same image/command as API, reuse the block above).
+
+# ---------------------------------------------------------------------------
+# C) Helm envvars that must still appear on the container (non-secret)
+#    These were missing from process.env in the failing pods — confirm chart
+#    maps .Values.envvars → Deployment env.
+# ---------------------------------------------------------------------------
+# envvars:
+#   DB_HOST: "idp-prod-mysql.ch022weyithc.ap-south-1.rds.amazonaws.com"
+#   DB_PORT: "3306"
+#   DB_NAME: "idp"
+#   SQS_HRMS_EVENTS_URL: "https://sqs.ap-south-1.amazonaws.com/964059510816/idp-prod-sqs.fifo"
+#   SQS_CELERY_BROKER_URL: "https://sqs.ap-south-1.amazonaws.com/964059510816/idp-prod-sqs.fifo"
+#   PUBLIC_BASE_URL: "https://idp.lenskart.com"
+#   SAML_IDP_BASE_URL: "https://idp.lenskart.com"
+#   SAML_IDP_ENTITY_ID: "https://idp.lenskart.com/saml/metadata"
+#   COOKIE_SECURE: "true"
+#   TRUST_PROXY: "true"
+#   SKIP_MIGRATIONS_ON_BOOT: "true"
+#   NODE_ENV: production
+#   PORT: "8080"
+#   AWS_REGION: ap-south-1
+#   LOG_LEVEL: info
+
+# ---------------------------------------------------------------------------
+# D) Verify after helm upgrade
+# ---------------------------------------------------------------------------
+# kubectl -n it-idp rollout restart deploy -l app=idp-api
+# kubectl -n it-idp exec deploy/idp-api -c idp-api -- sh -c \
+#   'set -a; . /vault/secrets/idp.env; set +a; env | egrep "^(DB_|REDIS_|SAML_|SESSION_|GOOGLE_)" | sed "s/=.*/=***/" | sort'
+# kubectl -n it-idp logs -l app=idp-api -c idp-api --tail=40
+#   → must NOT see [saml-auto-keys] auto-generating
+#   → must NOT see Configuration validation failed
+# for p in $(kubectl -n it-idp get pods -l app=idp-api -o name); do
+#   kubectl -n it-idp exec $p -c idp-api -- wget -qO- http://127.0.0.1:8080/saml/metadata \
+#     | sed -n 's/.*<ds:X509Certificate>\([^<]*\).*/\1/p' | head -1 | md5sum
+# done
+#   → same md5 on every pod

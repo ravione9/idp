@@ -63,7 +63,11 @@ function createAdAdapterFromConfig(
   const startTls = overrides.startTls !== undefined
     ? overrides.startTls
     : parseConnectorBoolean(cfg['startTls'], false);
-  const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
+  const host = (cfg['host'] as string | undefined)?.trim()
+    || (config.ad.url ? new URL(config.ad.url).hostname : '');
+  if (!host) {
+    throw new Error('AD host not configured — set connector host in portal or AD_URL in env/Vault');
+  }
   const port = overrides.port ?? parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
   const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
   const bindPass = resolveBindPassword(cfg);

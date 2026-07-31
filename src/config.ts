@@ -28,19 +28,29 @@ const ConfigSchema = z.object({
   DB_PASSWORD: z.string().min(1),
   DB_NAME: z.string().min(1),
 
-  // Redis
-  REDIS_URL: z.string().url(),
+  // Redis — accept redis:// and rediss:// (zod .url() rejects some AUTH / TLS forms)
+  REDIS_URL: z.preprocess(
+    emptyToUndefined,
+    z.string().min(1).refine((v) => {
+      try {
+        const u = new URL(v);
+        return u.protocol === 'redis:' || u.protocol === 'rediss:';
+      } catch {
+        return false;
+      }
+    }, { message: 'Must be redis:// or rediss:// URL (URL-encode special chars in password)' }),
+  ),
 
   // AWS / SQS — accept http URLs for LocalStack in dev
   AWS_REGION: z.string().min(1),
   SQS_HRMS_EVENTS_URL: z.string().min(1),
   SQS_CELERY_BROKER_URL: z.string().min(1),
 
-  // Google
-  GOOGLE_CLIENT_ID: z.string().min(1),
-  GOOGLE_CLIENT_SECRET: z.string().min(1),
-  GOOGLE_HOSTED_DOMAIN: z.string().min(1),
-  GOOGLE_SA_KEY_JSON: z.string().min(1),
+  // Google — optional at boot; portal general_settings / connectors override when set
+  GOOGLE_CLIENT_ID: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+  GOOGLE_CLIENT_SECRET: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+  GOOGLE_HOSTED_DOMAIN: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+  GOOGLE_SA_KEY_JSON: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
 
   // Zoho — only used by the outbound IGA adapter (zoho-adapter.ts) for
   // SCIM-style provisioning into Zoho. NOT used for portal login anymore.
@@ -48,15 +58,15 @@ const ConfigSchema = z.object({
   ZOHO_CLIENT_SECRET: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.string().min(1).optional()),
   ZOHO_SCIM_BASE_URL: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.string().url().optional()),
 
-  // Active Directory
-  AD_URL: z.string().min(1),
-  AD_BIND_DN: z.string().min(1),
-  AD_BIND_PASSWORD: z.string().min(1),
-  AD_BASE_DN: z.string().min(1),
+  // Active Directory — optional at boot; connector config in portal is preferred
+  AD_URL: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+  AD_BIND_DN: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+  AD_BIND_PASSWORD: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+  AD_BASE_DN: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
 
-  // HRMS
-  HRMS_API_BASE_URL: z.string().url(),
-  HRMS_API_KEY: z.string().min(1),
+  // HRMS — optional at boot; configure via portal / connectors when needed
+  HRMS_API_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  HRMS_API_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
 
   // Session
   SESSION_SECRET: z.string().min(32),
@@ -193,10 +203,10 @@ export const config = {
     sqsCeleryBrokerUrl: parsed.SQS_CELERY_BROKER_URL,
   },
   google: {
-    clientId: parsed.GOOGLE_CLIENT_ID,
-    clientSecret: parsed.GOOGLE_CLIENT_SECRET,
-    hostedDomain: parsed.GOOGLE_HOSTED_DOMAIN,
-    saKeyJson: parsed.GOOGLE_SA_KEY_JSON,
+    clientId: parsed.GOOGLE_CLIENT_ID ?? '',
+    clientSecret: parsed.GOOGLE_CLIENT_SECRET ?? '',
+    hostedDomain: parsed.GOOGLE_HOSTED_DOMAIN ?? '',
+    saKeyJson: parsed.GOOGLE_SA_KEY_JSON ?? '',
   },
   zoho: {
     /** Only set when ZOHO_* env vars exist; used by outbound provisioning adapter. */
@@ -205,14 +215,14 @@ export const config = {
     scimBaseUrl:  parsed.ZOHO_SCIM_BASE_URL ?? '',
   },
   ad: {
-    url: parsed.AD_URL,
-    bindDn: parsed.AD_BIND_DN,
-    bindPassword: parsed.AD_BIND_PASSWORD,
-    baseDn: parsed.AD_BASE_DN,
+    url: parsed.AD_URL ?? '',
+    bindDn: parsed.AD_BIND_DN ?? '',
+    bindPassword: parsed.AD_BIND_PASSWORD ?? '',
+    baseDn: parsed.AD_BASE_DN ?? '',
   },
   hrms: {
-    apiBaseUrl: parsed.HRMS_API_BASE_URL,
-    apiKey: parsed.HRMS_API_KEY,
+    apiBaseUrl: parsed.HRMS_API_BASE_URL ?? '',
+    apiKey: parsed.HRMS_API_KEY ?? '',
   },
   session: {
     secret: parsed.SESSION_SECRET,
