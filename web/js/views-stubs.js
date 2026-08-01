@@ -8404,7 +8404,7 @@ function aigStatusBadge(enabled, status) {
 }
 
 export async function viewAttendanceIga(content, initialTab = 'dash') {
-  const aigTabIds = ['dash', 'policy', 'config', 'imports', 'approvals', 'executions'];
+  const aigTabIds = ['dash', 'policy', 'config', 'imports', 'approvals', 'executions', 'rollbacks'];
   const startTab = aigTabIds.includes(initialTab) ? initialTab : 'dash';
   content.replaceChildren(el(`<div class="aig-page">
     ${header('Attendance IGA', 'Multiple revoke policies — each with its own API/SFTP source, schedule, and employee scope', `
@@ -8428,6 +8428,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       <button type="button" class="cfg-tab inline-tab${startTab === 'imports' ? ' active' : ''}" data-tab="imports">Import History</button>
       <button type="button" class="cfg-tab inline-tab${startTab === 'approvals' ? ' active' : ''}" data-tab="approvals">Approvals</button>
       <button type="button" class="cfg-tab inline-tab${startTab === 'executions' ? ' active' : ''}" data-tab="executions">Executions</button>
+      <button type="button" class="cfg-tab inline-tab${startTab === 'rollbacks' ? ' active' : ''}" data-tab="rollbacks">Rollbacks</button>
     </div>
     <div id="tab-dash" style="${startTab === 'dash' ? '' : 'display:none'}"></div>
     <div id="tab-policy" style="${startTab === 'policy' ? '' : 'display:none'}"></div>
@@ -8435,6 +8436,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     <div id="tab-imports" style="${startTab === 'imports' ? '' : 'display:none'}"></div>
     <div id="tab-approvals" style="${startTab === 'approvals' ? '' : 'display:none'}"></div>
     <div id="tab-executions" style="${startTab === 'executions' ? '' : 'display:none'}"></div>
+    <div id="tab-rollbacks" style="${startTab === 'rollbacks' ? '' : 'display:none'}"></div>
   </div>`));
   const wrap = content.firstChild;
   let configCache = null;
@@ -8803,6 +8805,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     const poll = existing?.polling_interval || 'manual';
     const cutoff = String(existing?.cutoff_time || '10:00:00').slice(0, 5);
     const days = existing?.consecutive_days ?? 3;
+    const evalMode = existing?.evaluation_mode === 'CONSECUTIVE_ABSENT' ? 'CONSECUTIVE_ABSENT' : 'DAILY_LIVE';
     const punch = existing?.punch_rule_actions || {
       no_punch_today: ['SUSPEND_USER'],
       no_punch_consecutive: ['DISABLE_USER'],
@@ -8867,18 +8870,40 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
               <option value="EMAIL" ${idField==='EMAIL'?'selected':''}>Email</option>
               <option value="USERNAME" ${idField==='USERNAME'?'selected':''}>Username</option>
             </select></div>
-          <div class="form-group"><label class="form-label">Punch cutoff</label>
+        </div>
+
+        <h3 style="font-size:0.9rem;margin:1.25rem 0 0.75rem">Attendance evaluation data</h3>
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">Choose whether this policy uses <strong>today’s live punch</strong> or only people who have <strong>not punched for N consecutive days</strong> (API/SFTP then consumes that N-day window).</p>
+        <div class="form-group">
+          <label class="form-label">Evaluation mode</label>
+          <select class="form-select" id="aig-eval-mode">
+            <option value="DAILY_LIVE" ${evalMode==='DAILY_LIVE'?'selected':''}>Daily live punch (today after cutoff)</option>
+            <option value="CONSECUTIVE_ABSENT" ${evalMode==='CONSECUTIVE_ABSENT'?'selected':''}>Not punched for N consecutive days only</option>
+          </select>
+        </div>
+        <div class="form-2col">
+          <div class="form-group aig-daily-only"><label class="form-label">Punch cutoff (daily mode)</label>
             <input class="form-input" id="aig-cutoff" type="time" value="${esc(cutoff)}"></div>
-          <div class="form-group"><label class="form-label">Consecutive absences</label>
-            <input class="form-input" id="aig-days" type="number" min="1" max="30" value="${esc(String(days))}"></div>
+          <div class="form-group"><label class="form-label">Absent-day window</label>
+            <select class="form-select" id="aig-days">
+              <option value="3" ${Number(days)===3?'selected':''}>3 days</option>
+              <option value="5" ${Number(days)===5?'selected':''}>5 days</option>
+              <option value="7" ${Number(days)===7?'selected':''}>7 days</option>
+              <option value="custom" ${![3,5,7].includes(Number(days))?'selected':''}>Custom…</option>
+            </select>
+            <p class="muted" style="font-size:0.75rem;margin:0.35rem 0 0">In consecutive mode the feed pulls this many days of punch data.</p></div>
+        </div>
+        <div class="form-group aig-custom-days" style="${[3,5,7].includes(Number(days))?'display:none':''}">
+          <label class="form-label">Custom absent days (1–30)</label>
+          <input class="form-input" id="aig-days-custom" type="number" min="1" max="30" value="${esc(String(days))}">
         </div>
 
         <h3 style="font-size:0.9rem;margin:1.25rem 0 0.75rem">Revoke actions</h3>
         <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">Choose what happens when attendance rules match. <strong>No action</strong> only records the evaluation. Suspend blocks SSO; disable/deprovision is stronger; app revoke removes application assignments.</p>
         <div class="form-2col">
-          <div class="form-group"><label class="form-label">Missed punch (today after cutoff)</label>
+          <div class="form-group aig-daily-only"><label class="form-label">Missed punch (today after cutoff)</label>
             <select class="form-select" id="aig-miss-punch">${aigPunchPresetOptions(missPreset)}</select></div>
-          <div class="form-group"><label class="form-label">Consecutive absences</label>
+          <div class="form-group"><label class="form-label">Consecutive absences (N-day window)</label>
             <select class="form-select" id="aig-consec-punch">${aigPunchPresetOptions(consecPreset)}</select></div>
         </div>
 
@@ -8898,6 +8923,20 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       </div>
     </div>`);
 
+    const syncEvalModeUi = () => {
+      const consec = bd.querySelector('#aig-eval-mode').value === 'CONSECUTIVE_ABSENT';
+      bd.querySelectorAll('.aig-daily-only').forEach((el) => { el.style.display = consec ? 'none' : ''; });
+    };
+    const syncDaysUi = () => {
+      const custom = bd.querySelector('#aig-days').value === 'custom';
+      const box = bd.querySelector('.aig-custom-days');
+      if (box) box.style.display = custom ? '' : 'none';
+    };
+    bd.querySelector('#aig-eval-mode').addEventListener('change', syncEvalModeUi);
+    bd.querySelector('#aig-days').addEventListener('change', syncDaysUi);
+    syncEvalModeUi();
+    syncDaysUi();
+
     bd.querySelector('#aig-pol-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#aig-pol-save').addEventListener('click', async () => {
       const errEl = bd.querySelector('#aig-pol-err');
@@ -8910,6 +8949,11 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       const cutoffVal = bd.querySelector('#aig-cutoff').value;
       const missKey = bd.querySelector('#aig-miss-punch').value;
       const consecKey = bd.querySelector('#aig-consec-punch').value;
+      const evalModeVal = bd.querySelector('#aig-eval-mode').value;
+      const daysSel = bd.querySelector('#aig-days').value;
+      const daysVal = daysSel === 'custom'
+        ? (Number(bd.querySelector('#aig-days-custom')?.value) || 3)
+        : (Number(daysSel) || 3);
       const payload = {
         name,
         employee_scope: { departments: depts, employment_types },
@@ -8917,7 +8961,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         source_type: bd.querySelector('#aig-source').value,
         polling_interval: bd.querySelector('#aig-poll').value,
         cutoff_time: cutoffVal.length === 5 ? cutoffVal + ':00' : cutoffVal,
-        consecutive_days: Number(bd.querySelector('#aig-days').value) || 3,
+        evaluation_mode: evalModeVal,
+        consecutive_days: Math.min(30, Math.max(1, daysVal)),
         approval_enabled: mode === 'approval' ? 1 : 0,
         emergency_mode: mode === 'emergency' ? 1 : 0,
         identifier_field: bd.querySelector('#aig-id-field').value,
@@ -9128,10 +9173,47 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     try {
       const rows = norm(await api.attendanceIgaImports(20, selectedConfigId));
       const statusBadge = s => ({ COMPLETED: 'badge-success', PARTIAL: 'badge-warning', FAILED: 'badge-danger', RUNNING: 'badge-info' }[s] || 'badge-neutral');
+      const noFeedData = (r) => Number(r.total_records || 0) === 0
+        && Number(r.successful || 0) === 0
+        && Number(r.failed || 0) === 0;
+      const outcomeNote = (r) => {
+        if (r.status === 'FAILED' && noFeedData(r)) {
+          const msg = String(r.error_message || '');
+          if (/disabled/i.test(msg)) {
+            return '<span class="badge badge-neutral">Policy off — no feed, no actions</span>';
+          }
+          if (msg) {
+            return '<span class="badge badge-danger">No connection / feed failed</span>';
+          }
+          return '<span class="badge badge-danger">No feed data — no policy actions</span>';
+        }
+        if (r.status === 'COMPLETED' && noFeedData(r)) {
+          return '<span class="badge badge-neutral">Empty feed — no actions</span>';
+        }
+        return '';
+      };
       area.innerHTML = `
-        <div class="aap-actions"><div><h3 class="section-title">Import History</h3><p class="subtitle">Staging validation results for each pipeline run.</p></div></div>
-        <div class="table-wrap aap-table"><table><thead><tr><th>Started</th><th>Source</th><th>Status</th><th>Total</th><th>OK</th><th>Failed</th><th>Dupes</th><th>Unmatched</th></tr></thead><tbody>
-        ${rows.length ? rows.map(r => `<tr><td>${fmtDate(r.started_at)}</td><td><span class="badge badge-info">${esc(r.source)}</span></td><td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td><td>${r.total_records}</td><td>${r.successful}</td><td>${r.failed}</td><td>${r.duplicates}</td><td>${r.unmatched}</td></tr>`).join('') : '<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">◎</div><p>No imports yet.</p></div></td></tr>'}
+        <div class="aap-actions"><div>
+          <h3 class="section-title">Import History</h3>
+          <p class="subtitle">Staging results per pipeline run. <strong>Total = 0</strong> means no attendance rows were loaded (policy disabled, connection/credentials failed, or empty feed) — <strong>no suspend/disable actions</strong> ran for that run.</p>
+        </div></div>
+        <div class="table-wrap aap-table"><table><thead><tr>
+          <th>Started</th><th>Source</th><th>Status</th><th>Total</th><th>OK</th><th>Failed</th><th>Dupes</th><th>Unmatched</th><th>Outcome</th><th>Detail</th>
+        </tr></thead><tbody>
+        ${rows.length ? rows.map(r => `<tr class="${r.status === 'FAILED' && noFeedData(r) ? 'row-warn' : ''}">
+          <td>${fmtDate(r.started_at)}</td>
+          <td><span class="badge badge-info">${esc(r.source)}</span></td>
+          <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td>
+          <td>${esc(String(r.total_records ?? 0))}</td>
+          <td>${esc(String(r.successful ?? 0))}</td>
+          <td>${esc(String(r.failed ?? 0))}</td>
+          <td>${esc(String(r.duplicates ?? 0))}</td>
+          <td>${esc(String(r.unmatched ?? 0))}</td>
+          <td>${outcomeNote(r) || '<span class="muted">—</span>'}</td>
+          <td style="max-width:280px;font-size:0.78rem">${r.error_message
+            ? `<span class="muted" title="${esc(r.error_message)}">${esc(String(r.error_message).slice(0, 180))}</span>`
+            : '<span class="muted">—</span>'}</td>
+        </tr>`).join('') : '<tr><td colspan="10"><div class="empty-state"><div class="empty-icon">◎</div><p>No imports yet.</p></div></td></tr>'}
       </tbody></table></div>`;
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
@@ -9159,28 +9241,490 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
 
+  const execFilters = { q: '', status: '', rule: '', rolledBack: '', action: '', from: '', to: '' };
+
+  function aigExecDateKey(raw) {
+    if (!raw) return 'unknown';
+    const s = String(raw);
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return 'unknown';
+    return d.toISOString().slice(0, 10);
+  }
+  function aigFmtDayLabel(isoDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return isoDate;
+    try {
+      return new Date(`${isoDate}T12:00:00`).toLocaleDateString(undefined, {
+        weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+      });
+    } catch { return isoDate; }
+  }
+
   async function loadExecutions() {
     const area = wrap.querySelector('#tab-executions');
     area.innerHTML = loading();
     try {
-      const rows = norm(await api.attendanceIgaExecutions());
+      const resp = await api.attendanceIgaExecutions({
+        configId: selectedConfigId,
+        limit: 500,
+        q: execFilters.q || undefined,
+        status: execFilters.status || undefined,
+        rule: execFilters.rule || undefined,
+        rolledBack: execFilters.rolledBack,
+        action: execFilters.action || undefined,
+        from: execFilters.from || undefined,
+        to: execFilters.to || undefined,
+      });
+      const rows = norm(resp);
+      const groups = Array.isArray(resp?.groups) && resp.groups.length
+        ? resp.groups
+        : (() => {
+            const map = new Map();
+            for (const r of rows) {
+              const k = aigExecDateKey(r.executed_at);
+              if (!map.has(k)) map.set(k, []);
+              map.get(k).push(r);
+            }
+            return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([date, items]) => ({
+              date, count: items.length, items,
+              suspended: items.filter((i) => i.policy_action === 'SUSPEND').length,
+              disabled: items.filter((i) => i.policy_action === 'DISABLE').length,
+              failed: items.filter((i) => i.failed).length,
+              rolled_back: items.filter((i) => i.rolled_back).length,
+            }));
+          })();
+      const policy = resp?.policy || {};
+      const exceptions = Array.isArray(resp?.exceptions) ? resp.exceptions : [];
       const statusBadge = s => ({ SUCCESS: 'badge-success', PARTIAL: 'badge-warning', FAILED: 'badge-danger' }[s] || 'badge-neutral');
-      area.innerHTML = `
-        <div class="aap-actions"><div><h3 class="section-title">Action Executions</h3><p class="subtitle">Audit trail of suspend, disable, and access removal actions.</p></div></div>
-        <div class="table-wrap"><table><thead><tr><th>Time</th><th>Employee</th><th>Rule</th><th>Status</th><th>Actions</th><th></th></tr></thead><tbody>
-        ${rows.length ? rows.map(r => `<tr>
-          <td class="muted">${fmtDate(r.executed_at)}</td><td class="cell-strong">${esc(r.full_name||r.emp_id)}</td><td>${esc(r.rule_key)}</td>
+      const actionBadge = (pa) => {
+        if (pa === 'DISABLE') return '<span class="badge badge-danger">Disable (policy)</span>';
+        if (pa === 'SUSPEND') return '<span class="badge badge-warning">Suspend (policy)</span>';
+        return pa ? `<span class="badge badge-neutral">${esc(pa)}</span>` : '—';
+      };
+      const todayActs = (policy.actions?.no_punch_today || []).join(', ') || 'SUSPEND_USER';
+      const consecActs = (policy.actions?.no_punch_consecutive || []).join(', ') || 'DISABLE_USER';
+      const exTypeLabel = (t) => ({ VIP_USER: 'VIP', EMPLOYEE: 'Employee', DEPARTMENT: 'Department' }[t] || t);
+      const rollbackable = rows.filter(r => !r.rolled_back);
+      const renderRow = (r) => `<tr class="${r.failed ? 'row-warn' : ''}">
+          <td>${r.rolled_back ? '' : `<input type="checkbox" class="aig-exec-cb" value="${esc(r.id)}" />`}</td>
+          <td class="muted">${fmtDate(r.executed_at)}</td>
+          <td class="cell-strong">${esc(r.full_name||r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}</div></td>
+          <td><span class="badge badge-neutral">${esc(r.rule_key)}</span></td>
+          <td>${r.absent_days != null ? `<strong>${esc(String(r.absent_days))}</strong>` : '—'}</td>
+          <td>${actionBadge(r.policy_action)}</td>
           <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td>
-          <td class="muted" style="font-size:0.78rem;max-width:220px">${esc(String(r.actions_taken||''))}</td>
+          <td style="max-width:240px;font-size:0.78rem">${r.failure_reason
+            ? `<span class="badge badge-danger">Failed</span> <span class="muted" title="${esc(r.failure_reason)}">${esc(String(r.failure_reason).slice(0, 160))}</span>`
+            : '<span class="muted">—</span>'}</td>
           <td>${r.rolled_back ? '<span class="badge badge-neutral">Rolled back</span>' : `<button class="btn btn-sm btn-secondary aig-rb" data-id="${esc(r.id)}">Rollback</button>`}</td>
-        </tr>`).join('') : '<tr><td colspan="6"><div class="empty-state"><p>No executions yet.</p></div></td></tr>'}
-      </tbody></table></div>`;
+        </tr>`;
+      area.innerHTML = `
+        <div class="aap-actions" style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start">
+          <div>
+            <h3 class="section-title">Action Executions</h3>
+            <p class="subtitle">Audit trail of suspend / disable actions, grouped by date. Use <strong>Rollbacks</strong> tab for CSV import or rollback-all.</p>
+          </div>
+          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+            <button type="button" class="btn btn-secondary btn-sm" id="aig-exec-export">Export CSV</button>
+            <label class="btn btn-secondary btn-sm" style="margin:0;cursor:pointer">
+              Import CSV rollback
+              <input type="file" id="aig-exec-csv" accept=".csv,text/csv" style="display:none" />
+            </label>
+            <button type="button" class="btn btn-secondary btn-sm" id="aig-rb-matching">Rollback all matching</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="aig-bulk-rb" disabled>Bulk rollback (0)</button>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
+          <div style="display:flex;flex-wrap:wrap;gap:0.75rem 1.5rem;align-items:center;margin-bottom:0.65rem">
+            <strong>${esc(policy.name || 'Policy')}</strong>
+            <span class="badge ${policy.enabled ? 'badge-success' : 'badge-danger'}">${policy.enabled ? 'ENABLED' : 'DISABLED'}</span>
+            <span class="badge badge-info">${policy.evaluation_mode === 'CONSECUTIVE_ABSENT' ? 'Consecutive absent only' : 'Daily live punch'}</span>
+            ${policy.evaluation_mode === 'CONSECUTIVE_ABSENT'
+              ? `<span class="muted" style="font-size:0.82rem">Window <strong>${esc(String(policy.consecutive_days ?? '—'))}</strong> days (feed consumes this range)</span>`
+              : `<span class="muted" style="font-size:0.82rem">Cutoff ${esc(policy.cutoff_time || '—')}</span>
+                 <span class="muted" style="font-size:0.82rem">Also consecutive ≥ <strong>${esc(String(policy.consecutive_days ?? '—'))}</strong> days</span>`}
+          </div>
+          <div class="muted" style="font-size:0.8rem;line-height:1.5">
+            ${policy.evaluation_mode === 'CONSECUTIVE_ABSENT'
+              ? `<div><strong>NO_PUNCH_CONSECUTIVE</strong> (≥${esc(String(policy.consecutive_days ?? 3))} days) → ${esc(consecActs)}</div>
+                 <div>Daily missed-punch rule is off for this policy.</div>`
+              : `<div><strong>NO_PUNCH_TODAY</strong> → ${esc(todayActs)}</div>
+                 <div><strong>NO_PUNCH_CONSECUTIVE</strong> (≥${esc(String(policy.consecutive_days ?? 3))} days) → ${esc(consecActs)}</div>`}
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
+          <h4 style="margin:0 0 0.5rem;font-size:0.95rem">Exception users / exclusions</h4>
+          <p class="muted" style="margin:0 0 0.65rem;font-size:0.8rem">These identities are skipped by Attendance IGA (VIP, employee, or department).</p>
+          <div class="table-wrap"><table><thead><tr><th>Type</th><th>Value</th><th>Name</th><th>Notes</th></tr></thead><tbody>
+          ${exceptions.length ? exceptions.map(ex => `<tr>
+            <td><span class="badge badge-info">${esc(exTypeLabel(ex.exclusion_type))}</span></td>
+            <td class="mono">${esc(ex.value)}</td>
+            <td>${esc(ex.full_name || '—')}</td>
+            <td class="muted">${esc(ex.notes || '—')}</td>
+          </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><p>No exception users configured for this policy.</p></div></td></tr>'}
+          </tbody></table></div>
+        </div>
+        <form id="aig-exec-filters" class="card" style="margin-bottom:1rem;padding:0.85rem 1rem;display:flex;flex-wrap:wrap;gap:0.65rem;align-items:end">
+          <div class="field" style="margin:0;min-width:160px;flex:1">
+            <label>Search</label>
+            <input name="q" class="form-input" placeholder="Name, emp id, email" value="${esc(execFilters.q)}" />
+          </div>
+          <div class="field" style="margin:0;min-width:130px">
+            <label>From date</label>
+            <input name="from" type="date" class="form-input" value="${esc(execFilters.from)}" />
+          </div>
+          <div class="field" style="margin:0;min-width:130px">
+            <label>To date</label>
+            <input name="to" type="date" class="form-input" value="${esc(execFilters.to)}" />
+          </div>
+          <div class="field" style="margin:0;min-width:120px">
+            <label>Status</label>
+            <select name="status" class="form-select">
+              <option value="">All</option>
+              <option value="SUCCESS" ${execFilters.status==='SUCCESS'?'selected':''}>Success</option>
+              <option value="PARTIAL" ${execFilters.status==='PARTIAL'?'selected':''}>Partial</option>
+              <option value="FAILED" ${execFilters.status==='FAILED'?'selected':''}>Failed</option>
+            </select>
+          </div>
+          <div class="field" style="margin:0;min-width:140px">
+            <label>Rule</label>
+            <select name="rule" class="form-select">
+              <option value="">All</option>
+              <option value="NO_PUNCH_TODAY" ${execFilters.rule==='NO_PUNCH_TODAY'?'selected':''}>NO_PUNCH_TODAY</option>
+              <option value="NO_PUNCH_CONSECUTIVE" ${execFilters.rule==='NO_PUNCH_CONSECUTIVE'?'selected':''}>NO_PUNCH_CONSECUTIVE</option>
+              <option value="TERMINATED" ${execFilters.rule==='TERMINATED'?'selected':''}>TERMINATED</option>
+            </select>
+          </div>
+          <div class="field" style="margin:0;min-width:130px">
+            <label>Action</label>
+            <select name="action" class="form-select">
+              <option value="">All</option>
+              <option value="SUSPEND" ${execFilters.action==='SUSPEND'?'selected':''}>Suspend</option>
+              <option value="DISABLE" ${execFilters.action==='DISABLE'?'selected':''}>Disable</option>
+              <option value="FAILED" ${execFilters.action==='FAILED'?'selected':''}>Failed / partial</option>
+            </select>
+          </div>
+          <div class="field" style="margin:0;min-width:130px">
+            <label>Rollback</label>
+            <select name="rolledBack" class="form-select">
+              <option value="">All</option>
+              <option value="0" ${execFilters.rolledBack==='0'?'selected':''}>Not rolled back</option>
+              <option value="1" ${execFilters.rolledBack==='1'?'selected':''}>Rolled back</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">Apply filters</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="aig-exec-clear">Clear</button>
+        </form>
+        <div class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">${rows.length} result(s) · ${groups.length} day(s)${rollbackable.length ? ` · ${rollbackable.length} can be rolled back` : ''}</div>
+        ${groups.length ? groups.map((g) => `
+          <div class="card" style="margin-bottom:0.85rem;padding:0;overflow:hidden" data-date-group="${esc(g.date)}">
+            <div style="display:flex;flex-wrap:wrap;gap:0.65rem 1rem;align-items:center;justify-content:space-between;padding:0.7rem 1rem;background:var(--surface,#f8fafc);border-bottom:1px solid var(--border,#e2e8f0)">
+              <div style="display:flex;flex-wrap:wrap;gap:0.5rem 0.85rem;align-items:center">
+                <strong>${esc(aigFmtDayLabel(g.date))}</strong>
+                <span class="badge badge-neutral">${esc(String(g.count))} execution(s)</span>
+                ${g.suspended ? `<span class="badge badge-warning">${esc(String(g.suspended))} suspend</span>` : ''}
+                ${g.disabled ? `<span class="badge badge-danger">${esc(String(g.disabled))} disable</span>` : ''}
+                ${g.failed ? `<span class="badge badge-danger">${esc(String(g.failed))} failed</span>` : ''}
+                ${g.rolled_back ? `<span class="badge badge-info">${esc(String(g.rolled_back))} rolled back</span>` : ''}
+              </div>
+              <label class="muted" style="font-size:0.78rem;display:flex;gap:0.35rem;align-items:center;margin:0">
+                <input type="checkbox" class="aig-exec-day" data-date="${esc(g.date)}" /> Select day
+              </label>
+            </div>
+            <div class="table-wrap" style="margin:0;border:0"><table><thead><tr>
+              <th style="width:2rem"></th>
+              <th>Time</th><th>Employee</th><th>Rule</th><th>Absent days</th><th>Policy action</th><th>Status</th><th>Failure detail</th><th></th>
+            </tr></thead><tbody>
+              ${(g.items || []).map(renderRow).join('')}
+            </tbody></table></div>
+          </div>`).join('') : '<div class="empty-state"><p>No executions match these filters.</p></div>'}
+        <div style="display:none"><input type="checkbox" id="aig-exec-all" ${rollbackable.length ? '' : 'disabled'} /></div>`;
+
+      const bulkBtn = area.querySelector('#aig-bulk-rb');
+      const syncBulk = () => {
+        const n = area.querySelectorAll('.aig-exec-cb:checked').length;
+        bulkBtn.disabled = n === 0;
+        bulkBtn.textContent = `Bulk rollback (${n})`;
+      };
+      area.querySelector('#aig-exec-all')?.addEventListener('change', (e) => {
+        area.querySelectorAll('.aig-exec-cb').forEach((cb) => { cb.checked = e.target.checked; });
+        syncBulk();
+      });
+      area.querySelectorAll('.aig-exec-day').forEach((dayCb) => {
+        dayCb.addEventListener('change', () => {
+          const card = dayCb.closest('[data-date-group]');
+          card?.querySelectorAll('.aig-exec-cb').forEach((cb) => { cb.checked = dayCb.checked; });
+          syncBulk();
+        });
+      });
+      area.querySelectorAll('.aig-exec-cb').forEach((cb) => cb.addEventListener('change', syncBulk));
+      bulkBtn?.addEventListener('click', async () => {
+        const ids = [...area.querySelectorAll('.aig-exec-cb:checked')].map((cb) => cb.value);
+        if (!ids.length) return;
+        if (!confirm(`Rollback ${ids.length} execution(s) and restore prior access?`)) return;
+        bulkBtn.disabled = true;
+        try {
+          const r = await api.bulkRollbackAttendanceIgaExecutions(ids, selectedConfigId);
+          alert(`Bulk rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed`);
+          await loadExecutions();
+          await loadStats();
+        } catch (e) { alert(e.message); bulkBtn.disabled = false; syncBulk(); }
+      });
+
+      area.querySelector('#aig-rb-matching')?.addEventListener('click', async () => {
+        const label = [
+          execFilters.from && `from ${execFilters.from}`,
+          execFilters.to && `to ${execFilters.to}`,
+          execFilters.status && `status=${execFilters.status}`,
+          execFilters.rule && `rule=${execFilters.rule}`,
+          execFilters.action && `action=${execFilters.action}`,
+          execFilters.q && `q=${execFilters.q}`,
+        ].filter(Boolean).join(', ') || 'current filters (not rolled back)';
+        if (!confirm(`Rollback ALL matching executions for this policy?\n\n${label}\n\nMax 2000 rows. This restores prior access from snapshots.`)) return;
+        const btn = area.querySelector('#aig-rb-matching');
+        if (btn) btn.disabled = true;
+        try {
+          const r = await api.rollbackMatchingAttendanceIgaExecutions({
+            configId: selectedConfigId,
+            q: execFilters.q || undefined,
+            status: execFilters.status || undefined,
+            rule: execFilters.rule || undefined,
+            action: execFilters.action || undefined,
+            from: execFilters.from || undefined,
+            to: execFilters.to || undefined,
+            rolledBack: '0',
+          });
+          alert(`Rollback matching: ${r.rolledBack || 0} ok, ${r.failed || 0} failed (${r.requested || 0} requested)`);
+          await loadExecutions();
+          await loadStats();
+        } catch (e) { alert(e.message); }
+        finally { if (btn) btn.disabled = false; }
+      });
+
+      area.querySelector('#aig-exec-csv')?.addEventListener('change', async (ev) => {
+        const file = ev.target.files?.[0];
+        ev.target.value = '';
+        if (!file) return;
+        try {
+          const text = await file.text();
+          if (!text.trim()) { alert('CSV is empty'); return; }
+          if (!confirm(`Import CSV "${file.name}" and rollback matching executions for this policy?`)) return;
+          const r = await api.csvRollbackAttendanceIgaExecutions({
+            csv: text,
+            configId: selectedConfigId,
+          });
+          alert(`CSV rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed (${r.requested || 0} requested)`);
+          await loadExecutions();
+          await loadStats();
+        } catch (e) { alert(e.message || 'CSV rollback failed'); }
+      });
+
+      area.querySelector('#aig-exec-export')?.addEventListener('click', async () => {
+        const btn = area.querySelector('#aig-exec-export');
+        const url = api.attendanceIgaExecutionsExportUrl({
+          configId: selectedConfigId,
+          q: execFilters.q || undefined,
+          status: execFilters.status || undefined,
+          rule: execFilters.rule || undefined,
+          rolledBack: execFilters.rolledBack,
+          action: execFilters.action || undefined,
+          from: execFilters.from || undefined,
+          to: execFilters.to || undefined,
+        });
+        const filename = `attendance-iga-executions-${selectedConfigId}-${execFilters.from || 'all'}-${execFilters.to || 'all'}.csv`;
+        if (btn) btn.disabled = true;
+        try {
+          const res = await fetch(url, { credentials: 'include' });
+          if (!res.ok) {
+            let msg = res.statusText;
+            try {
+              const body = await res.json();
+              msg = body.error || body.message || msg;
+            } catch { /* ignore */ }
+            throw new Error(msg || 'Export failed');
+          }
+          const blob = await res.blob();
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(a.href);
+        } catch (e) { alert(e.message || 'Export failed'); }
+        finally { if (btn) btn.disabled = false; }
+      });
+
+      area.querySelector('#aig-exec-filters')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        execFilters.q = String(fd.get('q') || '').trim();
+        execFilters.from = String(fd.get('from') || '').trim();
+        execFilters.to = String(fd.get('to') || '').trim();
+        execFilters.status = String(fd.get('status') || '');
+        execFilters.rule = String(fd.get('rule') || '');
+        execFilters.action = String(fd.get('action') || '');
+        execFilters.rolledBack = String(fd.get('rolledBack') || '');
+        void loadExecutions();
+      });
+      area.querySelector('#aig-exec-clear')?.addEventListener('click', () => {
+        execFilters.q = '';
+        execFilters.from = '';
+        execFilters.to = '';
+        execFilters.status = '';
+        execFilters.rule = '';
+        execFilters.action = '';
+        execFilters.rolledBack = '';
+        void loadExecutions();
+      });
+
       area.querySelectorAll('.aig-rb').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Restore access from rollback snapshot?')) return;
           try { await api.rollbackAttendanceIgaExecution(btn.dataset.id); await loadExecutions(); await loadStats(); }
           catch (e) { alert(e.message); }
         });
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
+  async function loadRollbacks() {
+    const area = wrap.querySelector('#tab-rollbacks');
+    area.innerHTML = loading();
+    try {
+      const hist = await api.attendanceIgaRollbacks(selectedConfigId);
+      const rows = norm(hist);
+      area.innerHTML = `
+        <div class="aap-actions" style="margin-bottom:1rem">
+          <div>
+            <h3 class="section-title">Complete execution rollback</h3>
+            <p class="subtitle">Rollback every matching execution for the active policy (by date / status / rule), or import a CSV of <code>execution_id</code> / <code>emp_id</code>.</p>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
+          <h4 style="margin:0 0 0.65rem;font-size:0.95rem">Rollback all matching</h4>
+          <form id="aig-rb-all-form" style="display:flex;flex-wrap:wrap;gap:0.65rem;align-items:end">
+            <div class="field" style="margin:0;min-width:140px">
+              <label>From date</label>
+              <input name="from" type="date" class="form-input" />
+            </div>
+            <div class="field" style="margin:0;min-width:140px">
+              <label>To date</label>
+              <input name="to" type="date" class="form-input" />
+            </div>
+            <div class="field" style="margin:0;min-width:130px">
+              <label>Status</label>
+              <select name="status" class="form-select">
+                <option value="">All</option>
+                <option value="SUCCESS">Success</option>
+                <option value="PARTIAL" selected>Partial</option>
+                <option value="FAILED">Failed</option>
+              </select>
+            </div>
+            <div class="field" style="margin:0;min-width:160px">
+              <label>Rule</label>
+              <select name="rule" class="form-select">
+                <option value="">All</option>
+                <option value="NO_PUNCH_TODAY">NO_PUNCH_TODAY</option>
+                <option value="NO_PUNCH_CONSECUTIVE">NO_PUNCH_CONSECUTIVE</option>
+              </select>
+            </div>
+            <div class="field" style="margin:0;min-width:140px">
+              <label>Action</label>
+              <select name="action" class="form-select">
+                <option value="">All</option>
+                <option value="SUSPEND">Suspend</option>
+                <option value="DISABLE">Disable</option>
+                <option value="FAILED">Failed / partial</option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm">Rollback all matching</button>
+          </form>
+          <p class="muted" style="margin:0.65rem 0 0;font-size:0.78rem">Only rows not already rolled back. Cap 2000. Tip: set From/To to one day (e.g. Jul 30) to undo that batch.</p>
+        </div>
+        <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
+          <h4 style="margin:0 0 0.5rem;font-size:0.95rem">CSV import rollback</h4>
+          <p class="muted" style="margin:0 0 0.65rem;font-size:0.8rem">
+            Columns: <code>execution_id</code> and/or <code>emp_id</code> (header optional).
+            Export from Executions includes <code>execution_id</code> — edit and re-import here.
+          </p>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+            <label class="btn btn-secondary btn-sm" style="margin:0;cursor:pointer">
+              Choose CSV file
+              <input type="file" id="aig-rb-csv-file" accept=".csv,text/csv" style="display:none" />
+            </label>
+            <span class="muted" style="font-size:0.8rem" id="aig-rb-csv-name">No file chosen</span>
+          </div>
+          <textarea id="aig-rb-csv-text" class="form-input" rows="6" style="margin-top:0.75rem;font-family:ui-monospace,monospace;font-size:0.8rem"
+            placeholder="execution_id,emp_id&#10;uuid-here,AD-6D24D77465E8&#10;,AD-2469C91E2692"></textarea>
+          <div style="margin-top:0.65rem">
+            <button type="button" class="btn btn-primary btn-sm" id="aig-rb-csv-run">Run CSV rollback</button>
+          </div>
+        </div>
+        <div class="card" style="padding:1rem 1.15rem">
+          <h4 style="margin:0 0 0.65rem;font-size:0.95rem">Recent rollback history</h4>
+          <div class="table-wrap"><table><thead><tr>
+            <th>When</th><th>Employee</th><th>Rule</th><th>Execution</th><th>By</th>
+          </tr></thead><tbody>
+          ${rows.length ? rows.map((r) => `<tr>
+            <td class="muted">${fmtDate(r.rolled_back_at)}</td>
+            <td class="cell-strong">${esc(r.full_name || r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}</div></td>
+            <td><span class="badge badge-neutral">${esc(r.rule_key || '—')}</span></td>
+            <td class="mono" style="font-size:0.72rem">${esc(String(r.execution_id || '').slice(0, 8))}…</td>
+            <td class="muted">${esc(r.rolled_back_by || '—')}</td>
+          </tr>`).join('') : '<tr><td colspan="5"><div class="empty-state"><p>No rollbacks recorded yet for this policy.</p></div></td></tr>'}
+          </tbody></table></div>
+        </div>`;
+
+      area.querySelector('#aig-rb-all-form')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const payload = {
+          configId: selectedConfigId,
+          from: String(fd.get('from') || '').trim() || undefined,
+          to: String(fd.get('to') || '').trim() || undefined,
+          status: String(fd.get('status') || '') || undefined,
+          rule: String(fd.get('rule') || '') || undefined,
+          action: String(fd.get('action') || '') || undefined,
+          rolledBack: '0',
+        };
+        const tip = [payload.from && `from ${payload.from}`, payload.to && `to ${payload.to}`, payload.status && `status=${payload.status}`]
+          .filter(Boolean).join(', ') || 'all not-rolled-back';
+        if (!confirm(`Rollback ALL matching executions?\n\n${tip}\n\nMax 2000.`)) return;
+        const btn = e.target.querySelector('button[type="submit"]');
+        if (btn) btn.disabled = true;
+        try {
+          const r = await api.rollbackMatchingAttendanceIgaExecutions(payload);
+          alert(`Complete rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed (${r.requested || 0} requested)`);
+          await loadRollbacks();
+          await loadStats();
+        } catch (err) { alert(err.message); }
+        finally { if (btn) btn.disabled = false; }
+      });
+
+      area.querySelector('#aig-rb-csv-file')?.addEventListener('change', async (ev) => {
+        const file = ev.target.files?.[0];
+        const nameEl = area.querySelector('#aig-rb-csv-name');
+        const ta = area.querySelector('#aig-rb-csv-text');
+        if (!file) return;
+        if (nameEl) nameEl.textContent = file.name;
+        ta.value = await file.text();
+      });
+
+      area.querySelector('#aig-rb-csv-run')?.addEventListener('click', async () => {
+        const ta = area.querySelector('#aig-rb-csv-text');
+        const text = String(ta?.value || '').trim();
+        if (!text) { alert('Paste CSV or choose a file first'); return; }
+        if (!confirm('Run CSV rollback for this policy?')) return;
+        const btn = area.querySelector('#aig-rb-csv-run');
+        if (btn) btn.disabled = true;
+        try {
+          const r = await api.csvRollbackAttendanceIgaExecutions({ csv: text, configId: selectedConfigId });
+          alert(`CSV rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed (${r.requested || 0} requested)`);
+          await loadRollbacks();
+          await loadStats();
+        } catch (err) { alert(err.message); }
+        finally { if (btn) btn.disabled = false; }
       });
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
@@ -9198,6 +9742,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     if (tab === 'imports') await loadImports();
     if (tab === 'approvals') await loadApprovals();
     if (tab === 'executions') await loadExecutions();
+    if (tab === 'rollbacks') await loadRollbacks();
   }
 
   wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((tabBtn) => {
@@ -9229,6 +9774,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     if (activeTab === 'policy') await loadPolicy();
     if (activeTab === 'config') await loadConfig();
     if (activeTab === 'imports') await loadImports();
+    if (activeTab === 'executions') await loadExecutions();
+    if (activeTab === 'rollbacks') await loadRollbacks();
   });
 
   await refreshConfigList();

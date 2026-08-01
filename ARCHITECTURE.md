@@ -672,7 +672,7 @@ To add a new migration:
 | `GET` | `/api/admin/attendance-iga/imports[/:id/staging]?configId=` | Import run history + staging rows |
 | `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (`configId`, REST API / SFTP / CSV / evaluate-only) |
 | `GET`/`POST` | `/api/admin/attendance-iga/approvals[/:id/decision]` | Pending approvals; approve / reject / skip |
-| `GET`/`POST` | `/api/admin/attendance-iga/executions[/:id/rollback]` | Execution audit + rollback |
+| `GET`/`POST` | `/api/admin/attendance-iga/executions[…]?configId=` | Execution audit: filters, date `groups[]`, `export=csv` (includes `execution_id`); single/`bulk-rollback` (ids / empIds / csv, max 2000); `POST …/rollback-matching` (confirm + filters) |
 | `GET` | `/api/admin/attendance-iga/rollbacks` | Rollback history |
 
 ### 8.5 IGA + multi-protocol AM (live read APIs; write paths return 501 until service layer ships)
