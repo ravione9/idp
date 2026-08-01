@@ -1066,7 +1066,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-08-01 — Attendance IGA CSV + complete execution rollback
+### `131942e` — 2026-08-01 — Attendance IGA CSV + complete execution rollback
 
 **Why** — Ops needed faster undo than per-row Rollback when many PARTIAL/SUSPEND executions share a day (e.g. Invalid FSM transition noise).
 
