@@ -88,6 +88,83 @@ export function renderLogin() {
   const appMfaStepUp = loginParams.get('app_mfa') === '1';
   const appMfaName = loginParams.get('app') || 'this application';
 
+  let loginBranding = {
+    org_name: 'Lenskart',
+    logo_url: null,
+    favicon_url: null,
+    accent_color: '#0f4c81',
+    login_hero_title: '',
+    login_hero_sub: '',
+    login_bg_url: null,
+    custom_css: null,
+  };
+
+  function authBrandHtml() {
+    const name = loginBranding.org_name || 'Lenskart';
+    const logo = loginBranding.logo_url;
+    const mark = logo
+      ? `<img class="auth-brand-logo" src="${esc(logo)}" alt="${esc(name)}" />`
+      : `<div class="auth-brand-mark" aria-hidden="true">${esc((name.trim().charAt(0) || 'L').toUpperCase())}</div>`;
+    return `<div class="auth-brand" aria-label="${esc(name)} IdP">
+        ${mark}
+        <div class="auth-brand-name">${esc(name)}</div>
+        <div class="auth-brand-sub">IdP</div>
+      </div>`;
+  }
+
+  function authLeadText() {
+    if (ssoResume) return loginBranding.login_hero_sub || 'Continue to your application with your work account.';
+    return loginBranding.login_hero_sub
+      || loginBranding.login_hero_title
+      || 'Sign in with your work account to continue.';
+  }
+
+  function applyLoginBranding(root) {
+    if (!root) return;
+    const accent = loginBranding.accent_color || '#0f4c81';
+    root.style.setProperty('--login-accent', accent);
+    root.style.setProperty('--login-accent-hover', `color-mix(in srgb, ${accent} 82%, #000)`);
+    if (loginBranding.login_bg_url) {
+      root.style.setProperty('--login-bg-image', `url("${loginBranding.login_bg_url.replace(/"/g, '')}")`);
+      root.classList.add('auth-shell--bg-image');
+    } else {
+      root.style.removeProperty('--login-bg-image');
+      root.classList.remove('auth-shell--bg-image');
+    }
+    const brandHost = root.querySelector('.auth-brand');
+    if (brandHost) brandHost.outerHTML = authBrandHtml();
+    const lead = root.querySelector('.auth-lead');
+    if (lead && !lead.dataset.locked) lead.textContent = authLeadText();
+    if (loginBranding.favicon_url) {
+      let link = document.querySelector('link[rel="icon"]');
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
+      }
+      link.href = loginBranding.favicon_url;
+    }
+    let cssEl = document.getElementById('login-branding-css');
+    if (loginBranding.custom_css) {
+      if (!cssEl) {
+        cssEl = document.createElement('style');
+        cssEl.id = 'login-branding-css';
+        document.head.appendChild(cssEl);
+      }
+      cssEl.textContent = loginBranding.custom_css;
+    } else if (cssEl) {
+      cssEl.remove();
+    }
+  }
+
+  function hydrateLoginBranding(root) {
+    void api.publicBranding().then((b) => {
+      if (!b || typeof b !== 'object') return;
+      loginBranding = { ...loginBranding, ...b };
+      applyLoginBranding(root);
+    }).catch(() => { /* keep defaults */ });
+  }
+
   // Google / MFA return already carries a challenge — never block on /api/me
   // (a hung Redis session lookup left the page stuck on "Checking session…" and
   // broke SP-initiated SAML → Google → MFA).
@@ -98,9 +175,9 @@ export function renderLogin() {
   // If the portal session is already valid, never re-prompt password/MFA —
   // continue straight to the SSO resume/launch (or home).
   const shell = el(`
-    <div class="auth-shell">
-      <main class="auth-panel" style="display:flex;align-items:center;justify-content:center;width:100%">
-        <div class="auth-card"><p class="muted" style="text-align:center">Checking session…</p></div>
+    <div class="auth-shell auth-shell--light">
+      <main class="auth-panel">
+        <div class="auth-card auth-card--light"><p class="muted" style="text-align:center;margin:0">Checking session…</p></div>
       </main>
     </div>`);
   const meAc = new AbortController();
@@ -117,24 +194,7 @@ export function renderLogin() {
 
   function renderLoginForm() {
   const root = el(`
-    <div class="auth-shell">
-      <aside class="auth-hero">
-        <div class="brand-mark">
-          <span class="brand-logo" style="width:34px;height:34px;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.22);border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:700;letter-spacing:-0.02em">L</span>
-          Lenskart IdP
-        </div>
-        <div>
-          <h1>Identity infrastructure for the enterprise.</h1>
-          <p>SSO, MFA, and governance in one control plane — built for operators who need precision, not noise.</p>
-          <ul class="auth-features">
-            <li>SAML 2.0 SSO &amp; federated login</li>
-            <li>TOTP MFA, sessions, password self-service</li>
-            <li>Lifecycle, access requests, certifications</li>
-            <li>Attendance IGA, audit, compliance reports</li>
-          </ul>
-        </div>
-        <div class="auth-footer">Lenskart Identity Platform</div>
-      </aside>
+    <div class="auth-shell auth-shell--light">
       <main class="auth-panel">
         <div class="auth-theme-bar">
           <div class="theme-picker" id="theme-picker">
@@ -147,28 +207,35 @@ export function renderLogin() {
             </div>
           </div>
         </div>
-        <div class="auth-card" id="step-email">
-          <h2>Sign in to Lenskart IdP</h2>
-          <p class="muted">${ssoResume ? 'Sign in to continue to your application.' : 'Enter your corporate email to continue.'}</p>
+        <div class="auth-card auth-card--light" id="step-email">
+          ${authBrandHtml()}
+          <p class="muted auth-lead">${esc(authLeadText())}</p>
           <div id="login-error"></div>
           <form id="email-form">
             <div class="field">
-              <label for="email">Work email</label>
-              <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@lenskart.com" />
+              <label for="email">Email</label>
+              <input id="email" name="email" type="email" required autocomplete="username" placeholder="Enter your business email" />
             </div>
-            <button type="submit" class="btn btn-primary btn-block btn-lg">Continue →</button>
+            <button type="submit" class="btn btn-primary btn-block btn-lg auth-continue">Continue</button>
           </form>
-          <div style="text-align:center;margin-top:1rem">
-            <a href="${esc(googleLoginHref(returnTo))}" class="btn btn-secondary" style="width:100%">Continue with Google</a>
-          </div>
+          <div class="auth-divider" role="separator"><span>or</span></div>
+          <a href="${esc(googleLoginHref(returnTo))}" class="btn btn-secondary btn-block auth-sso-btn">Continue with Google</a>
         </div>
       </main>
     </div>
   `);
 
   mountThemeMenu(root);
+  applyLoginBranding(root);
+  hydrateLoginBranding(root);
 
   const panel = root.querySelector('.auth-panel');
+  /** Keep theme bar + brand/accent when step cards replace the form. */
+  const wrapStep = (card) => {
+    const themeBar = panel.querySelector('.auth-theme-bar');
+    panel.replaceChildren(...(themeBar ? [themeBar, card] : [card]));
+    applyLoginBranding(root);
+  };
 
   function renderMfaEnrollStep(enrollChallengeId, email, { graceActive = false, gracePeriodHours = 24 } = {}) {
     const deferLabel = graceActive ? 'Continue without MFA for now' : 'Set up on next sign-in';
@@ -193,9 +260,10 @@ export function renderLogin() {
     }
 
     const card = el(`
-      <div class="auth-card">
-        <h2>Set up two-factor authentication</h2>
-        <p class="muted">MFA is required for ${esc(email)}. Scan the QR code with Google Authenticator, Authy, or 1Password.</p>
+      <div class="auth-card auth-card--light">
+        ${authBrandHtml()}
+        <h2 class="auth-step-title">Set up MFA</h2>
+        <p class="muted">Required for ${esc(email)}. Scan the QR with your authenticator app.</p>
         <div id="enroll-error"></div>
         <div id="enroll-loading" class="muted">Loading setup…</div>
         <div id="enroll-body" hidden></div>
@@ -205,7 +273,7 @@ export function renderLogin() {
         </div>
       </div>
     `);
-    panel.replaceChildren(card);
+    wrapStep(card);
     card.querySelector('#enroll-defer').addEventListener('click', () => { void deferEnrollment(); });
     const errEl = card.querySelector('#enroll-error');
     const bodyEl = card.querySelector('#enroll-body');
@@ -267,8 +335,9 @@ export function renderLogin() {
       ? `This is a critical application. Verify MFA for ${esc(email)} to continue.`
       : `Verify your identity for ${esc(email)}.`;
     const card = el(`
-      <div class="auth-card">
-        <h2>${esc(appTitle)}</h2>
+      <div class="auth-card auth-card--light">
+        ${authBrandHtml()}
+        <h2 class="auth-step-title">${esc(appTitle)}</h2>
         <p class="muted">${appHint}</p>
         <div id="mfa-error"></div>
         <form id="mfa-form">
@@ -280,11 +349,11 @@ export function renderLogin() {
             ${methods.has('sms_otp') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-send-sms">Text me a code</button>' : ''}
             ${methods.has('webauthn') ? '<button type="button" class="btn btn-secondary btn-sm" id="mfa-use-passkey">Use passkey</button>' : ''}
           </div>
-          <button type="submit" class="btn btn-primary btn-block btn-lg" id="mfa-verify-btn">Verify</button>
+          <button type="submit" class="btn btn-primary btn-block btn-lg auth-continue" id="mfa-verify-btn">Verify</button>
         </form>
       </div>
     `);
-    panel.replaceChildren(card);
+    wrapStep(card);
     const merr = card.querySelector('#mfa-error');
     const codeInput = card.querySelector('#mfa-code');
     codeInput?.focus();
@@ -360,9 +429,10 @@ export function renderLogin() {
   function showPasswordStep(email, infoMessage) {
     const initial = (email.trim().charAt(0) || '?').toUpperCase();
     const card = el(`
-      <div class="auth-card" id="step-password">
+      <div class="auth-card auth-card--light" id="step-password">
+        ${authBrandHtml()}
         <div class="auth-avatar-circle">${esc(initial)}</div>
-        <h2 style="text-align:center">Welcome back</h2>
+        <h2 class="auth-step-title" style="text-align:center">Welcome back</h2>
         <div class="auth-email-chip">
           <span>${esc(email)}</span>
           <a href="#" id="back-to-email">· Not you?</a>
@@ -374,11 +444,11 @@ export function renderLogin() {
             <label for="password">Password</label>
             <input id="password" name="password" type="password" required autocomplete="current-password" />
           </div>
-          <button type="submit" class="btn btn-primary btn-block btn-lg">Sign in</button>
+          <button type="submit" class="btn btn-primary btn-block btn-lg auth-continue">Sign in</button>
         </form>
       </div>
     `);
-    panel.replaceChildren(card);
+    wrapStep(card);
     card.querySelector('#password').focus();
 
     if (infoMessage) {
@@ -417,23 +487,22 @@ export function renderLogin() {
 
   function showEmailStep() {
     const card = el(`
-      <div class="auth-card" id="step-email">
-        <h2>Sign in to Lenskart IdP</h2>
-        <p class="muted">${ssoResume ? 'Sign in to continue to your application.' : 'Enter your corporate email to continue.'}</p>
+      <div class="auth-card auth-card--light" id="step-email">
+        ${authBrandHtml()}
+        <p class="muted auth-lead">${esc(authLeadText())}</p>
         <div id="login-error"></div>
         <form id="email-form">
           <div class="field">
-            <label for="email">Work email</label>
-            <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@lenskart.com" />
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" required autocomplete="username" placeholder="Enter your business email" />
           </div>
-          <button type="submit" class="btn btn-primary btn-block btn-lg">Continue →</button>
+          <button type="submit" class="btn btn-primary btn-block btn-lg auth-continue">Continue</button>
         </form>
-        <div style="text-align:center;margin-top:1rem">
-          <a href="${esc(googleLoginHref(returnTo))}" class="btn btn-secondary" style="width:100%">Continue with Google</a>
-        </div>
+        <div class="auth-divider" role="separator"><span>or</span></div>
+        <a href="${esc(googleLoginHref(returnTo))}" class="btn btn-secondary btn-block auth-sso-btn">Continue with Google</a>
       </div>
     `);
-    panel.replaceChildren(card);
+    wrapStep(card);
     wireEmailForm(card);
   }
 
@@ -453,12 +522,13 @@ export function renderLogin() {
   // Critical-app step-up: session exists, start MFA challenge without password re-entry.
   if (appMfaStepUp) {
     const card = el(`
-      <div class="auth-card">
-        <h2>Confirm access</h2>
+      <div class="auth-card auth-card--light">
+        ${authBrandHtml()}
+        <h2 class="auth-step-title">Confirm access</h2>
         <p class="muted">Starting MFA for <strong>${esc(appMfaName)}</strong>…</p>
         <div id="app-mfa-error"></div>
       </div>`);
-    panel.replaceChildren(card);
+    wrapStep(card);
     void api.sessionMfaChallenge(returnTo).then((r) => {
       if (r && r.mfaRequired && r.challengeId) {
         renderMfaStep(r.challengeId, r.email || pendingEmail || 'your account', r.availableMethods, {
@@ -498,8 +568,8 @@ export function renderLogin() {
   api.bootstrapStatus().then((s) => {
     if (!s.bootstrapEnabled) return;
     const card = el(`
-      <div class="auth-card" style="margin-top:1.5rem">
-        <h2 style="font-size:1.15rem">First-time setup</h2>
+      <div class="auth-card auth-card--light" style="margin-top:1.5rem">
+        <h2 class="auth-step-title" style="font-size:1.15rem">First-time setup</h2>
         <p class="muted">Create the first super administrator.</p>
         <div id="bs-error"></div>
         <form id="bs-form">
