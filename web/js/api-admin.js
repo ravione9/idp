@@ -360,6 +360,10 @@ Object.assign(api, {
   getMfaDeliveryStatus: () => f('/api/admin/users/mfa-delivery-status'),
   saveMfaDelivery:     (data) => f('/api/admin/users/mfa-delivery', { method: 'PUT', body: JSON.stringify(data) }),
   updateMfaPolicy:     (data) => f('/api/admin/users/mfa-policy', { method: 'POST', body: JSON.stringify(data) }),
+  listMfaCriticalApps: () => f('/api/admin/users/mfa-critical-apps'),
+  setMfaCriticalApp:   (id, data) => f(`/api/admin/users/mfa-critical-apps/${encodeURIComponent(id)}`, {
+    method: 'PUT', body: JSON.stringify(data),
+  }),
   listMfaGroupPolicies: () => f('/api/admin/users/mfa-group-policies'),
   createMfaGroupPolicy: (data) => f('/api/admin/users/mfa-group-policies', { method: 'POST', body: JSON.stringify(data) }),
   updateMfaGroupPolicy: (id, data) => f(`/api/admin/users/mfa-group-policies/${id}`, { method: 'PUT', body: JSON.stringify(data) }),

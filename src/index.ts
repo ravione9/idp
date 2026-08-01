@@ -77,6 +77,7 @@ import {
 } from './auth/middleware.js';
 import { googleLoginHandler } from './auth/login-routes.js';
 import { localLoginHandler, localLoginMfaEnrollConfirmHandler, localLoginMfaEnrollDeferHandler, localLoginMfaEnrollHandler, localLoginMfaSendOtpHandler, localLoginMfaVerifyHandler, localLoginMfaWebAuthnOptionsHandler, localLoginMfaWebAuthnVerifyHandler } from './auth/local-auth.js';
+import { sessionMfaChallengeHandler } from './auth/session-mfa-challenge.js';
 import { startAttendanceIgaScheduler } from './services/attendance-iga/scheduler.js';
 import { startAccessRequestExpiryScheduler } from './services/access-request-expiry.js';
 import { startConnectorHealthScheduler } from './services/connector-health.js';
@@ -182,6 +183,8 @@ app.post('/auth/local/login/mfa-webauthn/verify', loginRateLimiter, (req, res) =
 app.post('/auth/local/login/mfa-enroll',         loginRateLimiter, (req, res) => { void localLoginMfaEnrollHandler(req, res); });
 app.post('/auth/local/login/mfa-enroll/confirm', loginRateLimiter, (req, res) => { void localLoginMfaEnrollConfirmHandler(req, res); });
 app.post('/auth/local/login/mfa-enroll/defer',    loginRateLimiter, (req, res) => { void localLoginMfaEnrollDeferHandler(req, res); });
+/** Critical-app MFA step-up for an existing portal session (no password re-entry). */
+app.post('/auth/session/mfa-challenge', loginRateLimiter, (req, res) => { void sessionMfaChallengeHandler(req, res); });
 // First-time setup (IDP-01) — minimal public surface; not under /api/admin/*
 app.get('/auth/local/bootstrap-status', (req, res) => { void bootstrapStatusHandler(req, res); });
 app.post('/auth/local/bootstrap', loginRateLimiter, (req, res) => { void bootstrapAdminHandler(req, res); });

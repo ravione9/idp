@@ -49,6 +49,7 @@ import { getClientIp } from '../utils/request-context.js';
 import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
 import { isPortalAccessible } from '../fsm/states.js';
 import { PORTAL_OPERATOR_ROLES } from '../services/portal-roles.js';
+import { markSessionMfaFresh } from '../services/app-mfa-stepup.js';
 
 export const MFA_CHALLENGE_PREFIX        = 'lilg:mfa-challenge:';
 export const MFA_ENROLL_CHALLENGE_PREFIX = 'lilg:mfa-enroll-challenge:';
@@ -79,7 +80,7 @@ const enrollConfirmSchema = z.object({
   code:              mfaCodeSchema,
 });
 
-function safeChallengeReturnTo(raw: string | undefined): string | undefined {
+export function safeChallengeReturnTo(raw: string | undefined): string | undefined {
   if (!raw || !raw.startsWith('/') || raw.startsWith('//')) return undefined;
   return raw.slice(0, 500);
 }
@@ -96,6 +97,12 @@ export interface MfaChallenge {
   iss?:      'local' | 'google';
   sub?:      string;
   returnTo?: string;
+  /**
+   * Critical-app / session step-up: user already has a portal session.
+   * On verify, refresh MFA freshness on this session instead of minting a new one.
+   */
+  sessionStepUp?: boolean;
+  sessionId?:     string;
 }
 
 export interface MfaEnrollChallenge {
@@ -328,6 +335,8 @@ async function issueSessionAndRespond(
     returnTo?: string;
     /** Set/refresh MFA remember-device cookie when hours > 0. */
     rememberDeviceHours?: number;
+    /** True when this session follows a successful MFA challenge (critical-app freshness). */
+    mfaVerified?: boolean;
   },
 ): Promise<void> {
   const iss = opts?.iss ?? 'local';
@@ -352,8 +361,51 @@ async function issueSessionAndRespond(
   if ((opts?.rememberDeviceHours ?? 0) > 0) {
     setMfaDeviceTrustCookie(res, account.emp_id, opts!.rememberDeviceHours!, userAgent);
   }
+  if (opts?.mfaVerified) {
+    await markSessionMfaFresh(sessionId);
+  }
   logger.info({ empId: account.emp_id, email: account.email, iss }, 'Login session issued');
   res.json({ success: true, redirect: opts?.returnTo || '/' });
+}
+
+/** Complete MFA for an existing session (critical app step-up) or mint a new session. */
+async function finishMfaChallenge(
+  req: Request,
+  res: Response,
+  challenge: MfaChallenge,
+): Promise<void> {
+  const mfaRequirements = await getMfaRequirementContext(challenge.empId);
+  const userAgent = req.get('user-agent') ?? '';
+
+  if (challenge.sessionStepUp && challenge.sessionId) {
+    await markSessionMfaFresh(challenge.sessionId);
+    if (mfaRequirements.rememberDeviceHours > 0) {
+      setMfaDeviceTrustCookie(res, challenge.empId, mfaRequirements.rememberDeviceHours, userAgent);
+    }
+    logger.info({ empId: challenge.empId, sessionId: challenge.sessionId }, 'Critical-app MFA step-up OK');
+    res.json({ success: true, redirect: challenge.returnTo || '/', appStepUp: true });
+    return;
+  }
+
+  const sessionOpts: {
+    iss?: 'local' | 'google';
+    sub?: string;
+    returnTo?: string;
+    rememberDeviceHours?: number;
+    mfaVerified?: boolean;
+  } = {
+    iss: challenge.iss ?? 'local',
+    rememberDeviceHours: mfaRequirements.rememberDeviceHours,
+    mfaVerified: true,
+  };
+  if (challenge.sub) sessionOpts.sub = challenge.sub;
+  if (challenge.returnTo) sessionOpts.returnTo = challenge.returnTo;
+  await issueSessionAndRespond(res, req, {
+    id:     challenge.accountId,
+    emp_id: challenge.empId,
+    email:  challenge.email,
+    role:   challenge.role,
+  }, sessionOpts);
 }
 
 export async function localLoginHandler(req: Request, res: Response): Promise<void> {
@@ -539,25 +591,7 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
 
   await redis.del(key);
   await logAttempt(challenge.email, getClientIp(req), true, 'mfa-ok');
-
-  const mfaRequirements = await getMfaRequirementContext(challenge.empId);
-  const sessionOpts: {
-    iss?: 'local' | 'google';
-    sub?: string;
-    returnTo?: string;
-    rememberDeviceHours?: number;
-  } = {
-    iss: challenge.iss ?? 'local',
-    rememberDeviceHours: mfaRequirements.rememberDeviceHours,
-  };
-  if (challenge.sub) sessionOpts.sub = challenge.sub;
-  if (challenge.returnTo) sessionOpts.returnTo = challenge.returnTo;
-  await issueSessionAndRespond(res, req, {
-    id:     challenge.accountId,
-    emp_id: challenge.empId,
-    email:  challenge.email,
-    role:   challenge.role,
-  }, sessionOpts);
+  await finishMfaChallenge(req, res, challenge);
 }
 
 async function loadEnrollChallenge(enrollChallengeId: string): Promise<MfaEnrollChallenge | null> {
@@ -632,6 +666,7 @@ export async function localLoginMfaEnrollConfirmHandler(req: Request, res: Respo
       await touchLocalLogin(challenge.accountId);
     }
     setSessionCookie(res, sessionId, ttlHours);
+    await markSessionMfaFresh(sessionId);
     const mfaRequirements = await getMfaRequirementContext(challenge.empId);
     if (mfaRequirements.rememberDeviceHours > 0) {
       setMfaDeviceTrustCookie(res, challenge.empId, mfaRequirements.rememberDeviceHours, userAgent);
@@ -807,23 +842,5 @@ export async function localLoginMfaWebAuthnVerifyHandler(req: Request, res: Resp
 
   await redis.del(key);
   await logAttempt(challenge.email, getClientIp(req), true, 'mfa-webauthn-ok');
-
-  const mfaRequirements = await getMfaRequirementContext(challenge.empId);
-  const sessionOpts: {
-    iss?: 'local' | 'google';
-    sub?: string;
-    returnTo?: string;
-    rememberDeviceHours?: number;
-  } = {
-    iss: challenge.iss ?? 'local',
-    rememberDeviceHours: mfaRequirements.rememberDeviceHours,
-  };
-  if (challenge.sub) sessionOpts.sub = challenge.sub;
-  if (challenge.returnTo) sessionOpts.returnTo = challenge.returnTo;
-  await issueSessionAndRespond(res, req, {
-    id:     challenge.accountId,
-    emp_id: challenge.empId,
-    email:  challenge.email,
-    role:   challenge.role,
-  }, sessionOpts);
+  await finishMfaChallenge(req, res, challenge);
 }

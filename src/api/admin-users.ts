@@ -379,6 +379,8 @@ router.post('/mfa-policy', async (req: Request, res: Response): Promise<void> =>
     'remember_device_hours',
     'allowed_methods',
     'excluded_group_ids',
+    'critical_app_mfa',
+    'critical_app_mfa_max_age_seconds',
   ]);
   for (const [key, val] of Object.entries(updates)) {
     if (!allowed.has(key)) continue;
@@ -391,6 +393,54 @@ router.post('/mfa-policy', async (req: Request, res: Response): Promise<void> =>
   }
   logger.info({ by: adminId, updates }, 'Admin updated MFA global policy');
   res.json({ success: true });
+});
+
+/** List apps with critical-MFA flags (for Strong Auth policy UI). */
+router.get('/mfa-critical-apps', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const { listCriticalApps } = await import('../services/app-mfa-stepup.js');
+    const data = await listCriticalApps();
+    res.json({ data });
+  } catch (err) {
+    logger.warn({ err }, 'mfa-critical-apps list failed');
+    res.json({ data: [] });
+  }
+});
+
+const criticalAppSchema = z.object({
+  requireMfa: z.boolean(),
+  maxAgeSeconds: z.number().int().min(0).max(86400).optional(),
+});
+
+/** Mark / unmark an application as requiring MFA at SSO launch. */
+router.put('/mfa-critical-apps/:id', async (req: Request, res: Response): Promise<void> => {
+  const id = String(req.params['id'] ?? '').trim();
+  if (!id) {
+    res.status(400).json({ error: 'Missing application id' });
+    return;
+  }
+  const parsed = criticalAppSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+  try {
+    const { setApplicationRequireMfa } = await import('../services/app-mfa-stepup.js');
+    const ok = await setApplicationRequireMfa(
+      id,
+      parsed.data.requireMfa,
+      parsed.data.maxAgeSeconds,
+    );
+    if (!ok) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+    const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'system';
+    logger.info({ by: adminId, id, ...parsed.data }, 'Admin updated critical-app MFA flag');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Update failed' });
+  }
 });
 
 router.get('/mfa-delivery-status', async (_req: Request, res: Response): Promise<void> => {

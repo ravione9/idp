@@ -18,6 +18,12 @@ import { getPublicOrigin } from '../utils/request-context.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import logger from '../utils/logger.js';
 import {
+  enforceCriticalAppMfaOrRedirect,
+  getAppMfaByOidcClientId,
+  redirectAppMfaStepUp,
+  sessionSatisfiesAppMfa,
+} from '../services/app-mfa-stepup.js';
+import {
   getOidcClientByClientId,
   intersectScopes,
   isRedirectUriAllowed,
@@ -225,6 +231,21 @@ router.get('/oauth/authorize', asyncHandler(async (req: Request, res: Response) 
     return;
   }
 
+  {
+    const appMfa = await getAppMfaByOidcClientId(params.client_id);
+    if (!(await sessionSatisfiesAppMfa(user.sessionId, appMfa))) {
+      const pendingId = uuidv4();
+      await redis.set(
+        `${PENDING_OAUTH_PREFIX}${pendingId}`,
+        JSON.stringify(params),
+        'EX',
+        PENDING_OAUTH_TTL_S,
+      );
+      redirectAppMfaStepUp(res, `/oauth/resume/${pendingId}`, appMfa?.name || client.name);
+      return;
+    }
+  }
+
   await completeAuthorize(res, params, client, user.empId);
 }));
 
@@ -235,20 +256,32 @@ router.get('/oauth/resume/:pendingId', asyncHandler(async (req: Request, res: Re
     return;
   }
 
-  const raw = await redis.get(`${PENDING_OAUTH_PREFIX}${req.params['pendingId']}`);
+  const pendingKey = `${PENDING_OAUTH_PREFIX}${req.params['pendingId']}`;
+  const raw = await redis.get(pendingKey);
   if (!raw) {
     res.status(410).send('OAuth authorization session expired. Restart sign-in from the application.');
     return;
   }
-  await redis.del(`${PENDING_OAUTH_PREFIX}${req.params['pendingId']}`);
 
   const params = authorizeQuerySchema.parse(JSON.parse(raw));
   const client = await getOidcClientByClientId(params.client_id);
   if (!client || !isRedirectUriAllowed(client, params.redirect_uri)) {
+    await redis.del(pendingKey);
     res.status(400).send('Invalid OAuth client or redirect URI');
     return;
   }
 
+  {
+    const appMfa = await getAppMfaByOidcClientId(params.client_id);
+    const ok = await enforceCriticalAppMfaOrRedirect(req, res, {
+      sessionId: user.sessionId,
+      returnPath: `/oauth/resume/${req.params['pendingId']}`,
+      app: appMfa,
+    });
+    if (!ok) return;
+  }
+
+  await redis.del(pendingKey);
   await completeAuthorize(res, params, client, user.empId);
 }));
 
