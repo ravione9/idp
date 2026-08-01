@@ -405,9 +405,9 @@ Add more apps via **Admin Central → SAML Applications → Register new SAML ap
 
 - Folder: `migrations/NNN_name.sql`
 - Runner: `src/db/migrate.ts` (`runMigrations()`).
-- **Boot (docker-compose / single instance):** `src/index.ts` calls `maybeRunBootMigrations()` before listening — applies pending migrations unless `SKIP_MIGRATIONS_ON_BOOT=true`.
-- **K8s:** set `SKIP_MIGRATIONS_ON_BOOT=true` on API pods; run a one-shot Job with `node dist/db/migrate-cli.js` (`src/db/migrate-cli.ts`) before rolling the Deployment.
-- **Advisory lock:** `runMigrations()` acquires MySQL `GET_LOCK('lilg_migrations', 120)` after connect and `RELEASE_LOCK` in `finally`, so concurrent callers serialize; the second pass no-ops via the tracking table.
+- **Boot (default):** `src/index.ts` calls `maybeRunBootMigrations()` before listening — applies **pending** migrations only. Files already recorded in `lilg_schema_migrations` are **skipped**.
+- **K8s / Multiverse:** default `SKIP_MIGRATIONS_ON_BOOT=false` so API pods migrate on boot. Safe with multiple replicas via MySQL `GET_LOCK('lilg_migrations', 120)`. Optional Helm Job (`charts/lilg` `migrations.job: true`) can own schema exclusively when set; then pods get `SKIP_MIGRATIONS_ON_BOOT=true` and the Job runs `node dist/db/migrate-cli.js`.
+- **Advisory lock:** concurrent boot/Job callers serialize; losers wait, then see an up-to-date tracking table and skip.
 - Tracking: `lilg_schema_migrations(name, checksum, applied_at, duration_ms)`.
 - Each file is executed as a single multi-statement batch (the runner opens a connection with `multipleStatements: true`).
 - Compatibility fallback: if MySQL rejects `ADD COLUMN IF NOT EXISTS` with `ER_PARSE_ERROR`, the runner retries that migration statement-by-statement and emulates `IF NOT EXISTS` via `information_schema.COLUMNS` checks before each `ALTER TABLE ... ADD COLUMN`.
@@ -419,8 +419,8 @@ To add a new migration:
 
 ```bash
 # 1. Add migrations/003_my_change.sql with idempotent DDL
-# 2. Pull on the server, restart the API; migration applies automatically
-#    (or run the migrate Job when SKIP_MIGRATIONS_ON_BOOT=true)
+# 2. Deploy / restart the API; pending migrations apply on boot
+#    (already-applied names in lilg_schema_migrations are skipped)
 ```
 
 ### 7.2 Tables (current)
@@ -799,7 +799,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | yes | — | MySQL (app connection) |
 | `MYSQL_ROOT_PASSWORD` / `MYSQL_PASSWORD` | yes (compose) | — | MySQL container bootstrap; `MYSQL_PASSWORD` must match `DB_PASSWORD` |
 | `REDIS_URL` | yes | — | Sessions, MFA challenges, rate limits (`idp:rl:*`), scheduler locks (`idp:sched:*`), outbox leader |
-| `SKIP_MIGRATIONS_ON_BOOT` | no | `false` | When `"true"`, API skips `runMigrations()` (K8s Job runs `node dist/db/migrate-cli.js`). Unset/false = apply migrations on boot (docker-compose). |
+| `SKIP_MIGRATIONS_ON_BOOT` | no | `false` | When `"true"`, API skips `runMigrations()` (external Job owns schema). Unset/`false` = apply **pending** migrations on boot; already-applied files are skipped. |
 | `SESSION_SECRET` | yes (≥32 chars) | — | HMAC for cookie signing |
 | `SESSION_TTL_CORPORATE_HOURS` | no | `8` | Fallback idle/default session TTL when General Settings unavailable |
 | `SESSION_TTL_STORE_HOURS` | no | `12` | Reserved (store employment type); corporate path uses General Settings + corporate fallback |
@@ -879,7 +879,7 @@ Target topology is multi-replica API behind a load balancer with shared MySQL + 
 
 | Concern | Mechanism |
 |---|---|
-| Schema migrations | K8s Job: `node dist/db/migrate-cli.js` + `SKIP_MIGRATIONS_ON_BOOT=true` on pods; MySQL `GET_LOCK('lilg_migrations')` as defense-in-depth |
+| Schema migrations | Default: API boot `runMigrations()` with skip-already-applied + `GET_LOCK('lilg_migrations')`; optional Helm migrate Job when `migrations.job=true` |
 | Rate limiting | Redis fixed-window (`src/auth/rate-limit.ts`); fails open if Redis down |
 | In-process schedulers | Redis `SET NX PX` via `withSchedLock` (`src/utils/sched-lock.ts`) — attendance-iga, access-request-expiry, connector-health; lock expires (not released early) |
 | Outbox drain | Existing Redis leader election in `src/services/outbox-worker.ts` |
@@ -1068,6 +1068,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `TBD` — 2026-08-02 — Migrations run on boot; skip already-applied
+
+**Why** — Standalone migrate Job/image was easy to mis-tag; pods with `SKIP_MIGRATIONS_ON_BOOT=true` never applied pending schema (053/055), leaving Applications / Attendance broken.
+
+**What changed:**
+
+- Multiverse values + Helm chart default: `SKIP_MIGRATIONS_ON_BOOT=false` / `migrations.job=false` so API applies pending migrations on boot.
+- Runner already skips names in `lilg_schema_migrations`; logs now report applied vs skipped counts.
+- Multi-replica safe via existing `GET_LOCK('lilg_migrations')`.
 
 ### (pending) — 2026-08-01 — Attendance IGA evaluation mode (daily vs consecutive)
 
