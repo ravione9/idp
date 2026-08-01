@@ -885,7 +885,7 @@ Target topology is multi-replica API behind a load balancer with shared MySQL + 
 | Outbox drain | Existing Redis leader election in `src/services/outbox-worker.ts` |
 | SAML/OIDC signing keys | Inject `SAML_IDP_PRIVATE_KEY_PEM` + `SAML_IDP_CERT_PEM` from Vault (Agent Injector → process env on Multiverse; or External Secrets elsewhere); `ensureSamlKeys()` short-circuits; `ensureOidcKeys()` reuses SAML key when SAML is enabled |
 
-**Lenskart Multiverse (prod EKS):** Helm values overlay and Vault key template live in this repo at `deploy/multiverse/` for copy into `multiverse-application-helm` — `values-lk-multiverse-platform-eks.yaml` (ns `it-idp`, host `idp.lenskart.com`, RDS + ElastiCache + SQS FIFO) and `vault-multiverse-config-idp.template.env` (KV v1 `multiverse/config/idp`, role `idp`, SA `idp-sa`). EC2/docker-compose config is unchanged.
+**Lenskart Multiverse (prod EKS):** Helm values overlay and Vault key template live in this repo at `deploy/multiverse/` for copy into `multiverse-application-helm` — `values-lk-multiverse-platform-eks.yaml` (ns `it-idp`, host `idp.lenskart.com`, RDS + ElastiCache + SQS FIFO) and `vault-multiverse-config-idp.template.env` (KV v1 `multiverse/config/idp`, role `idp`, SA `idp-sa`). A starter in-repo chart also lives at `charts/lilg/` (API + worker, migrate Job, ExternalSecrets, HPA/PDB, Ingress). EC2/docker-compose config is unchanged.
 
 **Production SAML key generation (K8s / Vault):** do **not** rely on in-pod `ensureSamlKeys()` auto-generation (3-year validity, per-replica risk). Generate once offline with **15-year** validity and load into Vault:
 
@@ -1068,6 +1068,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-01 — Helm chart + HA/PRD/deploy docs in repo
+
+**Why** — Keep deployment guides, PRD, SSO rollout decks, and a starter Helm chart with the IdP source for Lenskart GitLab review.
+
+**What changed**
+- **`charts/lilg/`** — starter Helm chart (API/worker, migrate Job, ExternalSecrets, HPA/PDB, Ingress).
+- Docs: Deployment Guide (RDS/ElastiCache/Helm), HA architecture DOCX/MD updates, PRD, SSO rollout PPTX.
 
 ### `56682c2` — 2026-08-01 — Branding logo upload
 

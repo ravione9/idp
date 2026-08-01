@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lilg-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lilg.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      app: lilg-worker
+  template:
+    metadata:
+      labels:
+        app: lilg-worker
+        {{- include "lilg.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      terminationGracePeriodSeconds: 35
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: lilg-worker
+      containers:
+        - name: worker
+          image: {{ include "lilg.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "dist/services/outbox-worker.js"]
+          envFrom:
+            - configMapRef:
+                name: lilg-config
+            - secretRef:
+                name: lilg-app-secrets
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}

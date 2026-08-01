@@ -1,0 +1,26 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: lilg-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    release: {{ .Values.monitoring.serviceMonitor.release }}
+    {{- include "lilg.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: lilg-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+      # NOTE: Prometheus sends "Authorization: Bearer <INTERNAL_TOKEN>".
+      # requireDiagToken() in src/api/health.ts must also accept this header
+      # (one-line addition) — it currently only reads "x-internal-token".
+      authorization:
+        type: Bearer
+        credentials:
+          name: lilg-app-secrets
+          key: INTERNAL_TOKEN
+{{- end }}
