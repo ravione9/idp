@@ -1068,7 +1068,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-01 — Admin MFA opt-in via Strong Auth policy
+### `7362868` — 2026-08-01 — Admin MFA opt-in via Strong Auth policy
 
 **Why** — Administrator MFA was hard-forced (operators could not defer enrollment; `enforce_for_admins` defaulted on). It should follow policy only.
 
@@ -1077,7 +1077,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - Migration **`056_mfa_admins_policy_opt_in.sql`** — sets `mfa_policy.enforce_for_admins` to false (re-enable under Strong Auth Methods if needed).
 - **Strong Auth UI** — clearer opt-in wording for “Enforce MFA for administrators”.
 
-### (pending) — 2026-08-01 — Light login page + portal branding logo/accent
+### `7362868` — 2026-08-01 — Light login page + portal branding logo/accent
 
 **Why** — Login needed a consistently light background with readable dark type, and the logo/accent must come from Admin → Branding & Login (not hard-coded).
 
