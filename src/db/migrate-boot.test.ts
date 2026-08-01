@@ -33,8 +33,8 @@ describe('SKIP_MIGRATIONS_ON_BOOT gating', () => {
   it('runs runMigrations when skipMigrationsOnBoot is false', async () => {
     await maybeRunBootMigrations(false);
     expect(mockRunMigrations).toHaveBeenCalledTimes(1);
-    expect(logger.info).not.toHaveBeenCalledWith(
-      'SKIP_MIGRATIONS_ON_BOOT=true — migrations handled externally (K8s Job)',
+    expect(logger.info).toHaveBeenCalledWith(
+      'Running database migrations on boot (skipping already-applied)',
     );
   });
 });

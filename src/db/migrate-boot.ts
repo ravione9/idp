@@ -1,6 +1,8 @@
 /**
  * Boot-time migration gate for the API process.
- * When skip is true (K8s Job owns schema), log and return; otherwise runMigrations().
+ * Default: run pending migrations on boot (already-applied files in
+ * lilg_schema_migrations are skipped). Set SKIP_MIGRATIONS_ON_BOOT=true only
+ * when an external Job owns schema exclusively.
  */
 import { runMigrations } from './migrate.js';
 import logger from '../utils/logger.js';
@@ -10,5 +12,6 @@ export async function maybeRunBootMigrations(skipMigrationsOnBoot: boolean): Pro
     logger.info('SKIP_MIGRATIONS_ON_BOOT=true — migrations handled externally (K8s Job)');
     return;
   }
+  logger.info('Running database migrations on boot (skipping already-applied)');
   await runMigrations();
 }

@@ -115,7 +115,9 @@ deployment:
 terminationGracePeriodSeconds: 35
 
 envvars:
-  SKIP_MIGRATIONS_ON_BOOT: "true"
+  # false = API applies pending migrations on boot (skips rows already in lilg_schema_migrations).
+  # GET_LOCK('lilg_migrations') makes this safe with multiple replicas.
+  SKIP_MIGRATIONS_ON_BOOT: "false"
   NODE_ENV: production
   PORT: "8080"
   PUBLIC_BASE_URL: "https://idp.lenskart.com"

@@ -103,7 +103,7 @@ containerArgs:
 #   SAML_IDP_ENTITY_ID: "https://idp.lenskart.com/saml/metadata"
 #   COOKIE_SECURE: "true"
 #   TRUST_PROXY: "true"
-#   SKIP_MIGRATIONS_ON_BOOT: "true"
+#   SKIP_MIGRATIONS_ON_BOOT: "false"
 #   NODE_ENV: production
 #   PORT: "8080"
 #   AWS_REGION: ap-south-1

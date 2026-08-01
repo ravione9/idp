@@ -69,10 +69,12 @@ externalSecrets:
   samlSecretKey: "lilg/prod/saml-signing"
 
 # ---------------------------------------------------------------------------
-# Migrations run as a pre-install/pre-upgrade hook Job; pods skip migrate-on-boot
+# Migrations: default is boot-time on API pods (skip already-applied via
+# lilg_schema_migrations + GET_LOCK). Set job: true to also/instead use a
+# Helm pre-upgrade Job; that sets SKIP_MIGRATIONS_ON_BOOT=true on pods.
 # ---------------------------------------------------------------------------
 migrations:
-  job: true                    # false => pods run migrations on boot (single-replica only!)
+  job: false                   # false => pods run migrations on boot (HA-safe via GET_LOCK)
   backoffLimit: 2
   activeDeadlineSeconds: 600
 
