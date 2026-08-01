@@ -1,0 +1,40 @@
+{{- if .Values.migrations.job }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lilg-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lilg.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app: lilg-migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: migrate
+          image: {{ include "lilg.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "dist/db/migrate-cli.js"]
+          env:
+            # Job must run migrations even though the shared ConfigMap says skip
+            - name: SKIP_MIGRATIONS_ON_BOOT
+              value: "false"
+          envFrom:
+            - configMapRef:
+                name: lilg-config
+            - secretRef:
+                name: lilg-app-secrets
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+{{- end }}

@@ -1068,6 +1068,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-01 — Helm chart + HA/PRD/deploy docs in repo
+
+**Why** — Keep deployment guides, PRD, SSO rollout decks, and a starter Helm chart with the IdP source for Lenskart GitLab review.
+
+**What changed**
+- **charts/lilg/** — starter Helm chart (API/worker, migrate Job, ExternalSecrets, HPA/PDB, Ingress).
+- Docs: Deployment Guide (RDS/ElastiCache/Helm), HA architecture DOCX/MD updates, PRD, SSO rollout PPTX.
+
 ### (pending) — 2026-08-01 — Branding logo upload
 
 **Why** — Admins need to upload a login logo from the portal, not only paste an external URL.

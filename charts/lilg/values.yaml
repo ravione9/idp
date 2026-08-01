@@ -1,0 +1,94 @@
+# =============================================================================
+# Lenskart IdP (LILG) — Helm values
+# Managed data tier: RDS MySQL (Multi-AZ) + ElastiCache Redis (Multi-AZ)
+# Override per environment with -f values-<env>.yaml
+# =============================================================================
+
+image:
+  repository: "<ACCOUNT>.dkr.ecr.ap-south-1.amazonaws.com/lilg"
+  tag: "latest"                # always pin a git SHA in real deploys
+  pullPolicy: IfNotPresent
+
+# Public identity of this IdP
+idpHostname: idp.lenskart.com
+
+api:
+  replicaCount: 3
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 6             # keep (DB pool size x maxReplicas) < RDS max_connections
+    targetCPUUtilization: 65
+  pdb:
+    minAvailable: 2
+
+worker:
+  replicaCount: 2              # Redis leader-elected; 2nd is warm standby
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+
+# ---------------------------------------------------------------------------
+# Managed data tier endpoints (RDS + ElastiCache)
+# ---------------------------------------------------------------------------
+db:
+  host: "<rds-endpoint>.ap-south-1.rds.amazonaws.com"
+  port: 3306
+  name: lilg
+
+redis:
+  # ElastiCache with transit encryption => rediss://
+  url: "rediss://<elasticache-primary-endpoint>:6379/0"
+
+sqs:
+  hrmsEventsUrl: "https://sqs.ap-south-1.amazonaws.com/<ACCOUNT>/hrms-events"
+  celeryBrokerUrl: "https://sqs.ap-south-1.amazonaws.com/<ACCOUNT>/celery-broker"
+
+# ---------------------------------------------------------------------------
+# IAM / IRSA — role must allow: SQS on the two queues; (optional) Secrets Manager reads
+# ---------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: lilg
+  roleArn: "arn:aws:iam::<ACCOUNT>:role/lilg-prod"
+
+# ---------------------------------------------------------------------------
+# Secrets via External Secrets Operator <- AWS Secrets Manager
+#   lilg/<env>/app          : JSON {DB_USER, DB_PASSWORD, SESSION_SECRET, MASTER_ADMIN_EMAIL,
+#                              MASTER_ADMIN_PASSWORD, INTERNAL_TOKEN, SMTP/adapter creds, ...}
+#   lilg/<env>/saml-signing : JSON {privateKeyPem, certPem}
+# ---------------------------------------------------------------------------
+externalSecrets:
+  enabled: true
+  clusterSecretStore: aws-secrets-manager
+  refreshInterval: 1h
+  appSecretKey: "lilg/prod/app"
+  samlSecretKey: "lilg/prod/saml-signing"
+
+# ---------------------------------------------------------------------------
+# Migrations run as a pre-install/pre-upgrade hook Job; pods skip migrate-on-boot
+# ---------------------------------------------------------------------------
+migrations:
+  job: true                    # false => pods run migrations on boot (single-replica only!)
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+
+ingress:
+  enabled: true
+  className: alb
+  certificateArn: "arn:aws:acm:ap-south-1:<ACCOUNT>:certificate/<ID>"
+  scheme: internet-facing
+  # extra ALB annotations (e.g. WAF ACL, security groups restricted to Cloudflare IPs)
+  annotations: {}
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+    release: kube-prometheus-stack   # label your Prometheus selects on
+    interval: 30s
+
+# Extra non-sensitive env vars merged into the ConfigMap
+extraEnv: {}

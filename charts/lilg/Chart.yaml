@@ -1,0 +1,15 @@
+apiVersion: v2
+name: lilg
+description: Lenskart IdP — Enterprise SSO, Identity Governance & Privileged Access
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - identity
+  - sso
+  - saml
+  - oidc
+  - iga
+maintainers:
+  - name: Lenskart IT Infrastructure / DevOps
+    email: Devops.ai@lenskart.com
