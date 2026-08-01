@@ -1067,7 +1067,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-08-01 — Application-level MFA for critical apps
+### `891ada6` — 2026-08-01 — Application-level MFA for critical apps
 
 **Why** — Portal session reused at SAML/OIDC launch meant IT could not force MFA for high-risk applications after login.
 
