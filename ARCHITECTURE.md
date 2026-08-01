@@ -674,7 +674,7 @@ To add a new migration:
 | `GET` | `/api/admin/attendance-iga/imports[/:id/staging]?configId=` | Import run history + staging rows |
 | `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (`configId`, REST API / SFTP / CSV / evaluate-only) |
 | `GET`/`POST` | `/api/admin/attendance-iga/approvals[/:id/decision]` | Pending approvals; approve / reject / skip |
-| `GET`/`POST` | `/api/admin/attendance-iga/executions[…]?configId=` | Execution audit: filters (`q`,`status`,`rule`,`rolledBack`,`action`,`from`,`to`), date `groups[]`, `export=csv` (includes `execution_id` + `email`), failure detail, policy/exceptions; single/`bulk-rollback` (ids / empIds / emails / csv, max 2000); `POST …/rollback-matching` (confirm + same filters); pipeline refuses runs when policy `enabled=0` |
+| `GET`/`POST` | `/api/admin/attendance-iga/executions[…]?configId=` | Execution audit: filters (`q`,`status`,`rule`,`rolledBack`,`action`,`from`,`to`,`importRunId`), date `groups[]`, recent `jobs[]` (pending/rolled counts), `export=csv` (includes `execution_id` + `email`), failure detail, policy/exceptions; single/`bulk-rollback` (ids / empIds / emails / csv, max 2000); `POST …/rollback-matching` (confirm + same filters); `POST …/rollback-job` (confirm + `importRunId`, complete job undo); pipeline refuses runs when policy `enabled=0` |
 | `GET` | `/api/admin/attendance-iga/rollbacks` | Rollback history |
 
 ### 8.5 IGA + multi-protocol AM (live read APIs; write paths return 501 until service layer ships)
@@ -787,7 +787,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
 - `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=govReports&tab=mfa`, `/?v=groups&tab=tags`, `/?v=attendanceIga&tab=policy`)
 
-**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · Import History · Approvals · **Executions** (date-grouped audit, From/To filters, Export CSV, checkbox / CSV / rollback-all-matching; shows email) · **Rollbacks** (complete filter-based rollback, CSV import of `execution_id` / `emp_id` / `email`, recent history with email). Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
+**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · Import History · Approvals · **Executions** (default “Not rolled back” so checkboxes appear; sticky Select all / Rollback selected; per-day + **complete job rollback** from import-run cards; CSV / filter matching; shows email) · **Rollbacks** (complete filter-based rollback, CSV import of `execution_id` / `emp_id` / `email`, recent history with email). Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
 
 ---
 
@@ -1067,6 +1067,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-01 — Attendance IGA enterprise job/day rollback UX
+
+**Why** — IT could not see row checkboxes when viewing “All” (mostly already rolled back), and undoing a full import/evaluate run required tedious multi-select.
+
+**What changed:**
+
+- **`GET …/executions`** — returns `jobs[]` (recent import runs with open/rolled counts); filter `importRunId`; list limit up to 1000.
+- **`POST …/executions/rollback-job`** — complete undo for one `importRunId` (confirm required, max 2000).
+- **`POST …/rollback-matching`** — accepts `importRunId`.
+- **Executions UI** — default Rollback = Not rolled back; sticky Select all + Rollback selected; Rollback day; Complete job rollback panel (View / Rollback job); CSV + filter matching retained.
+- Asset cache `2026-08-01-aiga-rb3`.
 
 ### (pending) — 2026-08-01 — Attendance IGA rollback by email
 
