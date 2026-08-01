@@ -99,11 +99,16 @@ function buildExecutionWhere(configId: number, f: ExecFilterInput): { where: str
   return { where, params };
 }
 
-function parseRollbackCsv(csvText: string): { executionIds: string[]; empIds: string[] } {
+function looksLikeEmail(v: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+}
+
+function parseRollbackCsv(csvText: string): { executionIds: string[]; empIds: string[]; emails: string[] } {
   const executionIds: string[] = [];
   const empIds: string[] = [];
+  const emails: string[] = [];
   const lines = csvText.replace(/^\uFEFF/, '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (!lines.length) return { executionIds, empIds };
+  if (!lines.length) return { executionIds, empIds, emails };
 
   const split = (line: string): string[] => {
     const out: string[] = [];
@@ -123,34 +128,47 @@ function parseRollbackCsv(csvText: string): { executionIds: string[]; empIds: st
     return out;
   };
 
+  const classifyToken = (v: string) => {
+    if (!v) return;
+    if (/^[0-9a-f-]{16,}$/i.test(v)) executionIds.push(v);
+    else if (looksLikeEmail(v)) emails.push(v.toLowerCase());
+    else empIds.push(v);
+  };
+
   const headerCells = split(lines[0]!).map((h) => h.replace(/^"|"$/g, '').trim().toLowerCase());
   const looksLikeHeader = headerCells.some((h) =>
-    ['execution_id', 'id', 'emp_id', 'employee_id', 'employee id'].includes(h),
+    ['execution_id', 'id', 'emp_id', 'employee_id', 'employee id', 'email', 'email_id', 'email id', 'email_corp'].includes(h),
   );
   let execIdx = headerCells.findIndex((h) => h === 'execution_id' || h === 'id');
   let empIdx = headerCells.findIndex((h) => h === 'emp_id' || h === 'employee_id' || h === 'employee id');
+  let emailIdx = headerCells.findIndex((h) =>
+    h === 'email' || h === 'email_id' || h === 'email id' || h === 'email_corp',
+  );
   const start = looksLikeHeader ? 1 : 0;
   if (!looksLikeHeader) {
     execIdx = -1;
-    empIdx = 0;
+    empIdx = -1;
+    emailIdx = -1;
   }
 
   for (let li = start; li < lines.length; li++) {
     const cells = split(lines[li]!).map((c) => c.replace(/^"|"$/g, '').trim());
-    const execId = execIdx >= 0 ? (cells[execIdx] ?? '') : '';
-    const empId = empIdx >= 0 ? (cells[empIdx] ?? '') : (!looksLikeHeader ? (cells[0] ?? '') : '');
-    // UUID-ish → execution id; otherwise treat as emp_id
-    if (execId && /^[0-9a-f-]{16,}$/i.test(execId)) executionIds.push(execId);
-    else if (empId) empIds.push(empId);
-    else if (!looksLikeHeader && cells[0]) {
-      const v = cells[0];
-      if (/^[0-9a-f-]{16,}$/i.test(v)) executionIds.push(v);
-      else empIds.push(v);
+    if (looksLikeHeader) {
+      const execId = execIdx >= 0 ? (cells[execIdx] ?? '') : '';
+      const empId = empIdx >= 0 ? (cells[empIdx] ?? '') : '';
+      const email = emailIdx >= 0 ? (cells[emailIdx] ?? '') : '';
+      if (execId && /^[0-9a-f-]{16,}$/i.test(execId)) executionIds.push(execId);
+      if (empId) classifyToken(empId);
+      if (email) emails.push(email.toLowerCase());
+    } else {
+      // No header: each non-empty cell is execution_id | email | emp_id
+      for (const cell of cells) classifyToken(cell);
     }
   }
   return {
     executionIds: [...new Set(executionIds)],
     empIds: [...new Set(empIds.map((e) => e.trim()).filter(Boolean))],
+    emails: [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))],
   };
 }
 
@@ -703,6 +721,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
       id: string;
       emp_id: string;
       full_name: string;
+      email_corp: string | null;
       dept_id: string | null;
       rule_key: string;
       absent_days: number | null;
@@ -717,7 +736,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
       policy_name: string;
       consecutive_days: number;
     }>(
-      `SELECT x.id, x.emp_id, e.full_name, e.dept_id, x.rule_key,
+      `SELECT x.id, x.emp_id, e.full_name, e.email_corp, e.dept_id, x.rule_key,
               x.absent_days, x.attendance_status,
               ev.attendance_status AS eval_attendance_status,
               x.actions_taken, x.status, x.error_message, x.rolled_back, x.executed_at, x.executed_by,
@@ -796,7 +815,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
 
   if (wantExport) {
     const header = [
-      'execution_id', 'date', 'executed_at', 'emp_id', 'full_name', 'dept_id', 'rule_key',
+      'execution_id', 'date', 'executed_at', 'emp_id', 'email', 'full_name', 'dept_id', 'rule_key',
       'absent_days', 'policy_action', 'status', 'failure_reason', 'rolled_back', 'executed_by',
     ];
     const lines = [header.join(',')];
@@ -811,6 +830,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
           g.date,
           at,
           row.emp_id,
+          row.email_corp,
           row.full_name,
           row.dept_id,
           row.rule_key,
@@ -859,17 +879,20 @@ router.get('/executions', asyncHandler(async (req, res) => {
 router.post('/executions/bulk-rollback', asyncHandler(async (req, res) => {
   const idsRaw = req.body?.ids;
   const empIdsRaw = req.body?.empIds;
+  const emailsRaw = req.body?.emails;
   const csvText = typeof req.body?.csv === 'string' ? req.body.csv : '';
   const configId = configIdFromReq(req);
   const byActor = actor(req);
 
   let ids: string[] = [];
   let empIds: string[] = [];
+  let emails: string[] = [];
 
   if (csvText.trim()) {
     const parsed = parseRollbackCsv(csvText);
     ids.push(...parsed.executionIds);
     empIds.push(...parsed.empIds);
+    emails.push(...parsed.emails);
   }
   if (Array.isArray(idsRaw)) {
     ids.push(...idsRaw.map((id) => String(id)).filter(Boolean));
@@ -877,9 +900,25 @@ router.post('/executions/bulk-rollback', asyncHandler(async (req, res) => {
   if (Array.isArray(empIdsRaw)) {
     empIds.push(...empIdsRaw.map((id) => String(id)).filter(Boolean));
   }
+  if (Array.isArray(emailsRaw)) {
+    emails.push(...emailsRaw.map((e) => String(e).trim().toLowerCase()).filter(Boolean));
+  }
 
   ids = [...new Set(ids)];
   empIds = [...new Set(empIds)];
+  emails = [...new Set(emails)];
+
+  if (emails.length) {
+    const placeholders = emails.map(() => '?').join(',');
+    const byEmail = await query<{ emp_id: string }>(
+      `SELECT emp_id FROM employees
+        WHERE LOWER(email_corp) IN (${placeholders})
+           OR LOWER(COALESCE(email_personal, '')) IN (${placeholders})`,
+      [...emails, ...emails],
+    );
+    empIds.push(...byEmail.map((r) => r.emp_id));
+    empIds = [...new Set(empIds)];
+  }
 
   if (empIds.length) {
     const placeholders = empIds.map(() => '?').join(',');
@@ -900,7 +939,7 @@ router.post('/executions/bulk-rollback', asyncHandler(async (req, res) => {
 
   if (!ids.length) {
     res.status(400).json({
-      error: 'Provide ids[], empIds[], or csv text (execution_id / emp_id columns)',
+      error: 'Provide ids[], empIds[], emails[], or csv text (execution_id / emp_id / email columns)',
     });
     return;
   }
@@ -977,7 +1016,7 @@ router.get('/rollbacks', asyncHandler(async (req, res) => {
   const configId = configIdFromReq(req);
   const limit = Math.min(parseInt(String(req.query['limit'] ?? '100'), 10) || 100, 500);
   const rows = await query(
-    `SELECT r.*, x.emp_id, x.rule_key, e.full_name, x.status AS execution_status, x.executed_at
+    `SELECT r.*, x.emp_id, x.rule_key, e.full_name, e.email_corp, x.status AS execution_status, x.executed_at
        FROM attendance_iga_rollback_log r
        JOIN attendance_iga_executions x ON x.id = r.execution_id
        JOIN attendance_iga_import_runs ir ON ir.id = x.import_run_id
