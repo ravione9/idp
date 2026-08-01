@@ -219,7 +219,7 @@ Supported methods (policy-controlled via `mfa_policy.allowed_methods` + optional
   - user-level enforcement (`employees.mfa_enforced = 1`)
   - group policy enforce (`mfa_group_policies.enforce = 1` for a group the user belongs to)
   - global policy `mfa_policy.global_enforce = true`
-  - admin policy `mfa_policy.enforce_for_admins = true` and role is `ADMIN` / `SUPER_ADMIN`
+  - admin policy `mfa_policy.enforce_for_admins = true` (opt-in; default **off**) and role is a portal operator (`ADMIN` / `SUPER_ADMIN` / other console roles). Not hard-coded — turn on under **Admin → Strong Auth Methods**.
 - Group exclusions: `mfa_policy.excluded_group_ids` **overrides global/admin MFA** — members skip enrollment prompts and skip challenges that would fire only because MFA is already enrolled. Does **not** bypass per-user Enforce, group-policy Enforce, or adaptive `MFA`/`STEP_UP`.
 - **Group method policies** (`mfa_group_policies`, migration `038`): Admin → Strong Auth Methods → **MFA Policies** tab. Global `allowed_methods` is the ceiling; if the user is in any group with an active policy, allowed methods = intersection(global, union(group policies)). Users with no matching group policy use global methods only.
 - Login flow when MFA is enabled:
@@ -517,6 +517,7 @@ To add a new migration:
 | `GET` | `/healthz` | Liveness |
 | `GET` | `/readyz` | Readiness (DB + Redis) |
 | `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/api/public/branding` | Login branding (org name, logo, favicon, accent, hero copy, optional bg / custom CSS) — no auth |
 
 ### 8.2 Auth
 
@@ -734,7 +735,7 @@ web/
 
 ### 9.2 Layout
 
-- **Login screen** — split: brand hero (grid + gradient) + sign-in card. **Identity-first flow**: email step → password step (avatar + "Not you?" link) → optional MFA verify or MFA enrollment (QR) inline when required. Google SSO button on email step.
+- **Login screen** — always-light page background; white sign-in card with dark readable text. Logo, org name, accent colour, and hero copy come from **Admin → Branding & Login** via `GET /api/public/branding` (default accent `#0f4c81`). **Identity-first flow**: email → password (avatar + "Not you?") → optional MFA verify/enroll. Google SSO on email step.
 - **Console** — fixed top primary nav + contextual left sidebar (user or admin mode); content pane uses subtle atmosphere + page-enter motion.
 - **Routing** — SPA state is reflected in the URL: `/?v=<route>` (e.g. `users`, `settings`, `applications`) with optional `?tab=<subtab>` (e.g. `sessions`, `prebuilt`, `favs`). A full page refresh restores the same view and sub-tab. Per-page search/filter text is persisted in `sessionStorage` via `persistSearch()` and re-applied on load.
 - **Admin → Authentication** — shows Google OIDC status and supports SUPER_ADMIN save of Client ID / Secret / Hosted Domain (or pasted OAuth web-client JSON) into DB overrides.
@@ -959,7 +960,7 @@ docker exec -i idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg < migrations/<
 |---|---|
 | Local password | `bcryptjs` cost 12; default `password_policies` enforced on create/change/reset (complexity + history) |
 | Session cookie | HMAC-signed (length-safe verify), `HttpOnly`, `SameSite=Lax`, `Secure` (configurable for dev). Redis cache always re-checks DB `revoked_at` + live role |
-| MFA | TOTP RFC 6238, ±1 step skew, hashed backup codes. Enforced for local **and Google** login when policy/adaptive requires it. Portal operators cannot defer enrollment. Disable/regen requires password (local) + TOTP step-up |
+| MFA | TOTP RFC 6238, ±1 step skew, hashed backup codes. Enforced for local **and Google** login when policy/adaptive requires it. Admin MFA is opt-in via `enforce_for_admins` (same grace/defer as other users). Disable/regen requires password (local) + TOTP step-up |
 | Rate limiting | 10 req / minute / (IP + email) on auth endpoints |
 | Forensics | `auth_attempts` table records every attempt with reason + IP |
 | Internal API | `X-Internal-Token` timing-safe compare (`INTERNAL_TOKEN`). Also required for `/diagz` and `/metrics` |
@@ -1065,6 +1066,26 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-01 — Admin MFA opt-in via Strong Auth policy
+
+**Why** — Administrator MFA was hard-forced (operators could not defer enrollment; `enforce_for_admins` defaulted on). It should follow policy only.
+
+**What changed**
+- **`src/auth/local-auth.ts`** — removed hard-coded “operators cannot defer”; `enforce_for_admins` defaults to **off**.
+- Migration **`056_mfa_admins_policy_opt_in.sql`** — sets `mfa_policy.enforce_for_admins` to false (re-enable under Strong Auth Methods if needed).
+- **Strong Auth UI** — clearer opt-in wording for “Enforce MFA for administrators”.
+
+### (pending) — 2026-08-01 — Light login page + portal branding logo/accent
+
+**Why** — Login needed a consistently light background with readable dark type, and the logo/accent must come from Admin → Branding & Login (not hard-coded).
+
+**What changed**
+- **`GET /api/public/branding`** — unauthenticated read of safe branding fields for `/login`.
+- **`web/js/views-end-user.js`** — hydrates org name, logo URL, accent, hero copy, favicon, optional bg/CSS; light shell on all login steps.
+- **`web/css/styles.css`** — always-light login background; white card; text/buttons use `--login-accent` (default `#0f4c81`).
+- **`web/js/views-stubs.js`** — Branding preview mirrors light login + live logo.
+- Cache bump `2026-08-01-login-light`.
 
 ### `a611239` — 2026-07-31 — Optional Google/AD/HRMS env for portal-first K8s boot
 
@@ -1909,7 +1930,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 - **RBAC** — `requirePortalModule(...)` on all `/api/admin/*` and IGA admin routes; Super Admin–only for Google OIDC PUT, portal SSL mutate, and minting `SUPER_ADMIN` local accounts.
 - **Sessions** — Redis session hit re-validates DB revocation + refreshes role; HMAC cookie verify is length-safe (no `timingSafeEqual` throw).
-- **MFA** — Google OIDC runs the same MFA/adaptive gate as local login; `enforce_for_admins` covers all portal operator roles; operators cannot defer enrollment; MFA disable/regen requires step-up.
+- **MFA** — Google OIDC runs the same MFA/adaptive gate as local login; `enforce_for_admins` (default off) covers portal operator roles when enabled in Strong Auth policy; operators use the same grace/defer path as other users; MFA disable/regen requires step-up.
 - **Password policy** — default policy enforced on self-service change, admin create, and admin reset.
 - **SSRF** — outbound URL allowlist/denylist for Attendance IGA, workflow webhooks, event triggers.
 - **XSS** — `esc()` escapes `'`; JSON-in-`data-*` uses `escAttrJson`.

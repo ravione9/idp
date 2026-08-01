@@ -37,6 +37,8 @@ Object.assign(api, {
   me:               (opts = {}) => f('/api/me', opts),
   apps:             () => f('/api/apps'),
   diagz:            () => f('/diagz'),
+  /** Public login branding (logo, accent, hero copy) — no auth. */
+  publicBranding:   () => f('/api/public/branding'),
   localLogin: (email, password, returnTo) =>
     f('/auth/local/login', { method: 'POST', body: JSON.stringify({ email, password, ...(returnTo ? { returnTo } : {}) }) }),
   localLoginMfa:    (challengeId, code, opts = {}) =>
