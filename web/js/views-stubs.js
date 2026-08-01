@@ -9329,7 +9329,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
 
-  const execFilters = { q: '', status: '', rule: '', rolledBack: '', action: '', from: '', to: '' };
+  // Default: show only rows that can still be rolled back (so checkboxes always appear for IT).
+  const execFilters = { q: '', status: '', rule: '', rolledBack: '0', action: '', from: '', to: '', importRunId: '' };
 
   function aigExecDateKey(raw) {
     if (!raw) return 'unknown';
@@ -9354,7 +9355,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     try {
       const resp = await api.attendanceIgaExecutions({
         configId: selectedConfigId,
-        limit: 500,
+        limit: 1000,
         q: execFilters.q || undefined,
         status: execFilters.status || undefined,
         rule: execFilters.rule || undefined,
@@ -9362,8 +9363,10 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         action: execFilters.action || undefined,
         from: execFilters.from || undefined,
         to: execFilters.to || undefined,
+        importRunId: execFilters.importRunId || undefined,
       });
       const rows = norm(resp);
+      const jobs = Array.isArray(resp?.jobs) ? resp.jobs : [];
       const groups = Array.isArray(resp?.groups) && resp.groups.length
         ? resp.groups
         : (() => {
@@ -9392,35 +9395,82 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       const todayActs = (policy.actions?.no_punch_today || []).join(', ') || 'SUSPEND_USER';
       const consecActs = (policy.actions?.no_punch_consecutive || []).join(', ') || 'DISABLE_USER';
       const exTypeLabel = (t) => ({ VIP_USER: 'VIP', EMPLOYEE: 'Employee', DEPARTMENT: 'Department' }[t] || t);
-      const rollbackable = rows.filter(r => !r.rolled_back);
-      const renderRow = (r) => `<tr class="${r.failed ? 'row-warn' : ''}">
-          <td>${r.rolled_back ? '' : `<input type="checkbox" class="aig-exec-cb" value="${esc(r.id)}" />`}</td>
+      const rollbackable = rows.filter(r => !Number(r.rolled_back));
+      const renderRow = (r) => {
+        const canRb = !Number(r.rolled_back);
+        return `<tr class="${r.failed ? 'row-warn' : ''}" data-run="${esc(r.import_run_id || '')}">
+          <td style="text-align:center">${canRb
+            ? `<input type="checkbox" class="aig-exec-cb" value="${esc(r.id)}" style="width:1.1rem;height:1.1rem;cursor:pointer" />`
+            : ''}</td>
           <td class="muted">${fmtDate(r.executed_at)}</td>
           <td class="cell-strong">${esc(r.full_name||r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}${r.email_corp ? ` · ${esc(r.email_corp)}` : ''}</div></td>
           <td><span class="badge badge-neutral">${esc(r.rule_key)}</span></td>
           <td>${r.absent_days != null ? `<strong>${esc(String(r.absent_days))}</strong>` : '—'}</td>
           <td>${actionBadge(r.policy_action)}</td>
           <td><span class="badge ${statusBadge(r.status)}">${esc(r.status)}</span></td>
-          <td style="max-width:240px;font-size:0.78rem">${r.failure_reason
-            ? `<span class="badge badge-danger">Failed</span> <span class="muted" title="${esc(r.failure_reason)}">${esc(String(r.failure_reason).slice(0, 160))}</span>`
+          <td style="max-width:220px;font-size:0.78rem">${r.failure_reason
+            ? `<span class="badge badge-danger">Failed</span> <span class="muted" title="${esc(r.failure_reason)}">${esc(String(r.failure_reason).slice(0, 120))}</span>`
             : '<span class="muted">—</span>'}</td>
-          <td>${r.rolled_back ? '<span class="badge badge-neutral">Rolled back</span>' : `<button class="btn btn-sm btn-secondary aig-rb" data-id="${esc(r.id)}">Rollback</button>`}</td>
+          <td>${canRb
+            ? `<button class="btn btn-sm btn-secondary aig-rb" data-id="${esc(r.id)}">Rollback</button>`
+            : '<span class="badge badge-neutral">Rolled back</span>'}</td>
         </tr>`;
+      };
+      const jobsWithPending = jobs.filter((j) => Number(j.pending_rollback) > 0);
       area.innerHTML = `
         <div class="aap-actions" style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start">
           <div>
             <h3 class="section-title">Action Executions</h3>
-            <p class="subtitle">Audit trail of suspend / disable actions, grouped by date. Use <strong>Rollbacks</strong> tab for CSV import or rollback-all.</p>
+            <p class="subtitle">Enterprise undo: select rows / day / entire import job. Default filter shows only rows still open for rollback.</p>
           </div>
-          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
-            <button type="button" class="btn btn-secondary btn-sm" id="aig-exec-export">Export CSV</button>
-            <label class="btn btn-secondary btn-sm" style="margin:0;cursor:pointer">
-              Import CSV rollback
-              <input type="file" id="aig-exec-csv" accept=".csv,text/csv" style="display:none" />
-            </label>
-            <button type="button" class="btn btn-secondary btn-sm" id="aig-rb-matching">Rollback all matching</button>
-            <button type="button" class="btn btn-secondary btn-sm" id="aig-bulk-rb" disabled>Bulk rollback (0)</button>
+        </div>
+        <div class="card" id="aig-rb-toolbar" style="position:sticky;top:0;z-index:5;margin-bottom:1rem;padding:0.85rem 1rem;display:flex;flex-wrap:wrap;gap:0.65rem;align-items:center;background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);box-shadow:0 1px 3px rgba(0,0,0,.06)">
+          <label style="display:flex;gap:0.4rem;align-items:center;margin:0;font-weight:600;font-size:0.85rem;cursor:pointer">
+            <input type="checkbox" id="aig-exec-all" ${rollbackable.length ? '' : 'disabled'} style="width:1.15rem;height:1.15rem;cursor:pointer" />
+            Select all open (${rollbackable.length})
+          </label>
+          <button type="button" class="btn btn-primary btn-sm" id="aig-bulk-rb" ${rollbackable.length ? '' : 'disabled'}>Rollback selected (0)</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="aig-rb-matching">Rollback all matching filters</button>
+          <span style="flex:1"></span>
+          <label class="btn btn-secondary btn-sm" style="margin:0;cursor:pointer">
+            Import CSV
+            <input type="file" id="aig-exec-csv" accept=".csv,text/csv" style="display:none" />
+          </label>
+          <button type="button" class="btn btn-secondary btn-sm" id="aig-exec-export">Export CSV</button>
+        </div>
+        <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
+          <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:center;margin-bottom:0.65rem">
+            <div>
+              <h4 style="margin:0 0 0.25rem;font-size:0.95rem">Complete job rollback</h4>
+              <p class="muted" style="margin:0;font-size:0.8rem">One click undoes every open execution from an import / evaluate run (max 2000).</p>
+            </div>
+            ${execFilters.importRunId ? `<button type="button" class="btn btn-secondary btn-sm" id="aig-clear-job">Clear job filter</button>` : ''}
           </div>
+          ${jobs.length ? `<div class="table-wrap"><table><thead><tr>
+            <th>Job started</th><th>Source</th><th>Status</th><th>Executions</th><th>Open</th><th>Rolled back</th><th></th>
+          </tr></thead><tbody>
+          ${jobs.map((j) => {
+            const pending = Number(j.pending_rollback) || 0;
+            const total = Number(j.executions) || 0;
+            const done = Number(j.rolled_back) || 0;
+            return `<tr>
+              <td class="muted">${fmtDate(j.started_at)}<div class="mono" style="font-size:0.68rem">${esc(String(j.id || '').slice(0, 8))}…</div></td>
+              <td><span class="badge badge-info">${esc(j.source || '—')}</span></td>
+              <td><span class="badge badge-neutral">${esc(j.status || '—')}</span></td>
+              <td>${esc(String(total))}</td>
+              <td><strong>${esc(String(pending))}</strong></td>
+              <td>${esc(String(done))}</td>
+              <td style="display:flex;gap:0.35rem;flex-wrap:wrap">
+                <button type="button" class="btn btn-sm btn-secondary aig-view-job" data-run="${esc(j.id)}">View</button>
+                ${pending
+                  ? `<button type="button" class="btn btn-sm btn-primary aig-rb-job" data-run="${esc(j.id)}" data-n="${pending}">Rollback job (${pending})</button>`
+                  : '<span class="badge badge-neutral">Fully rolled back</span>'}
+              </td>
+            </tr>`;
+          }).join('')}
+          </tbody></table></div>`
+            : '<div class="empty-state"><p>No import jobs with executions yet.</p></div>'}
+          ${jobsWithPending.length ? '' : '<p class="muted" style="margin:0.65rem 0 0;font-size:0.78rem">No jobs currently have open (not rolled back) executions.</p>'}
         </div>
         <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
           <div style="display:flex;flex-wrap:wrap;gap:0.75rem 1.5rem;align-items:center;margin-bottom:0.65rem">
@@ -9503,8 +9553,15 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
           <button type="submit" class="btn btn-primary btn-sm">Apply filters</button>
           <button type="button" class="btn btn-secondary btn-sm" id="aig-exec-clear">Clear</button>
         </form>
-        <div class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">${rows.length} result(s) · ${groups.length} day(s)${rollbackable.length ? ` · ${rollbackable.length} can be rolled back` : ''}</div>
-        ${groups.length ? groups.map((g) => `
+        ${execFilters.importRunId ? `<div class="card" style="margin-bottom:0.65rem;padding:0.65rem 1rem;display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;background:#f0f9ff;border-color:#bae6fd">
+          <span class="badge badge-info">Job filter</span>
+          <span class="mono" style="font-size:0.78rem">${esc(execFilters.importRunId)}</span>
+          <button type="button" class="btn btn-secondary btn-sm" id="aig-clear-job-banner">Clear job filter</button>
+        </div>` : ''}
+        <div class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">${rows.length} result(s) · ${groups.length} day(s)${rollbackable.length ? ` · <strong>${rollbackable.length} open for rollback</strong>` : ' · none open for rollback (switch Rollback filter to All to audit history)'}</div>
+        ${groups.length ? groups.map((g) => {
+          const openN = (g.items || []).filter((r) => !Number(r.rolled_back)).length;
+          return `
           <div class="card" style="margin-bottom:0.85rem;padding:0;overflow:hidden" data-date-group="${esc(g.date)}">
             <div style="display:flex;flex-wrap:wrap;gap:0.65rem 1rem;align-items:center;justify-content:space-between;padding:0.7rem 1rem;background:var(--surface,#f8fafc);border-bottom:1px solid var(--border,#e2e8f0)">
               <div style="display:flex;flex-wrap:wrap;gap:0.5rem 0.85rem;align-items:center">
@@ -9514,27 +9571,39 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
                 ${g.disabled ? `<span class="badge badge-danger">${esc(String(g.disabled))} disable</span>` : ''}
                 ${g.failed ? `<span class="badge badge-danger">${esc(String(g.failed))} failed</span>` : ''}
                 ${g.rolled_back ? `<span class="badge badge-info">${esc(String(g.rolled_back))} rolled back</span>` : ''}
+                ${openN ? `<span class="badge badge-success">${esc(String(openN))} open</span>` : ''}
               </div>
-              <label class="muted" style="font-size:0.78rem;display:flex;gap:0.35rem;align-items:center;margin:0">
-                <input type="checkbox" class="aig-exec-day" data-date="${esc(g.date)}" /> Select day
-              </label>
+              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                ${openN ? `<label style="font-size:0.78rem;display:flex;gap:0.35rem;align-items:center;margin:0;font-weight:600;cursor:pointer">
+                  <input type="checkbox" class="aig-exec-day" data-date="${esc(g.date)}" style="width:1.1rem;height:1.1rem;cursor:pointer" /> Select day (${openN})
+                </label>
+                <button type="button" class="btn btn-sm btn-primary aig-rb-day" data-date="${esc(g.date)}" data-n="${openN}">Rollback day (${openN})</button>` : '<span class="muted" style="font-size:0.78rem">Nothing open this day</span>'}
+              </div>
             </div>
             <div class="table-wrap" style="margin:0;border:0"><table><thead><tr>
-              <th style="width:2rem"></th>
-              <th>Time</th><th>Employee</th><th>Rule</th><th>Absent days</th><th>Policy action</th><th>Status</th><th>Failure detail</th><th></th>
+              <th style="width:2.5rem;text-align:center">☐</th>
+              <th>Time</th><th>Employee</th><th>Rule</th><th>Absent days</th><th>Policy action</th><th>Status</th><th>Failure detail</th><th>Undo</th>
             </tr></thead><tbody>
               ${(g.items || []).map(renderRow).join('')}
             </tbody></table></div>
-          </div>`).join('') : '<div class="empty-state"><p>No executions match these filters.</p></div>'}
-        <div style="display:none"><input type="checkbox" id="aig-exec-all" ${rollbackable.length ? '' : 'disabled'} /></div>`;
+          </div>`;
+        }).join('') : '<div class="empty-state"><p>No executions match these filters. Tip: set Rollback to “Not rolled back” to see selectable rows.</p></div>'}`;
 
       const bulkBtn = area.querySelector('#aig-bulk-rb');
+      const selectAll = area.querySelector('#aig-exec-all');
       const syncBulk = () => {
-        const n = area.querySelectorAll('.aig-exec-cb:checked').length;
-        bulkBtn.disabled = n === 0;
-        bulkBtn.textContent = `Bulk rollback (${n})`;
+        const boxes = [...area.querySelectorAll('.aig-exec-cb')];
+        const n = boxes.filter((cb) => cb.checked).length;
+        if (bulkBtn) {
+          bulkBtn.disabled = n === 0;
+          bulkBtn.textContent = `Rollback selected (${n})`;
+        }
+        if (selectAll && boxes.length) {
+          selectAll.checked = n === boxes.length;
+          selectAll.indeterminate = n > 0 && n < boxes.length;
+        }
       };
-      area.querySelector('#aig-exec-all')?.addEventListener('change', (e) => {
+      selectAll?.addEventListener('change', (e) => {
         area.querySelectorAll('.aig-exec-cb').forEach((cb) => { cb.checked = e.target.checked; });
         syncBulk();
       });
@@ -9546,17 +9615,69 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         });
       });
       area.querySelectorAll('.aig-exec-cb').forEach((cb) => cb.addEventListener('change', syncBulk));
-      bulkBtn?.addEventListener('click', async () => {
-        const ids = [...area.querySelectorAll('.aig-exec-cb:checked')].map((cb) => cb.value);
+      syncBulk();
+
+      const runBulkIds = async (ids, label) => {
         if (!ids.length) return;
-        if (!confirm(`Rollback ${ids.length} execution(s) and restore prior access?`)) return;
-        bulkBtn.disabled = true;
+        if (!confirm(`${label}\n\n${ids.length} execution(s) will be rolled back and prior access restored.`)) return;
+        if (bulkBtn) bulkBtn.disabled = true;
         try {
           const r = await api.bulkRollbackAttendanceIgaExecutions(ids, selectedConfigId);
-          alert(`Bulk rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed`);
+          alert(`Rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed`);
           await loadExecutions();
           await loadStats();
-        } catch (e) { alert(e.message); bulkBtn.disabled = false; syncBulk(); }
+        } catch (e) {
+          alert(e.message);
+          if (bulkBtn) bulkBtn.disabled = false;
+          syncBulk();
+        }
+      };
+
+      bulkBtn?.addEventListener('click', () => {
+        const ids = [...area.querySelectorAll('.aig-exec-cb:checked')].map((cb) => cb.value);
+        void runBulkIds(ids, 'Rollback selected executions?');
+      });
+
+      area.querySelectorAll('.aig-rb-day').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const card = btn.closest('[data-date-group]');
+          const ids = [...(card?.querySelectorAll('.aig-exec-cb') || [])].map((cb) => cb.value);
+          void runBulkIds(ids, `Rollback entire day ${btn.dataset.date}?`);
+        });
+      });
+
+      const clearJobFilter = () => {
+        execFilters.importRunId = '';
+        void loadExecutions();
+      };
+      area.querySelector('#aig-clear-job')?.addEventListener('click', clearJobFilter);
+      area.querySelector('#aig-clear-job-banner')?.addEventListener('click', clearJobFilter);
+
+      area.querySelectorAll('.aig-view-job').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          execFilters.importRunId = btn.dataset.run || '';
+          execFilters.rolledBack = '';
+          void loadExecutions();
+        });
+      });
+
+      area.querySelectorAll('.aig-rb-job').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const runId = btn.dataset.run;
+          const n = btn.dataset.n || '?';
+          if (!runId) return;
+          if (!confirm(`COMPLETE JOB ROLLBACK\n\nThis undoes all ${n} open execution(s) from this import/evaluate run and restores prior access.\n\nJob: ${runId}\n\nContinue?`)) return;
+          btn.disabled = true;
+          try {
+            const r = await api.rollbackJobAttendanceIgaExecutions(runId, selectedConfigId);
+            alert(`Job rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed (${r.requested || 0} requested)`);
+            await loadExecutions();
+            await loadStats();
+          } catch (e) {
+            alert(e.message);
+            btn.disabled = false;
+          }
+        });
       });
 
       area.querySelector('#aig-rb-matching')?.addEventListener('click', async () => {
@@ -9567,8 +9688,9 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
           execFilters.rule && `rule=${execFilters.rule}`,
           execFilters.action && `action=${execFilters.action}`,
           execFilters.q && `q=${execFilters.q}`,
+          execFilters.importRunId && `job=${execFilters.importRunId}`,
         ].filter(Boolean).join(', ') || 'current filters (not rolled back)';
-        if (!confirm(`Rollback ALL matching executions for this policy?\n\n${label}\n\nMax 2000 rows. This restores prior access from snapshots.`)) return;
+        if (!confirm(`Rollback ALL matching open executions for this policy?\n\n${label}\n\nMax 2000 rows. This restores prior access from snapshots.`)) return;
         const btn = area.querySelector('#aig-rb-matching');
         if (btn) btn.disabled = true;
         try {
@@ -9580,6 +9702,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
             action: execFilters.action || undefined,
             from: execFilters.from || undefined,
             to: execFilters.to || undefined,
+            importRunId: execFilters.importRunId || undefined,
             rolledBack: '0',
           });
           alert(`Rollback matching: ${r.rolledBack || 0} ok, ${r.failed || 0} failed (${r.requested || 0} requested)`);
@@ -9618,6 +9741,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
           action: execFilters.action || undefined,
           from: execFilters.from || undefined,
           to: execFilters.to || undefined,
+          importRunId: execFilters.importRunId || undefined,
         });
         const filename = `attendance-iga-executions-${selectedConfigId}-${execFilters.from || 'all'}-${execFilters.to || 'all'}.csv`;
         if (btn) btn.disabled = true;
@@ -9662,7 +9786,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         execFilters.status = '';
         execFilters.rule = '';
         execFilters.action = '';
-        execFilters.rolledBack = '';
+        execFilters.rolledBack = '0';
+        execFilters.importRunId = '';
         void loadExecutions();
       });
 

@@ -50,6 +50,7 @@ type ExecFilterInput = {
   action?: string;
   from?: string;
   to?: string;
+  importRunId?: string;
 };
 
 /** Build WHERE + params for attendance_iga_executions scoped to a policy. */
@@ -63,7 +64,12 @@ function buildExecutionWhere(configId: number, f: ExecFilterInput): { where: str
   const actionFilter = String(f.action ?? '').trim().toUpperCase();
   const fromDate = String(f.from ?? '').trim().slice(0, 10);
   const toDate = String(f.to ?? '').trim().slice(0, 10);
+  const importRunId = String(f.importRunId ?? '').trim().slice(0, 64);
 
+  if (importRunId) {
+    where.push('x.import_run_id = ?');
+    params.push(importRunId);
+  }
   if (q) {
     where.push('(e.full_name LIKE ? OR e.emp_id LIKE ? OR e.email_corp LIKE ?)');
     const like = `%${q}%`;
@@ -680,7 +686,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
   const wantExportEarly = String(req.query['export'] ?? '') === 'csv';
   const limit = Math.min(
     parseInt((req.query['limit'] as string) ?? (wantExportEarly ? '5000' : '100'), 10),
-    wantExportEarly ? 10000 : 500,
+    wantExportEarly ? 10000 : 1000,
   );
   const configId = configIdFromReq(req);
   const q = String(req.query['q'] ?? '').trim().slice(0, 120);
@@ -690,11 +696,12 @@ router.get('/executions', asyncHandler(async (req, res) => {
   const actionFilter = String(req.query['action'] ?? '').trim().toUpperCase(); // SUSPEND | DISABLE | FAILED
   const fromDate = String(req.query['from'] ?? '').trim().slice(0, 10);
   const toDate = String(req.query['to'] ?? '').trim().slice(0, 10);
+  const importRunId = String(req.query['importRunId'] ?? '').trim().slice(0, 64);
   const wantExport = String(req.query['export'] ?? '') === 'csv';
 
   const { where, params: filterParams } = buildExecutionWhere(configId, {
     q, status: statusFilter, rule: ruleFilter, rolledBack: rolledBackRaw,
-    action: actionFilter, from: fromDate, to: toDate,
+    action: actionFilter, from: fromDate, to: toDate, importRunId,
   });
   const params: unknown[] = [...filterParams, limit];
 
@@ -719,6 +726,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
     ),
     query<{
       id: string;
+      import_run_id: string;
       emp_id: string;
       full_name: string;
       email_corp: string | null;
@@ -735,12 +743,15 @@ router.get('/executions', asyncHandler(async (req, res) => {
       executed_by: string;
       policy_name: string;
       consecutive_days: number;
+      import_source: string | null;
+      import_started_at: Date | null;
     }>(
-      `SELECT x.id, x.emp_id, e.full_name, e.email_corp, e.dept_id, x.rule_key,
+      `SELECT x.id, x.import_run_id, x.emp_id, e.full_name, e.email_corp, e.dept_id, x.rule_key,
               x.absent_days, x.attendance_status,
               ev.attendance_status AS eval_attendance_status,
               x.actions_taken, x.status, x.error_message, x.rolled_back, x.executed_at, x.executed_by,
-              c.name AS policy_name, c.consecutive_days
+              c.name AS policy_name, c.consecutive_days,
+              r.source AS import_source, r.started_at AS import_started_at
          FROM attendance_iga_executions x
          JOIN employees e ON e.emp_id = x.emp_id
          JOIN attendance_iga_import_runs r ON r.id = x.import_run_id
@@ -750,7 +761,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
           AND ev.emp_id = x.emp_id
           AND ev.rule_key = x.rule_key
         WHERE ${where.join(' AND ')}
-        ORDER BY x.executed_at DESC
+        ORDER BY x.rolled_back ASC, x.executed_at DESC
         LIMIT ?`,
       params,
     ),
@@ -850,9 +861,40 @@ router.get('/executions', asyncHandler(async (req, res) => {
     return;
   }
 
+  // Recent import jobs with rollbackable counts (enterprise “complete job rollback”).
+  const jobs = await query<{
+    id: string;
+    source: string;
+    status: string;
+    started_at: Date;
+    completed_at: Date | null;
+    initiated_by: string | null;
+    executions: number;
+    pending_rollback: number;
+    rolled_back: number;
+  }>(
+    `SELECT r.id, r.source, r.status, r.started_at, r.completed_at, r.initiated_by,
+            COUNT(x.id) AS executions,
+            SUM(CASE WHEN x.rolled_back = 0 THEN 1 ELSE 0 END) AS pending_rollback,
+            SUM(CASE WHEN x.rolled_back = 1 THEN 1 ELSE 0 END) AS rolled_back
+       FROM attendance_iga_import_runs r
+       JOIN attendance_iga_executions x ON x.import_run_id = r.id
+      WHERE r.config_id = ?
+      GROUP BY r.id, r.source, r.status, r.started_at, r.completed_at, r.initiated_by
+      ORDER BY r.started_at DESC
+      LIMIT 15`,
+    [configId],
+  );
+
   res.json({
     data,
     groups,
+    jobs: jobs.map((j) => ({
+      ...j,
+      executions: Number(j.executions) || 0,
+      pending_rollback: Number(j.pending_rollback) || 0,
+      rolled_back: Number(j.rolled_back) || 0,
+    })),
     filters: {
       q: q || null,
       status: statusFilter || null,
@@ -861,6 +903,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
       action: actionFilter || null,
       from: fromDate || null,
       to: toDate || null,
+      importRunId: importRunId || null,
       limit,
     },
     policy: {
@@ -955,6 +998,64 @@ router.post('/executions/bulk-rollback', asyncHandler(async (req, res) => {
   });
 }));
 
+/** Rollback every non-rolled-back execution for one import job (complete job undo). */
+router.post('/executions/rollback-job', asyncHandler(async (req, res) => {
+  if (req.body?.confirm !== true && req.body?.confirm !== 'true') {
+    res.status(400).json({ error: 'confirm: true is required' });
+    return;
+  }
+  const importRunId = String(req.body?.importRunId ?? '').trim();
+  if (!importRunId) {
+    res.status(400).json({ error: 'importRunId is required' });
+    return;
+  }
+  const configId = configIdFromReq(req);
+  const byActor = actor(req);
+
+  const job = await queryOne<{ id: string; source: string; started_at: Date }>(
+    `SELECT id, source, started_at FROM attendance_iga_import_runs
+      WHERE id = ? AND config_id = ?`,
+    [importRunId, configId],
+  );
+  if (!job) {
+    res.status(404).json({ error: 'Import job not found for this policy' });
+    return;
+  }
+
+  const rows = await query<{ id: string }>(
+    `SELECT x.id
+       FROM attendance_iga_executions x
+      WHERE x.import_run_id = ?
+        AND x.rolled_back = 0
+      ORDER BY x.executed_at DESC
+      LIMIT ?`,
+    [importRunId, BULK_ROLLBACK_MAX],
+  );
+  const ids = rows.map((r) => r.id);
+  if (!ids.length) {
+    res.json({
+      success: true,
+      rolledBack: 0,
+      failed: 0,
+      requested: 0,
+      importRunId,
+      job,
+      results: [],
+    });
+    return;
+  }
+  const outcome = await rollbackOwnedExecutions(ids, configId, byActor);
+  res.json({
+    success: outcome.failed === 0,
+    rolledBack: outcome.rolledBack,
+    failed: outcome.failed,
+    requested: ids.length,
+    importRunId,
+    job,
+    results: outcome.results,
+  });
+}));
+
 /** Rollback every non-rolled-back execution matching the same filters as GET /executions. */
 router.post('/executions/rollback-matching', asyncHandler(async (req, res) => {
   if (req.body?.confirm !== true && req.body?.confirm !== 'true') {
@@ -972,6 +1073,7 @@ router.post('/executions/rollback-matching', asyncHandler(async (req, res) => {
     action: String(req.body?.action ?? ''),
     from: String(req.body?.from ?? ''),
     to: String(req.body?.to ?? ''),
+    importRunId: String(req.body?.importRunId ?? ''),
   };
   const { where, params } = buildExecutionWhere(configId, filters);
   // Safety: never roll back already-rolled rows unless explicitly requested
