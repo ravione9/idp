@@ -62,6 +62,28 @@ export async function runAttendanceIgaPipeline(params: {
     validationErrors: [],
   };
 
+  // Policy toggle is authoritative — refuse scheduled, manual, and internal runs when off.
+  if (config.enabled !== 1) {
+    const msg = `Attendance IGA policy "${config.name}" is disabled — no import or suspend/disable actions run`;
+    logger.warn({ configId, initiatedBy: params.initiatedBy }, msg);
+    await execute(
+      `INSERT INTO attendance_iga_import_runs
+         (id, config_id, source, status, initiated_by, error_message, completed_at)
+       VALUES (?, ?, ?, 'FAILED', ?, ?, UTC_TIMESTAMP())`,
+      [importRunId, configId, params.source, params.initiatedBy, msg.slice(0, 4000)],
+    );
+    await updateSyncStatus('FAILED', msg, configId);
+    return {
+      importRunId,
+      status: 'FAILED',
+      report,
+      evaluations: 0,
+      approvalsCreated: 0,
+      executions: 0,
+      error: msg,
+    };
+  }
+
   await execute(
     `INSERT INTO attendance_iga_import_runs (id, config_id, source, status, initiated_by)
      VALUES (?, ?, ?, 'RUNNING', ?)`,
@@ -173,6 +195,8 @@ export async function runAttendanceIgaPipeline(params: {
         ruleKey: ev.ruleKey,
         importRunId,
         executedBy: params.initiatedBy,
+        absentDays: ev.absentDays,
+        attendanceStatus: ev.attendanceStatus,
       });
       executions++;
       if (ev.actions.includes('SUSPEND_USER')) suspended++;
@@ -455,6 +479,7 @@ async function evaluateAllEmployees(
         ruleKey: actionEval.ruleKey,
         ruleName: actionEval.ruleName,
         attendanceStatus: actionEval.attendanceStatus,
+        absentDays: actionEval.absentDays,
         actionRecommended: actions.join(','),
         skippedReason: null,
         actions,
@@ -522,13 +547,20 @@ async function evaluateActionRules(
   config: AttendanceIgaConfig,
   today: string,
   nowMinutes: number,
-): Promise<{ ruleKey: string; ruleName: string; attendanceStatus: string; actions: AttendanceAction[] } | null> {
+): Promise<{
+  ruleKey: string;
+  ruleName: string;
+  attendanceStatus: string;
+  absentDays: number | null;
+  actions: AttendanceAction[];
+} | null> {
   if (emp.hrms_status === 'DEPARTED' || emp.ilg_state === 'DEPARTED') {
     const rule = rules.find((r) => r.rule_key === 'TERMINATED');
     return {
       ruleKey: 'TERMINATED',
       ruleName: rule?.name ?? 'Employee Terminated',
       attendanceStatus: 'terminated',
+      absentDays: null,
       actions: parseActions(rule?.actions_json),
     };
   }
@@ -547,6 +579,7 @@ async function evaluateActionRules(
         ruleKey: 'NO_PUNCH_TODAY',
         ruleName: rule?.name ?? 'No Punch-In Today',
         attendanceStatus: 'no_punch_today',
+        absentDays: 1,
         actions: parseActions(rule?.actions_json),
       };
     }
@@ -559,6 +592,7 @@ async function evaluateActionRules(
       ruleKey: 'NO_PUNCH_CONSECUTIVE',
       ruleName: rule?.name ?? 'No Punch-In Consecutive Days',
       attendanceStatus: `no_punch_${consecutive}d`,
+      absentDays: consecutive,
       actions: parseActions(rule?.actions_json),
     };
   }
@@ -679,6 +713,24 @@ export async function processApprovalDecision(params: {
     [row.import_run_id],
   );
   const config = await loadAttendanceIgaConfig(run?.config_id ?? 1);
+  if (config.enabled !== 1) {
+    throw new Error(`Attendance IGA policy "${config.name}" is disabled — cannot execute approved action`);
+  }
+  const evalRow = await queryOne<{ attendance_status: string | null }>(
+    `SELECT attendance_status FROM attendance_iga_evaluations
+      WHERE import_run_id = ? AND emp_id = ? AND rule_key = ?
+      ORDER BY evaluated_at DESC LIMIT 1`,
+    [row.import_run_id, row.emp_id, row.rule_key],
+  );
+  const status = evalRow?.attendance_status ?? null;
+  const absentMatch = status?.match(/no_punch_(\d+)/);
+  const absentDays = row.rule_key === 'NO_PUNCH_TODAY'
+    ? 1
+    : absentMatch
+      ? Number(absentMatch[1])
+      : row.rule_key === 'NO_PUNCH_CONSECUTIVE'
+        ? config.consecutive_days
+        : null;
   const result = await executeAttendanceActions({
     empId: row.emp_id,
     actions,
@@ -686,6 +738,8 @@ export async function processApprovalDecision(params: {
     importRunId: row.import_run_id,
     executedBy: params.approverEmpId,
     approvalId: params.approvalId,
+    absentDays,
+    attendanceStatus: status,
   });
   await notifyAttendanceAction({
     config,
