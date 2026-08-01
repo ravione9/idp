@@ -1066,7 +1066,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `pending` — 2026-08-01 — Attendance IGA enterprise job/day rollback UX
+### `ce6993a` — 2026-08-01 — Attendance IGA enterprise job/day rollback UX
 
 **Why** — IT could not see row checkboxes when viewing “All” (mostly already rolled back), and undoing a full import/evaluate run required tedious multi-select.
 
