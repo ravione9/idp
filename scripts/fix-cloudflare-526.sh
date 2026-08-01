@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOSTNAME="${IDP_ORIGIN_HOST:-idp.lenskart.com}"
+HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
 EMAIL="${1:-admin@lenskart.com}"
 
 echo "==> Diagnose origin TLS (526 = Cloudflare rejects origin certificate)"
@@ -70,4 +70,4 @@ if command -v openssl >/dev/null 2>&1; then
 fi
 
 echo ""
-echo "Test: curl -sI https://idp.lenskart.com/healthz  (expect HTTP 200)"
+echo "Test: curl -sI https://${HOSTNAME}/healthz  (expect HTTP 200)"

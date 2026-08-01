@@ -25,8 +25,11 @@ echo "    Using: ${COMPOSE_FILE} + docker-compose.prod.yml"
 
 git pull --ff-only 2>/dev/null || echo "WARN: git pull failed — continuing with local files"
 
-# Remove duplicate COOKIE_SECURE=false if PUBLIC prod URL is set
-if grep -q '^PUBLIC_BASE_URL=https://idp.lenskart.com' .env 2>/dev/null; then
+HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
+PUBLIC_URL="https://${HOSTNAME}"
+
+# Remove duplicate COOKIE_SECURE=false if PUBLIC preprod URL is set
+if grep -q "^PUBLIC_BASE_URL=${PUBLIC_URL}" .env 2>/dev/null; then
   if grep -c '^COOKIE_SECURE=' .env 2>/dev/null | grep -qv '^1$'; then
     echo "WARN: .env has multiple COOKIE_SECURE lines — keep only: COOKIE_SECURE=true"
   fi
@@ -51,7 +54,7 @@ for i in $(seq 1 24); do
     curl -sf http://127.0.0.1:80/healthz && echo
     echo ""
     echo "Now verify:"
-    echo "  curl -sI https://idp.lenskart.com/healthz   # should be HTTP 200, not 521"
+    echo "  curl -sI ${PUBLIC_URL}/healthz   # should be HTTP 200, not 521"
     echo ""
     echo "If still 521, open AWS Security Group inbound TCP 80 from 0.0.0.0/0"
     echo "Cloudflare SSL/TLS mode must be: Flexible"

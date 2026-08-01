@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 # shellcheck source=compose-lib.sh
 source "$(dirname "$0")/compose-lib.sh"
 
-HOSTNAME="${IDP_ORIGIN_HOST:-idp.lenskart.com}"
+HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
 EMAIL="${1:-admin@lenskart.com}"
 
 if idp_uses_dev_stack; then
@@ -117,7 +117,7 @@ fi
 
 echo ""
 echo "Test Cloudflare (should be HTTP 200, not 526):"
-echo "  curl -sI https://idp.lenskart.com/healthz"
+echo "  curl -sI https://${HOSTNAME}/healthz"
 echo ""
 echo "Auto-renewal: add to root crontab:"
 echo "  0 3 * * 1 cd /opt/idp && bash scripts/renew-letsencrypt.sh >> /var/log/idp-cert-renew.log 2>&1"
