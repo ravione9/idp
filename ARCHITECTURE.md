@@ -1069,7 +1069,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-01 — Helm chart + HA/PRD/deploy docs in repo
+### `229075b` — 2026-08-01 — Helm chart + HA/PRD/deploy docs in repo
 
 **Why** — Keep deployment guides, PRD, SSO rollout decks, and a starter Helm chart with the IdP source for Lenskart GitLab review.
 
