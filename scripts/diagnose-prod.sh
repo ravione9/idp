@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# Diagnostics when https://idp-preprod.lenskart.com is down (Cloudflare 502/503/403).
+# Diagnostics when https://idp.lenskart.com is down (Cloudflare 502/503/403).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
-PUBLIC_URL="https://${HOSTNAME}"
-
 echo "=== Public URL (via Cloudflare) ==="
-curl -sI "${PUBLIC_URL}/healthz" 2>&1 | head -15 || echo "curl failed"
+curl -sI "https://idp.lenskart.com/healthz" 2>&1 | head -15 || echo "curl failed"
 
 echo ""
 echo "=== Origin :80 (what Cloudflare hits) ==="
@@ -61,7 +58,7 @@ if [[ -z "$PUB_IP" ]]; then
   echo "    • Put ALB/NLB in front with public listener → 80 → this instance"
   echo "    • Use Cloudflare Tunnel (cloudflared) — no inbound port 80 on AWS"
 else
-  echo "  Cloudflare dashboard → DNS → ${HOSTNAME} A record must be: $PUB_IP (Proxied ON)"
+  echo "  Cloudflare dashboard → DNS → idp.lenskart.com A record must be: $PUB_IP (Proxied ON)"
   echo "  Test from another network: curl -sf http://$PUB_IP/healthz"
 fi
 

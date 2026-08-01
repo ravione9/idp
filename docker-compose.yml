@@ -156,7 +156,7 @@ services:
       SAML_KEY_DIR: /app/data/saml
       REDIS_URL: redis://redis:6379/0
       AWS_ENDPOINT_URL: http://localstack:4566
-      # EC2 preprod: set in .env — PUBLIC_BASE_URL=https://idp-preprod.lenskart.com
+      # Production: set in .env — PUBLIC_BASE_URL=https://idp.lenskart.com
     ports:
       # Non-privileged host ports (Checkmarx). Terminate TLS on 443 via reverse proxy if needed.
       - "127.0.0.1:8080:8080"

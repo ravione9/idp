@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EC2 preprod deploy — idp-preprod.lenskart.com behind Cloudflare (proxied).
+# Production deploy — idp.lenskart.com behind Cloudflare (proxied).
 #
 #   bash scripts/deploy-prod.sh
 #
@@ -20,10 +20,8 @@ fi
 idp_compose_init
 
 PROD_COMPOSE=("${IDP_COMPOSE[@]}" -f docker-compose.prod.yml)
-HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
-PUBLIC_URL="https://${HOSTNAME}"
 
-echo "==> EC2 preprod deploy for ${PUBLIC_URL}"
+echo "==> Production deploy for https://idp.lenskart.com"
 echo "    Compose: ${COMPOSE_FILE} + docker-compose.prod.yml"
 
 if [[ ! -f .env ]]; then
@@ -31,8 +29,8 @@ if [[ ! -f .env ]]; then
   echo "    Created .env from env.prod.example — edit secrets before go-live."
 fi
 
-if ! grep -q "^PUBLIC_BASE_URL=${PUBLIC_URL}" .env 2>/dev/null; then
-  echo "WARN: PUBLIC_BASE_URL should be ${PUBLIC_URL} in .env"
+if ! grep -q '^PUBLIC_BASE_URL=https://idp.lenskart.com' .env 2>/dev/null; then
+  echo "WARN: PUBLIC_BASE_URL should be https://idp.lenskart.com in .env"
 fi
 
 echo "==> Validating compose project..."
@@ -67,10 +65,10 @@ for i in $(seq 1 36); do
     echo "=== SUCCESS (origin ready for Cloudflare) ==="
     curl -sf http://127.0.0.1:80/healthz && echo
     echo ""
-    echo "Public URL:  ${PUBLIC_URL}/login"
+    echo "Public URL:  https://idp.lenskart.com/login"
     echo ""
     echo "Cloudflare checklist:"
-    echo "  1. DNS A record ${HOSTNAME} → this server public IP, Proxied ON"
+    echo "  1. DNS A record idp.lenskart.com → this server public IP, Proxied ON"
     echo "  2. SSL/TLS mode: Flexible (CF HTTPS → origin HTTP :80)"
     echo "  3. AWS Security Group: inbound TCP 80 open"
     echo "  4. WAF: allow /healthz /login /auth/* /api/* /saml/*"

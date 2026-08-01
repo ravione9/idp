@@ -2,8 +2,7 @@
 
 > Identity Provider, Single Sign-On, and Identity Governance platform for Lenskart.
 > **Repository:** [github.com/ravione9/idp](https://github.com/ravione9/idp)
-> **Production hostname (EKS / Multiverse):** `idp.lenskart.com`
-> **EC2 / Cloudflare preprod:** `https://idp-preprod.lenskart.com`
+> **Production hostname (target):** `idp.lenskart.com`
 > **Dev server:** `http://192.168.24.254:8080` (host `pam-2`, install dir `/opt/idp`)
 
 This document is the **living source of truth** for the system. It is updated on every architectural change. The most recent change is at the top of [§ Change Log](#change-log).
@@ -813,7 +812,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | `MASTER_ADMIN_EMAIL` | recommended | — | Master admin auto-provisioned on startup |
 | `MASTER_ADMIN_PASSWORD` | recommended | — | (≥10 chars) |
 | `MASTER_ADMIN_FULL_NAME` | no | `Master Administrator` | |
-| `PUBLIC_BASE_URL` | yes | — | `http://192.168.24.254:8080` (dev) / `https://idp-preprod.lenskart.com` (EC2) / `https://idp.lenskart.com` (EKS) |
+| `PUBLIC_BASE_URL` | yes | — | `http://192.168.24.254:8080` (dev) / `https://idp.lenskart.com` (prod) |
 | `SAML_IDP_BASE_URL` | yes for SAML | — | Same as above |
 | `SAML_IDP_ENTITY_ID` | no | `<base>/saml/metadata` | IdP entity ID |
 | `SAML_IDP_PRIVATE_KEY_PEM` | yes for SAML | — | PEM (escape `\n` as literal `\n`) |
@@ -886,9 +885,7 @@ Target topology is multi-replica API behind a load balancer with shared MySQL + 
 | Outbox drain | Existing Redis leader election in `src/services/outbox-worker.ts` |
 | SAML/OIDC signing keys | Inject `SAML_IDP_PRIVATE_KEY_PEM` + `SAML_IDP_CERT_PEM` from Vault (Agent Injector → process env on Multiverse; or External Secrets elsewhere); `ensureSamlKeys()` short-circuits; `ensureOidcKeys()` reuses SAML key when SAML is enabled |
 
-**Lenskart Multiverse (prod EKS):** Helm values overlay and Vault key template live in this repo at `deploy/multiverse/` for copy into `multiverse-application-helm` — `values-lk-multiverse-platform-eks.yaml` (ns `it-idp`, host `idp.lenskart.com`, RDS + ElastiCache + SQS FIFO) and `vault-multiverse-config-idp.template.env` (KV v1 `multiverse/config/idp`, role `idp`, SA `idp-sa`).
-
-**EC2 / Cloudflare preprod:** single-tier `docker-compose` + `docker-compose.prod.yml` on EC2. Public hostname is `idp-preprod.lenskart.com` (Cloudflare orange-cloud A → EC2 EIP). Bootstrap from `env.prod.example`; deploy with `bash scripts/deploy-prod.sh`. Override host in ops scripts via `IDP_ORIGIN_HOST` (default `idp-preprod.lenskart.com`).
+**Lenskart Multiverse (prod EKS):** Helm values overlay and Vault key template live in this repo at `deploy/multiverse/` for copy into `multiverse-application-helm` — `values-lk-multiverse-platform-eks.yaml` (ns `it-idp`, host `idp.lenskart.com`, RDS + ElastiCache + SQS FIFO) and `vault-multiverse-config-idp.template.env` (KV v1 `multiverse/config/idp`, role `idp`, SA `idp-sa`). EC2/docker-compose config is unchanged.
 
 **Production SAML key generation (K8s / Vault):** do **not** rely on in-pod `ensureSamlKeys()` auto-generation (3-year validity, per-replica risk). Generate once offline with **15-year** validity and load into Vault:
 
@@ -1126,15 +1123,6 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **Export CSV** — includes `email` column.
 - **UI** — Executions employee cell + Rollbacks history show email; CSV placeholder documents email column.
 - Asset cache `2026-08-01-aiga-rb2`.
-
-### (pending) — 2026-08-02 — EC2 hostname → `idp-preprod.lenskart.com`
-
-**Why** — Cloudflare DNS for the EC2 origin now points at `idp-preprod.lenskart.com` (prod EKS keeps `idp.lenskart.com`).
-
-**What changed**
-- **`env.prod.example`**, **`docker-compose.prod.yml`**, **`.env.example`** — `PUBLIC_BASE_URL` / SAML URLs → `https://idp-preprod.lenskart.com`.
-- **`scripts/deploy-prod.sh`** and Cloudflare/origin ops scripts — default `IDP_ORIGIN_HOST=idp-preprod.lenskart.com`.
-- **§10 / §11.2** — document EC2 preprod vs Multiverse prod hostnames.
 
 ### (pending) — 2026-08-01 — Helm chart + HA/PRD/deploy docs in repo
 

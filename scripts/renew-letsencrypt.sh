@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
+HOSTNAME="${IDP_ORIGIN_HOST:-idp.lenskart.com}"
 LE_DIR="/etc/letsencrypt/live/${HOSTNAME}"
 
 certbot renew --webroot -w "$(pwd)/acme-webroot" --quiet

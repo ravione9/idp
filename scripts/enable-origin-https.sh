@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
+HOSTNAME="${IDP_ORIGIN_HOST:-idp.lenskart.com}"
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
@@ -86,7 +86,7 @@ fi
 
 echo ""
 echo "Now test Cloudflare (orange cloud can stay ON):"
-echo "  curl -sI https://${HOSTNAME}/healthz"
+echo "  curl -sI https://idp.lenskart.com/healthz"
 echo ""
 echo "If Cloudflare shows 526 (not 521):"
 echo "  Self-signed is rejected by Full (strict). Run:"

@@ -3,13 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
-PUBLIC_URL="https://${HOSTNAME}"
 PUB_IP="${1:-$(curl -sf --max-time 3 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || curl -sf --max-time 5 https://ifconfig.me 2>/dev/null || echo '')}"
 
 echo "=== Cloudflare origin simulation ==="
 echo "521 means Cloudflare never completed TCP to origin — Express never runs."
-echo "Host: ${HOSTNAME}"
 echo ""
 
 pass() { echo "  OK: $1"; }
@@ -17,13 +14,13 @@ fail() { echo "  FAIL: $1"; }
 
 echo "1) Local :80 with Cloudflare Host + headers"
 if curl -sf http://127.0.0.1:80/healthz \
-  -H "Host: ${HOSTNAME}" \
+  -H "Host: idp.lenskart.com" \
   -H "X-Forwarded-Proto: https" \
   -H "CF-Connecting-IP: 104.16.0.1" \
   -H "CF-Ray: test" >/dev/null; then
   pass "App responds to Cloudflare-style HTTP on port 80"
   curl -sf http://127.0.0.1:80/healthz \
-    -H "Host: ${HOSTNAME}" \
+    -H "Host: idp.lenskart.com" \
     -H "X-Forwarded-Proto: https" && echo
 else
   fail "App not responding on :80"
@@ -32,7 +29,7 @@ fi
 echo ""
 echo "2) Public IP :80 (what internet / Cloudflare must reach)"
 if [[ -n "$PUB_IP" ]]; then
-  if curl -sf "http://${PUB_IP}/healthz" -H "Host: ${HOSTNAME}" >/dev/null; then
+  if curl -sf "http://${PUB_IP}/healthz" -H "Host: idp.lenskart.com" >/dev/null; then
     pass "Origin reachable at http://${PUB_IP}/healthz"
   else
     fail "Cannot reach http://${PUB_IP}/healthz — SG/ufw/DNS issue"
@@ -69,9 +66,9 @@ if [[ -n "$PUB_IP" ]]; then
   if command -v openssl >/dev/null 2>&1; then
     echo ""
     echo "5) TLS handshake on :443"
-    if openssl s_client -connect "${PUB_IP}:443" -servername "${HOSTNAME}" </dev/null 2>/dev/null | grep -q "BEGIN CERTIFICATE"; then
+    if openssl s_client -connect "${PUB_IP}:443" -servername idp.lenskart.com </dev/null 2>/dev/null | grep -q "BEGIN CERTIFICATE"; then
       pass "TLS certificate presented on :443"
-      openssl s_client -connect "${PUB_IP}:443" -servername "${HOSTNAME}" </dev/null 2>/dev/null \
+      openssl s_client -connect "${PUB_IP}:443" -servername idp.lenskart.com </dev/null 2>/dev/null \
         | openssl x509 -noout -subject -dates 2>/dev/null || true
     else
       echo "  FAIL: no valid TLS on :443 (expected until Origin Certificate is installed)"
@@ -83,17 +80,17 @@ fi
 
 echo ""
 echo "6) Via Cloudflare edge (orange cloud)"
-CF_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "${PUBLIC_URL}/healthz" 2>/dev/null || echo "000")
-echo "  ${PUBLIC_URL}/healthz → HTTP $CF_CODE"
+CF_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 https://idp.lenskart.com/healthz 2>/dev/null || echo "000")
+echo "  https://idp.lenskart.com/healthz → HTTP $CF_CODE"
 if [[ "$CF_CODE" == "200" ]]; then
   pass "Cloudflare → origin working"
 elif [[ "$CF_CODE" == "521" ]]; then
   echo ""
   echo "  521 with local/public :80 OK → Cloudflare is NOT hitting this server on :80."
   echo "  Check Cloudflare dashboard:"
-  echo "    DNS A ${HOSTNAME} → ${PUB_IP:-<EC2 EIP>} (Proxied ON)"
+  echo "    DNS A idp → ${PUB_IP:-3.6.124.122} (Proxied ON)"
   echo "    SSL/TLS → Flexible (not Full)"
-  echo "  Optional test: grey-cloud the A record 5 min — if http://${HOSTNAME} works,"
+  echo "  Optional test: grey-cloud the A record 5 min — if http://idp.lenskart.com works,"
   echo "  origin IP is correct and orange-cloud SSL/port config is the problem."
 else
   echo "  HTTP $CF_CODE — see Cloudflare / WAF rules"

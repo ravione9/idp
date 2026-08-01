@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install a CA-signed certificate on origin :443 (fixes Cloudflare 526 Full strict).
 #
-# Wildcard *.lenskart.com covers idp-preprod.lenskart.com.
+# Wildcard *.lenskart.com covers idp.lenskart.com.
 #
 # Usage:
 #   bash scripts/install-origin-cert.sh /path/to/cert.pem /path/to/key.pem
@@ -15,7 +15,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
+HOSTNAME="${IDP_ORIGIN_HOST:-idp.lenskart.com}"
 CERT_FILE="${1:-}"
 KEY_FILE="${2:-}"
 CA_FILE="${3:-}"
@@ -144,4 +144,4 @@ PUB_IP=$(curl -sf --max-time 3 http://169.254.169.254/latest/meta-data/public-ip
 
 echo ""
 echo "Test Cloudflare (expect HTTP 200, not 526):"
-echo "  curl -sI https://${HOSTNAME}/healthz"
+echo "  curl -sI https://idp.lenskart.com/healthz"

@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
+HOSTNAME="${IDP_ORIGIN_HOST:-idp.lenskart.com}"
 PUB_IP=$(curl -sf --max-time 3 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "3.6.124.122")
 
 echo "=== Origin TLS handshake (certs SENT by server, not client-built) ==="
