@@ -28,6 +28,12 @@ import {
 } from '../saml/sp-registry.js';
 import { evaluateAppLaunch } from '../services/app-access-policy.js';
 import {
+  enforceCriticalAppMfaOrRedirect,
+  getAppMfaBySlug,
+  redirectAppMfaStepUp,
+  sessionSatisfiesAppMfa,
+} from '../services/app-mfa-stepup.js';
+import {
   extractRequestIdFromAuthnRequest,
   logSamlAssertion,
   samlBindingFromFlow,
@@ -317,6 +323,39 @@ async function issueAssertion(
     }
   }
 
+  {
+    const appMfa = await getAppMfaBySlug(resolved.sp.slug);
+    if (!(await sessionSatisfiesAppMfa(user.sessionId, appMfa))) {
+      // Preserve AuthnRequest across MFA step-up (POST binding would lose the body on redirect).
+      const pendingId = uuidv4();
+      const q = normalizeSamlParams(req.query as Record<string, unknown>);
+      const b = normalizeSamlParams(req.body as Record<string, unknown>);
+      try {
+        await redis.set(
+          `${PENDING_SSO_PREFIX}${pendingId}`,
+          JSON.stringify({
+            binding,
+            query: q,
+            body: b,
+            relayState: q['RelayState'] ?? b['RelayState'],
+            spEntityId: resolved.sp.entity_id,
+          }),
+          'EX',
+          PENDING_SSO_TTL_S,
+        );
+      } catch (err) {
+        logger.error({ err }, 'Failed to store pending SAML SSO for app MFA step-up');
+        res.status(503).type('html').send(
+          '<!doctype html><title>SSO unavailable</title><h1>Sign-in temporarily unavailable</h1>'
+          + '<p>Please retry from the application in a moment.</p>',
+        );
+        return;
+      }
+      redirectAppMfaStepUp(res, `/saml/resume/${pendingId}`, appMfa?.name || resolved.sp.name);
+      return;
+    }
+  }
+
   try {
     const relayState =
       (req.query['RelayState'] as string | undefined) ??
@@ -436,6 +475,21 @@ router.get('/resume/:pendingId', async (req: Request, res: Response): Promise<vo
     return;
   }
 
+  // Critical-app MFA before replaying AuthnRequest (reuse this pending id across step-up).
+  {
+    const samlReq = pending.query?.['SAMLRequest'] || pending.body?.['SAMLRequest'] || '';
+    const issuer = pending.spEntityId
+      || (samlReq ? extractIssuerFromAuthnRequest(samlReq) : null);
+    const sp = issuer ? await getServiceProviderByEntityId(issuer) : null;
+    if (sp && req.user) {
+      const appMfa = await getAppMfaBySlug(sp.slug);
+      if (!(await sessionSatisfiesAppMfa(req.user.sessionId, appMfa))) {
+        redirectAppMfaStepUp(res, `/saml/resume/${pendingId}`, appMfa?.name || sp.name);
+        return;
+      }
+    }
+  }
+
   // Do NOT spread Express req ({...req} drops methods like req.get and breaks samlify).
   // Replay the stored AuthnRequest on the live request, then restore.
   const prevQuery = req.query;
@@ -510,6 +564,16 @@ router.get('/launch/:slug', async (req: Request, res: Response): Promise<void> =
       respondLaunchDenied(req, res, decision.reason, clientIp, sp.name);
       return;
     }
+  }
+
+  {
+    const appMfa = await getAppMfaBySlug(sp.slug);
+    const ok = await enforceCriticalAppMfaOrRedirect(req, res, {
+      sessionId: user.sessionId,
+      returnPath: `/saml/launch/${slug}`,
+      app: appMfa,
+    });
+    if (!ok) return;
   }
 
   try {

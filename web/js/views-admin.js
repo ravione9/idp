@@ -686,6 +686,15 @@ export async function viewIgaApps(content, opts = {}) {
             <label class="form-label">Icon URL <span class="muted" style="font-weight:400">(optional)</span></label>
             <input class="form-input" id="csp-icon" type="url" value="${esc(sp?.icon_url||'')}" placeholder="https://…/logo.png">
           </div>
+          <div class="form-group span2">
+            <label class="mfa-toggle-row" style="display:flex;gap:0.55rem;align-items:flex-start;cursor:pointer;margin:0">
+              <input type="checkbox" id="csp-require-mfa" ${sp?.require_mfa ? 'checked' : ''} style="margin-top:0.2rem">
+              <span>
+                <strong>Critical application — require MFA at launch</strong>
+                <span class="muted" style="display:block;font-size:0.8rem;font-weight:400">Users must complete MFA again before SSO into this app (controlled by Strong Auth → Application-level MFA).</span>
+              </span>
+            </label>
+          </div>
         </div>
         <div id="csp-err"></div>
       </div>
@@ -720,7 +729,9 @@ export async function viewIgaApps(content, opts = {}) {
 
       saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
       const data = { name, entityId, acsUrl, nameidFormat,
-        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined, ...extras };
+        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined,
+        requireMfa: !!bd.querySelector('#csp-require-mfa')?.checked,
+        ...extras };
       if (!isEdit) data.slug = slug;
 
       try {
@@ -1050,6 +1061,15 @@ export async function viewSamlApps(me, content, opts = {}) {
             <label class="form-label">Icon URL <span class="muted" style="font-weight:400">(optional)</span></label>
             <input class="form-input" id="sp-icon" type="url" value="${esc(sp?.icon_url||'')}" placeholder="https://…/logo.png">
           </div>
+          <div class="form-group span2">
+            <label class="mfa-toggle-row" style="display:flex;gap:0.55rem;align-items:flex-start;cursor:pointer;margin:0">
+              <input type="checkbox" id="sp-require-mfa" ${sp?.require_mfa ? 'checked' : ''} style="margin-top:0.2rem">
+              <span>
+                <strong>Critical application — require MFA at launch</strong>
+                <span class="muted" style="display:block;font-size:0.8rem;font-weight:400">Users must complete MFA again before SSO into this app (Strong Auth → Application-level MFA).</span>
+              </span>
+            </label>
+          </div>
         </div>
         <div id="sp-err"></div>
       </div>
@@ -1084,7 +1104,9 @@ export async function viewSamlApps(me, content, opts = {}) {
 
       saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
       const data = { name, entityId, acsUrl, nameidFormat,
-        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined, ...extras };
+        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined,
+        requireMfa: !!bd.querySelector('#sp-require-mfa')?.checked,
+        ...extras };
       if (!isEdit) data.slug = slug;
 
       try {
@@ -1114,7 +1136,8 @@ export async function viewSamlApps(me, content, opts = {}) {
           : '<span class="badge badge-neutral">Disabled</span>'}</td>
         <td>${sp.request_access
           ? '<span class="badge badge-success" title="Users can request SSO via Request Access">Request Access</span>'
-          : '<span class="badge badge-neutral" title="Not in Request Access catalog">SSO only</span>'}</td>
+          : '<span class="badge badge-neutral" title="Not in Request Access catalog">SSO only</span>'}
+          ${sp.require_mfa ? ' <span class="badge badge-warning" title="Fresh MFA required at launch">MFA</span>' : ''}</td>
         <td style="white-space:nowrap">${isSuper ? `
           <button class="btn btn-sm btn-secondary sp-edit" data-id="${esc(String(sp.id))}" title="Edit">✏️ Edit</button>
           ${!sp.request_access ? `<button class="btn btn-sm btn-primary sp-enable-jit"

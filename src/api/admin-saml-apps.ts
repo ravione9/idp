@@ -38,6 +38,8 @@ const registerSpSchema = z.object({
   mergeDefaultAttrs: z.boolean().optional(),
   iconUrl:         z.string().url().optional().nullable(),
   sortOrder:       z.number().int().optional(),
+  /** Critical app — require fresh MFA at SSO launch (when MFA policy critical_app_mfa is on). */
+  requireMfa:      z.boolean().optional(),
   entitlementRule: z.object({
     all_active:       z.boolean().optional(),
     roles:            z.array(z.string()).optional(),
@@ -61,6 +63,7 @@ const updateSpSchema = z.object({
   mergeDefaultAttrs: z.boolean().optional(),
   iconUrl:         z.string().url().optional().nullable(),
   active:          z.boolean().optional(),
+  requireMfa:      z.boolean().optional(),
 });
 
 function validateAttributeMap(map: Record<string, string> | null | undefined): string | null {
@@ -117,6 +120,7 @@ function mapAdminRow(row: Record<string, unknown>) {
     /** IGA Request Access (JIT) — mirrored applications.requestable + active workflow */
     request_access:    Number(row['app_requestable'] ?? 0) === 1 && Number(row['has_jit_workflow'] ?? 0) === 1,
     app_requestable:   Number(row['app_requestable'] ?? 0) === 1,
+    require_mfa:       Number(row['app_require_mfa'] ?? 0) === 1,
   };
 }
 
@@ -168,6 +172,7 @@ router.get('/', async (_req: Request, res: Response): Promise<void> => {
             sp.nameid_attribute, sp.attribute_map, sp.sign_assertions, sp.sign_response,
             sp.merge_default_attrs, sp.active, sp.sort_order, sp.icon_url, sp.created_at,
             COALESCE(a.requestable, 0) AS app_requestable,
+            COALESCE(a.require_mfa, 0) AS app_require_mfa,
             EXISTS (
               SELECT 1 FROM app_group_access_workflows w
                WHERE w.app_id = a.id AND w.active = 1
@@ -247,6 +252,13 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     await ensureSamlAppMirrored(d.slug).catch((err) =>
       logger.warn({ err, slug: d.slug }, 'Failed to mirror new SAML SP into applications catalog'),
     );
+
+    if (d.requireMfa !== undefined) {
+      const { setApplicationRequireMfa } = await import('../services/app-mfa-stepup.js');
+      await setApplicationRequireMfa(d.slug, d.requireMfa).catch((err) =>
+        logger.warn({ err, slug: d.slug }, 'Failed to set require_mfa on new SAML app'),
+      );
+    }
 
     // Enable IGA Request Access (JIT) so the app appears for end-user SSO requests
     const actor = req.user?.empId ?? 'system';
@@ -348,6 +360,18 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
     }
     if (d.attributeMap === null || (d.attributeMap && Object.keys(d.attributeMap).length === 0)) {
       await execute('UPDATE saml_service_providers SET attribute_map = NULL WHERE id = ?', [id]);
+    }
+
+    if (d.requireMfa !== undefined) {
+      const slugRow = await queryOne<{ slug: string }>(
+        'SELECT slug FROM saml_service_providers WHERE id = ? LIMIT 1',
+        [id],
+      );
+      if (slugRow?.slug) {
+        await ensureSamlAppMirrored(slugRow.slug).catch(() => undefined);
+        const { setApplicationRequireMfa } = await import('../services/app-mfa-stepup.js');
+        await setApplicationRequireMfa(slugRow.slug, d.requireMfa);
+      }
     }
 
     logger.info({ id }, 'SAML SP updated via Admin Central');

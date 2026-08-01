@@ -941,16 +941,18 @@ export async function viewMfaMethods(content) {
 
   async function loadMfaPage() {
     try {
-      const [status, policyRes, groupsRes, deliveryRes, groupPolRes] = await Promise.all([
+      const [status, policyRes, groupsRes, deliveryRes, groupPolRes, criticalAppsRes] = await Promise.all([
         api.mfaStatus().catch(() => ({})),
         api.getMfaPolicy().catch(() => ({ data: {} })),
         api.listGroups().catch(() => ({ data: [] })),
         api.getMfaDeliveryStatus().catch(() => ({ data: {} })),
         api.listMfaGroupPolicies().catch(() => ({ data: [] })),
+        api.listMfaCriticalApps().catch(() => ({ data: [] })),
       ]);
       const policy = policyRes?.data || {};
       const groups = norm(groupsRes);
       const groupPolicies = norm(groupPolRes);
+      const criticalApps = norm(criticalAppsRes);
       const enrolled = status?.methods || [];
       const allowedMethods = Array.isArray(policy.allowed_methods)
         ? policy.allowed_methods
@@ -962,6 +964,8 @@ export async function viewMfaMethods(content) {
       const enforceAdmins = !!policy['enforce_for_admins'];
       const gracePeriod   = policy['grace_period_hours'] ?? 24;
       const rememberDevice = policy['remember_device_hours'] ?? 24;
+      const criticalAppMfa = policy['critical_app_mfa'] !== false && policy['critical_app_mfa'] !== 0 && policy['critical_app_mfa'] !== '0';
+      const criticalAppMaxAge = policy['critical_app_mfa_max_age_seconds'] ?? 300;
       const parseExcludedGroupIds = (raw) => {
         if (Array.isArray(raw)) return raw.map((v) => String(v)).filter(Boolean);
         if (typeof raw !== 'string') return [];
@@ -1231,6 +1235,39 @@ export async function viewMfaMethods(content) {
               <label class="form-label" style="font-weight:600">Allowed MFA Methods</label>
               <p class="muted" style="font-size:0.8rem;margin-bottom:0.45rem">Users can enroll only the methods enabled here.</p>
               <div class="mfa-policy-methods">${methodPolicyRows}</div>
+            </div>
+            <div class="form-group" style="grid-column:1/-1;padding-top:0.5rem;border-top:1px solid var(--border,#e2e8f0)">
+              <label class="form-label" style="font-weight:600">Application-level MFA (critical apps)</label>
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.65rem">When enabled, launching a marked critical application requires a fresh MFA challenge even if the portal session is already open (SAML / OIDC). Remember-device does <strong>not</strong> skip this step-up.</p>
+              <div class="grid-2" style="gap:1rem;margin-bottom:0.85rem">
+                <div>
+                  <label class="form-label">Push application MFA</label>
+                  <select class="form-select" id="policy-critical-app-mfa">
+                    <option value="1" ${criticalAppMfa ? 'selected' : ''}>Enabled — enforce MFA at critical app launch</option>
+                    <option value="0" ${!criticalAppMfa ? 'selected' : ''}>Disabled — ignore critical-app flags</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label">Fresh MFA max age (seconds)</label>
+                  <input class="form-input" type="number" id="policy-critical-app-age" value="${esc(String(criticalAppMaxAge))}" min="0" max="86400" />
+                  <p class="muted" style="font-size:0.75rem;margin:0.25rem 0 0">0 = challenge on every launch. Default 300 (5 min).</p>
+                </div>
+              </div>
+              <div class="table-wrap"><table><thead><tr>
+                <th>Application</th><th>Slug</th><th>Critical MFA</th>
+              </tr></thead><tbody>
+              ${criticalApps.length ? criticalApps.map((a) => `<tr>
+                <td class="cell-strong">${esc(a.name)}${a.has_saml ? ' <span class="badge badge-info">SAML</span>' : ''}</td>
+                <td class="mono muted" style="font-size:0.78rem">${esc(a.slug)}</td>
+                <td>
+                  <label style="display:flex;gap:0.4rem;align-items:center;margin:0;cursor:pointer;font-weight:600">
+                    <input type="checkbox" class="policy-critical-app" data-id="${esc(a.id)}" ${a.require_mfa ? 'checked' : ''} />
+                    Require MFA at launch
+                  </label>
+                </td>
+              </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><p>No applications in catalog yet. Register a SAML app first.</p></div></td></tr>'}
+              </tbody></table></div>
+              <p class="muted" style="font-size:0.75rem;margin:0.5rem 0 0">You can also toggle this on each SAML application under Applications → SAML.</p>
             </div>
             <div class="form-group" style="grid-column:1/-1">
               <label class="form-label" style="font-weight:600">Exclude Groups from Policy MFA</label>
@@ -1568,18 +1605,27 @@ export async function viewMfaMethods(content) {
         const allowed_methods = Array
           .from(wrap.querySelectorAll('.policy-method:checked'))
           .map((n) => n.value);
+        const btn = wrap.querySelector('#save-policy-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
         try {
           await api.updateMfaPolicy({
             global_enforce:     parseInt(wrap.querySelector('#policy-global').value) === 1,
             enforce_for_admins: parseInt(wrap.querySelector('#policy-admins').value) === 1,
             grace_period_hours: parseInt(wrap.querySelector('#policy-grace').value) || 24,
             remember_device_hours: Math.max(0, parseInt(wrap.querySelector('#policy-remember').value, 10) || 0),
+            critical_app_mfa: parseInt(wrap.querySelector('#policy-critical-app-mfa').value, 10) === 1,
+            critical_app_mfa_max_age_seconds: Math.max(0, Math.min(86400, parseInt(wrap.querySelector('#policy-critical-app-age').value, 10) || 0)),
             excluded_group_ids: excludedGroups,
             allowed_methods,
           });
+          const toggles = [...wrap.querySelectorAll('.policy-critical-app')];
+          await Promise.all(toggles.map((cb) => api.setMfaCriticalApp(cb.dataset.id, {
+            requireMfa: !!cb.checked,
+          })));
           msg.innerHTML = `<div class="alert alert-success">Policy saved successfully.</div>`;
           await loadMfaPage();
         } catch (e) { msg.innerHTML = errHtml(e.message); }
+        finally { if (btn) { btn.disabled = false; btn.textContent = 'Save Policy'; } }
       });
 
       // ── Per-user search & actions ───────────────────────────────────────────
