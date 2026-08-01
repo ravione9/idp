@@ -180,6 +180,7 @@ Object.assign(api, {
     if (params.action) q.set('action', params.action);
     if (params.from) q.set('from', params.from);
     if (params.to) q.set('to', params.to);
+    if (params.importRunId) q.set('importRunId', params.importRunId);
     if (params.export) q.set('export', params.export);
     return f(`/api/admin/attendance-iga/executions?${q}`);
   },
@@ -195,6 +196,7 @@ Object.assign(api, {
     if (params.action) q.set('action', params.action);
     if (params.from) q.set('from', params.from);
     if (params.to) q.set('to', params.to);
+    if (params.importRunId) q.set('importRunId', params.importRunId);
     return `/api/admin/attendance-iga/executions?${q}`;
   },
   rollbackAttendanceIgaExecution: (id) => f(`/api/admin/attendance-iga/executions/${id}/rollback`, { method: 'POST' }),
@@ -203,7 +205,7 @@ Object.assign(api, {
       method: 'POST',
       body: JSON.stringify({ ids, configId }),
     }),
-  /** CSV text and/or empIds for bulk rollback (up to 2000). */
+  /** CSV text and/or empIds/emails for bulk rollback (up to 2000). */
   csvRollbackAttendanceIgaExecutions: (payload = {}) =>
     f('/api/admin/attendance-iga/executions/bulk-rollback', {
       method: 'POST',
@@ -214,6 +216,12 @@ Object.assign(api, {
     f('/api/admin/attendance-iga/executions/rollback-matching', {
       method: 'POST',
       body: JSON.stringify({ confirm: true, ...payload }),
+    }),
+  /** Complete undo for one import/evaluate job. */
+  rollbackJobAttendanceIgaExecutions: (importRunId, configId = 1) =>
+    f('/api/admin/attendance-iga/executions/rollback-job', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true, importRunId, configId }),
     }),
   attendanceIgaRollbacks: (configId = 1) =>
     f(`/api/admin/attendance-iga/rollbacks?configId=${encodeURIComponent(configId)}&limit=200`),
