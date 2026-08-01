@@ -155,8 +155,9 @@ ingress:
     meta.helm.sh/release-namespace: it-idp
   annotations:
     private:
-      alb.ingress.kubernetes.io/scheme: internal
-      alb.ingress.kubernetes.io/group.name: lk-multiverse-platform-internal
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/group.name: lk-multiverse-platform-public
+      alb.ingress.kubernetes.io/security-groups: sg-0bc9b2b3f1e7392b7
       alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
       alb.ingress.kubernetes.io/ssl-redirect: "443"
       alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-south-1:964059510816:certificate/c37bfc42-0cde-42f3-acc5-64c90dbf939f
