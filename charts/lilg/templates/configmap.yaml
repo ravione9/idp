@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lilg-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lilg.labels" . | nindent 4 }}
+data:
+  NODE_ENV: "production"
+  PORT: "8080"
+  PUBLIC_BASE_URL: "https://{{ .Values.idpHostname }}"
+  SAML_IDP_BASE_URL: "https://{{ .Values.idpHostname }}"
+  SAML_IDP_ENTITY_ID: "https://{{ .Values.idpHostname }}/saml/metadata"
+  COOKIE_SECURE: "true"
+  TRUST_PROXY: "true"
+  SKIP_MIGRATIONS_ON_BOOT: {{ .Values.migrations.job | quote }}
+  DB_HOST: {{ .Values.db.host | quote }}
+  DB_PORT: {{ .Values.db.port | quote }}
+  DB_NAME: {{ .Values.db.name | quote }}
+  REDIS_URL: {{ .Values.redis.url | quote }}
+  SQS_HRMS_EVENTS_URL: {{ .Values.sqs.hrmsEventsUrl | quote }}
+  SQS_CELERY_BROKER_URL: {{ .Values.sqs.celeryBrokerUrl | quote }}
+  {{- range $k, $v := .Values.extraEnv }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

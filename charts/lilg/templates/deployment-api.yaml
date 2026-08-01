@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lilg-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lilg.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: lilg-api
+  template:
+    metadata:
+      labels:
+        app: lilg-api
+        {{- include "lilg.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      terminationGracePeriodSeconds: 35   # app forces exit at 30s on SIGTERM
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: lilg-api
+      containers:
+        - name: api
+          image: {{ include "lilg.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: lilg-config
+            - secretRef:
+                name: lilg-app-secrets
+            - secretRef:
+                name: lilg-saml-keys
+          startupProbe:
+            httpGet: { path: /readyz, port: 8080 }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8080 }
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}

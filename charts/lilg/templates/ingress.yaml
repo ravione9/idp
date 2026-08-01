@@ -1,0 +1,32 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lilg
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lilg.labels" . | nindent 4 }}
+  annotations:
+    alb.ingress.kubernetes.io/scheme: {{ .Values.ingress.scheme }}
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443},{"HTTP":80}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.certificateArn | quote }}
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    {{- range $k, $v := .Values.ingress.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.idpHostname }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lilg-api
+                port:
+                  number: 80
+{{- end }}

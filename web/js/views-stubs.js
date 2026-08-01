@@ -959,7 +959,7 @@ export async function viewMfaMethods(content) {
       const liveCount = methodDefs.filter((m) => allowedSet.has(m.key)).length;
       const enrolledCount = enrolled.length;
       const globalEnforce = !!policy['global_enforce'];
-      const enforceAdmins = policy['enforce_for_admins'] !== false;
+      const enforceAdmins = !!policy['enforce_for_admins'];
       const gracePeriod   = policy['grace_period_hours'] ?? 24;
       const rememberDevice = policy['remember_device_hours'] ?? 24;
       const parseExcludedGroupIds = (raw) => {
@@ -1210,11 +1210,11 @@ export async function viewMfaMethods(content) {
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label" style="font-weight:600">Always Enforce for Admins</label>
-              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Admins and Super-Admins always require MFA.</p>
+              <label class="form-label" style="font-weight:600">Enforce MFA for administrators</label>
+              <p class="muted" style="font-size:0.8rem;margin-bottom:0.4rem">Off by default. When enabled, portal operators (Admin / Super-Admin and other console roles) must enroll MFA. Same grace period as global enforcement — not auto-forced outside this policy.</p>
               <select class="form-select" id="policy-admins">
-                <option value="1" ${enforceAdmins?'selected':''}>Yes — admins must always have MFA</option>
-                <option value="0" ${!enforceAdmins?'selected':''}>No — follow global policy only</option>
+                <option value="1" ${enforceAdmins?'selected':''}>Enabled — require MFA for administrators</option>
+                <option value="0" ${!enforceAdmins?'selected':''}>Disabled — administrators follow global / per-user / group policy only</option>
               </select>
             </div>
             <div class="form-group">
@@ -8073,9 +8073,21 @@ export async function viewBranding(content) {
           <h2>Branding Settings</h2>
           <p class="muted" style="margin:0 0 1rem;font-size:0.82rem">This page is the single editor for login appearance (Login Customization redirects here).</p>
           <div class="form-group"><label class="form-label">Organisation / App Name</label><input class="form-input" id="br-appname" value="${esc(orgName)}"></div>
-          <div class="form-group"><label class="form-label">Logo URL</label><input class="form-input" id="br-logo" value="${esc(b.logo_url||'')}"></div>
+          <div class="form-group">
+            <label class="form-label">Logo</label>
+            <p class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">Upload a PNG, JPEG, WebP, or GIF (max 400 KB), or paste an external URL.</p>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin-bottom:0.5rem">
+              <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
+                Upload logo…
+                <input type="file" id="br-logo-file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" hidden>
+              </label>
+              <button type="button" class="btn btn-sm btn-secondary" id="br-logo-clear" ${b.has_logo_upload || b.logo_url ? '' : 'disabled'}>Remove logo</button>
+              <span class="muted" id="br-logo-status" style="font-size:0.78rem">${b.has_logo_upload ? 'Using uploaded logo' : ''}</span>
+            </div>
+            <input class="form-input" id="br-logo" value="${esc(b.logo_url||'')}" placeholder="https://…/logo.png or leave blank after upload">
+          </div>
           <div class="form-group"><label class="form-label">Favicon URL</label><input class="form-input" id="br-fav" value="${esc(b.favicon_url||'')}"></div>
-          <div class="form-group"><label class="form-label">Accent Color</label><input type="color" class="form-input" id="br-color" value="${esc(b.accent_color||'#2563eb')}" style="height:2.5rem;padding:0.25rem"></div>
+          <div class="form-group"><label class="form-label">Accent Color</label><input type="color" class="form-input" id="br-color" value="${esc(b.accent_color||'#0f4c81')}" style="height:2.5rem;padding:0.25rem"></div>
           <div class="form-group"><label class="form-label">Support Email</label><input class="form-input" id="br-email" value="${esc(b.support_email||'')}"></div>
           <div class="form-group"><label class="form-label">Login Hero Title</label><input class="form-input" id="br-hero" value="${esc(heroTitle)}"></div>
           <div class="form-group"><label class="form-label">Login Hero Subtext</label><input class="form-input" id="br-sub" value="${esc(heroSub)}"></div>
@@ -8085,33 +8097,109 @@ export async function viewBranding(content) {
           <button class="btn btn-primary" id="br-save">Save Branding</button>
         </div>
         <div class="card">
-          <h2>Preview</h2>
-          <div id="br-preview" style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:0.5rem">
-            <div id="br-prev-header" style="background:${esc(b.accent_color||'#2563eb')};padding:2rem 1.5rem;text-align:center">
-              <div style="font-size:1.25rem;font-weight:700;color:#fff" id="br-prev-title">${esc(orgName)}</div>
-            </div>
-            <div style="padding:1rem;background:#f9f9f9">
-              <div style="font-size:0.8rem;font-weight:600;color:#333;text-align:center" id="br-prev-hero">${esc(heroTitle)}</div>
-              <div style="margin-top:0.4rem;font-size:0.7rem;color:#888;text-align:center" id="br-prev-sub">${esc(heroSub)}</div>
-              <div style="margin-top:1rem;background:#fff;border-radius:4px;padding:0.75rem;border:1px solid #e2e8f0">
-                <div style="height:0.5rem;background:#e2e8f0;border-radius:2px;margin-bottom:0.5rem"></div>
-                <div style="height:0.5rem;background:#e2e8f0;border-radius:2px;width:70%"></div>
-                <div id="br-prev-btn" style="margin-top:0.75rem;height:1.5rem;border-radius:4px;background:${esc(b.accent_color||'#2563eb')}"></div>
+          <h2>Login preview</h2>
+          <div id="br-preview" style="border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:0.5rem;background:#eef3f9">
+            <div style="padding:1.5rem 1.25rem">
+              <div style="background:#fff;border:1px solid #dce3ec;border-radius:12px;padding:1.25rem;box-shadow:0 10px 28px rgba(15,76,129,0.1);text-align:center">
+                <div id="br-prev-logo-wrap" style="min-height:2.5rem;margin-bottom:0.5rem;display:flex;align-items:center;justify-content:center">
+                  ${b.logo_url ? `<img id="br-prev-logo" src="${esc(b.logo_url)}" alt="" style="max-height:44px;max-width:160px;object-fit:contain">` : `<div id="br-prev-mark" style="width:44px;height:44px;border-radius:10px;background:${esc(b.accent_color||'#0f4c81')};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.2rem">${esc((orgName.trim().charAt(0) || 'L').toUpperCase())}</div>`}
+                </div>
+                <div style="font-size:1.15rem;font-weight:700;color:${esc(b.accent_color||'#0f4c81')}" id="br-prev-title">${esc(orgName)}</div>
+                <div style="margin-top:0.15rem;font-size:0.7rem;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:#64748b">IdP</div>
+                <div style="margin-top:0.75rem;font-size:0.78rem;font-weight:600;color:#0f172a" id="br-prev-hero">${esc(heroTitle)}</div>
+                <div style="margin-top:0.35rem;font-size:0.72rem;color:#475569" id="br-prev-sub">${esc(heroSub)}</div>
+                <div style="margin-top:1rem;text-align:left">
+                  <div style="height:2rem;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:0.5rem"></div>
+                  <div id="br-prev-btn" style="height:2rem;border-radius:6px;background:${esc(b.accent_color||'#0f4c81')}"></div>
+                </div>
               </div>
             </div>
           </div>
-          <div style="margin-top:1rem;font-size:0.75rem;color:var(--muted)">Live preview updates as you type.</div>
+          <div style="margin-top:1rem;font-size:0.75rem;color:var(--muted)">Matches the light login page. Upload or URL + accent apply after save (upload updates the login logo immediately).</div>
         </div>
       </div>`;
 
+    const logoStatus = wrap.querySelector('#br-logo-status');
+    const logoClearBtn = wrap.querySelector('#br-logo-clear');
+    const setLogoStatus = (text) => { if (logoStatus) logoStatus.textContent = text || ''; };
+    const syncPreviewLogo = () => {
+      const logoUrl = wrap.querySelector('#br-logo').value.trim();
+      const color = wrap.querySelector('#br-color').value || '#0f4c81';
+      const name = wrap.querySelector('#br-appname').value || 'Lenskart';
+      const host = wrap.querySelector('#br-prev-logo-wrap');
+      if (!host) return;
+      if (logoUrl) {
+        host.innerHTML = `<img id="br-prev-logo" src="${esc(logoUrl)}" alt="" style="max-height:44px;max-width:160px;object-fit:contain">`;
+      } else {
+        host.innerHTML = `<div id="br-prev-mark" style="width:44px;height:44px;border-radius:10px;background:${esc(color)};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.2rem">${esc((name.trim().charAt(0) || 'L').toUpperCase())}</div>`;
+      }
+      if (logoClearBtn) logoClearBtn.disabled = !logoUrl;
+    };
     const colorInput = wrap.querySelector('#br-color');
     colorInput.addEventListener('input', () => {
-      wrap.querySelector('#br-prev-header').style.background = colorInput.value;
       wrap.querySelector('#br-prev-btn').style.background = colorInput.value;
+      wrap.querySelector('#br-prev-title').style.color = colorInput.value;
+      const mark = wrap.querySelector('#br-prev-mark');
+      if (mark) mark.style.background = colorInput.value;
     });
-    wrap.querySelector('#br-appname').addEventListener('input', e => { wrap.querySelector('#br-prev-title').textContent = e.target.value || 'Lenskart IdP'; });
+    wrap.querySelector('#br-appname').addEventListener('input', e => {
+      wrap.querySelector('#br-prev-title').textContent = e.target.value || 'Lenskart IdP';
+      syncPreviewLogo();
+    });
+    wrap.querySelector('#br-logo').addEventListener('input', () => {
+      setLogoStatus('');
+      syncPreviewLogo();
+    });
     wrap.querySelector('#br-hero').addEventListener('input', e => { wrap.querySelector('#br-prev-hero').textContent = e.target.value; });
     wrap.querySelector('#br-sub').addEventListener('input', e => { wrap.querySelector('#br-prev-sub').textContent = e.target.value; });
+
+    wrap.querySelector('#br-logo-file').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      if (file.size > 400 * 1024) {
+        wrap.querySelector('#br-msg').innerHTML = errHtml('Logo must be 400 KB or smaller.');
+        return;
+      }
+      setLogoStatus('Uploading…');
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('Could not read file'));
+          reader.readAsDataURL(file);
+        });
+        const r = await api.uploadBrandingLogo({
+          imageBase64: String(dataUrl),
+          mimeType: file.type || undefined,
+          fileName: file.name,
+        });
+        wrap.querySelector('#br-logo').value = r.logo_url || '';
+        setLogoStatus('Uploaded — shown on login');
+        syncPreviewLogo();
+        wrap.querySelector('#br-msg').innerHTML = `<div class="alert alert-success">Logo uploaded.</div>`;
+        setTimeout(() => { if (wrap.querySelector('#br-msg')) wrap.querySelector('#br-msg').innerHTML = ''; }, 3000);
+      } catch (err) {
+        setLogoStatus('');
+        wrap.querySelector('#br-msg').innerHTML = errHtml(err.message || 'Upload failed');
+      }
+    });
+
+    logoClearBtn?.addEventListener('click', async () => {
+      try {
+        const logoVal = wrap.querySelector('#br-logo').value.trim();
+        if (logoVal.includes('/api/public/branding/logo') || b.has_logo_upload) {
+          await api.deleteBrandingLogo();
+        }
+        wrap.querySelector('#br-logo').value = '';
+        setLogoStatus('');
+        syncPreviewLogo();
+        wrap.querySelector('#br-msg').innerHTML = `<div class="alert alert-success">Logo removed. Save branding if you also changed other fields.</div>`;
+        setTimeout(() => { if (wrap.querySelector('#br-msg')) wrap.querySelector('#br-msg').innerHTML = ''; }, 3000);
+      } catch (err) {
+        wrap.querySelector('#br-msg').innerHTML = errHtml(err.message || 'Could not remove logo');
+      }
+    });
 
     wrap.querySelector('#br-save').addEventListener('click', async () => {
       const data = {

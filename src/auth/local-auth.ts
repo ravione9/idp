@@ -209,7 +209,8 @@ export async function getMfaRequirementContext(empId: string): Promise<MfaRequir
 
   const policyMap = new Map(policyRows.map((row) => [row.policy_key, row.policy_value]));
   const globalEnforce = parsePolicyBoolean(policyMap.get('global_enforce'), false);
-  const enforceForAdmins = parsePolicyBoolean(policyMap.get('enforce_for_admins'), true);
+  // Default off — admin MFA is opt-in via Strong Auth policy, not auto-enforced.
+  const enforceForAdmins = parsePolicyBoolean(policyMap.get('enforce_for_admins'), false);
   const userEnforced = (employeeRows[0]?.mfa_enforced ?? 0) === 1;
   const excludedGroupIds = parsePolicyStringArray(policyMap.get('excluded_group_ids'));
 
@@ -663,15 +664,9 @@ export async function localLoginMfaEnrollDeferHandler(req: Request, res: Respons
   const graceRemainingMs = await getGraceRemainingMs(challenge.empId, mfaRequirements.gracePeriodHours);
   await redis.del(key);
 
-  // Portal operators may not defer MFA — privilege requires enrollment first
-  if (PORTAL_OPERATOR_ROLES.has((challenge.role || '').toUpperCase())) {
-    await logAttempt(challenge.email, getClientIp(req), false, 'mfa-enroll-defer-blocked-operator');
-    res.status(403).json({
-      error: 'Two-factor setup is required for administrator accounts before you can continue.',
-      code: 'MFA_ENROLL_REQUIRED',
-    });
-    return;
-  }
+  // Administrators follow the same grace/defer path as everyone else.
+  // Whether MFA is required at all is decided by mfa_policy (enforce_for_admins,
+  // global_enforce, per-user / group enforce) — not a hard-coded operator rule.
 
   if (graceRemainingMs > 0) {
     await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-deferred-grace');

@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lilg-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lilg.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.api.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      app: lilg-api
