@@ -518,6 +518,7 @@ To add a new migration:
 | `GET` | `/readyz` | Readiness (DB + Redis) |
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/api/public/branding` | Login branding (org name, logo, favicon, accent, hero copy, optional bg / custom CSS) — no auth |
+| `GET` | `/api/public/branding/logo` | Uploaded logo image bytes (404 if none) — no auth |
 
 ### 8.2 Auth
 
@@ -1066,6 +1067,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-01 — Branding logo upload
+
+**Why** — Admins need to upload a login logo from the portal, not only paste an external URL.
+
+**What changed**
+- Migration **`057_branding_logo_upload.sql`** — `branding_settings.logo_data` / `logo_mime` (DB-backed for multi-replica).
+- **`POST/DELETE /api/admin/branding/logo`**, **`GET /api/public/branding/logo`**.
+- **Admin → Branding & Login** — Upload logo / Remove logo (PNG, JPEG, WebP, GIF ≤ 400 KB); URL field still supported.
 
 ### (pending) — 2026-08-01 — Admin MFA opt-in via Strong Auth policy
 
@@ -2925,7 +2935,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
   - `identity_profiles` — per-population (employee / contractor / partner / customer / service) source-of-truth definitions with attribute-mapping JSON and lifecycle policy
   - `adaptive_auth_policies` — risk-based policy rows with conditions JSON, action `ALLOW`/`MFA`/`DENY`/`BLOCK`, scope `ALL`/`APP_SPECIFIC`/`USER_GROUP`
   - `password_policies` — complexity, history, rotation, lockout, breach-check (seeded with a `Default Policy` row)
-  - `branding_settings` — singleton row: org name, logo, accent colour, login hero copy, support contacts, custom CSS
+  - `branding_settings` — singleton row: org name, logo URL, optional uploaded `logo_data`/`logo_mime`, accent colour, login hero copy, support contacts, custom CSS
   - `general_settings` — singleton row: display name, session TTLs, MFA grace period, audit retention, login provider toggles, maintenance mode
   - `pam_resources`, `pam_sessions`, `credential_vault_entries` — full PAM data model: SSH/RDP/DB/Web targets, session recording, JIT credentials, KMS-rooted vault entries with rotation
   - `event_triggers` — webhook / Slack / email / workflow subscriptions to platform events
@@ -2937,7 +2947,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
   - `/api/admin/identity-profiles`
   - `/api/admin/adaptive-auth`
   - `/api/admin/password-policies`
-  - `/api/admin/branding`
+  - `/api/admin/branding` (GET/PUT settings; POST/DELETE `/logo` for image upload)
   - `/api/admin/general-settings`
   - `/api/admin/oidc-clients`
   - `/api/admin/pam` (resources / sessions / vault)

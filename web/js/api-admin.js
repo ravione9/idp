@@ -103,6 +103,8 @@ Object.assign(api, {
   // Branding,
   getBranding:    () => f('/api/admin/branding'),
   saveBranding:   (data) => f('/api/admin/branding', { method: 'PUT', body: JSON.stringify(data) }),
+  uploadBrandingLogo: (data) => f('/api/admin/branding/logo', { method: 'POST', body: JSON.stringify(data) }),
+  deleteBrandingLogo: () => f('/api/admin/branding/logo', { method: 'DELETE' }),
 
   // General Settings,
   getGeneralSettings:  () => f('/api/admin/general-settings'),

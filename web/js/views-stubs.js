@@ -8073,7 +8073,19 @@ export async function viewBranding(content) {
           <h2>Branding Settings</h2>
           <p class="muted" style="margin:0 0 1rem;font-size:0.82rem">This page is the single editor for login appearance (Login Customization redirects here).</p>
           <div class="form-group"><label class="form-label">Organisation / App Name</label><input class="form-input" id="br-appname" value="${esc(orgName)}"></div>
-          <div class="form-group"><label class="form-label">Logo URL</label><input class="form-input" id="br-logo" value="${esc(b.logo_url||'')}"></div>
+          <div class="form-group">
+            <label class="form-label">Logo</label>
+            <p class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">Upload a PNG, JPEG, WebP, or GIF (max 400 KB), or paste an external URL.</p>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin-bottom:0.5rem">
+              <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
+                Upload logo…
+                <input type="file" id="br-logo-file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" hidden>
+              </label>
+              <button type="button" class="btn btn-sm btn-secondary" id="br-logo-clear" ${b.has_logo_upload || b.logo_url ? '' : 'disabled'}>Remove logo</button>
+              <span class="muted" id="br-logo-status" style="font-size:0.78rem">${b.has_logo_upload ? 'Using uploaded logo' : ''}</span>
+            </div>
+            <input class="form-input" id="br-logo" value="${esc(b.logo_url||'')}" placeholder="https://…/logo.png or leave blank after upload">
+          </div>
           <div class="form-group"><label class="form-label">Favicon URL</label><input class="form-input" id="br-fav" value="${esc(b.favicon_url||'')}"></div>
           <div class="form-group"><label class="form-label">Accent Color</label><input type="color" class="form-input" id="br-color" value="${esc(b.accent_color||'#0f4c81')}" style="height:2.5rem;padding:0.25rem"></div>
           <div class="form-group"><label class="form-label">Support Email</label><input class="form-input" id="br-email" value="${esc(b.support_email||'')}"></div>
@@ -8103,10 +8115,13 @@ export async function viewBranding(content) {
               </div>
             </div>
           </div>
-          <div style="margin-top:1rem;font-size:0.75rem;color:var(--muted)">Matches the light login page. Logo URL and accent color apply immediately after save.</div>
+          <div style="margin-top:1rem;font-size:0.75rem;color:var(--muted)">Matches the light login page. Upload or URL + accent apply after save (upload updates the login logo immediately).</div>
         </div>
       </div>`;
 
+    const logoStatus = wrap.querySelector('#br-logo-status');
+    const logoClearBtn = wrap.querySelector('#br-logo-clear');
+    const setLogoStatus = (text) => { if (logoStatus) logoStatus.textContent = text || ''; };
     const syncPreviewLogo = () => {
       const logoUrl = wrap.querySelector('#br-logo').value.trim();
       const color = wrap.querySelector('#br-color').value || '#0f4c81';
@@ -8118,6 +8133,7 @@ export async function viewBranding(content) {
       } else {
         host.innerHTML = `<div id="br-prev-mark" style="width:44px;height:44px;border-radius:10px;background:${esc(color)};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.2rem">${esc((name.trim().charAt(0) || 'L').toUpperCase())}</div>`;
       }
+      if (logoClearBtn) logoClearBtn.disabled = !logoUrl;
     };
     const colorInput = wrap.querySelector('#br-color');
     colorInput.addEventListener('input', () => {
@@ -8130,9 +8146,60 @@ export async function viewBranding(content) {
       wrap.querySelector('#br-prev-title').textContent = e.target.value || 'Lenskart IdP';
       syncPreviewLogo();
     });
-    wrap.querySelector('#br-logo').addEventListener('input', syncPreviewLogo);
+    wrap.querySelector('#br-logo').addEventListener('input', () => {
+      setLogoStatus('');
+      syncPreviewLogo();
+    });
     wrap.querySelector('#br-hero').addEventListener('input', e => { wrap.querySelector('#br-prev-hero').textContent = e.target.value; });
     wrap.querySelector('#br-sub').addEventListener('input', e => { wrap.querySelector('#br-prev-sub').textContent = e.target.value; });
+
+    wrap.querySelector('#br-logo-file').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      if (file.size > 400 * 1024) {
+        wrap.querySelector('#br-msg').innerHTML = errHtml('Logo must be 400 KB or smaller.');
+        return;
+      }
+      setLogoStatus('Uploading…');
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('Could not read file'));
+          reader.readAsDataURL(file);
+        });
+        const r = await api.uploadBrandingLogo({
+          imageBase64: String(dataUrl),
+          mimeType: file.type || undefined,
+          fileName: file.name,
+        });
+        wrap.querySelector('#br-logo').value = r.logo_url || '';
+        setLogoStatus('Uploaded — shown on login');
+        syncPreviewLogo();
+        wrap.querySelector('#br-msg').innerHTML = `<div class="alert alert-success">Logo uploaded.</div>`;
+        setTimeout(() => { if (wrap.querySelector('#br-msg')) wrap.querySelector('#br-msg').innerHTML = ''; }, 3000);
+      } catch (err) {
+        setLogoStatus('');
+        wrap.querySelector('#br-msg').innerHTML = errHtml(err.message || 'Upload failed');
+      }
+    });
+
+    logoClearBtn?.addEventListener('click', async () => {
+      try {
+        const logoVal = wrap.querySelector('#br-logo').value.trim();
+        if (logoVal.includes('/api/public/branding/logo') || b.has_logo_upload) {
+          await api.deleteBrandingLogo();
+        }
+        wrap.querySelector('#br-logo').value = '';
+        setLogoStatus('');
+        syncPreviewLogo();
+        wrap.querySelector('#br-msg').innerHTML = `<div class="alert alert-success">Logo removed. Save branding if you also changed other fields.</div>`;
+        setTimeout(() => { if (wrap.querySelector('#br-msg')) wrap.querySelector('#br-msg').innerHTML = ''; }, 3000);
+      } catch (err) {
+        wrap.querySelector('#br-msg').innerHTML = errHtml(err.message || 'Could not remove logo');
+      }
+    });
 
     wrap.querySelector('#br-save').addEventListener('click', async () => {
       const data = {
