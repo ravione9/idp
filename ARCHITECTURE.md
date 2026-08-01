@@ -1069,6 +1069,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-01 — Attendance IGA evaluation mode (daily vs consecutive)
+
+**Why** — Policies need to choose daily live punch evaluation vs only acting on users who have not punched for N consecutive days (and only consume that N-day punch feed). Docker builds failed because the API referenced `evaluation_mode` without the type/mapper/migration on GitLab main.
+
+**What changed:**
+
+- **Migration `054`** — `attendance_iga_config.evaluation_mode` (`DAILY_LIVE` | `CONSECUTIVE_ABSENT`).
+- **Types/config** — `AttendanceIgaConfig.evaluation_mode` + mapper/create wiring.
+- **Rules** — consecutive mode skips `NO_PUNCH_TODAY`; Truein/SFTP lookback uses the N-day window and merges all days.
+- **Policy UI** — evaluation mode + 3/5/7 (or custom) absent-day window.
+
 ### (pending) — 2026-08-01 — Application-level MFA for critical apps
 
 **Why** — Portal session reused at SAML/OIDC launch meant IT could not force MFA for high-risk applications after login.

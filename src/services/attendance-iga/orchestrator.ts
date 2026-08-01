@@ -96,8 +96,14 @@ export async function runAttendanceIgaPipeline(params: {
       if (!config.sftp_config) {
         throw new Error('SFTP is not configured');
       }
+      const sftpCfg = config.evaluation_mode === 'CONSECUTIVE_ABSENT'
+        ? {
+            ...config.sftp_config,
+            lookbackDays: Math.max(0, Number(config.consecutive_days || 3) - 1),
+          }
+        : config.sftp_config;
       const sftpResult = await fetchAttendanceFromSftp({
-        sftpConfig: config.sftp_config,
+        sftpConfig: sftpCfg,
         fileMapping: config.file_mapping_json,
       });
       await updateSftpLastFile(sftpResult.remoteFile, configId);
@@ -532,14 +538,18 @@ async function evaluateActionRules(
     [emp.emp_id, today],
   );
 
-  if (todayAgg?.expected_to_work && !todayAgg.has_attendance && nowMinutes >= cutoffMinutes(config.cutoff_time)) {
-    const rule = rules.find((r) => r.rule_key === 'NO_PUNCH_TODAY');
-    return {
-      ruleKey: 'NO_PUNCH_TODAY',
-      ruleName: rule?.name ?? 'No Punch-In Today',
-      attendanceStatus: 'no_punch_today',
-      actions: parseActions(rule?.actions_json),
-    };
+  // Daily live mode: act on same-day missed punch after cutoff.
+  // Consecutive-absent mode: skip today; only consume the N-day absence window.
+  if (config.evaluation_mode !== 'CONSECUTIVE_ABSENT') {
+    if (todayAgg?.expected_to_work && !todayAgg.has_attendance && nowMinutes >= cutoffMinutes(config.cutoff_time)) {
+      const rule = rules.find((r) => r.rule_key === 'NO_PUNCH_TODAY');
+      return {
+        ruleKey: 'NO_PUNCH_TODAY',
+        ruleName: rule?.name ?? 'No Punch-In Today',
+        attendanceStatus: 'no_punch_today',
+        actions: parseActions(rule?.actions_json),
+      };
+    }
   }
 
   const consecutive = await countConsecutiveNoPunchDays(emp.emp_id, config.consecutive_days);
