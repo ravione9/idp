@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Production overlay — Cloudflare WAF proxied at https://idp.lenskart.com
+# EC2 / Cloudflare preprod overlay — https://idp-preprod.lenskart.com
 #
 # Cloudflare orange-cloud connects to origin on port 80 (HTTP) by default.
 # We map host :80 → container :8080 so the IdP is reachable without a reverse proxy.
@@ -12,9 +12,9 @@ services:
   lilg-api:
     container_name: idp-api
     environment:
-      PUBLIC_BASE_URL: https://idp.lenskart.com
-      SAML_IDP_BASE_URL: https://idp.lenskart.com
-      SAML_IDP_ENTITY_ID: https://idp.lenskart.com/saml/metadata
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://idp-preprod.lenskart.com}
+      SAML_IDP_BASE_URL: ${SAML_IDP_BASE_URL:-https://idp-preprod.lenskart.com}
+      SAML_IDP_ENTITY_ID: ${SAML_IDP_ENTITY_ID:-https://idp-preprod.lenskart.com/saml/metadata}
       COOKIE_SECURE: "true"
       TRUST_PROXY: "true"
       SAML_KEY_DIR: /app/data/saml

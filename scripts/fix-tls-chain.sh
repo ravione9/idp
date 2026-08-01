@@ -125,8 +125,9 @@ done
 
 echo ""
 echo "==> Verify chain count..."
+HOSTNAME="${IDP_ORIGIN_HOST:-idp-preprod.lenskart.com}"
 CHAIN_COUNT=$(echo | openssl s_client -connect 127.0.0.1:443 \
-  -servername idp.lenskart.com -showcerts 2>/dev/null | grep -c "BEGIN CERTIFICATE" || echo 0)
+  -servername "${HOSTNAME}" -showcerts 2>/dev/null | grep -c "BEGIN CERTIFICATE" || echo 0)
 echo "    Certificates in handshake: $CHAIN_COUNT"
 
 if [[ "$CHAIN_COUNT" -ge 2 ]]; then
@@ -136,7 +137,7 @@ if [[ "$CHAIN_COUNT" -ge 2 ]]; then
   echo ""
   echo "Test Cloudflare:"
   sleep 3
-  curl -sI "https://idp.lenskart.com/healthz" | head -5
+  curl -sI "https://${HOSTNAME}/healthz" | head -5
 else
   echo "ERROR: still only $CHAIN_COUNT cert in handshake"
   echo "  Manually upload fullchain.pem (leaf+intermediate together) in Portal SSL GUI"
