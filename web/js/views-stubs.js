@@ -9396,7 +9396,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       const renderRow = (r) => `<tr class="${r.failed ? 'row-warn' : ''}">
           <td>${r.rolled_back ? '' : `<input type="checkbox" class="aig-exec-cb" value="${esc(r.id)}" />`}</td>
           <td class="muted">${fmtDate(r.executed_at)}</td>
-          <td class="cell-strong">${esc(r.full_name||r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}</div></td>
+          <td class="cell-strong">${esc(r.full_name||r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}${r.email_corp ? ` · ${esc(r.email_corp)}` : ''}</div></td>
           <td><span class="badge badge-neutral">${esc(r.rule_key)}</span></td>
           <td>${r.absent_days != null ? `<strong>${esc(String(r.absent_days))}</strong>` : '—'}</td>
           <td>${actionBadge(r.policy_action)}</td>
@@ -9733,8 +9733,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
           <h4 style="margin:0 0 0.5rem;font-size:0.95rem">CSV import rollback</h4>
           <p class="muted" style="margin:0 0 0.65rem;font-size:0.8rem">
-            Columns: <code>execution_id</code> and/or <code>emp_id</code> (header optional).
-            Export from Executions includes <code>execution_id</code> — edit and re-import here.
+            Columns: <code>execution_id</code>, <code>emp_id</code>, and/or <code>email</code> / <code>email_id</code> (header optional).
+            Export from Executions includes <code>execution_id</code> + <code>email</code> — edit and re-import here.
           </p>
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
             <label class="btn btn-secondary btn-sm" style="margin:0;cursor:pointer">
@@ -9744,7 +9744,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
             <span class="muted" style="font-size:0.8rem" id="aig-rb-csv-name">No file chosen</span>
           </div>
           <textarea id="aig-rb-csv-text" class="form-input" rows="6" style="margin-top:0.75rem;font-family:ui-monospace,monospace;font-size:0.8rem"
-            placeholder="execution_id,emp_id&#10;uuid-here,AD-6D24D77465E8&#10;,AD-2469C91E2692"></textarea>
+            placeholder="execution_id,emp_id,email&#10;uuid-here,AD-6D24D77465E8,user@lenskart.com&#10;,,other@lenskart.com"></textarea>
           <div style="margin-top:0.65rem">
             <button type="button" class="btn btn-primary btn-sm" id="aig-rb-csv-run">Run CSV rollback</button>
           </div>
@@ -9752,15 +9752,16 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         <div class="card" style="padding:1rem 1.15rem">
           <h4 style="margin:0 0 0.65rem;font-size:0.95rem">Recent rollback history</h4>
           <div class="table-wrap"><table><thead><tr>
-            <th>When</th><th>Employee</th><th>Rule</th><th>Execution</th><th>By</th>
+            <th>When</th><th>Employee</th><th>Email</th><th>Rule</th><th>Execution</th><th>By</th>
           </tr></thead><tbody>
           ${rows.length ? rows.map((r) => `<tr>
             <td class="muted">${fmtDate(r.rolled_back_at)}</td>
             <td class="cell-strong">${esc(r.full_name || r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}</div></td>
+            <td class="muted" style="font-size:0.8rem">${esc(r.email_corp || '—')}</td>
             <td><span class="badge badge-neutral">${esc(r.rule_key || '—')}</span></td>
             <td class="mono" style="font-size:0.72rem">${esc(String(r.execution_id || '').slice(0, 8))}…</td>
             <td class="muted">${esc(r.rolled_back_by || '—')}</td>
-          </tr>`).join('') : '<tr><td colspan="5"><div class="empty-state"><p>No rollbacks recorded yet for this policy.</p></div></td></tr>'}
+          </tr>`).join('') : '<tr><td colspan="6"><div class="empty-state"><p>No rollbacks recorded yet for this policy.</p></div></td></tr>'}
           </tbody></table></div>
         </div>`;
 
