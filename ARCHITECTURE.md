@@ -1127,7 +1127,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **UI** — Executions employee cell + Rollbacks history show email; CSV placeholder documents email column.
 - Asset cache `2026-08-01-aiga-rb2`.
 
-### (pending) — 2026-08-02 — EC2 hostname → `idp-preprod.lenskart.com`
+### `b381adf` — 2026-08-02 — EC2 hostname → `idp-preprod.lenskart.com`
 
 **Why** — Cloudflare DNS for the EC2 origin now points at `idp-preprod.lenskart.com` (prod EKS keeps `idp.lenskart.com`).
 
