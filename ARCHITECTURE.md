@@ -674,7 +674,7 @@ To add a new migration:
 | `GET` | `/api/admin/attendance-iga/imports[/:id/staging]?configId=` | Import run history + staging rows |
 | `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (`configId`, REST API / SFTP / CSV / evaluate-only) |
 | `GET`/`POST` | `/api/admin/attendance-iga/approvals[/:id/decision]` | Pending approvals; approve / reject / skip |
-| `GET`/`POST` | `/api/admin/attendance-iga/executions[…]?configId=` | Execution audit: filters, date `groups[]`, `export=csv` (includes `execution_id`); single/`bulk-rollback` (ids / empIds / csv, max 2000); `POST …/rollback-matching` (confirm + filters) |
+| `GET`/`POST` | `/api/admin/attendance-iga/executions[…]?configId=` | Execution audit: filters (`q`,`status`,`rule`,`rolledBack`,`action`,`from`,`to`), date `groups[]`, `export=csv` (includes `execution_id` + `email`), failure detail, policy/exceptions; single/`bulk-rollback` (ids / empIds / emails / csv, max 2000); `POST …/rollback-matching` (confirm + same filters); pipeline refuses runs when policy `enabled=0` |
 | `GET` | `/api/admin/attendance-iga/rollbacks` | Rollback history |
 
 ### 8.5 IGA + multi-protocol AM (live read APIs; write paths return 501 until service layer ships)
@@ -787,7 +787,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
 - `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=govReports&tab=mfa`, `/?v=groups&tab=tags`, `/?v=attendanceIga&tab=policy`)
 
-**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · Import History · Approvals · Executions. Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
+**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · Import History · Approvals · **Executions** (date-grouped audit, From/To filters, Export CSV, checkbox / CSV / rollback-all-matching; shows email) · **Rollbacks** (complete filter-based rollback, CSV import of `execution_id` / `emp_id` / `email`, recent history with email). Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
 
 ---
 
@@ -1067,6 +1067,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-01 — Attendance IGA rollback by email
+
+**Why** — Ops roll back by corporate email as often as emp_id; history needed email visible.
+
+**What changed:**
+
+- **CSV / bulk-rollback** — accept `email` / `email_id` / `email_corp` (resolve via `employees.email_corp` / `email_personal`).
+- **Export CSV** — includes `email` column.
+- **UI** — Executions employee cell + Rollbacks history show email; CSV placeholder documents email column.
+- Asset cache `2026-08-01-aiga-rb2`.
 
 ### (pending) — 2026-08-01 — Helm chart + HA/PRD/deploy docs in repo
 
