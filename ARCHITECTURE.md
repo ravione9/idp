@@ -1066,7 +1066,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-08-01 — Attendance IGA rollback by email
+### `09f8cdc` — 2026-08-01 — Attendance IGA rollback by email
 
 **Why** — Ops roll back by corporate email as often as emp_id; history needed email visible.
 
