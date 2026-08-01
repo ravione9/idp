@@ -1069,7 +1069,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `TBD` — 2026-08-02 — Migrations run on boot; skip already-applied
+### `6608b69` — 2026-08-02 — Migrations run on boot; skip already-applied
 
 **Why** — Standalone migrate Job/image was easy to mis-tag; pods with `SKIP_MIGRATIONS_ON_BOOT=true` never applied pending schema (053/055), leaving Applications / Attendance broken.
 
