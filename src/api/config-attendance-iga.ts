@@ -40,6 +40,156 @@ function configIdFromReq(req: Request, fallback = 1): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+const BULK_ROLLBACK_MAX = 2000;
+
+type ExecFilterInput = {
+  q?: string;
+  status?: string;
+  rule?: string;
+  rolledBack?: string;
+  action?: string;
+  from?: string;
+  to?: string;
+};
+
+/** Build WHERE + params for attendance_iga_executions scoped to a policy. */
+function buildExecutionWhere(configId: number, f: ExecFilterInput): { where: string[]; params: unknown[] } {
+  const where: string[] = ['r.config_id = ?'];
+  const params: unknown[] = [configId];
+  const q = String(f.q ?? '').trim().slice(0, 120);
+  const statusFilter = String(f.status ?? '').trim().toUpperCase();
+  const ruleFilter = String(f.rule ?? '').trim().slice(0, 50);
+  const rolledBackRaw = String(f.rolledBack ?? '').trim();
+  const actionFilter = String(f.action ?? '').trim().toUpperCase();
+  const fromDate = String(f.from ?? '').trim().slice(0, 10);
+  const toDate = String(f.to ?? '').trim().slice(0, 10);
+
+  if (q) {
+    where.push('(e.full_name LIKE ? OR e.emp_id LIKE ? OR e.email_corp LIKE ?)');
+    const like = `%${q}%`;
+    params.push(like, like, like);
+  }
+  if (statusFilter && ['SUCCESS', 'FAILED', 'PARTIAL'].includes(statusFilter)) {
+    where.push('x.status = ?');
+    params.push(statusFilter);
+  }
+  if (ruleFilter) {
+    where.push('x.rule_key = ?');
+    params.push(ruleFilter);
+  }
+  if (rolledBackRaw === '1' || rolledBackRaw === '0') {
+    where.push('x.rolled_back = ?');
+    params.push(Number(rolledBackRaw));
+  }
+  if (actionFilter === 'FAILED') {
+    where.push(`(x.status IN ('FAILED','PARTIAL') OR (x.error_message IS NOT NULL AND x.error_message <> ''))`);
+  } else if (actionFilter === 'SUSPEND') {
+    where.push(`(x.actions_taken LIKE '%SUSPEND_USER%')`);
+  } else if (actionFilter === 'DISABLE') {
+    where.push(`(x.actions_taken LIKE '%DISABLE_USER%')`);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+    where.push('x.executed_at >= ?');
+    params.push(`${fromDate} 00:00:00`);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+    where.push('x.executed_at < DATE_ADD(?, INTERVAL 1 DAY)');
+    params.push(toDate);
+  }
+  return { where, params };
+}
+
+function parseRollbackCsv(csvText: string): { executionIds: string[]; empIds: string[] } {
+  const executionIds: string[] = [];
+  const empIds: string[] = [];
+  const lines = csvText.replace(/^\uFEFF/, '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return { executionIds, empIds };
+
+  const split = (line: string): string[] => {
+    const out: string[] = [];
+    let cur = '';
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]!;
+      if (ch === '"') {
+        if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQ = !inQ;
+        continue;
+      }
+      if (ch === ',' && !inQ) { out.push(cur.trim()); cur = ''; continue; }
+      cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+  };
+
+  const headerCells = split(lines[0]!).map((h) => h.replace(/^"|"$/g, '').trim().toLowerCase());
+  const looksLikeHeader = headerCells.some((h) =>
+    ['execution_id', 'id', 'emp_id', 'employee_id', 'employee id'].includes(h),
+  );
+  let execIdx = headerCells.findIndex((h) => h === 'execution_id' || h === 'id');
+  let empIdx = headerCells.findIndex((h) => h === 'emp_id' || h === 'employee_id' || h === 'employee id');
+  const start = looksLikeHeader ? 1 : 0;
+  if (!looksLikeHeader) {
+    execIdx = -1;
+    empIdx = 0;
+  }
+
+  for (let li = start; li < lines.length; li++) {
+    const cells = split(lines[li]!).map((c) => c.replace(/^"|"$/g, '').trim());
+    const execId = execIdx >= 0 ? (cells[execIdx] ?? '') : '';
+    const empId = empIdx >= 0 ? (cells[empIdx] ?? '') : (!looksLikeHeader ? (cells[0] ?? '') : '');
+    // UUID-ish → execution id; otherwise treat as emp_id
+    if (execId && /^[0-9a-f-]{16,}$/i.test(execId)) executionIds.push(execId);
+    else if (empId) empIds.push(empId);
+    else if (!looksLikeHeader && cells[0]) {
+      const v = cells[0];
+      if (/^[0-9a-f-]{16,}$/i.test(v)) executionIds.push(v);
+      else empIds.push(v);
+    }
+  }
+  return {
+    executionIds: [...new Set(executionIds)],
+    empIds: [...new Set(empIds.map((e) => e.trim()).filter(Boolean))],
+  };
+}
+
+async function rollbackOwnedExecutions(
+  ids: string[],
+  configId: number,
+  byActor: string,
+): Promise<{ results: Array<{ id: string; ok: boolean; error?: string }>; rolledBack: number; failed: number }> {
+  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+  for (const id of ids) {
+    const owned = await queryOne<{ id: string; rolled_back: number }>(
+      `SELECT x.id, x.rolled_back
+         FROM attendance_iga_executions x
+         JOIN attendance_iga_import_runs r ON r.id = x.import_run_id
+        WHERE x.id = ? AND r.config_id = ?`,
+      [id, configId],
+    );
+    if (!owned) {
+      results.push({ id, ok: false, error: 'Not found for this policy' });
+      continue;
+    }
+    if (owned.rolled_back) {
+      results.push({ id, ok: false, error: 'Already rolled back' });
+      continue;
+    }
+    try {
+      await rollbackExecution(id, byActor);
+      results.push({ id, ok: true });
+    } catch (err) {
+      results.push({ id, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return {
+    results,
+    rolledBack: results.filter((r) => r.ok).length,
+    failed: results.filter((r) => !r.ok).length,
+  };
+}
+
 const employeeScopeSchema = z.object({
   departments: z.array(z.string().max(100)).max(200).optional(),
   employment_types: z.array(z.enum(['CORPORATE', 'STORE', 'PLANT', 'DC'])).max(10).optional(),
@@ -524,43 +674,11 @@ router.get('/executions', asyncHandler(async (req, res) => {
   const toDate = String(req.query['to'] ?? '').trim().slice(0, 10);
   const wantExport = String(req.query['export'] ?? '') === 'csv';
 
-  const where: string[] = ['r.config_id = ?'];
-  const params: unknown[] = [configId];
-
-  if (q) {
-    where.push('(e.full_name LIKE ? OR e.emp_id LIKE ? OR e.email_corp LIKE ?)');
-    const like = `%${q}%`;
-    params.push(like, like, like);
-  }
-  if (statusFilter && ['SUCCESS', 'FAILED', 'PARTIAL'].includes(statusFilter)) {
-    where.push('x.status = ?');
-    params.push(statusFilter);
-  }
-  if (ruleFilter) {
-    where.push('x.rule_key = ?');
-    params.push(ruleFilter);
-  }
-  if (rolledBackRaw === '1' || rolledBackRaw === '0') {
-    where.push('x.rolled_back = ?');
-    params.push(Number(rolledBackRaw));
-  }
-  if (actionFilter === 'FAILED') {
-    where.push(`(x.status IN ('FAILED','PARTIAL') OR (x.error_message IS NOT NULL AND x.error_message <> ''))`);
-  } else if (actionFilter === 'SUSPEND') {
-    where.push(`(x.actions_taken LIKE '%SUSPEND_USER%')`);
-  } else if (actionFilter === 'DISABLE') {
-    where.push(`(x.actions_taken LIKE '%DISABLE_USER%')`);
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
-    where.push('x.executed_at >= ?');
-    params.push(`${fromDate} 00:00:00`);
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
-    where.push('x.executed_at < DATE_ADD(?, INTERVAL 1 DAY)');
-    params.push(toDate);
-  }
-
-  params.push(limit);
+  const { where, params: filterParams } = buildExecutionWhere(configId, {
+    q, status: statusFilter, rule: ruleFilter, rolledBack: rolledBackRaw,
+    action: actionFilter, from: fromDate, to: toDate,
+  });
+  const params: unknown[] = [...filterParams, limit];
 
   const [config, punchActions, exceptions, rows] = await Promise.all([
     loadAttendanceIgaConfig(configId),
@@ -678,7 +796,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
 
   if (wantExport) {
     const header = [
-      'date', 'executed_at', 'emp_id', 'full_name', 'dept_id', 'rule_key',
+      'execution_id', 'date', 'executed_at', 'emp_id', 'full_name', 'dept_id', 'rule_key',
       'absent_days', 'policy_action', 'status', 'failure_reason', 'rolled_back', 'executed_by',
     ];
     const lines = [header.join(',')];
@@ -689,6 +807,7 @@ router.get('/executions', asyncHandler(async (req, res) => {
           ? row.executed_at.toISOString()
           : String(row.executed_at ?? '');
         lines.push([
+          row.id,
           g.date,
           at,
           row.emp_id,
@@ -739,44 +858,113 @@ router.get('/executions', asyncHandler(async (req, res) => {
 
 router.post('/executions/bulk-rollback', asyncHandler(async (req, res) => {
   const idsRaw = req.body?.ids;
-  if (!Array.isArray(idsRaw) || idsRaw.length === 0) {
-    res.status(400).json({ error: 'ids array required' });
-    return;
-  }
-  const ids = [...new Set(idsRaw.map((id) => String(id)).filter(Boolean))].slice(0, 100);
+  const empIdsRaw = req.body?.empIds;
+  const csvText = typeof req.body?.csv === 'string' ? req.body.csv : '';
   const configId = configIdFromReq(req);
   const byActor = actor(req);
-  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
 
-  for (const id of ids) {
-    const owned = await queryOne<{ id: string; rolled_back: number }>(
-      `SELECT x.id, x.rolled_back
+  let ids: string[] = [];
+  let empIds: string[] = [];
+
+  if (csvText.trim()) {
+    const parsed = parseRollbackCsv(csvText);
+    ids.push(...parsed.executionIds);
+    empIds.push(...parsed.empIds);
+  }
+  if (Array.isArray(idsRaw)) {
+    ids.push(...idsRaw.map((id) => String(id)).filter(Boolean));
+  }
+  if (Array.isArray(empIdsRaw)) {
+    empIds.push(...empIdsRaw.map((id) => String(id)).filter(Boolean));
+  }
+
+  ids = [...new Set(ids)];
+  empIds = [...new Set(empIds)];
+
+  if (empIds.length) {
+    const placeholders = empIds.map(() => '?').join(',');
+    const fromEmp = await query<{ id: string }>(
+      `SELECT x.id
          FROM attendance_iga_executions x
          JOIN attendance_iga_import_runs r ON r.id = x.import_run_id
-        WHERE x.id = ? AND r.config_id = ?`,
-      [id, configId],
+        WHERE r.config_id = ?
+          AND x.rolled_back = 0
+          AND x.emp_id IN (${placeholders})
+        ORDER BY x.executed_at DESC
+        LIMIT ?`,
+      [configId, ...empIds, BULK_ROLLBACK_MAX],
     );
-    if (!owned) {
-      results.push({ id, ok: false, error: 'Not found for this policy' });
-      continue;
-    }
-    if (owned.rolled_back) {
-      results.push({ id, ok: false, error: 'Already rolled back' });
-      continue;
-    }
-    try {
-      await rollbackExecution(id, byActor);
-      results.push({ id, ok: true });
-    } catch (err) {
-      results.push({ id, ok: false, error: err instanceof Error ? err.message : String(err) });
+    ids.push(...fromEmp.map((r) => r.id));
+    ids = [...new Set(ids)];
+  }
+
+  if (!ids.length) {
+    res.status(400).json({
+      error: 'Provide ids[], empIds[], or csv text (execution_id / emp_id columns)',
+    });
+    return;
+  }
+
+  ids = ids.slice(0, BULK_ROLLBACK_MAX);
+  const outcome = await rollbackOwnedExecutions(ids, configId, byActor);
+  res.json({
+    success: outcome.failed === 0,
+    rolledBack: outcome.rolledBack,
+    failed: outcome.failed,
+    requested: ids.length,
+    results: outcome.results,
+  });
+}));
+
+/** Rollback every non-rolled-back execution matching the same filters as GET /executions. */
+router.post('/executions/rollback-matching', asyncHandler(async (req, res) => {
+  if (req.body?.confirm !== true && req.body?.confirm !== 'true') {
+    res.status(400).json({ error: 'confirm: true is required' });
+    return;
+  }
+  const configId = configIdFromReq(req);
+  const byActor = actor(req);
+  const filters: ExecFilterInput = {
+    q: String(req.body?.q ?? ''),
+    status: String(req.body?.status ?? ''),
+    rule: String(req.body?.rule ?? ''),
+    // Default: only not-yet-rolled-back
+    rolledBack: String(req.body?.rolledBack ?? '0'),
+    action: String(req.body?.action ?? ''),
+    from: String(req.body?.from ?? ''),
+    to: String(req.body?.to ?? ''),
+  };
+  const { where, params } = buildExecutionWhere(configId, filters);
+  // Safety: never roll back already-rolled rows unless explicitly requested
+  if (filters.rolledBack !== '1') {
+    if (!where.some((w) => w.includes('rolled_back'))) {
+      where.push('x.rolled_back = 0');
     }
   }
 
+  const rows = await query<{ id: string }>(
+    `SELECT x.id
+       FROM attendance_iga_executions x
+       JOIN employees e ON e.emp_id = x.emp_id
+       JOIN attendance_iga_import_runs r ON r.id = x.import_run_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY x.executed_at DESC
+      LIMIT ?`,
+    [...params, BULK_ROLLBACK_MAX],
+  );
+  const ids = rows.map((r) => r.id);
+  if (!ids.length) {
+    res.json({ success: true, rolledBack: 0, failed: 0, requested: 0, results: [], filters });
+    return;
+  }
+  const outcome = await rollbackOwnedExecutions(ids, configId, byActor);
   res.json({
-    success: results.every((r) => r.ok),
-    rolledBack: results.filter((r) => r.ok).length,
-    failed: results.filter((r) => !r.ok).length,
-    results,
+    success: outcome.failed === 0,
+    rolledBack: outcome.rolledBack,
+    failed: outcome.failed,
+    requested: ids.length,
+    filters,
+    results: outcome.results,
   });
 }));
 
@@ -785,14 +973,19 @@ router.post('/executions/:id/rollback', asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-router.get('/rollbacks', asyncHandler(async (_req, res) => {
+router.get('/rollbacks', asyncHandler(async (req, res) => {
+  const configId = configIdFromReq(req);
+  const limit = Math.min(parseInt(String(req.query['limit'] ?? '100'), 10) || 100, 500);
   const rows = await query(
-    `SELECT r.*, x.emp_id, x.rule_key, e.full_name
+    `SELECT r.*, x.emp_id, x.rule_key, e.full_name, x.status AS execution_status, x.executed_at
        FROM attendance_iga_rollback_log r
        JOIN attendance_iga_executions x ON x.id = r.execution_id
+       JOIN attendance_iga_import_runs ir ON ir.id = x.import_run_id
        JOIN employees e ON e.emp_id = x.emp_id
-      ORDER BY r.rolled_back_at DESC LIMIT 50`,
-    [],
+      WHERE ir.config_id = ?
+      ORDER BY r.rolled_back_at DESC
+      LIMIT ?`,
+    [configId, limit],
   );
   res.json({ data: rows });
 }));

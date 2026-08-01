@@ -672,7 +672,7 @@ To add a new migration:
 | `GET` | `/api/admin/attendance-iga/imports[/:id/staging]?configId=` | Import run history + staging rows |
 | `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (`configId`, REST API / SFTP / CSV / evaluate-only) |
 | `GET`/`POST` | `/api/admin/attendance-iga/approvals[/:id/decision]` | Pending approvals; approve / reject / skip |
-| `GET`/`POST` | `/api/admin/attendance-iga/executions[…]?configId=` | Execution audit: filters (`q`,`status`,`rule`,`rolledBack`,`action`,`from`,`to`), date `groups[]`, `export=csv`, failure detail, policy/exceptions; single/`bulk-rollback`; pipeline refuses runs when policy `enabled=0` |
+| `GET`/`POST` | `/api/admin/attendance-iga/executions[…]?configId=` | Execution audit: filters (`q`,`status`,`rule`,`rolledBack`,`action`,`from`,`to`), date `groups[]`, `export=csv` (includes `execution_id`), failure detail, policy/exceptions; single/`bulk-rollback` (ids / empIds / csv, max 2000); `POST …/rollback-matching` (confirm + same filters); pipeline refuses runs when policy `enabled=0` |
 | `GET` | `/api/admin/attendance-iga/rollbacks` | Rollback history |
 
 ### 8.5 IGA + multi-protocol AM (live read APIs; write paths return 501 until service layer ships)
@@ -785,7 +785,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
 - `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=govReports&tab=mfa`, `/?v=groups&tab=tags`, `/?v=attendanceIga&tab=policy`)
 
-**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · Import History · Approvals · **Executions** (date-grouped audit, From/To filters, Export CSV, bulk rollback). Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
+**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · Import History · Approvals · **Executions** (date-grouped audit, From/To filters, Export CSV, checkbox / CSV / rollback-all-matching) · **Rollbacks** (complete filter-based rollback, CSV import of `execution_id`/`emp_id`, recent history). Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
 
 ---
 
@@ -1065,6 +1065,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `TBD` — 2026-08-01 — Attendance IGA CSV + complete execution rollback
+
+**Why** — Ops needed faster undo than per-row Rollback when many PARTIAL/SUSPEND executions share a day (e.g. Invalid FSM transition noise).
+
+**What changed:**
+
+- **`POST …/executions/bulk-rollback`** — accepts `ids`, `empIds`, and/or `csv` (columns `execution_id` / `emp_id`); max 2000.
+- **`POST …/executions/rollback-matching`** — rollback all non-rolled-back rows matching Executions filters (`confirm: true` required).
+- **CSV export** — includes `execution_id` for re-import.
+- **UI** — Executions: Import CSV + Rollback all matching; new **Rollbacks** tab (filter form, paste/upload CSV, history).
+- Asset cache `2026-08-01-aiga-rb`.
 
 ### `e9b2fbb` — 2026-07-31 — Optional Google/AD/HRMS env for portal-first K8s boot
 

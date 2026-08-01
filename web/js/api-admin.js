@@ -203,7 +203,20 @@ Object.assign(api, {
       method: 'POST',
       body: JSON.stringify({ ids, configId }),
     }),
-  attendanceIgaRollbacks: () => f('/api/admin/attendance-iga/rollbacks'),
+  /** CSV text and/or empIds for bulk rollback (up to 2000). */
+  csvRollbackAttendanceIgaExecutions: (payload = {}) =>
+    f('/api/admin/attendance-iga/executions/bulk-rollback', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  /** Rollback all executions matching filters (confirm: true required). */
+  rollbackMatchingAttendanceIgaExecutions: (payload = {}) =>
+    f('/api/admin/attendance-iga/executions/rollback-matching', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true, ...payload }),
+    }),
+  attendanceIgaRollbacks: (configId = 1) =>
+    f(`/api/admin/attendance-iga/rollbacks?configId=${encodeURIComponent(configId)}&limit=200`),
 
   // Tickets,
   listTickets:    (status = '', cat = '') => f(`/api/admin/tickets?status=${encodeURIComponent(status)}&category=${encodeURIComponent(cat)}`),

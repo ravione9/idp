@@ -8404,7 +8404,7 @@ function aigStatusBadge(enabled, status) {
 }
 
 export async function viewAttendanceIga(content, initialTab = 'dash') {
-  const aigTabIds = ['dash', 'policy', 'config', 'imports', 'approvals', 'executions'];
+  const aigTabIds = ['dash', 'policy', 'config', 'imports', 'approvals', 'executions', 'rollbacks'];
   const startTab = aigTabIds.includes(initialTab) ? initialTab : 'dash';
   content.replaceChildren(el(`<div class="aig-page">
     ${header('Attendance IGA', 'Multiple revoke policies — each with its own API/SFTP source, schedule, and employee scope', `
@@ -8428,6 +8428,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       <button type="button" class="cfg-tab inline-tab${startTab === 'imports' ? ' active' : ''}" data-tab="imports">Import History</button>
       <button type="button" class="cfg-tab inline-tab${startTab === 'approvals' ? ' active' : ''}" data-tab="approvals">Approvals</button>
       <button type="button" class="cfg-tab inline-tab${startTab === 'executions' ? ' active' : ''}" data-tab="executions">Executions</button>
+      <button type="button" class="cfg-tab inline-tab${startTab === 'rollbacks' ? ' active' : ''}" data-tab="rollbacks">Rollbacks</button>
     </div>
     <div id="tab-dash" style="${startTab === 'dash' ? '' : 'display:none'}"></div>
     <div id="tab-policy" style="${startTab === 'policy' ? '' : 'display:none'}"></div>
@@ -8435,6 +8436,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     <div id="tab-imports" style="${startTab === 'imports' ? '' : 'display:none'}"></div>
     <div id="tab-approvals" style="${startTab === 'approvals' ? '' : 'display:none'}"></div>
     <div id="tab-executions" style="${startTab === 'executions' ? '' : 'display:none'}"></div>
+    <div id="tab-rollbacks" style="${startTab === 'rollbacks' ? '' : 'display:none'}"></div>
   </div>`));
   const wrap = content.firstChild;
   let configCache = null;
@@ -9320,10 +9322,15 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         <div class="aap-actions" style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start">
           <div>
             <h3 class="section-title">Action Executions</h3>
-            <p class="subtitle">Audit trail of suspend / disable actions, grouped by date. Pipeline refuses to run while the policy is off.</p>
+            <p class="subtitle">Audit trail of suspend / disable actions, grouped by date. Use <strong>Rollbacks</strong> tab for CSV import or rollback-all.</p>
           </div>
           <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
             <button type="button" class="btn btn-secondary btn-sm" id="aig-exec-export">Export CSV</button>
+            <label class="btn btn-secondary btn-sm" style="margin:0;cursor:pointer">
+              Import CSV rollback
+              <input type="file" id="aig-exec-csv" accept=".csv,text/csv" style="display:none" />
+            </label>
+            <button type="button" class="btn btn-secondary btn-sm" id="aig-rb-matching">Rollback all matching</button>
             <button type="button" class="btn btn-secondary btn-sm" id="aig-bulk-rb" disabled>Bulk rollback (0)</button>
           </div>
         </div>
@@ -9464,6 +9471,54 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
         } catch (e) { alert(e.message); bulkBtn.disabled = false; syncBulk(); }
       });
 
+      area.querySelector('#aig-rb-matching')?.addEventListener('click', async () => {
+        const label = [
+          execFilters.from && `from ${execFilters.from}`,
+          execFilters.to && `to ${execFilters.to}`,
+          execFilters.status && `status=${execFilters.status}`,
+          execFilters.rule && `rule=${execFilters.rule}`,
+          execFilters.action && `action=${execFilters.action}`,
+          execFilters.q && `q=${execFilters.q}`,
+        ].filter(Boolean).join(', ') || 'current filters (not rolled back)';
+        if (!confirm(`Rollback ALL matching executions for this policy?\n\n${label}\n\nMax 2000 rows. This restores prior access from snapshots.`)) return;
+        const btn = area.querySelector('#aig-rb-matching');
+        if (btn) btn.disabled = true;
+        try {
+          const r = await api.rollbackMatchingAttendanceIgaExecutions({
+            configId: selectedConfigId,
+            q: execFilters.q || undefined,
+            status: execFilters.status || undefined,
+            rule: execFilters.rule || undefined,
+            action: execFilters.action || undefined,
+            from: execFilters.from || undefined,
+            to: execFilters.to || undefined,
+            rolledBack: '0',
+          });
+          alert(`Rollback matching: ${r.rolledBack || 0} ok, ${r.failed || 0} failed (${r.requested || 0} requested)`);
+          await loadExecutions();
+          await loadStats();
+        } catch (e) { alert(e.message); }
+        finally { if (btn) btn.disabled = false; }
+      });
+
+      area.querySelector('#aig-exec-csv')?.addEventListener('change', async (ev) => {
+        const file = ev.target.files?.[0];
+        ev.target.value = '';
+        if (!file) return;
+        try {
+          const text = await file.text();
+          if (!text.trim()) { alert('CSV is empty'); return; }
+          if (!confirm(`Import CSV "${file.name}" and rollback matching executions for this policy?`)) return;
+          const r = await api.csvRollbackAttendanceIgaExecutions({
+            csv: text,
+            configId: selectedConfigId,
+          });
+          alert(`CSV rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed (${r.requested || 0} requested)`);
+          await loadExecutions();
+          await loadStats();
+        } catch (e) { alert(e.message || 'CSV rollback failed'); }
+      });
+
       area.querySelector('#aig-exec-export')?.addEventListener('click', async () => {
         const btn = area.querySelector('#aig-exec-export');
         const url = api.attendanceIgaExecutionsExportUrl({
@@ -9533,6 +9588,147 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     } catch (e) { area.innerHTML = errHtml(e.message); }
   }
 
+  async function loadRollbacks() {
+    const area = wrap.querySelector('#tab-rollbacks');
+    area.innerHTML = loading();
+    try {
+      const hist = await api.attendanceIgaRollbacks(selectedConfigId);
+      const rows = norm(hist);
+      area.innerHTML = `
+        <div class="aap-actions" style="margin-bottom:1rem">
+          <div>
+            <h3 class="section-title">Complete execution rollback</h3>
+            <p class="subtitle">Rollback every matching execution for the active policy (by date / status / rule), or import a CSV of <code>execution_id</code> / <code>emp_id</code>.</p>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
+          <h4 style="margin:0 0 0.65rem;font-size:0.95rem">Rollback all matching</h4>
+          <form id="aig-rb-all-form" style="display:flex;flex-wrap:wrap;gap:0.65rem;align-items:end">
+            <div class="field" style="margin:0;min-width:140px">
+              <label>From date</label>
+              <input name="from" type="date" class="form-input" />
+            </div>
+            <div class="field" style="margin:0;min-width:140px">
+              <label>To date</label>
+              <input name="to" type="date" class="form-input" />
+            </div>
+            <div class="field" style="margin:0;min-width:130px">
+              <label>Status</label>
+              <select name="status" class="form-select">
+                <option value="">All</option>
+                <option value="SUCCESS">Success</option>
+                <option value="PARTIAL" selected>Partial</option>
+                <option value="FAILED">Failed</option>
+              </select>
+            </div>
+            <div class="field" style="margin:0;min-width:160px">
+              <label>Rule</label>
+              <select name="rule" class="form-select">
+                <option value="">All</option>
+                <option value="NO_PUNCH_TODAY">NO_PUNCH_TODAY</option>
+                <option value="NO_PUNCH_CONSECUTIVE">NO_PUNCH_CONSECUTIVE</option>
+              </select>
+            </div>
+            <div class="field" style="margin:0;min-width:140px">
+              <label>Action</label>
+              <select name="action" class="form-select">
+                <option value="">All</option>
+                <option value="SUSPEND">Suspend</option>
+                <option value="DISABLE">Disable</option>
+                <option value="FAILED">Failed / partial</option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm">Rollback all matching</button>
+          </form>
+          <p class="muted" style="margin:0.65rem 0 0;font-size:0.78rem">Only rows not already rolled back. Cap 2000. Tip: set From/To to one day (e.g. Jul 30) to undo that batch.</p>
+        </div>
+        <div class="card" style="margin-bottom:1rem;padding:1rem 1.15rem">
+          <h4 style="margin:0 0 0.5rem;font-size:0.95rem">CSV import rollback</h4>
+          <p class="muted" style="margin:0 0 0.65rem;font-size:0.8rem">
+            Columns: <code>execution_id</code> and/or <code>emp_id</code> (header optional).
+            Export from Executions includes <code>execution_id</code> — edit and re-import here.
+          </p>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+            <label class="btn btn-secondary btn-sm" style="margin:0;cursor:pointer">
+              Choose CSV file
+              <input type="file" id="aig-rb-csv-file" accept=".csv,text/csv" style="display:none" />
+            </label>
+            <span class="muted" style="font-size:0.8rem" id="aig-rb-csv-name">No file chosen</span>
+          </div>
+          <textarea id="aig-rb-csv-text" class="form-input" rows="6" style="margin-top:0.75rem;font-family:ui-monospace,monospace;font-size:0.8rem"
+            placeholder="execution_id,emp_id&#10;uuid-here,AD-6D24D77465E8&#10;,AD-2469C91E2692"></textarea>
+          <div style="margin-top:0.65rem">
+            <button type="button" class="btn btn-primary btn-sm" id="aig-rb-csv-run">Run CSV rollback</button>
+          </div>
+        </div>
+        <div class="card" style="padding:1rem 1.15rem">
+          <h4 style="margin:0 0 0.65rem;font-size:0.95rem">Recent rollback history</h4>
+          <div class="table-wrap"><table><thead><tr>
+            <th>When</th><th>Employee</th><th>Rule</th><th>Execution</th><th>By</th>
+          </tr></thead><tbody>
+          ${rows.length ? rows.map((r) => `<tr>
+            <td class="muted">${fmtDate(r.rolled_back_at)}</td>
+            <td class="cell-strong">${esc(r.full_name || r.emp_id)}<div class="muted" style="font-size:0.72rem">${esc(r.emp_id)}</div></td>
+            <td><span class="badge badge-neutral">${esc(r.rule_key || '—')}</span></td>
+            <td class="mono" style="font-size:0.72rem">${esc(String(r.execution_id || '').slice(0, 8))}…</td>
+            <td class="muted">${esc(r.rolled_back_by || '—')}</td>
+          </tr>`).join('') : '<tr><td colspan="5"><div class="empty-state"><p>No rollbacks recorded yet for this policy.</p></div></td></tr>'}
+          </tbody></table></div>
+        </div>`;
+
+      area.querySelector('#aig-rb-all-form')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const payload = {
+          configId: selectedConfigId,
+          from: String(fd.get('from') || '').trim() || undefined,
+          to: String(fd.get('to') || '').trim() || undefined,
+          status: String(fd.get('status') || '') || undefined,
+          rule: String(fd.get('rule') || '') || undefined,
+          action: String(fd.get('action') || '') || undefined,
+          rolledBack: '0',
+        };
+        const tip = [payload.from && `from ${payload.from}`, payload.to && `to ${payload.to}`, payload.status && `status=${payload.status}`]
+          .filter(Boolean).join(', ') || 'all not-rolled-back';
+        if (!confirm(`Rollback ALL matching executions?\n\n${tip}\n\nMax 2000.`)) return;
+        const btn = e.target.querySelector('button[type="submit"]');
+        if (btn) btn.disabled = true;
+        try {
+          const r = await api.rollbackMatchingAttendanceIgaExecutions(payload);
+          alert(`Complete rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed (${r.requested || 0} requested)`);
+          await loadRollbacks();
+          await loadStats();
+        } catch (err) { alert(err.message); }
+        finally { if (btn) btn.disabled = false; }
+      });
+
+      area.querySelector('#aig-rb-csv-file')?.addEventListener('change', async (ev) => {
+        const file = ev.target.files?.[0];
+        const nameEl = area.querySelector('#aig-rb-csv-name');
+        const ta = area.querySelector('#aig-rb-csv-text');
+        if (!file) return;
+        if (nameEl) nameEl.textContent = file.name;
+        ta.value = await file.text();
+      });
+
+      area.querySelector('#aig-rb-csv-run')?.addEventListener('click', async () => {
+        const ta = area.querySelector('#aig-rb-csv-text');
+        const text = String(ta?.value || '').trim();
+        if (!text) { alert('Paste CSV or choose a file first'); return; }
+        if (!confirm('Run CSV rollback for this policy?')) return;
+        const btn = area.querySelector('#aig-rb-csv-run');
+        if (btn) btn.disabled = true;
+        try {
+          const r = await api.csvRollbackAttendanceIgaExecutions({ csv: text, configId: selectedConfigId });
+          alert(`CSV rollback: ${r.rolledBack || 0} ok, ${r.failed || 0} failed (${r.requested || 0} requested)`);
+          await loadRollbacks();
+          await loadStats();
+        } catch (err) { alert(err.message); }
+        finally { if (btn) btn.disabled = false; }
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
   async function showAigTab(name) {
     const tab = aigTabIds.includes(name) ? name : 'dash';
     wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
@@ -9546,6 +9742,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     if (tab === 'imports') await loadImports();
     if (tab === 'approvals') await loadApprovals();
     if (tab === 'executions') await loadExecutions();
+    if (tab === 'rollbacks') await loadRollbacks();
   }
 
   wrap.querySelectorAll('.aig-tabs .cfg-tab').forEach((tabBtn) => {
@@ -9577,6 +9774,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     if (activeTab === 'policy') await loadPolicy();
     if (activeTab === 'config') await loadConfig();
     if (activeTab === 'imports') await loadImports();
+    if (activeTab === 'executions') await loadExecutions();
+    if (activeTab === 'rollbacks') await loadRollbacks();
   });
 
   await refreshConfigList();
