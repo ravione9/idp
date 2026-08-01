@@ -220,6 +220,7 @@ Supported methods (policy-controlled via `mfa_policy.allowed_methods` + optional
   - group policy enforce (`mfa_group_policies.enforce = 1` for a group the user belongs to)
   - global policy `mfa_policy.global_enforce = true`
   - admin policy `mfa_policy.enforce_for_admins = true` (opt-in; default **off**) and role is a portal operator (`ADMIN` / `SUPER_ADMIN` / other console roles). Not hard-coded — turn on under **Admin → Strong Auth Methods**.
+- **Application-level MFA (critical apps)** — `mfa_policy.critical_app_mfa` (default on) + `applications.require_mfa = 1`. At SAML `/saml/launch|sso` and OIDC `/oauth/authorize`, if the portal session has no fresh MFA within `critical_app_mfa_max_age_seconds` / per-app `mfa_step_up_max_age_seconds` (default 300), the user is redirected to `/login?app_mfa=1` for a session step-up (`POST /auth/session/mfa-challenge`). Remember-device does **not** skip this. Configure under **Admin → Strong Auth Methods** (policy + app list) or on each SAML app (“Critical application — require MFA at launch”). Migration `055_critical_app_mfa.sql`.
 - Group exclusions: `mfa_policy.excluded_group_ids` **overrides global/admin MFA** — members skip enrollment prompts and skip challenges that would fire only because MFA is already enrolled. Does **not** bypass per-user Enforce, group-policy Enforce, or adaptive `MFA`/`STEP_UP`.
 - **Group method policies** (`mfa_group_policies`, migration `038`): Admin → Strong Auth Methods → **MFA Policies** tab. Global `allowed_methods` is the ceiling; if the user is in any group with an active policy, allowed methods = intersection(global, union(group policies)). Users with no matching group policy use global methods only.
 - Login flow when MFA is enabled:
@@ -316,7 +317,7 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 | `GET  /saml/resume/:pendingId` | Resume SP-initiated SSO after portal sign-in (pending `AuthnRequest` in Redis) |
 | `GET  /saml/launch/:slug` | IdP-initiated launch (browser → app tile click) |
 
-**Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which temporarily applies the stored `query`/`body` on the live Express request (does **not** clone via `{...req}`), issues the assertion, and only then deletes the Redis key (so a failed resume can retry within the TTL). **If a portal session cookie is already present**, `/saml/sso` and `/saml/launch/:slug` reuse it (no second MFA). The login page also short-circuits to `returnTo` when `/api/me` succeeds. Browser navigations get HTML error pages (not JSON) when SP resolution or assertion fails.
+**Unauthenticated SP-initiated flow:** when `/saml/sso` receives an `AuthnRequest` without a session, the IdP stores the request in Redis (5 min TTL) and redirects to `/login?returnTo=/saml/resume/<id>`. The user signs in with **local password** or **Google OIDC**; after auth, the browser hits `/saml/resume/<id>`, which temporarily applies the stored `query`/`body` on the live Express request (does **not** clone via `{...req}`), issues the assertion, and only then deletes the Redis key (so a failed resume can retry within the TTL). **If a portal session cookie is already present**, `/saml/sso` and `/saml/launch/:slug` reuse it. **Critical apps** (`applications.require_mfa` + policy `critical_app_mfa`) still require a fresh MFA step-up before the assertion is issued. The login page short-circuits to `returnTo` when `/api/me` succeeds **unless** `app_mfa=1` (critical-app step-up). Browser navigations get HTML error pages (not JSON) when SP resolution or assertion fails.
 
 **Assertion shape** (`src/saml/idp.ts`): login responses always include a WebSSO `AuthnStatement` (`AuthnInstant`, `SessionIndex`, `PasswordProtectedTransport`) plus an `AttributeStatement` built from the SP `attribute_map` (never an empty `AttributeStatement` — that fails `saml-schema-protocol-2.0.xsd`). Default attributes include `email`/`mail` and `displayName` for auto-provisioning SPs (e.g. SentinelOne). samlify leaves `{AuthnStatement}` empty unless a `loginResponseTemplate` + `customTagReplacement` fills it. **IdP-initiated** (portal tile) responses omit `InResponseTo` entirely. Template tag replacement matches `="{Tag}"` for attributes and treats `{InResponseToAttr}` / statement blocks as raw XML — samlify’s optional-leading-quote replacer must not be used here (it turns SP-initiated `InResponseTo` into `&quot;…&quot;` and fails XSD).
 
@@ -1067,6 +1068,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-01 — Application-level MFA for critical apps
+
+**Why** — Portal session reused at SAML/OIDC launch meant IT could not force MFA for high-risk applications after login.
+
+**What changed:**
+
+- Migration **`055_critical_app_mfa.sql`** — `applications.require_mfa`, `mfa_step_up_max_age_seconds`; policy keys `critical_app_mfa`, `critical_app_mfa_max_age_seconds`.
+- **Strong Auth** — “Push application MFA” kill-switch + per-app checkboxes; SAML app modal “Critical application — require MFA at launch”.
+- **Enforcement** — SAML launch/SSO + OIDC authorize require fresh MFA (Redis `idp:mfa-fresh:{sessionId}`); `POST /auth/session/mfa-challenge` for in-session step-up.
+- Asset cache `2026-08-01-app-mfa`.
 
 ### (pending) — 2026-08-01 — Attendance IGA enterprise job/day rollback UX
 

@@ -80,10 +80,13 @@ export function renderLogin() {
   captureLoginReferrer();
   const loginParams = new URLSearchParams(location.search);
   const returnTo = loginParams.get('return_to') || loginReturnTo();
-  const ssoResume = returnTo.startsWith('/saml/resume/') || returnTo.startsWith('/saml/launch/');
+  const ssoResume = returnTo.startsWith('/saml/resume/') || returnTo.startsWith('/saml/launch/')
+    || returnTo.startsWith('/oauth/resume/');
   const pendingMfaChallenge = loginParams.get('mfa_challenge');
   const pendingEnrollChallenge = loginParams.get('enroll_challenge');
   const pendingEmail = loginParams.get('email') || '';
+  const appMfaStepUp = loginParams.get('app_mfa') === '1';
+  const appMfaName = loginParams.get('app') || 'this application';
 
   let loginBranding = {
     org_name: 'Lenskart',
@@ -165,7 +168,7 @@ export function renderLogin() {
   // Google / MFA return already carries a challenge — never block on /api/me
   // (a hung Redis session lookup left the page stuck on "Checking session…" and
   // broke SP-initiated SAML → Google → MFA).
-  if (pendingMfaChallenge || pendingEnrollChallenge) {
+  if (pendingMfaChallenge || pendingEnrollChallenge || appMfaStepUp) {
     return renderLoginForm();
   }
 
@@ -316,7 +319,7 @@ export function renderLogin() {
     });
   }
 
-  function renderMfaStep(challengeId, email, availableMethods = ['totp']) {
+  function renderMfaStep(challengeId, email, availableMethods = ['totp'], opts = {}) {
     const methods = new Set(availableMethods || ['totp']);
     const hintParts = [];
     if (methods.has('totp')) hintParts.push('6-digit authenticator code');
@@ -325,11 +328,17 @@ export function renderLogin() {
     const hint = hintParts.length
       ? `${hintParts.join(', ').replace(/^./, (c) => c.toUpperCase())}.`
       : 'Enter your verification code.';
+    const appTitle = opts.appName
+      ? `Confirm MFA to open ${opts.appName}`
+      : 'Two-factor authentication';
+    const appHint = opts.appName
+      ? `This is a critical application. Verify MFA for ${esc(email)} to continue.`
+      : `Verify your identity for ${esc(email)}.`;
     const card = el(`
       <div class="auth-card auth-card--light">
         ${authBrandHtml()}
-        <h2 class="auth-step-title">Two-factor authentication</h2>
-        <p class="muted">Verify your identity for ${esc(email)}.</p>
+        <h2 class="auth-step-title">${esc(appTitle)}</h2>
+        <p class="muted">${appHint}</p>
         <div id="mfa-error"></div>
         <form id="mfa-form">
           <div class="field"><label>Verification code</label>
@@ -508,6 +517,34 @@ export function renderLogin() {
       }
       showPasswordStep(email.trim());
     });
+  }
+
+  // Critical-app step-up: session exists, start MFA challenge without password re-entry.
+  if (appMfaStepUp) {
+    const card = el(`
+      <div class="auth-card auth-card--light">
+        ${authBrandHtml()}
+        <h2 class="auth-step-title">Confirm access</h2>
+        <p class="muted">Starting MFA for <strong>${esc(appMfaName)}</strong>…</p>
+        <div id="app-mfa-error"></div>
+      </div>`);
+    wrapStep(card);
+    void api.sessionMfaChallenge(returnTo).then((r) => {
+      if (r && r.mfaRequired && r.challengeId) {
+        renderMfaStep(r.challengeId, r.email || pendingEmail || 'your account', r.availableMethods, {
+          appName: appMfaName,
+        });
+        return;
+      }
+      location.href = r?.redirect || returnTo || '/';
+    }).catch((err) => {
+      const errEl = card.querySelector('#app-mfa-error');
+      if (errEl) {
+        errEl.innerHTML = `<div class="alert alert-error">${esc(err.message || 'MFA step-up failed')}</div>
+          <p class="muted" style="margin-top:0.75rem"><a href="/?v=settings">Enroll MFA in Settings</a> · <a href="/login">Sign in again</a></p>`;
+      }
+    });
+    return root;
   }
 
   // Google OIDC may redirect here with an MFA / enroll challenge after passwordless Google auth

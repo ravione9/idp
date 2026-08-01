@@ -85,6 +85,9 @@ Object.assign(api, {
     f('/auth/local/login/mfa-webauthn/options', { method: 'POST', body: JSON.stringify({ challengeId }) }),
   localLoginMfaWebAuthnVerify: (challengeId, webauthnChallengeId, response) =>
     f('/auth/local/login/mfa-webauthn/verify', { method: 'POST', body: JSON.stringify({ challengeId, webauthnChallengeId, response }) }),
+  /** Critical-app MFA step-up while already signed in. */
+  sessionMfaChallenge: (returnTo) =>
+    f('/auth/session/mfa-challenge', { method: 'POST', body: JSON.stringify({ ...(returnTo ? { returnTo } : {}) }) }),
   reportBrowserAppSignals: (domains) => f('/api/me/browser-app-signals', { method: 'POST', body: JSON.stringify({ domains }) }),
   igaRequestableApps: (opts = {}) => {
     const q = new URLSearchParams();
