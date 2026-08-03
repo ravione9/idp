@@ -672,7 +672,9 @@ To add a new migration:
 | `GET` | `/api/admin/attendance-iga/dashboard?configId=` | Dashboard stats for one policy |
 | `GET`/`PUT` | `/api/admin/attendance-iga/config?configId=` | Read/update source, scope, schedule, approval, notifications |
 | `GET`/`PUT` | `/api/admin/attendance-iga/rules[/:id]?configId=` | List/update rule definitions (A–H) for a policy |
-| `GET`/`POST`/`DELETE` | `/api/admin/attendance-iga/exclusions[/:id]?configId=` | VIP / department / employee exclusions |
+| `GET`/`POST`/`DELETE` | `/api/admin/attendance-iga/exclusions[/:id]?configId=` | VIP / department / employee exclusions (per policy) |
+| `GET`/`POST`/`DELETE` | `/api/admin/attendance-iga/global-exclusions[/:id]` | Global email exclusion list (all policies — skip suspend/disable) |
+| `POST` | `/api/admin/attendance-iga/global-exclusions/import` | Bulk import exclusions from CSV (`email` column or one email per line) |
 | `GET` | `/api/admin/attendance-iga/imports[/:id/staging]?configId=` | Import run history + staging rows |
 | `POST` | `/api/admin/attendance-iga/run` | Manual pipeline run (`configId`, REST API / SFTP / CSV / evaluate-only) |
 | `GET`/`POST` | `/api/admin/attendance-iga/approvals[/:id/decision]` | Pending approvals; approve / reject / skip |
@@ -789,7 +791,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 - `/?v=<view>` — direct deep link to any view (e.g. `/?v=attendanceIga` for Attendance IGA admin console)
 - `/?v=<view>&tab=<tab>` — sub-tab deep links (e.g. `/?v=workflowLibrary&tab=triggers`, `/?v=applications&tab=discovery`, `/?v=audit&tab=sso`, `/?v=govReports&tab=mfa`, `/?v=groups&tab=tags`, `/?v=attendanceIga&tab=policy`)
 
-**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · Import History · Approvals · **Executions** (default “Not rolled back” so checkboxes appear; sticky Select all / Rollback selected; per-day + **complete job rollback** from import-run cards; CSV / filter matching; shows email) · **Rollbacks** (complete filter-based rollback, CSV import of `execution_id` / `emp_id` / `email`, recent history with email). Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
+**Attendance IGA admin console** (`/?v=attendanceIga`) — active-policy selector for runs/feeds + tabs: Overview · **Policy** (table list like App Access / Adaptive Auth; **+ New Policy** / Edit open a modal with scope, source, schedule, approval) · **Configuration** (Truein API + SFTP credentials + manual CSV via **Feeds**) · **Global Exclusions** (email list + CSV import — users never suspended by any policy) · Import History · Approvals · **Executions** (default “Not rolled back” so checkboxes appear; sticky Select all / Rollback selected; per-day + **complete job rollback** from import-run cards; CSV / filter matching; shows email) · **Rollbacks** (complete filter-based rollback, CSV import of `execution_id` / `emp_id` / `email`, recent history with email). Each named policy has its own feed credentials and **employee scope** (departments + employment types; empty = all). Pipeline: fetch attendance → staging validation → employee match → **scope filter** → rule evaluation → optional approval → connector actions → audit + rollback.
 
 ---
 
@@ -1124,6 +1126,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **Export CSV** — includes `email` column.
 - **UI** — Executions employee cell + Rollbacks history show email; CSV placeholder documents email column.
 - Asset cache `2026-08-01-aiga-rb2`.
+
+### `3c45a78` — 2026-08-03 — Attendance IGA global exclusion list
+
+**Why** — Ops needed a single email-based skip list across all revoke policies so VIP / exception users are never auto-suspended.
+
+**What changed**
+- Migration **`058_attendance_iga_global_exclusions.sql`** — `attendance_iga_global_exclusions` (email, optional `emp_id`, notes).
+- **`src/services/attendance-iga/global-exclusions.ts`** — list/add/import/remove + pipeline lookup.
+- **`evaluateIgnoreRules()`** — skips employees on global list before per-policy exclusions.
+- **Admin API** — `GET/POST/DELETE /global-exclusions`, `POST /global-exclusions/import`.
+- **UI** — Attendance IGA **Global Exclusions** tab (add email, CSV import, remove).
 
 ### `2573fe7` — 2026-08-03 — MFA reset in user profile + defer without password re-prompt
 

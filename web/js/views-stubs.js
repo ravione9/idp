@@ -8546,7 +8546,7 @@ function aigStatusBadge(enabled, status) {
 }
 
 export async function viewAttendanceIga(content, initialTab = 'dash') {
-  const aigTabIds = ['dash', 'policy', 'config', 'imports', 'approvals', 'executions', 'rollbacks'];
+  const aigTabIds = ['dash', 'policy', 'config', 'exclusions', 'imports', 'approvals', 'executions', 'rollbacks'];
   const startTab = aigTabIds.includes(initialTab) ? initialTab : 'dash';
   content.replaceChildren(el(`<div class="aig-page">
     ${header('Attendance IGA', 'Multiple revoke policies — each with its own API/SFTP source, schedule, and employee scope', `
@@ -8567,6 +8567,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       <button type="button" class="cfg-tab inline-tab${startTab === 'dash' ? ' active' : ''}" data-tab="dash">Overview</button>
       <button type="button" class="cfg-tab inline-tab${startTab === 'policy' ? ' active' : ''}" data-tab="policy">Policy</button>
       <button type="button" class="cfg-tab inline-tab${startTab === 'config' ? ' active' : ''}" data-tab="config">Configuration</button>
+      <button type="button" class="cfg-tab inline-tab${startTab === 'exclusions' ? ' active' : ''}" data-tab="exclusions">Global Exclusions</button>
       <button type="button" class="cfg-tab inline-tab${startTab === 'imports' ? ' active' : ''}" data-tab="imports">Import History</button>
       <button type="button" class="cfg-tab inline-tab${startTab === 'approvals' ? ' active' : ''}" data-tab="approvals">Approvals</button>
       <button type="button" class="cfg-tab inline-tab${startTab === 'executions' ? ' active' : ''}" data-tab="executions">Executions</button>
@@ -8575,6 +8576,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     <div id="tab-dash" style="${startTab === 'dash' ? '' : 'display:none'}"></div>
     <div id="tab-policy" style="${startTab === 'policy' ? '' : 'display:none'}"></div>
     <div id="tab-config" style="${startTab === 'config' ? '' : 'display:none'}"></div>
+    <div id="tab-exclusions" style="${startTab === 'exclusions' ? '' : 'display:none'}"></div>
     <div id="tab-imports" style="${startTab === 'imports' ? '' : 'display:none'}"></div>
     <div id="tab-approvals" style="${startTab === 'approvals' ? '' : 'display:none'}"></div>
     <div id="tab-executions" style="${startTab === 'executions' ? '' : 'display:none'}"></div>
@@ -9137,6 +9139,101 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     });
   }
 
+  async function loadGlobalExclusions() {
+    const area = wrap.querySelector('#tab-exclusions');
+    area.innerHTML = loading();
+    try {
+      const r = await api.attendanceIgaGlobalExclusions();
+      const rows = r.data || [];
+      const tableRows = rows.length
+        ? rows.map((row) => `<tr>
+            <td>${esc(row.email)}</td>
+            <td>${esc(row.full_name || '—')}</td>
+            <td style="font-family:var(--mono,'JetBrains Mono',monospace);font-size:0.82rem">${esc(row.emp_id || '—')}</td>
+            <td class="muted" style="font-size:0.82rem">${esc(row.notes || '—')}</td>
+            <td style="white-space:nowrap"><button class="btn btn-sm btn-ghost aig-excl-remove" data-id="${esc(row.id)}">Remove</button></td>
+          </tr>`).join('')
+        : `<tr><td colspan="5" class="muted" style="padding:1rem">No exclusions yet — add emails below.</td></tr>`;
+
+      area.innerHTML = `
+        <div class="card" style="margin-bottom:1rem">
+          <div class="aig-section-head" style="margin-bottom:1rem">
+            <h3 style="margin:0">Global exclusion list</h3>
+            <p class="muted" style="margin:0.35rem 0 0">Users on this list are <strong>never suspended or disabled</strong> by Attendance IGA across all policies. Applies by corporate email (and resolved employee id).</p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Email</th><th>Name</th><th>Employee ID</th><th>Notes</th><th></th></tr></thead>
+              <tbody>${tableRows}</tbody>
+            </table>
+          </div>
+        </div>
+        <div class="aig-dash-grid">
+          <div class="card">
+            <h3 style="margin:0 0 0.75rem">Add by email</h3>
+            <div class="form-group">
+              <label class="form-label">Corporate email</label>
+              <input class="form-input" id="aig-excl-email" type="email" placeholder="user@lenskart.com" autocomplete="off">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Notes (optional)</label>
+              <input class="form-input" id="aig-excl-notes" placeholder="e.g. VIP, on leave, contractor">
+            </div>
+            <div id="aig-excl-add-msg"></div>
+            <button class="btn btn-primary" id="aig-excl-add">Add to exclusion list</button>
+          </div>
+          <div class="card">
+            <h3 style="margin:0 0 0.75rem">Import from CSV</h3>
+            <p class="muted" style="font-size:0.85rem;margin-bottom:0.75rem">One email per line, or a column named <code>email</code> / <code>email_corp</code>.</p>
+            <textarea class="form-textarea" id="aig-excl-csv" rows="8" placeholder="email&#10;vip1@lenskart.com&#10;vip2@lenskart.com"></textarea>
+            <div id="aig-excl-import-msg" style="margin-top:0.75rem"></div>
+            <button class="btn btn-secondary" id="aig-excl-import" style="margin-top:0.75rem">Import CSV</button>
+          </div>
+        </div>`;
+
+      area.querySelector('#aig-excl-add').addEventListener('click', async () => {
+        const msg = area.querySelector('#aig-excl-add-msg');
+        msg.innerHTML = '';
+        const email = area.querySelector('#aig-excl-email').value.trim();
+        const notes = area.querySelector('#aig-excl-notes').value.trim();
+        if (!email) { msg.innerHTML = errHtml('Email is required'); return; }
+        try {
+          const result = await api.addAttendanceIgaGlobalExclusion({ email, notes: notes || undefined });
+          const warn = result.unknownEmail
+            ? `<div class="alert alert-warning" style="margin-top:0.5rem">Added, but no employee record matched this email yet — exclusion still applies when the email matches at run time.</div>`
+            : '';
+          msg.innerHTML = `<div class="alert alert-success">Added ${esc(result.email)}</div>${warn}`;
+          await loadGlobalExclusions();
+        } catch (e) { msg.innerHTML = errHtml(e.message); }
+      });
+
+      area.querySelector('#aig-excl-import').addEventListener('click', async () => {
+        const msg = area.querySelector('#aig-excl-import-msg');
+        msg.innerHTML = '';
+        const csvText = area.querySelector('#aig-excl-csv').value;
+        if (!csvText.trim()) { msg.innerHTML = errHtml('Paste CSV content first'); return; }
+        try {
+          const result = await api.importAttendanceIgaGlobalExclusions(csvText);
+          const unknown = (result.unknownEmails || []).length
+            ? `<div class="alert alert-warning" style="margin-top:0.5rem">${result.unknownEmails.length} email(s) not found in directory — still excluded by email at run time.</div>`
+            : '';
+          msg.innerHTML = `<div class="alert alert-success">Imported ${result.added} email(s)${result.skipped ? ` · ${result.skipped} skipped` : ''}</div>${unknown}`;
+          await loadGlobalExclusions();
+        } catch (e) { msg.innerHTML = errHtml(e.message); }
+      });
+
+      area.querySelectorAll('.aig-excl-remove').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Remove this email from the global exclusion list?')) return;
+          try {
+            await api.deleteAttendanceIgaGlobalExclusion(btn.dataset.id);
+            await loadGlobalExclusions();
+          } catch (e) { alert(e.message); }
+        });
+      });
+    } catch (e) { area.innerHTML = errHtml(e.message); }
+  }
+
   async function loadConfig() {
     const area = wrap.querySelector('#tab-config');
     area.innerHTML = loading();
@@ -9161,6 +9258,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
             <button type="button" class="aig-nav-item" data-section="api"><span class="aig-nav-title">Truein API</span><span class="aig-nav-desc">Token &amp; endpoint</span></button>
             <button type="button" class="aig-nav-item" data-section="sftp"><span class="aig-nav-title">SFTP</span><span class="aig-nav-desc">Daily CSV file</span></button>
             <button type="button" class="aig-nav-item" data-section="manual"><span class="aig-nav-title">Manual Import</span><span class="aig-nav-desc">One-off CSV</span></button>
+            <button type="button" class="aig-nav-item" data-section="exclusions"><span class="aig-nav-title">Global Exclusions</span><span class="aig-nav-desc">Skip suspend list</span></button>
           </aside>
           <div class="aig-settings-main">
             <div class="aig-settings-scroll">
@@ -9240,6 +9338,14 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
                   </div>
                 </div>
               </section>
+
+              <section class="aig-section" data-section="exclusions">
+                <div class="aig-section-head">
+                  <h3>Global exclusion list</h3>
+                  <p>Users on this list are never suspended or disabled by Attendance IGA (all policies). Manage the full list on the <strong>Global Exclusions</strong> tab.</p>
+                </div>
+                <button class="btn btn-secondary" id="aig-open-exclusions">Open Global Exclusions</button>
+              </section>
             </div>
             <div class="aig-settings-footer">
               <div id="aig-cfg-err"></div>
@@ -9269,6 +9375,8 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
       wireSftpPreview(area);
       wireApiPreview(area);
       wireSftpAfter(area);
+
+      area.querySelector('#aig-open-exclusions')?.addEventListener('click', () => { void showAigTab('exclusions'); });
 
       area.querySelector('#aig-api-test')?.addEventListener('click', async () => {
         const box = area.querySelector('#aig-api-test-result');
@@ -10007,6 +10115,7 @@ export async function viewAttendanceIga(content, initialTab = 'dash') {
     if (tab === 'dash') await loadDash();
     if (tab === 'policy') await loadPolicy();
     if (tab === 'config') await loadConfig();
+    if (tab === 'exclusions') await loadGlobalExclusions();
     if (tab === 'imports') await loadImports();
     if (tab === 'approvals') await loadApprovals();
     if (tab === 'executions') await loadExecutions();
