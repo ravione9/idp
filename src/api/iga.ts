@@ -23,6 +23,7 @@ import { runConnectorConnectivityTest } from '../services/connector-health.js';
 import { harvestConnectorEntitlements } from '../services/entitlement-harvest.js';
 import { fulfillEntitlementOnTarget } from '../services/entitlement-fulfillment.js';
 import { submitAccessRequest, processDecision, repairAccessRequestFulfillment } from '../services/access-request-workflow.js';
+import { isValidSyncSchedule } from '../utils/sync-schedule.js';
 import {
   explainJitCatalogForUser,
   expireStaleAccessRequests,
@@ -229,7 +230,10 @@ const connectorSchema = z.object({
   connectorType: z.string().min(1).max(50),
   direction:     z.enum(['INBOUND', 'OUTBOUND', 'BIDIRECTIONAL']).default('BIDIRECTIONAL'),
   syncMode:      z.enum(['FULL', 'INCREMENTAL', 'RECONCILE']).default('INCREMENTAL'),
-  syncSchedule:  z.string().max(100).optional(),
+  syncSchedule:  z.string().max(100).optional().refine(
+    (v) => v == null || v === '' || isValidSyncSchedule(v),
+    { message: 'Invalid sync schedule — use every:15m, every:1h, or a 5-field cron expression' },
+  ),
   configJson:    z.record(z.unknown()).optional(),
 });
 

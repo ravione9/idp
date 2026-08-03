@@ -81,6 +81,7 @@ import { sessionMfaChallengeHandler } from './auth/session-mfa-challenge.js';
 import { startAttendanceIgaScheduler } from './services/attendance-iga/scheduler.js';
 import { startAccessRequestExpiryScheduler } from './services/access-request-expiry.js';
 import { startConnectorHealthScheduler } from './services/connector-health.js';
+import { startConnectorSyncScheduler } from './services/connector-sync-scheduler.js';
 import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
 const WEB_ROOT = path.join(process.cwd(), 'web');
@@ -370,6 +371,7 @@ async function main(): Promise<void> {
   startAttendanceIgaScheduler();
   startAccessRequestExpiryScheduler();
   startConnectorHealthScheduler();
+  startConnectorSyncScheduler();
   startRadiusUdpServer();
 
   const server = app.listen(config.app.port, () => {

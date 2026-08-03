@@ -723,6 +723,8 @@ To add a new migration:
 
 **Attendance ownership:** when any Attendance IGA policy is enabled, that pipeline owns Truein/SFTP fetch + suspensions. In-process scheduler ticks every 60s (guarded by Redis `withSchedLock('attendance-iga', …)`) and runs each due enabled policy independently. Keep Airflow on `/attendance-iga/run` (optional `configId`); do not also schedule `/risk-scan` for the same attendance gap policy.
 
+**Directory connector sync:** in-process scheduler ticks every 60s (`withSchedLock('connector-sync', …)`) and runs due connector syncs from `connectors.sync_schedule` (interval presets like `every:15m` or cron). Manual sync remains `POST /api/iga/connectors/:id/sync`. Connector must be `CONNECTED`/`ACTIVE` (successful Test Connection).
+
 ---
 
 ## 9. Frontend (web console)
@@ -1001,6 +1003,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Entitlement harvest** — `src/services/entitlement-harvest.ts` + fulfill (`entitlement-fulfillment.ts`): AD/Google groups → `entitlements` catalog; grant/request pushes group membership on target
 - ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); inbound import **skips disabled AD accounts** (does not create new portal users); existing linked users disabled in AD are marked `SUSPENDED_AUTO` and hidden from the Universal Directory; tracks runs in `connector_runs`
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import **skips suspended Google accounts** (same rules as AD); outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank OU/user scope syncs the full directory; non-empty filters combine with AND logic; blank/`*` **Sync Groups** auto-mirrors up to 200 Workspace groups into `groups` / `group_members` (requires `admin.directory.group.readonly` domain-wide delegation)
+- ✅ **Connector sync scheduler** — `src/services/connector-sync-scheduler.ts` ticks every 60s (Redis `withSchedLock('connector-sync', …)`); reads each connector's `sync_schedule` (`every:15m`, `every:1h`, custom interval, or 5-field cron) and triggers `POST`-equivalent sync when due for `CONNECTED`/`ACTIVE` connectors; Directory Sync UI exposes presets + custom interval/cron
 - ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; AD writeback auto-retries StartTLS/LDAPS when the connector uses plain LDAP; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
 - ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate` — admin suspend sets `SUSPENDED_HR` (hidden from directory, login blocked); revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`
 - ✅ **Access review campaign generator** — `POST /api/iga/access-reviews` + `POST /api/iga/access-reviews/:id/items/:itemId/decision` in `src/services/access-review.ts` (scopes: ALL_USERS, APP_SPECIFIC, HIGH_RISK; auto-closes campaign when all items reviewed; REVOKE triggers user_entitlement revocation)
@@ -1071,6 +1074,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-03 — Connector sync schedule presets + in-process scheduler
+
+**Why** — Admins needed simple interval choices (15 min, 1 hr, custom) instead of raw cron only; stored schedules were not auto-run.
+
+**What changed:**
+
+- **`src/utils/sync-schedule.ts`** — parse/validate `every:15m` interval presets, custom intervals, and 5-field cron; due-check from `last_sync_at`.
+- **`src/services/connector-sync-scheduler.ts`** — 60s tick with Redis sched lock; triggers directory sync for due connected connectors.
+- **Directory Sync UI** — Edit connector modal: dropdown presets (15m / 30m / 1h / 6h / 12h / 24h), custom interval, custom cron, or Manual; table shows friendly labels.
+- **API** — `syncSchedule` validated on connector create/update.
 
 ### `6608b69` — 2026-08-02 — Migrations run on boot; skip already-applied
 
