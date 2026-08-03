@@ -1127,7 +1127,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **UI** — Executions employee cell + Rollbacks history show email; CSV placeholder documents email column.
 - Asset cache `2026-08-01-aiga-rb2`.
 
-### (pending) — 2026-08-03 — Attendance IGA global exclusion list
+### `3c45a78` — 2026-08-03 — Attendance IGA global exclusion list
 
 **Why** — Ops needed a single email-based skip list across all revoke policies so VIP / exception users are never auto-suspended.
 
