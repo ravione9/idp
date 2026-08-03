@@ -1146,13 +1146,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **UI** — Executions employee cell + Rollbacks history show email; CSV placeholder documents email column.
 - Asset cache `2026-08-01-aiga-rb2`.
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-### `f74eee1` — 2026-08-02 — EC2 hostname → `idp-preprod.lenskart.com`
-=======
-### (pending) — 2026-08-03 — MFA reset in user profile + defer without password re-prompt
-=======
-### (pending) — 2026-08-03 — Attendance IGA global exclusion list
+### `3c45a78` — 2026-08-03 — Attendance IGA global exclusion list
 
 **Why** — Ops needed a single email-based skip list across all revoke policies so VIP / exception users are never auto-suspended.
 
@@ -1164,7 +1158,6 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **UI** — Attendance IGA **Global Exclusions** tab (add email, CSV import, remove).
 
 ### `2573fe7` — 2026-08-03 — MFA reset in user profile + defer without password re-prompt
->>>>>>> 3c45a78 (Add Attendance IGA global email exclusion list.)
 
 **Why** — Admins needed Reset MFA on the Directory user MFA tab even when MFA shows disabled; skipping MFA enrollment sent users back to the password step despite already authenticating.
 
@@ -1175,8 +1168,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **Google OIDC enroll redirect** — passes `grace_active` / `grace_hours` to the login page.
 - **`src/auth/mfa-grace.ts`** — shared Redis grace helpers.
 
-### (pending) — 2026-08-01 — Helm chart + HA/PRD/deploy docs in repo
->>>>>>> 2573fe7 (Add admin MFA reset and fix defer login without password re-prompt.)
+### `f74eee1` — 2026-08-02 — EC2 hostname → `idp-preprod.lenskart.com`
 
 **Why** — Cloudflare DNS for the EC2 origin now points at `idp-preprod.lenskart.com` (prod EKS keeps `idp.lenskart.com`).
 
