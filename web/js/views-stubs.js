@@ -3881,6 +3881,113 @@ function normalizeConnectorType(t) {
   return t === 'GOOGLE' ? 'GOOGLE_WORKSPACE' : t;
 }
 
+function parseConnectorScheduleUi(raw) {
+  const s = (raw || '').trim();
+  if (!s || s.toLowerCase() === 'manual') return { mode: 'every:15m' };
+  const every = s.match(/^every:(\d+)(m|h)$/i);
+  if (every) {
+    const token = `${every[1]}${every[2].toLowerCase()}`;
+    const preset = `every:${token}`;
+    const presets = ['every:15m', 'every:30m', 'every:1h', 'every:6h', 'every:12h', 'every:24h'];
+    if (presets.includes(preset)) return { mode: preset };
+    return { mode: 'custom-interval', value: parseInt(every[1], 10), unit: every[2].toLowerCase() };
+  }
+  const legacy = s.match(/^(\d+)(m|h)$/i);
+  if (legacy && !s.includes(' ')) return parseConnectorScheduleUi(`every:${legacy[1]}${legacy[2].toLowerCase()}`);
+  if (['15m', '30m', '1h', '6h', '12h', '24h'].includes(s)) return parseConnectorScheduleUi(`every:${s}`);
+  if (s.split(/\s+/).length === 5) return { mode: 'custom-cron', cron: s };
+  return { mode: 'every:15m' };
+}
+
+function formatConnectorScheduleLabel(raw) {
+  const s = (raw || '').trim();
+  if (!s || s.toLowerCase() === 'manual') return 'Manual';
+  const every = s.match(/^every:(\d+)(m|h)$/i);
+  if (every) {
+    const n = parseInt(every[1], 10);
+    const unit = every[2].toLowerCase() === 'h' ? 'hour(s)' : 'minute(s)';
+    return `Every ${n} ${unit}`;
+  }
+  const legacy = s.match(/^(\d+)(m|h)$/i);
+  if (legacy && !s.includes(' ')) return formatConnectorScheduleLabel(`every:${legacy[1]}${legacy[2].toLowerCase()}`);
+  const parts = s.split(/\s+/);
+  if (parts.length === 5 && parts[2] === '*' && parts[1] !== '*' && parts[0] !== '*' && !parts[0].includes('/') && !parts[1].includes('/')) {
+    return `Daily at ${parts[1].padStart(2, '0')}:${parts[0].padStart(2, '0')} UTC`;
+  }
+  if (parts[0]?.startsWith('*/')) return `Every ${parts[0].slice(2)} minute(s)`;
+  if (parts[1]?.startsWith('*/')) return `Every ${parts[1].slice(2)} hour(s)`;
+  return s;
+}
+
+function renderConnectorScheduleFields(defaults) {
+  const ui = parseConnectorScheduleUi(defaults.sync_schedule);
+  const presets = [
+    ['manual', 'Manual only'],
+    ['every:15m', 'Every 15 minutes'],
+    ['every:30m', 'Every 30 minutes'],
+    ['every:1h', 'Every 1 hour'],
+    ['every:6h', 'Every 6 hours'],
+    ['every:12h', 'Every 12 hours'],
+    ['every:24h', 'Every 24 hours'],
+    ['custom-interval', 'Custom interval…'],
+    ['custom-cron', 'Custom cron (advanced)…'],
+  ];
+  const opts = presets.map(([v, l]) => `<option value="${v}" ${ui.mode === v ? 'selected' : ''}>${l}</option>`).join('');
+  const showInterval = ui.mode === 'custom-interval';
+  const showCron = ui.mode === 'custom-cron';
+  const cronVal = showCron ? (ui.cron || '') : (defaults.sync_schedule && String(defaults.sync_schedule).includes(' ') ? defaults.sync_schedule : '0 3 * * *');
+  return `
+    <div class="form-group" style="grid-column:1/-1">
+      <label class="form-label">Sync Schedule</label>
+      <select class="form-select" id="cfg-schedule-mode">${opts}</select>
+      <p class="muted" style="font-size:0.75rem;margin:0.35rem 0 0">Runs automatically when the connector is Connected. All times are UTC.</p>
+    </div>
+    <div class="form-group" id="cfg-schedule-interval-wrap" style="grid-column:1/-1;${showInterval ? '' : 'display:none'}">
+      <label class="form-label">Custom interval</label>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+        <input class="form-input" id="cfg-schedule-interval-val" type="number" min="1" max="10080" value="${showInterval ? (ui.value || 15) : 15}" style="max-width:100px">
+        <select class="form-select" id="cfg-schedule-interval-unit" style="max-width:120px">
+          <option value="m" ${ui.unit === 'h' ? '' : 'selected'}>Minutes</option>
+          <option value="h" ${ui.unit === 'h' ? 'selected' : ''}>Hours</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group" id="cfg-schedule-cron-wrap" style="grid-column:1/-1;${showCron ? '' : 'display:none'}">
+      <label class="form-label">Cron expression <span class="muted" style="font-size:0.75rem">(minute hour day month weekday)</span></label>
+      <input class="form-input" id="cfg-schedule-cron" value="${esc(cronVal)}" placeholder="0 3 * * *">
+    </div>`;
+}
+
+function bindConnectorScheduleFields(bd) {
+  const mode = bd.querySelector('#cfg-schedule-mode');
+  if (!mode) return;
+  const intervalWrap = bd.querySelector('#cfg-schedule-interval-wrap');
+  const cronWrap = bd.querySelector('#cfg-schedule-cron-wrap');
+  const refresh = () => {
+    if (intervalWrap) intervalWrap.style.display = mode.value === 'custom-interval' ? '' : 'none';
+    if (cronWrap) cronWrap.style.display = mode.value === 'custom-cron' ? '' : 'none';
+  };
+  mode.addEventListener('change', refresh);
+  refresh();
+}
+
+function collectConnectorSchedule(bd) {
+  const mode = bd.querySelector('#cfg-schedule-mode')?.value || 'manual';
+  if (mode === 'manual') return null;
+  if (mode === 'custom-interval') {
+    const v = parseInt(bd.querySelector('#cfg-schedule-interval-val')?.value || '0', 10);
+    const unit = bd.querySelector('#cfg-schedule-interval-unit')?.value || 'm';
+    if (!v || v <= 0) throw new Error('Custom sync interval must be greater than zero');
+    return `every:${v}${unit}`;
+  }
+  if (mode === 'custom-cron') {
+    const cron = bd.querySelector('#cfg-schedule-cron')?.value.trim() || '';
+    if (cron.split(/\s+/).length !== 5) throw new Error('Cron must be five fields: minute hour day month weekday');
+    return cron;
+  }
+  return mode;
+}
+
 const CONNECTOR_TYPES = {
   AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',
     fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl','syncGroups'],
@@ -4039,7 +4146,7 @@ function initSourcesTab(panel) {
           </div>
         </td>
         <td><span class="badge badge-neutral">${esc(c.direction || '—')}</span></td>
-        <td class="muted">${c.sync_schedule ? esc(c.sync_schedule) : 'Manual'}</td>
+        <td class="muted">${esc(formatConnectorScheduleLabel(c.sync_schedule))}</td>
         <td class="muted">${c.last_sync_at ? fmtDate(c.last_sync_at) : 'Never'}</td>
         <td>${connectorStatusBadge(c.status)}${errHint}
           ${c.last_health_check_at ? `<div class="muted" style="font-size:0.72rem;margin-top:0.2rem">Checked ${fmtDate(c.last_health_check_at)}</div>` : ''}
@@ -4400,10 +4507,7 @@ function initSourcesTab(panel) {
               <option ${(!defaults.direction||defaults.direction==='BIDIRECTIONAL')?'selected':''} value="BIDIRECTIONAL">BIDIRECTIONAL</option>
             </select>
           </div>
-          <div class="form-group">
-            <label class="form-label">Sync Schedule <span class="muted" style="font-size:0.75rem">(cron or blank for manual)</span></label>
-            <input class="form-input" id="cfg-schedule" value="${esc(defaults.sync_schedule||'0 */6 * * *')}" placeholder="0 */6 * * *">
-          </div>
+          ${renderConnectorScheduleFields(defaults)}
         </div>
         ${isGoogle ? '' : `<hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 1rem">
         <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:0.75rem;color:var(--text-dim)">CONNECTION SETTINGS</h3>`}
@@ -4418,6 +4522,8 @@ function initSourcesTab(panel) {
         <button class="btn btn-secondary" id="cfg-cancel">Cancel</button>
       </div>
     </div>`);
+
+    bindConnectorScheduleFields(bd);
 
     if (!isEdit) bd.querySelector('#cfg-back').addEventListener('click', () => { bd.remove(); openAddWizard(); });
     bd.querySelector('#cfg-cancel').addEventListener('click', () => bd.remove());
@@ -4543,7 +4649,7 @@ function initSourcesTab(panel) {
       slug:          bd.querySelector('#cfg-slug').value.trim(),
       connectorType,
       direction:     bd.querySelector('#cfg-direction').value,
-      syncSchedule:  bd.querySelector('#cfg-schedule').value.trim() || null,
+      syncSchedule:  collectConnectorSchedule(bd),
       syncMode:      'INCREMENTAL',
       configJson,
     };
