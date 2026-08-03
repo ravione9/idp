@@ -30,6 +30,7 @@ import {
   disableMfa,
   regenerateBackupCodes,
 } from '../auth/mfa.js';
+import { clearMfaGrace } from '../auth/mfa-grace.js';
 import {
   MFA_METHOD_KEYS,
   listMfaGroupPolicies,
@@ -1088,6 +1089,30 @@ router.post('/:empId/mfa/disable', async (req: Request, res: Response): Promise<
   await disableMfa(emp.emp_id);
   logger.info({ empId: emp.emp_id }, 'Admin disabled MFA for user');
   res.json({ success: true });
+});
+
+router.post('/:empId/mfa/reset', async (req: Request, res: Response): Promise<void> => {
+  const { empId } = req.params;
+  const enforce = req.body?.enforce !== false;
+  const emp = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees WHERE emp_id = ?`,
+    [empId],
+  );
+  if (!emp) { res.status(404).json({ error: 'Employee not found' }); return; }
+
+  const adminId = (req as unknown as { session?: { emp_id?: string } }).session?.emp_id ?? 'system';
+  await disableMfa(emp.emp_id);
+  await clearMfaGrace(emp.emp_id);
+
+  if (enforce) {
+    await query(
+      `UPDATE employees SET mfa_enforced = 1, mfa_enforced_at = NOW(), mfa_enforced_by = ? WHERE emp_id = ?`,
+      [adminId, emp.emp_id],
+    );
+  }
+
+  logger.info({ empId: emp.emp_id, enforce, by: adminId }, 'Admin reset MFA for user');
+  res.json({ success: true, mfa_enforced: enforce });
 });
 
 router.post('/:empId/mfa/regenerate-codes', async (req: Request, res: Response): Promise<void> => {

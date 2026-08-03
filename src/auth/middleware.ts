@@ -43,6 +43,7 @@ import {
   setMfaDeviceTrustCookie,
 } from './mfa-device-trust.js';
 import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
+import { ensureMfaGraceStarted, getGraceRemainingMs } from './mfa-grace.js';
 import crypto from 'node:crypto';
 
 // ---------------------------------------------------------------------------
@@ -455,11 +456,17 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
           'EX',
           MFA_CHALLENGE_TTL_S,
         );
+        await ensureMfaGraceStarted(emp.emp_id, mfaRequirements.gracePeriodHours);
+        const graceRemainingMs = await getGraceRemainingMs(emp.emp_id, mfaRequirements.gracePeriodHours);
         const params = new URLSearchParams({
           enroll_challenge: enrollChallengeId,
           email,
           return_to: returnTo,
         });
+        if (graceRemainingMs > 0) {
+          params.set('grace_active', '1');
+          params.set('grace_hours', String(mfaRequirements.gracePeriodHours));
+        }
         // 303 — leave Google's spinner immediately (important for SAML resume returnTo)
         res.redirect(303, `/login?${params.toString()}`);
         return;
