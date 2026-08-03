@@ -11,6 +11,7 @@ import {
   notifyAttendanceAction,
 } from './actions.js';
 import { sendNotification } from '../notification.js';
+import { isGloballyExcluded, loadGlobalExclusionLookup, type GlobalExclusionLookup } from './global-exclusions.js';
 import type {
   AttendanceAction,
   AttendanceIgaConfig,
@@ -428,6 +429,10 @@ async function loadExclusions(configId: number): Promise<{ type: string; value: 
   );
 }
 
+async function loadGlobalExclusions(): Promise<GlobalExclusionLookup> {
+  return loadGlobalExclusionLookup();
+}
+
 function parseActions(raw: RuleRow['actions_json'] | undefined): AttendanceAction[] {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw as AttendanceAction[];
@@ -446,6 +451,7 @@ async function evaluateAllEmployees(
     [],
   );
   const exclusions = await loadExclusions(config.id);
+  const globalExclusions = await loadGlobalExclusions();
   const results: RuleEvaluation[] = [];
   const tz = resolveConfigTimezone(config);
   const clock = nowInTimezone(tz);
@@ -455,7 +461,7 @@ async function evaluateAllEmployees(
   for (const emp of employees) {
     if (!employeeMatchesScope(emp, config.employee_scope)) continue;
 
-    const skip = await evaluateIgnoreRules(emp, rules, exclusions, today, clock.dayOfWeek);
+    const skip = await evaluateIgnoreRules(emp, rules, exclusions, globalExclusions, today, clock.dayOfWeek);
     if (skip) {
       await storeEvaluation(importRunId, emp.emp_id, skip.ruleKey, skip.ruleName, skip.attendanceStatus, null, skip.skippedReason, []);
       continue;
@@ -500,9 +506,19 @@ async function evaluateIgnoreRules(
   emp: EmployeeCtx,
   rules: RuleRow[],
   exclusions: { type: string; value: string }[],
+  globalExclusions: GlobalExclusionLookup,
   today: string,
   dayOfWeek: number,
 ): Promise<{ ruleKey: string; ruleName: string; attendanceStatus: string; skippedReason: string } | null> {
+  if (isGloballyExcluded(emp, globalExclusions)) {
+    return {
+      ruleKey: 'GLOBAL_EXCLUSION',
+      ruleName: 'Global Exclusion',
+      attendanceStatus: 'excluded',
+      skippedReason: 'Global exclusion list',
+    };
+  }
+
   for (const ex of exclusions) {
     if (ex.type === 'VIP_USER' && ex.value === emp.emp_id) {
       return { ruleKey: 'VIP_USER', ruleName: 'VIP User', attendanceStatus: 'excluded', skippedReason: 'VIP exclusion list' };

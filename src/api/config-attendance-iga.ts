@@ -25,6 +25,12 @@ import {
 import { rollbackExecution } from '../services/attendance-iga/actions.js';
 import { previewSftpPaths } from '../services/attendance-iga/sftp-fetcher.js';
 import { previewTrueinRequest, testTrueinConnection } from '../services/attendance-iga/truein-client.js';
+import {
+  addGlobalExclusion,
+  importGlobalExclusionsCsv,
+  listGlobalExclusions,
+  removeGlobalExclusion,
+} from '../services/attendance-iga/global-exclusions.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -619,6 +625,41 @@ router.post('/exclusions', asyncHandler(async (req, res) => {
 
 router.delete('/exclusions/:id', asyncHandler(async (req, res) => {
   await execute(`UPDATE attendance_iga_exclusions SET active = 0 WHERE id = ?`, [req.params['id']]);
+  res.json({ success: true });
+}));
+
+router.get('/global-exclusions', asyncHandler(async (_req, res) => {
+  const data = await listGlobalExclusions();
+  res.json({ data });
+}));
+
+router.post('/global-exclusions', asyncHandler(async (req, res) => {
+  const email = String((req.body as { email?: string })?.email ?? '').trim();
+  const notes = (req.body as { notes?: string })?.notes ?? null;
+  if (!email) {
+    res.status(400).json({ error: 'email required' });
+    return;
+  }
+  try {
+    const result = await addGlobalExclusion(email, notes, actor(req));
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid email' });
+  }
+}));
+
+router.post('/global-exclusions/import', asyncHandler(async (req, res) => {
+  const csvText = String((req.body as { csvText?: string })?.csvText ?? '');
+  if (!csvText.trim()) {
+    res.status(400).json({ error: 'csvText required' });
+    return;
+  }
+  const result = await importGlobalExclusionsCsv(csvText, actor(req));
+  res.json(result);
+}));
+
+router.delete('/global-exclusions/:id', asyncHandler(async (req, res) => {
+  await removeGlobalExclusion(req.params['id']!);
   res.json({ success: true });
 }));
 
