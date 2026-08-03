@@ -1125,7 +1125,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **UI** — Executions employee cell + Rollbacks history show email; CSV placeholder documents email column.
 - Asset cache `2026-08-01-aiga-rb2`.
 
-### (pending) — 2026-08-03 — MFA reset in user profile + defer without password re-prompt
+### `2573fe7` — 2026-08-03 — MFA reset in user profile + defer without password re-prompt
 
 **Why** — Admins needed Reset MFA on the Directory user MFA tab even when MFA shows disabled; skipping MFA enrollment sent users back to the password step despite already authenticating.
 
