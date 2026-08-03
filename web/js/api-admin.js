@@ -356,6 +356,7 @@ Object.assign(api, {
   adminMfaEnroll:      (empId) => f(`/api/admin/users/${empId}/mfa/enroll`, { method: 'POST' }),
   adminMfaConfirm:     (empId, code) => f(`/api/admin/users/${empId}/mfa/confirm`, { method: 'POST', body: JSON.stringify({ code }) }),
   adminMfaDisable:     (empId) => f(`/api/admin/users/${empId}/mfa/disable`, { method: 'POST' }),
+  adminMfaReset:       (empId, enforce = true) => f(`/api/admin/users/${empId}/mfa/reset`, { method: 'POST', body: JSON.stringify({ enforce }) }),
   adminMfaRegenCodes:  (empId) => f(`/api/admin/users/${empId}/mfa/regenerate-codes`, { method: 'POST' }),
   adminMfaEnforce:     (empId, enforce) => f(`/api/admin/users/${empId}/mfa/enforce`, { method: 'POST', body: JSON.stringify({ enforce }) }),
   getMfaPolicy:        () => f('/api/admin/users/mfa-policy'),
