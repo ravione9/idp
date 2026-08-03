@@ -1722,8 +1722,7 @@ export async function viewMfaMethods(content) {
         if (!selectedUser) return;
         if (!confirm(`Reset MFA for ${selectedUser.full_name}? Current MFA will be removed and fresh enrollment will be required at next login.`)) return;
         try {
-          await api.adminMfaDisable(selectedUser.emp_id);
-          await api.adminMfaEnforce(selectedUser.emp_id, true);
+          await api.adminMfaReset(selectedUser.emp_id, true);
           selectedUser.mfa_enforced = true;
           setActionMsg(`✓ MFA reset for ${selectedUser.full_name}. Fresh enrollment is now required on next login.`);
         } catch (e) { setActionMsg(e.message, true); }
@@ -5619,7 +5618,7 @@ function initUsersTab(panel, me = null) {
         const isEnforced = !!(emp.mfa_enforced);
         const statusBadge = mfaStatus.enabled
           ? `<span class="badge badge-success">Enabled</span>`
-          : mfaStatus.enrolled
+          : mfaStatus.pendingEnrollment
             ? `<span class="badge badge-warning">Enrollment pending</span>`
             : `<span class="badge badge-neutral">Disabled</span>`;
 
@@ -5692,8 +5691,7 @@ function initUsersTab(panel, me = null) {
           body.querySelector('#pp-mfa-reset').addEventListener('click', async () => {
             if (!confirm(`Reset MFA for ${emp.full_name || empId}? Current MFA will be removed and fresh enrollment will be required at next login.`)) return;
             try {
-              await api.adminMfaDisable(empId);
-              await api.adminMfaEnforce(empId, true);
+              await api.adminMfaReset(empId, true);
               msgEl.innerHTML = `<div class="pp-alert success">✓ MFA reset. User must enroll again at next login.</div>`;
               reloadProfile(true);
             } catch (e) { msgEl.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
@@ -5725,10 +5723,20 @@ function initUsersTab(panel, me = null) {
 
         } else {
           actionsEl.innerHTML = `
-            <button class="btn btn-sm btn-primary" id="pp-mfa-start">Start MFA Enrollment for User</button>`;
+            <button class="btn btn-sm btn-primary" id="pp-mfa-start">Start MFA Enrollment for User</button>
+            <button class="btn btn-sm btn-secondary" id="pp-mfa-reset">↺ Reset MFA (force fresh enrollment)</button>`;
           const enrollDiv = document.createElement('div');
           enrollDiv.style.marginTop = '1rem';
           body.appendChild(enrollDiv);
+
+          body.querySelector('#pp-mfa-reset').addEventListener('click', async () => {
+            if (!confirm(`Reset MFA for ${emp.full_name || empId}? Any existing MFA setup will be cleared and fresh enrollment will be required at next login.`)) return;
+            try {
+              await api.adminMfaReset(empId, true);
+              msgEl.innerHTML = `<div class="pp-alert success">✓ MFA reset. User must enroll again at next login.</div>`;
+              reloadProfile(true);
+            } catch (e) { msgEl.innerHTML = `<div class="pp-alert error">Failed: ${esc(e.message)}</div>`; }
+          });
 
           body.querySelector('#pp-mfa-start').addEventListener('click', async () => {
             const btn = body.querySelector('#pp-mfa-start');

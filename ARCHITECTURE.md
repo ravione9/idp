@@ -529,7 +529,7 @@ To add a new migration:
 | `POST` | `/auth/local/login/mfa-verify` | Submit TOTP / backup code |
 | `POST` | `/auth/local/login/mfa-enroll` | Start TOTP enrollment during login (QR + secret; no session) |
 | `POST` | `/auth/local/login/mfa-enroll/confirm` | Confirm TOTP during login → enable MFA + issue session |
-| `POST` | `/auth/local/login/mfa-enroll/defer` | Defer enrollment (sign in during grace period, or return to login) |
+| `POST` | `/auth/local/login/mfa-enroll/defer` | Defer enrollment — issues session immediately (password/OIDC already verified); user completes MFA on a later sign-in |
 | `GET`  | `/auth/google` `/auth/google/callback` | Google Workspace OIDC |
 | `POST` | `/auth/logout` | End current session |
 | `GET`  | `/auth/zoho` `/auth/zoho/callback` | **Removed** — returns HTTP 410 Gone (Zoho Mail is now a SAML SP) |
@@ -568,6 +568,7 @@ To add a new migration:
 | `POST` | `/api/admin/users/:empId/mfa/enroll` | Start user MFA enrollment (returns QR + secret) |
 | `POST` | `/api/admin/users/:empId/mfa/confirm` | Confirm user MFA with 6-digit code |
 | `POST` | `/api/admin/users/:empId/mfa/disable` | Disable MFA for a user |
+| `POST` | `/api/admin/users/:empId/mfa/reset` | Reset MFA — clear secrets + grace; optionally re-enforce (`enforce` body, default true) |
 | `POST` | `/api/admin/users/:empId/mfa/regenerate-codes` | Regenerate user MFA backup codes |
 | `POST` | `/api/admin/users/:empId/mfa/enforce` | Set/clear per-user MFA enforcement |
 | `GET` | `/api/admin/users/mfa-policy` | Read global MFA policy |
@@ -1123,6 +1124,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **Export CSV** — includes `email` column.
 - **UI** — Executions employee cell + Rollbacks history show email; CSV placeholder documents email column.
 - Asset cache `2026-08-01-aiga-rb2`.
+
+### (pending) — 2026-08-03 — MFA reset in user profile + defer without password re-prompt
+
+**Why** — Admins needed Reset MFA on the Directory user MFA tab even when MFA shows disabled; skipping MFA enrollment sent users back to the password step despite already authenticating.
+
+**What changed**
+- **`POST /api/admin/users/:empId/mfa/reset`** — clears MFA secrets, grace window, and re-enforces enrollment.
+- **User profile MFA tab** — Reset MFA button shown for disabled and enabled users.
+- **`POST /auth/local/login/mfa-enroll/defer`** — always issues a session (local or Google); no password re-prompt.
+- **Google OIDC enroll redirect** — passes `grace_active` / `grace_hours` to the login page.
+- **`src/auth/mfa-grace.ts`** — shared Redis grace helpers.
 
 ### (pending) — 2026-08-01 — Helm chart + HA/PRD/deploy docs in repo
 

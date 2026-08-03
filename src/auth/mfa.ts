@@ -101,6 +101,8 @@ export interface MfaSecretRow {
 export interface MfaStatus {
   enrolled: boolean;
   enabled:  boolean;
+  /** TOTP secret exists but user has not confirmed enrollment yet. */
+  pendingEnrollment: boolean;
   remainingBackupCodes: number;
   lastUsedAt: string | null;
   methods?: MfaMethodKey[];
@@ -146,10 +148,12 @@ export async function getMfaStatus(empId: string): Promise<MfaStatus> {
     emp?.mobile,
   );
   const enabled = await isAnyMfaEnabled(empId, active);
+  const pendingEnrollment = !!row && !active;
 
   return {
     enrolled: enabled,
     enabled,
+    pendingEnrollment,
     remainingBackupCodes: active ? codes.length : 0,
     lastUsedAt,
     methods,

@@ -14,7 +14,7 @@
  *   2c. POST /auth/local/login/mfa-enroll/confirm { enrollChallengeId, code }
  *        → { success:true, redirect:'/', backupCodes }  (enable MFA + session)
  *   2d. POST /auth/local/login/mfa-enroll/defer { enrollChallengeId }
- *        → { deferred:true, session:false } OR { success:true, redirect } during grace period
+ *        → { success:true, redirect } (password/OIDC already verified — no re-prompt)
  */
 import { Request, Response } from 'express';
 import { z } from 'zod';
@@ -50,10 +50,10 @@ import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
 import { isPortalAccessible } from '../fsm/states.js';
 import { PORTAL_OPERATOR_ROLES } from '../services/portal-roles.js';
 import { markSessionMfaFresh } from '../services/app-mfa-stepup.js';
+import { clearMfaGrace, ensureMfaGraceStarted, getGraceRemainingMs } from './mfa-grace.js';
 
 export const MFA_CHALLENGE_PREFIX        = 'lilg:mfa-challenge:';
 export const MFA_ENROLL_CHALLENGE_PREFIX = 'lilg:mfa-enroll-challenge:';
-const MFA_GRACE_PREFIX            = 'lilg:mfa-grace:';
 export const MFA_CHALLENGE_TTL_S         = 600; // 10 min — SSO app login often pauses on authenticator
 
 const loginSchema = z.object({
@@ -289,30 +289,6 @@ export function isMfaChallengeRequired(opts: {
 
   const enrolledOrPolicy = challengeBecauseEnrolled || policyRequiresMfa;
   return enrolledOrPolicy && !deviceTrusted;
-}
-
-function mfaGraceKey(empId: string): string {
-  return `${MFA_GRACE_PREFIX}${empId}`;
-}
-
-async function ensureMfaGraceStarted(empId: string, gracePeriodHours: number): Promise<void> {
-  if (gracePeriodHours <= 0) return;
-  const ttlS = Math.max(gracePeriodHours * 3600, 3600);
-  await redis.set(mfaGraceKey(empId), String(Date.now()), 'EX', ttlS, 'NX');
-}
-
-async function getGraceRemainingMs(empId: string, gracePeriodHours: number): Promise<number> {
-  if (gracePeriodHours <= 0) return 0;
-  const raw = await redis.get(mfaGraceKey(empId));
-  if (!raw) return 0;
-  const startedAt = Number(raw);
-  if (Number.isNaN(startedAt)) return 0;
-  const remaining = startedAt + gracePeriodHours * 3600 * 1000 - Date.now();
-  return remaining > 0 ? remaining : 0;
-}
-
-async function clearMfaGrace(empId: string): Promise<void> {
-  await redis.del(mfaGraceKey(empId));
 }
 
 async function logAttempt(email: string, ip: string, success: boolean, reason?: string): Promise<void> {
@@ -699,40 +675,44 @@ export async function localLoginMfaEnrollDeferHandler(req: Request, res: Respons
   const graceRemainingMs = await getGraceRemainingMs(challenge.empId, mfaRequirements.gracePeriodHours);
   await redis.del(key);
 
-  // Administrators follow the same grace/defer path as everyone else.
-  // Whether MFA is required at all is decided by mfa_policy (enforce_for_admins,
-  // global_enforce, per-user / group enforce) — not a hard-coded operator rule.
+  const iss = challenge.iss ?? 'local';
+  const sub = challenge.sub ?? (iss === 'local' ? `local:${challenge.accountId}` : challenge.email);
+  const ttlHours = await getSessionCreateTtlHours();
+  const sessionId = await createSession({
+    empId:     challenge.empId,
+    email:     challenge.email,
+    role:      challenge.role,
+    iss,
+    sub,
+    ttlHours,
+    ip:        getClientIp(req),
+    userAgent: req.get('user-agent') ?? '',
+  });
+  if (iss === 'local' && challenge.accountId > 0) {
+    await touchLocalLogin(challenge.accountId);
+  }
+  setSessionCookie(res, sessionId, ttlHours);
 
+  const redirect = challenge.returnTo || '/';
   if (graceRemainingMs > 0) {
     await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-deferred-grace');
-    const ttlHours = await getSessionCreateTtlHours();
-    const sessionId = await createSession({
-      empId:     challenge.empId,
-      email:     challenge.email,
-      role:      challenge.role,
-      iss:       'local',
-      sub:       `local:${challenge.accountId}`,
-      ttlHours,
-      ip:        getClientIp(req),
-      userAgent: req.get('user-agent') ?? '',
-    });
-    await touchLocalLogin(challenge.accountId);
-    setSessionCookie(res, sessionId, ttlHours);
-    logger.info({ empId: challenge.empId, email: challenge.email }, 'Local login with deferred MFA enrollment');
+    logger.info({ empId: challenge.empId, email: challenge.email, iss }, 'Login with deferred MFA enrollment (grace)');
     res.json({
       success: true,
-      redirect: '/',
+      redirect,
       deferredEnrollment: true,
       graceRemainingHours: Math.ceil(graceRemainingMs / 3_600_000),
     });
     return;
   }
 
-  await logAttempt(challenge.email, getClientIp(req), false, 'mfa-enroll-deferred');
+  await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-deferred');
+  logger.info({ empId: challenge.empId, email: challenge.email, iss }, 'Login with deferred MFA enrollment');
   res.json({
-    deferred: true,
-    session: false,
-    message: 'Two-factor setup is required. You can complete it on your next sign-in.',
+    success: true,
+    redirect,
+    deferredEnrollment: true,
+    enrollRequiredNextLogin: true,
   });
 }
 

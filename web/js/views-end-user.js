@@ -246,16 +246,14 @@ export function renderLogin() {
     async function deferEnrollment() {
       try {
         const r = await api.localLoginMfaEnrollDefer(enrollChallengeId);
-        if (r && r.success && r.redirect) {
-          location.href = returnTo;
+        if (r && r.success) {
+          location.href = r.redirect || returnTo || '/';
           return;
         }
-        showPasswordStep(
-          email,
-          r?.message || 'Two-factor setup is required. You can complete it on your next sign-in.',
-        );
+        location.href = returnTo || '/';
       } catch (err) {
-        showPasswordStep(email, err.message);
+        const errEl = document.querySelector('#enroll-error');
+        if (errEl) errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }
     }
 
@@ -556,8 +554,8 @@ export function renderLogin() {
   }
   if (pendingEnrollChallenge) {
     renderMfaEnrollStep(pendingEnrollChallenge, pendingEmail || 'your account', {
-      graceActive: false,
-      gracePeriodHours: 24,
+      graceActive: loginParams.get('grace_active') === '1',
+      gracePeriodHours: Number(loginParams.get('grace_hours') || '24') || 24,
     });
     return root;
   }
