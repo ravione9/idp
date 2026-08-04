@@ -165,34 +165,55 @@ export function renderLogin() {
     }).catch(() => { /* keep defaults */ });
   }
 
-  // Google / MFA return already carries a challenge — never block on /api/me
-  // (a hung Redis session lookup left the page stuck on "Checking session…" and
-  // broke SP-initiated SAML → Google → MFA).
-  if (pendingMfaChallenge || pendingEnrollChallenge || appMfaStepUp) {
-    return renderLoginForm();
+  function authSuccessRedirect(url) {
+    location.replace(url || returnTo || '/');
   }
 
-  // If the portal session is already valid, never re-prompt password/MFA —
-  // continue straight to the SSO resume/launch (or home).
+  // Always verify portal session first — even when URL still has mfa_challenge from
+  // Google redirect or browser back/forward (avoids re-prompting after sign-in).
   const shell = el(`
     <div class="auth-shell auth-shell--light">
       <main class="auth-panel">
         <div class="auth-card auth-card--light"><p class="muted" style="text-align:center;margin:0">Checking session…</p></div>
       </main>
     </div>`);
+
+  function mountLoginForm(opts = {}) {
+    const root = document.getElementById('app');
+    const form = renderLoginForm(opts);
+    if (root) root.replaceChildren(form);
+    return form;
+  }
+
   const meAc = new AbortController();
   const meTimer = setTimeout(() => meAc.abort(), 3_000);
   void api.me({ signal: meAc.signal }).then(() => {
     clearTimeout(meTimer);
-    location.replace(returnTo);
+    if (appMfaStepUp) {
+      mountLoginForm({ allowAppMfaStepUp: true });
+      return;
+    }
+    authSuccessRedirect(returnTo || '/');
   }).catch(() => {
     clearTimeout(meTimer);
-    const root = document.getElementById('app');
-    if (root) root.replaceChildren(renderLoginForm());
+    mountLoginForm({ allowAppMfaStepUp: false });
   });
+
+  // bfcache restore (Back button) can show stale /login?mfa_challenge=… without re-running boot.
+  window.addEventListener('pageshow', (ev) => {
+    if (!ev.persisted) return;
+    const path = location.pathname.replace(/\/$/, '') || '/';
+    if (path !== '/login') return;
+    void api.me().then(() => {
+      const rt = new URLSearchParams(location.search).get('return_to') || '/';
+      location.replace(rt);
+    }).catch(() => { /* not signed in — keep login UI */ });
+  }, { once: true });
+
   return shell;
 
-  function renderLoginForm() {
+  function renderLoginForm(opts = {}) {
+  const { allowAppMfaStepUp = false } = opts;
   const root = el(`
     <div class="auth-shell auth-shell--light">
       <main class="auth-panel">
@@ -274,10 +295,10 @@ export function renderLogin() {
       try {
         const r = await api.localLoginMfaEnrollDefer(enrollChallengeId);
         if (r && r.success) {
-          location.href = r.redirect || returnTo || '/';
+          authSuccessRedirect(r.redirect);
           return;
         }
-        location.href = returnTo || '/';
+        authSuccessRedirect(returnTo);
       } catch (err) {
         const errEl = card.querySelector('#enroll-error');
         if (isEnrollSessionExpiredError(err.message)) {
@@ -336,7 +357,7 @@ export function renderLogin() {
               </div></div></div>
             <button type="button" class="btn btn-primary btn-block btn-lg" id="enroll-done" style="margin-top:1rem">Continue</button>`;
           out.querySelector('#enroll-done').addEventListener('click', () => {
-            location.href = returnTo;
+            authSuccessRedirect(returnTo);
           });
         } catch (err) {
           if (isEnrollSessionExpiredError(err.message)) {
@@ -412,7 +433,7 @@ export function renderLogin() {
       const timer = setTimeout(() => ac.abort(), 15_000);
       try {
         const r = await api.localLoginMfa(challengeId, code, { signal: ac.signal });
-        location.href = r?.redirect || returnTo || '/';
+        authSuccessRedirect(r?.redirect);
       } catch (err) {
         const msg = err?.name === 'AbortError'
           ? 'Verification timed out — check your connection and try again.'
@@ -456,7 +477,7 @@ export function renderLogin() {
           publicKey: prepareWebAuthnAuthOptions(options),
         });
         await api.localLoginMfaWebAuthnVerify(challengeId, webauthnChallengeId, webAuthnAuthResponseToJson(cred));
-        location.href = returnTo;
+        authSuccessRedirect(returnTo);
       } catch (err) {
         merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }
@@ -515,7 +536,7 @@ export function renderLogin() {
           renderMfaStep(r.challengeId, email, r.availableMethods);
           return;
         }
-        location.href = r?.redirect || returnTo || '/';
+        location.replace(r?.redirect || returnTo || '/');
       } catch (err) {
         pwErr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }
@@ -557,7 +578,7 @@ export function renderLogin() {
   }
 
   // Critical-app step-up: session exists, start MFA challenge without password re-entry.
-  if (appMfaStepUp) {
+  if (appMfaStepUp && allowAppMfaStepUp) {
     const card = el(`
       <div class="auth-card auth-card--light">
         ${authBrandHtml()}
@@ -573,7 +594,7 @@ export function renderLogin() {
         });
         return;
       }
-      location.href = r?.redirect || returnTo || '/';
+      authSuccessRedirect(r?.redirect);
     }).catch((err) => {
       const errEl = card.querySelector('#app-mfa-error');
       if (errEl) {
