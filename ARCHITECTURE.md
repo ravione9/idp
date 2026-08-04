@@ -1080,6 +1080,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-04 — Login session check on stale MFA URLs (back button / new tab)
+
+**Why** — Browser Back or a second tab to `/login?mfa_challenge=…` re-prompted MFA even when the portal session was already valid.
+
+**What changed:**
+
+- **`web/js/views-end-user.js`** — always call `/api/me` on `/login` first; redirect home when session exists; `location.replace` after auth success; bfcache `pageshow` handler.
+- **`web/js/app.js`** — unauthenticated `/` redirect uses `replace` (not `href`).
+
 ### (pending) — 2026-08-04 — MFA enroll session TTL + Directory Sync JSON hardening
 
 **Why** — MFA setup expired after 10 min while users scanned QR; Directory Sync showed cryptic `Unexpected token` when API/proxy returned non-JSON.
