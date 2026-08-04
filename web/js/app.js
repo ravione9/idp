@@ -507,7 +507,7 @@ async function main() {
     try {
       state.me = await api.me();
     } catch {
-      location.href = '/login';
+      location.replace('/login');
       return;
     }
 
