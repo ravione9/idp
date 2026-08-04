@@ -237,11 +237,38 @@ export function renderLogin() {
     applyLoginBranding(root);
   };
 
+  function persistEnrollChallengeInUrl(enrollChallengeId, email, { graceActive = false, gracePeriodHours = 24 } = {}) {
+    const p = new URLSearchParams(location.search);
+    p.set('enroll_challenge', enrollChallengeId);
+    if (email) p.set('email', email);
+    if (graceActive) p.set('grace_active', '1');
+    else p.delete('grace_active');
+    if (gracePeriodHours) p.set('grace_hours', String(gracePeriodHours));
+    history.replaceState(null, '', `/login?${p.toString()}`);
+  }
+
+  function isEnrollSessionExpiredError(message) {
+    return /enrollment session expired/i.test(String(message || ''));
+  }
+
+  function showEnrollSessionExpired(container, email) {
+    container.innerHTML = `<div class="alert alert-error">Setup session expired — sign in again to continue MFA setup.</div>
+      <button type="button" class="btn btn-primary btn-block btn-lg" id="enroll-relogin" style="margin-top:0.75rem">Sign in again</button>`;
+    container.querySelector('#enroll-relogin').addEventListener('click', () => {
+      const p = new URLSearchParams();
+      if (email && email !== 'your account') p.set('email', email);
+      if (returnTo && returnTo !== '/') p.set('return_to', returnTo);
+      location.href = `/login${p.toString() ? `?${p.toString()}` : ''}`;
+    });
+  }
+
   function renderMfaEnrollStep(enrollChallengeId, email, { graceActive = false, gracePeriodHours = 24 } = {}) {
     const deferLabel = graceActive ? 'Continue without MFA for now' : 'Set up on next sign-in';
     const deferHint = graceActive
       ? `MFA must be enabled within ${gracePeriodHours} hour${gracePeriodHours === 1 ? '' : 's'} of your first required sign-in.`
       : 'You will be prompted to set up MFA the next time you sign in.';
+
+    persistEnrollChallengeInUrl(enrollChallengeId, email, { graceActive, gracePeriodHours });
 
     async function deferEnrollment() {
       try {
@@ -252,7 +279,11 @@ export function renderLogin() {
         }
         location.href = returnTo || '/';
       } catch (err) {
-        const errEl = document.querySelector('#enroll-error');
+        const errEl = card.querySelector('#enroll-error');
+        if (isEnrollSessionExpiredError(err.message)) {
+          showEnrollSessionExpired(errEl, email);
+          return;
+        }
         if (errEl) errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }
     }
@@ -308,11 +339,19 @@ export function renderLogin() {
             location.href = returnTo;
           });
         } catch (err) {
+          if (isEnrollSessionExpiredError(err.message)) {
+            showEnrollSessionExpired(out, email);
+            return;
+          }
           out.innerHTML = `<div class="alert alert-error" style="margin-top:1rem">${esc(err.message)}</div>`;
         }
       });
     }).catch((err) => {
       loadingEl.hidden = true;
+      if (isEnrollSessionExpiredError(err.message)) {
+        showEnrollSessionExpired(errEl, email);
+        return;
+      }
       errEl.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
     });
   }

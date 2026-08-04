@@ -55,6 +55,8 @@ import { clearMfaGrace, ensureMfaGraceStarted, getGraceRemainingMs } from './mfa
 export const MFA_CHALLENGE_PREFIX        = 'lilg:mfa-challenge:';
 export const MFA_ENROLL_CHALLENGE_PREFIX = 'lilg:mfa-enroll-challenge:';
 export const MFA_CHALLENGE_TTL_S         = 600; // 10 min — SSO app login often pauses on authenticator
+/** Enrollment may include QR scan + app setup — keep alive longer and refresh on each step. */
+export const MFA_ENROLL_CHALLENGE_TTL_S  = 3600; // 1 hour
 
 const loginSchema = z.object({
   email:    z.string().email(),
@@ -487,7 +489,7 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
           `${MFA_ENROLL_CHALLENGE_PREFIX}${enrollChallengeId}`,
           JSON.stringify(enrollChallenge),
           'EX',
-          MFA_CHALLENGE_TTL_S,
+          MFA_ENROLL_CHALLENGE_TTL_S,
         );
         await ensureMfaGraceStarted(account.emp_id, mfaRequirements.gracePeriodHours);
         const graceRemainingMs = await getGraceRemainingMs(account.emp_id, mfaRequirements.gracePeriodHours);
@@ -571,9 +573,20 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
   await finishMfaChallenge(req, res, challenge);
 }
 
-async function loadEnrollChallenge(enrollChallengeId: string): Promise<MfaEnrollChallenge | null> {
-  const raw = await redis.get(`${MFA_ENROLL_CHALLENGE_PREFIX}${enrollChallengeId}`);
+function enrollChallengeKey(enrollChallengeId: string): string {
+  return `${MFA_ENROLL_CHALLENGE_PREFIX}${enrollChallengeId}`;
+}
+
+async function loadEnrollChallenge(
+  enrollChallengeId: string,
+  touch = false,
+): Promise<MfaEnrollChallenge | null> {
+  const key = enrollChallengeKey(enrollChallengeId);
+  const raw = await redis.get(key);
   if (!raw) return null;
+  if (touch) {
+    await redis.set(key, raw, 'EX', MFA_ENROLL_CHALLENGE_TTL_S);
+  }
   return JSON.parse(raw) as MfaEnrollChallenge;
 }
 
@@ -584,7 +597,7 @@ export async function localLoginMfaEnrollHandler(req: Request, res: Response): P
     return;
   }
 
-  const challenge = await loadEnrollChallenge(parsed.data.enrollChallengeId);
+  const challenge = await loadEnrollChallenge(parsed.data.enrollChallengeId, true);
   if (!challenge) {
     res.status(401).json({ error: 'Enrollment session expired — sign in again' });
     return;
@@ -592,6 +605,7 @@ export async function localLoginMfaEnrollHandler(req: Request, res: Response): P
 
   try {
     const result = await startEnrollment(challenge.empId, challenge.email);
+    await redis.expire(enrollChallengeKey(parsed.data.enrollChallengeId), MFA_ENROLL_CHALLENGE_TTL_S);
     const qrDataUrl = await qrcode.toDataURL(result.otpauthUrl, { margin: 1, width: 220 });
     res.json({
       secret:     result.secret,
@@ -611,8 +625,8 @@ export async function localLoginMfaEnrollConfirmHandler(req: Request, res: Respo
     return;
   }
 
-  const key = `${MFA_ENROLL_CHALLENGE_PREFIX}${parsed.data.enrollChallengeId}`;
-  const challenge = await loadEnrollChallenge(parsed.data.enrollChallengeId);
+  const key = enrollChallengeKey(parsed.data.enrollChallengeId);
+  const challenge = await loadEnrollChallenge(parsed.data.enrollChallengeId, true);
   if (!challenge) {
     res.status(401).json({ error: 'Enrollment session expired — sign in again' });
     return;
@@ -664,8 +678,8 @@ export async function localLoginMfaEnrollDeferHandler(req: Request, res: Respons
   }
 
   const enrollChallengeId = parsed.data.enrollChallengeId;
-  const key = `${MFA_ENROLL_CHALLENGE_PREFIX}${enrollChallengeId}`;
-  const challenge = await loadEnrollChallenge(enrollChallengeId);
+  const key = enrollChallengeKey(enrollChallengeId);
+  const challenge = await loadEnrollChallenge(enrollChallengeId, true);
   if (!challenge) {
     res.status(401).json({ error: 'Enrollment session expired — sign in again' });
     return;

@@ -64,6 +64,7 @@ Object.assign(api, {
   updateConnector:   (id, data) => f(`/api/iga/connectors/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteConnector:   (id) => f(`/api/iga/connectors/${id}`, { method: 'DELETE' }),
   testConnector:     (id) => f(`/api/iga/connectors/${id}/test`, { method: 'POST' }),
+  syncConnector:     (id) => f(`/api/iga/connectors/${id}/sync`, { method: 'POST' }),
   getConnectorRuns:  (id, limit = 10) => f(`/api/iga/connectors/${id}/runs?limit=${limit}`),
   listGroups:       () => f('/api/admin/groups'),
   syncDirectoryGroups: () => f('/api/admin/groups/sync', { method: 'POST' }),

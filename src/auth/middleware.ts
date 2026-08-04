@@ -32,6 +32,7 @@ import {
   MFA_CHALLENGE_PREFIX,
   MFA_CHALLENGE_TTL_S,
   MFA_ENROLL_CHALLENGE_PREFIX,
+  MFA_ENROLL_CHALLENGE_TTL_S,
   getMfaRequirementContext,
   isMfaChallengeRequired,
   type MfaChallenge,
@@ -454,7 +455,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
           `${MFA_ENROLL_CHALLENGE_PREFIX}${enrollChallengeId}`,
           JSON.stringify(enrollChallenge),
           'EX',
-          MFA_CHALLENGE_TTL_S,
+          MFA_ENROLL_CHALLENGE_TTL_S,
         );
         await ensureMfaGraceStarted(emp.emp_id, mfaRequirements.gracePeriodHours);
         const graceRemainingMs = await getGraceRemainingMs(emp.emp_id, mfaRequirements.gracePeriodHours);
