@@ -4207,11 +4207,10 @@ function initSourcesTab(panel) {
       btn.addEventListener('click', async () => {
         btn.disabled = true; btn.textContent = '⟳ Syncing…';
         try {
-          const r = await api.igaConnectors(); // ping to confirm alive
-          await fetch(`/api/iga/connectors/${btn.dataset.id}/sync`, { method: 'POST', credentials: 'include' });
+          await api.syncConnector(btn.dataset.id);
           showToast('Sync triggered — check history for results.');
           await load();
-        } catch(e) { alert('Sync failed: ' + e.message); btn.disabled = false; btn.textContent = '▶ Sync Now'; }
+        } catch(e) { showToast(e.message || 'Sync failed', true); btn.disabled = false; btn.textContent = 'Sync'; }
       });
     });
 

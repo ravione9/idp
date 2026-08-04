@@ -235,11 +235,13 @@ Supported methods (policy-controlled via `mfa_policy.allowed_methods` + optional
 - Dev without SMTP/SMS: enable **Development mode** in the GUI (or `MFA_OTP_DEV_LOG` / `SMS_DEV_LOG` env).
 - WebAuthn RP: `WEBAUTHN_RP_ID` (defaults to request hostname), `WEBAUTHN_RP_NAME` (defaults to `Lenskart IdP`).
 - Login flow when MFA is **required but not yet enrolled** (unchanged grace-period path via TOTP enrollment at login).
-- MFA verify and enroll challenges live in Redis with 5-minute TTL.
+- MFA verify and enroll challenges live in Redis (verify: 10 min; enroll: 1 h with sliding refresh on each step).
 
 ### 5.5 Rate limiting
 
 `/auth/local/login`, `/auth/local/login/mfa-verify`, `/auth/local/login/mfa-enroll`, `/auth/local/login/mfa-enroll/confirm`, and `/auth/local/login/mfa-enroll/defer` are rate limited at **10 requests / minute / (IP+email or IP+challenge)** via a **Redis fixed-window** counter (`src/auth/rate-limit.ts`, keys `idp:rl:*`, atomic Lua `INCR` + `PEXPIRE`). Same middleware signature as before; cluster-safe across API replicas. On Redis errors the limiter **fails open** (allows the request and logs a warning).
+
+**MFA challenge TTL:** verification challenges expire after **10 minutes** (`MFA_CHALLENGE_TTL_S`). Enrollment challenges last **1 hour** (`MFA_ENROLL_CHALLENGE_TTL_S`) and refresh on each enroll / confirm / defer step so QR setup is not cut off mid-flow.
 Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 ### 5.6 Adaptive / Risk-based Authentication
@@ -1077,6 +1079,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-04 — MFA enroll session TTL + Directory Sync JSON hardening
+
+**Why** — MFA setup expired after 10 min while users scanned QR; Directory Sync showed cryptic `Unexpected token` when API/proxy returned non-JSON.
+
+**What changed:**
+
+- **`MFA_ENROLL_CHALLENGE_TTL_S` (1 h)** — sliding refresh on enroll / confirm / defer; Google OIDC + password login paths.
+- **Login UI** — persist `enroll_challenge` in URL; "Sign in again" on expiry.
+- **`src/utils/json-safe.ts`** — sanitize connector error strings in API responses.
+- **`web/js/api.js`** — safe JSON parse with readable errors; **`syncConnector`** API helper.
 
 ### (pending) — 2026-08-03 — Connector sync schedule presets + in-process scheduler
 

@@ -24,6 +24,7 @@ import { harvestConnectorEntitlements } from '../services/entitlement-harvest.js
 import { fulfillEntitlementOnTarget } from '../services/entitlement-fulfillment.js';
 import { submitAccessRequest, processDecision, repairAccessRequestFulfillment } from '../services/access-request-workflow.js';
 import { isValidSyncSchedule } from '../utils/sync-schedule.js';
+import { jsonSafeRow, jsonSafeString } from '../utils/json-safe.js';
 import {
   explainJitCatalogForUser,
   expireStaleAccessRequests,
@@ -220,7 +221,12 @@ router.get(
         LIMIT ? OFFSET ?`,
       [limit, offset],
     );
-    res.json({ data: rows, total: rows.length, limit, offset });
+    res.json({
+      data: rows.map((row) => jsonSafeRow(row, ['last_error', 'name', 'sync_schedule'])),
+      total: rows.length,
+      limit,
+      offset,
+    });
   }),
 );
 
@@ -504,14 +510,14 @@ router.post(
     }
     const body: Record<string, unknown> = {
       success: result.success,
-      message: result.message,
+      message: jsonSafeString(result.message) ?? result.message,
       status: result.connectorStatus,
     };
     if (result.code) body['code'] = result.code;
     if (result.warnings) body['warnings'] = result.warnings;
     if (result.info) body['info'] = result.info;
     if (result.ouSuggestions) body['ouSuggestions'] = result.ouSuggestions;
-    if (result.detail) body['detail'] = result.detail;
+    if (result.detail) body['detail'] = jsonSafeString(result.detail);
     res.status(result.statusCode).json(body);
   }),
 );

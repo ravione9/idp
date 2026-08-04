@@ -9,7 +9,25 @@ export const api = {
       ...options,
     });
     const ct = res.headers.get('content-type') || '';
-    const body = ct.includes('json') ? await res.json() : await res.text();
+    const raw = await res.text();
+    let body;
+    if (ct.includes('json')) {
+      try {
+        body = raw ? JSON.parse(raw) : null;
+      } catch {
+        const preview = raw.slice(0, 80).replace(/\s+/g, ' ').trim();
+        const err = new Error(
+          res.ok
+            ? 'Server returned invalid JSON — try refreshing or signing in again'
+            : `Request failed (HTTP ${res.status})${preview ? `: ${preview}` : ''}`,
+        );
+        err.status = res.status;
+        err.body = raw;
+        throw err;
+      }
+    } else {
+      body = raw;
+    }
     if (!res.ok) {
       // Prefer body.message (used by connector test + most IGA endpoints),
       // then body.error (used by validation errors), then HTTP status text.
