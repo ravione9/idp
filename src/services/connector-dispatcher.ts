@@ -8,6 +8,7 @@
 import { queryOne } from '../db/connection.js';
 import { runAdSync } from './ad-sync.js';
 import { runGoogleSync } from './google-sync.js';
+import { queueAdAgentSync } from './ad-agent-sync.js';
 import { isConnectorSyncEligible } from './connector-health.js';
 import type { SyncResult } from './ad-sync.js';
 import logger from '../utils/logger.js';
@@ -63,6 +64,8 @@ export async function triggerConnectorSync(
 
   if (type === 'AD' || type === 'LDAP' || slug === 'active-directory') {
     syncPromise = runAdSync(connectorId);
+  } else if (type === 'AD_AGENT') {
+    syncPromise = queueAdAgentSync(connectorId);
   } else if (
     type === 'GOOGLE'
     || type === 'GOOGLE_WORKSPACE'
@@ -72,7 +75,7 @@ export async function triggerConnectorSync(
   } else {
     throw new Error(
       `No sync/provisioning handler for connector type: ${connector.connector_type}. `
-      + 'Supported: AD, LDAP, GOOGLE / GOOGLE_WORKSPACE.',
+      + 'Supported: AD, LDAP, AD_AGENT, GOOGLE / GOOGLE_WORKSPACE.',
     );
   }
 

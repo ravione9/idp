@@ -19,6 +19,10 @@ import {
   listScopedGoogleUsers,
   resolveGoogleSyncScope,
 } from './google-directory-config.js';
+import {
+  AGENT_HEARTBEAT_TTL_MS,
+  isAgentRecentlyConnected,
+} from './ad-agent-sync.js';
 import { parseGoogleHostedDomains } from '../auth/google-domains.js';
 
 export type ConnectorHealthStatus = 'CONFIGURED' | 'CONNECTED' | 'ERROR' | 'DISABLED' | 'ACTIVE';
@@ -101,6 +105,19 @@ export async function runConnectorConnectivityTest(connectorId: string): Promise
       return { ...result, connectorStatus: 'ERROR' };
     }
 
+    if (type === 'AD_AGENT') {
+      const result = await testAdAgent(connectorId, cfg);
+      if (result.success) {
+        await markConnectorHealth(connectorId, true, result.message);
+        return { ...result, connectorStatus: 'CONNECTED' };
+      }
+      if (result.code === 'WAITING_FOR_AGENT') {
+        return { ...result, connectorStatus: 'CONFIGURED' };
+      }
+      await markConnectorHealth(connectorId, false, result.message);
+      return { ...result, connectorStatus: 'ERROR' };
+    }
+
     if (type === 'GOOGLE' || type === 'GOOGLE_WORKSPACE') {
       const result = await testGoogle(cfg);
       if (result.success) {
@@ -131,6 +148,47 @@ export async function runConnectorConnectivityTest(connectorId: string): Promise
       connectorStatus: 'ERROR',
     };
   }
+}
+
+async function testAdAgent(connectorId: string, cfg: Record<string, unknown>): Promise<Omit<ConnectorTestResult, 'connectorStatus'>> {
+  if (!String(cfg['agentTokenHash'] ?? '').trim()) {
+    return {
+      success: false,
+      statusCode: 422,
+      code: 'MISSING_AGENT_TOKEN',
+      message: 'Agent token not configured — re-save the connector or regenerate the token.',
+    };
+  }
+  if (!String(cfg['idpUrl'] ?? '').trim()) {
+    return {
+      success: false,
+      statusCode: 422,
+      code: 'MISSING_IDP_URL',
+      message: 'Missing idpUrl — set the IdP HTTPS URL (port 443) in connector settings.',
+    };
+  }
+
+  const row = await queryOne<{ last_health_check_at: Date | string | null; last_health_ok: number | null }>(
+    `SELECT last_health_check_at, last_health_ok FROM connectors WHERE id = ?`,
+    [connectorId],
+  );
+
+  if (row && isAgentRecentlyConnected(row.last_health_check_at) && row.last_health_ok === 1) {
+    return {
+      success: true,
+      statusCode: 200,
+      message: `AD Agent connected (heartbeat within ${Math.round(AGENT_HEARTBEAT_TTL_MS / 60_000)} minutes).`,
+    };
+  }
+
+  return {
+    success: false,
+    statusCode: 202,
+    code: 'WAITING_FOR_AGENT',
+    message:
+      'Waiting for on-prem AD Agent — install and start lilg-ad-connector.exe on a domain server. ' +
+      'The agent connects outbound to IdP on HTTPS :443 and sends heartbeats.',
+  };
 }
 
 async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorTestResult, 'connectorStatus'>> {

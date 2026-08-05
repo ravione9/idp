@@ -642,6 +642,16 @@ To add a new migration:
 | `GET`/`POST`/`DELETE` | `/api/admin/pam/system-users[/:id]` | Service / shared accounts |
 | `POST` | `/api/internal/radius/authenticate` | FreeRADIUS `rlm_rest` / AAA agent (X-Internal-Token) |
 | `GET` | `/api/internal/radius/health` | RADIUS module health |
+| `POST` | `/api/internal/ad-connector/heartbeat` | On-prem AD agent heartbeat (X-Connector-Id + X-Agent-Token) |
+| `GET` | `/api/internal/ad-connector/jobs/next` | Poll next pending sync job for this connector |
+| `POST` | `/api/internal/ad-connector/jobs/:runId/claim` | Agent claims a queued sync run |
+| `POST` | `/api/internal/ad-connector/jobs/:runId/inbound` | Agent posts AD user directory snapshot |
+| `GET` | `/api/internal/ad-connector/jobs/:runId/outbound-plan` | IdP returns provision/disable/enable actions |
+| `POST` | `/api/internal/ad-connector/jobs/:runId/outbound` | Agent reports outbound LDAP results |
+| `POST` | `/api/internal/ad-connector/jobs/:runId/groups` | Agent posts AD group membership snapshot |
+| `POST` | `/api/internal/ad-connector/jobs/:runId/complete` | Finalize connector run |
+| `GET` | `/api/internal/ad-connector/health` | AD agent API health |
+| `GET` | `/api/iga/connectors/ad-agent-package.zip` | Download on-prem AD agent ZIP (admin; includes README) |
 | `GET` | `/api/admin/reports/overview` | Enterprise Reports Hub KPIs + 30d trends (logins / SSO / failures) |
 | `GET` | `/api/admin/reports/access-inventory` | Who-has-what (apps, roles, entitlements); `export=csv` |
 | `GET` | `/api/admin/reports/mfa-coverage` | MFA enrollment posture for active users; `export=csv` |
@@ -918,6 +928,25 @@ Multi-stage build (`Dockerfile`):
 2. `runner` — Alpine + non-root user + `dumb-init` + healthcheck.
 3. Copies: `dist/`, `node_modules/`, `package.json`, `web/`, `migrations/`.
 
+### 11.4 AD connector agent (Windows, on-prem)
+
+Install on a domain-joined Windows server that can reach AD LDAP/LDAPS and outbound HTTPS :443 to the IdP.
+
+```powershell
+cd connectors\ad-agent
+copy config.example.json config.json   # edit IdP URL, connector ID, agent token, AD LDAP
+npm run build
+npm run package:win                    # optional — dist\lilg-ad-connector.exe
+
+# Run at boot (recommended — no extra tools):
+powershell -ExecutionPolicy Bypass -File scripts\install-scheduled-task.ps1 -InstallDir "C:\LILG\ad-connector"
+
+# Or true Windows Service (requires NSSM from https://nssm.cc):
+powershell -ExecutionPolicy Bypass -File scripts\install-service-nssm.ps1 -InstallDir "C:\LILG\ad-connector" -NssmPath "C:\Tools\nssm.exe"
+```
+
+Unregister: `scripts\uninstall.ps1`. AD credentials live only in the agent `config.json`; the IdP stores `idpUrl`, sync scope (Base DN, Sync Groups), and a hashed agent token.
+
 ---
 
 ## 12. Operations runbook
@@ -1079,6 +1108,40 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-05 — Directory Sync: download AD agent package from console
+
+**Why** — Admins need a one-click way to get the on-prem connector with installation documentation.
+
+**What changed:**
+
+- **`GET /api/iga/connectors/ad-agent-package.zip`** — authenticated admin download (source, built `dist/`, scripts, `README.md`).
+- **`connectors/ad-agent/README.md`** — full install guide (config, Node/EXE run, scheduled task, NSSM service).
+- **Directory Sync UI** — **Download AD Agent** in page header, sources toolbar, empty state, AD Agent connector modal, and per-row **Agent ZIP** link.
+- **`Dockerfile`** — builds and ships `connectors/ad-agent` for production downloads.
+
+### (pending) — 2026-08-05 — AD agent: group sync + Windows install scripts
+
+**Why** — Agent sync should mirror AD security groups into IdP Groups; IT needs a supported way to run the agent at boot on Windows servers.
+
+**What changed:**
+
+- **`POST /api/internal/ad-connector/jobs/:runId/groups`** — agent uploads group + member snapshot; IdP applies via `processAdGroupsFromAgent`.
+- **Agent v1.1.0** — inbound sync now includes group harvest (respects connector **Sync Groups** scope; blank/`*` = up to 200 security groups).
+- **`connectors/ad-agent/scripts/`** — `install-scheduled-task.ps1` (recommended, no extra deps), `install-service-nssm.ps1` (true Windows Service via NSSM), `uninstall.ps1`.
+
+### (pending) — 2026-08-04 — Active Directory on-prem agent connector (HTTPS :443)
+
+**Why** — Cloud IdP cannot reach AD LDAP through firewalls; customers need bidirectional directory sync with AD credentials kept on-premises.
+
+**What changed:**
+
+- **Migration `059_ad_agent_connector.sql`** — `connector_type` adds `AD_AGENT`; `connector_runs.status` adds `PENDING_AGENT`.
+- **`src/api/internal-ad-connector.ts`** — agent API at `/api/internal/ad-connector/*` (X-Connector-Id + X-Agent-Token).
+- **`src/services/ad-agent-sync.ts`** — queue/claim/complete agent sync jobs; heartbeat → connector health.
+- **`connectors/ad-agent/`** — Windows Node agent (`lilg-ad-connector.exe` via `npm run package:win`); local `config.json` holds AD LDAP settings.
+- **Directory Sync UI** — new source type **Active Directory (Agent)**; one-time agent token on create.
+- **Dispatcher** — `AD_AGENT` connectors queue jobs for the agent instead of direct LDAP from the API.
 
 ### (pending) — 2026-08-04 — Login session check on stale MFA URLs (back button / new tab)
 

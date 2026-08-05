@@ -66,6 +66,7 @@ import configPortalSslRouter from './api/config-portal-ssl.js';
 import configAttendanceIgaRouter from './api/config-attendance-iga.js';
 import configRadiusRouter from './api/config-radius.js';
 import internalRadiusRouter from './api/internal-radius.js';
+import internalAdConnectorRouter from './api/internal-ad-connector.js';
 import { startRadiusUdpServer } from './services/radius-udp.js';
 
 // Auth
@@ -249,6 +250,7 @@ app.use('/api/admin/radius', configRadiusRouter);
 app.use('/api/internal',      internalRouter);
 app.use('/api/internal/saml', internalSamlRouter);
 app.use('/api/internal/radius', internalRadiusRouter);
+app.use('/api/internal/ad-connector', internalAdConnectorRouter);
 
 // ---------------------------------------------------------------------------
 // Portal downloads (authenticated) — before static so .zip is not 404'd
