@@ -1,0 +1,19 @@
+{
+  "idpUrl": "https://idp.example.com",
+  "connectorId": "paste-connector-uuid-from-admin-console",
+  "agentToken": "paste-agent-token-shown-once-at-creation",
+  "pollIntervalSeconds": 30,
+  "heartbeatIntervalSeconds": 60,
+  "ad": {
+    "host": "dc01.corp.example.com",
+    "port": 636,
+    "useSsl": true,
+    "startTls": false,
+    "bindDn": "CN=svc-lilg,OU=Service Accounts,DC=corp,DC=example,DC=com",
+    "bindPassword": "change-me",
+    "baseDn": "DC=corp,DC=example,DC=com",
+    "targetOu": "OU=Employees",
+    "upnDomain": "corp.example.com",
+    "disabledOu": "OU=Disabled,"
+  }
+}

@@ -3989,10 +3989,15 @@ function collectConnectorSchedule(bd) {
 }
 
 const CONNECTOR_TYPES = {
-  AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP',
+  AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP (IdP connects directly)',
     fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl','syncGroups'],
     connectionFields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl'],
     scopeFields: ['syncGroups'] },
+  AD_AGENT:         { label: 'Active Directory (Agent)', icon: '🖥️', badge: 'badge-info', desc: 'On-prem Windows agent — bidirectional sync over HTTPS :443; AD credentials stay on the agent',
+    fields: ['idpUrl','baseDn','targetOu','upnDomain','syncGroups'],
+    connectionFields: ['idpUrl'],
+    scopeFields: ['baseDn','targetOu','upnDomain','syncGroups'],
+    agentNote: true },
   LDAP:             { label: 'LDAP',             icon: '📂', badge: 'badge-info',    desc: 'Generic LDAP v3 directory server',             fields: ['host','port','bindDn','bindPassword','baseDn','useSsl'] },
   GOOGLE_WORKSPACE: GOOGLE_WS_META,
   AZURE_AD:         { label: 'Azure AD / Entra', icon: '☁️', badge: 'badge-info',    desc: 'Microsoft Entra ID (Azure AD)',                 fields: ['tenantId','clientId','clientSecret','domain'] },
@@ -4018,6 +4023,7 @@ const FIELD_LABELS = {
   adminEmail:         'Admin Email (Workspace super admin — required for domain-wide delegation)',
   syncOrgUnits:       'Sync OUs (one per line, e.g. /Sales — blank = all OUs)',
   syncGroups:         'Sync Groups (Google: group email, blank/* = all Workspace groups up to 200; AD: CN/sAMAccountName/DN, blank/* = all security groups)',
+  idpUrl:             'IdP URL (HTTPS, port 443 — e.g. https://idp.lenskart.com)',
   syncGroupMemberships: 'Mirror group membership into IdP Groups (on by default)',
   syncUsers:          'Sync Users (one per line, user email — optional filter)',
   provisionOrgUnit:   'Provision OU (outbound new users, e.g. /Employees)',
@@ -4050,7 +4056,7 @@ export async function viewDirectorySync(content, initialTab = 'sources', me = nu
   const allowed = new Set(['sources', 'users', 'mapping', 'sync']);
   const validTab = allowed.has(initialTab) ? initialTab : 'sources';
   content.replaceChildren(el(`<div class="admin-page">
-    ${header('Universal Directory', 'Identity sources and hybrid users across AD, Google, and local directories', `<button class="btn btn-primary btn-sm" id="ds-add-header-btn">+ Add Source</button>`)}
+    ${header('Universal Directory', 'Identity sources and hybrid users across AD, Google, and local directories', `<a class="btn btn-secondary btn-sm" href="${esc(api.adAgentPackageUrl())}" download="lilg-ad-connector.zip" style="margin-right:0.5rem">⬇ AD Agent</a><button class="btn btn-primary btn-sm" id="ds-add-header-btn">+ Add Source</button>`)}
     <div class="tabs tabs--compact">
       <button class="tab${validTab === 'sources' ? ' active' : ''}" data-tab="sources">Directory Sources</button>
       <button class="tab${validTab === 'users' ? ' active' : ''}" data-tab="users">Users</button>
@@ -4113,9 +4119,14 @@ function initSourcesTab(panel) {
       [configured, 'Not tested', 'info'],
       [errors, 'Errors', errors ? 'danger' : 'neutral'],
       [lastSync ? fmtDate(lastSync) : '—', 'Last sync', 'neutral'],
-    ]) + `<div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap">
+    ]) + `<div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
       <button type="button" class="btn btn-secondary btn-sm" id="ds-harvest-all">Harvest All Roles</button>
+      <a class="btn btn-secondary btn-sm" id="ds-download-ad-agent" href="${esc(api.adAgentPackageUrl())}" download="${esc('lilg-ad-connector.zip')}">⬇ Download AD Agent</a>
       <a class="btn btn-ghost btn-sm" href="/?v=entitlementCatalog">View entitlements catalog →</a>
+    </div>
+    <div class="alert alert-info" style="font-size:0.82rem;margin-top:0.75rem;margin-bottom:0;line-height:1.45">
+      <strong>Active Directory (Agent):</strong> download the on-prem connector package (includes <code>README.md</code> with install steps).
+      Install on a domain server, configure <code>config.json</code>, then create an <strong>Active Directory (Agent)</strong> source and paste the agent token.
     </div>`;
     panel.querySelector('#ds-harvest-all')?.addEventListener('click', async () => {
       if (!confirm('Harvest groups/roles from all AD and Google connectors into the entitlements catalog?')) return;
@@ -4157,6 +4168,7 @@ function initSourcesTab(panel) {
             <button class="btn btn-sm btn-secondary ds-harvest" data-id="${esc(String(c.id))}" title="Import groups/roles into IGA entitlements catalog">Harvest Roles</button>
             <button class="btn btn-sm btn-secondary ds-test" data-id="${esc(String(c.id))}">Test</button>
             <button class="btn btn-sm btn-ghost ds-edit" data-id="${esc(String(c.id))}" data-type="${esc(c.connector_type)}" data-name="${esc(c.name)}" data-mode="${esc(c.sync_mode || '')}" data-sched="${esc(c.sync_schedule || '')}">Edit</button>
+            ${normalizeConnectorType(c.connector_type) === 'AD_AGENT' ? `<a class="btn btn-sm btn-secondary" href="${esc(api.adAgentPackageUrl())}" download="lilg-ad-connector.zip" title="Download on-prem agent package">Agent ZIP</a>` : ''}
             <button class="btn btn-sm btn-ghost ds-logs" data-id="${esc(String(c.id))}" data-name="${esc(c.name)}">History</button>
             <button class="btn btn-sm btn-danger ds-del" data-id="${esc(String(c.id))}">Delete</button>
           </div>
@@ -4189,7 +4201,11 @@ function initSourcesTab(panel) {
             <div class="empty-panel-icon">🔌</div>
             <h2>No directory sources configured</h2>
             <p class="muted">Connect Active Directory, Google Workspace, Azure AD, or any SCIM directory to start syncing identities.</p>
-            <button class="btn btn-primary btn-sm" id="ds-empty-add">+ Add Directory Source</button>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:center;margin-bottom:1rem">
+              <button class="btn btn-primary btn-sm" id="ds-empty-add">+ Add Directory Source</button>
+              <a class="btn btn-secondary btn-sm" href="${esc(api.adAgentPackageUrl())}" download="${esc('lilg-ad-connector.zip')}">⬇ Download AD Agent</a>
+            </div>
+            <p class="muted" style="font-size:0.82rem;max-width:36rem;margin:0 auto">For firewalled AD, use <strong>Active Directory (Agent)</strong>. The ZIP includes <code>README.md</code> with Windows install steps.</p>
           </div>`;
         panel.querySelector('#ds-empty-add').addEventListener('click', openAddWizard);
         return;
@@ -4318,7 +4334,8 @@ function initSourcesTab(panel) {
     const isEdit = !!existingId;
     const isGoogle = connectorType === 'GOOGLE_WORKSPACE';
     const isAd = connectorType === 'AD';
-    const useScopeTabs = isGoogle || isAd;
+    const isAdAgent = connectorType === 'AD_AGENT';
+    const useScopeTabs = isGoogle || isAd || isAdAgent;
 
     function renderConfigField(f) {
       const label = FIELD_LABELS[f] || f;
@@ -4365,11 +4382,11 @@ function initSourcesTab(panel) {
           <textarea class="form-textarea" id="cfg-${f}" rows="3" placeholder="/Sales&#10;/Engineering">${val}</textarea>
         </div>`;
       }
-      if (f === 'syncGroups' && (isGoogle || connectorType === 'AD')) {
+      if (f === 'syncGroups' && (isGoogle || connectorType === 'AD' || isAdAgent)) {
         const ph = isGoogle
           ? 'sales-team@company.com&#10;it-admins@company.com'
           : 'IT-Admins&#10;VPN-Users&#10;*';
-        const hint = connectorType === 'AD'
+        const hint = (connectorType === 'AD' || isAdAgent)
           ? '<p class="muted" style="font-size:0.75rem;margin-top:0.35rem">One group per line. Members appear after users are linked in AD sync. Use <code>*</code> to mirror all security groups (max 200).</p>'
           : '';
         return `<div class="form-group" style="grid-column:1/-1">
@@ -4468,6 +4485,13 @@ function initSourcesTab(panel) {
         </div>
         <div id="cfg-pane-conn" class="cfg-pane">
           <div style="display:grid;grid-template-columns:1fr;gap:0">${isGoogle ? googleConnFields : adConnFields}</div>
+          ${isAdAgent ? `<div class="alert alert-info" style="font-size:0.8rem;margin-top:1rem;line-height:1.45">
+            <strong>On-prem agent required.</strong>
+            <a href="${esc(api.adAgentPackageUrl())}" download="lilg-ad-connector.zip" class="btn btn-secondary btn-sm" style="margin:0.35rem 0.5rem 0.35rem 0">⬇ Download package</a>
+            includes <code>README.md</code> with install steps.
+            Configure AD LDAP settings (host, bind DN, password) in the agent <code>config.json</code> — not in this form.
+            The agent connects <em>outbound</em> to IdP on HTTPS :443 using the connector ID and agent token shown once at creation.
+          </div>` : ''}
           ${isGoogle ? `<div class="alert alert-info" style="font-size:0.8rem;margin-top:1rem;line-height:1.45">
             <strong>Domain-wide delegation</strong> (one-time in Google): Cloud Console → Service account → enable delegation → Admin Console → API controls → add SA Client ID with scopes
             <code style="font-size:0.72rem">https://www.googleapis.com/auth/admin.directory.user</code>
@@ -4586,6 +4610,18 @@ function initSourcesTab(panel) {
           if (isGoogle) await saveGooglePortalAuth(bd);
         } else {
           const created = await api.createConnector(data);
+          if (isAdAgent && created?.agentToken) {
+            openModal(`<div class="modal" style="width:560px;max-width:96vw">
+              <div class="modal-header"><h2>Agent token — copy now</h2></div>
+              <div class="modal-body">
+                <p class="muted" style="font-size:0.85rem">This token is shown once. Paste it into the on-prem agent <code>config.json</code> as <code>agentToken</code>.</p>
+                <pre style="background:var(--surface-2);padding:0.75rem;border-radius:6px;overflow:auto;user-select:all;font-size:0.8rem">${esc(created.agentToken)}</pre>
+                <p class="muted" style="font-size:0.8rem;margin-top:0.75rem">Connector ID: <code>${esc(created.id || '')}</code></p>
+              </div>
+              <div class="modal-footer"><button class="btn btn-primary" id="agent-token-ok">Done</button></div>
+            </div>`);
+            document.getElementById('agent-token-ok')?.addEventListener('click', () => document.querySelector('.modal-backdrop')?.remove());
+          }
           if (isGoogle && created?.id) {
             try { await saveGooglePortalAuth(bd); } catch (oidcErr) {
               showToast('Connector saved. Complete Portal sign-in tab for Google login.', true);

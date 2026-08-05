@@ -21,7 +21,9 @@ RUN apk add --no-cache \
 # Copy source and compile
 COPY tsconfig.json ./
 COPY src ./src
-RUN npm run build
+COPY connectors/ad-agent ./connectors/ad-agent
+RUN npm run build \
+    && npx tsc --project connectors/ad-agent/tsconfig.json
 
 # Prune dev dependencies so we can copy node_modules cleanly
 RUN npm prune --production
@@ -46,6 +48,7 @@ COPY --from=builder --chown=lilg:lilg /app/node_modules ./node_modules
 COPY --from=builder --chown=lilg:lilg /app/package.json ./package.json
 COPY --chown=lilg:lilg web ./web
 COPY --chown=lilg:lilg migrations ./migrations
+COPY --from=builder --chown=lilg:lilg /app/connectors/ad-agent ./connectors/ad-agent
 
 # Expose HTTP and HTTPS ports
 EXPOSE 8080

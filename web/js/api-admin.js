@@ -66,6 +66,7 @@ Object.assign(api, {
   testConnector:     (id) => f(`/api/iga/connectors/${id}/test`, { method: 'POST' }),
   syncConnector:     (id) => f(`/api/iga/connectors/${id}/sync`, { method: 'POST' }),
   getConnectorRuns:  (id, limit = 10) => f(`/api/iga/connectors/${id}/runs?limit=${limit}`),
+  adAgentPackageUrl: () => '/api/iga/connectors/ad-agent-package.zip',
   listGroups:       () => f('/api/admin/groups'),
   syncDirectoryGroups: () => f('/api/admin/groups/sync', { method: 'POST' }),
   getGroup:         (id) => f(`/api/admin/groups/${id}`),

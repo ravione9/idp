@@ -347,6 +347,27 @@ async function repairDatabaseOrphanAdLinks(adapter: ADAdapter, errors: string[])
   return repaired;
 }
 
+export interface AdOutboundAction {
+  action: 'PROVISION' | 'DISABLE' | 'ENABLE' | 'NOOP';
+  empId: string;
+  fullName: string;
+  emailCorp: string;
+  deptId: string | null;
+  role: string | null;
+  externalId?: string | undefined;
+  suggestedSam?: string | undefined;
+  provisionOuRdn?: string | undefined;
+  upnDomain?: string | undefined;
+}
+
+export interface AdOutboundResult {
+  empId: string;
+  action: string;
+  success: boolean;
+  externalId?: string;
+  error?: string;
+}
+
 /** Import person accounts from AD into employees + identity_links. */
 async function importAdDirectoryUsers(
   adapter: ADAdapter,
@@ -369,7 +390,28 @@ async function importAdDirectoryUsers(
     throw new Error(listResult.error ?? 'Failed to list AD users');
   }
 
-  const adUsers = listResult.data;
+  return processInboundAdUsers(listResult.data, dirConfig, errors, { adapter });
+}
+
+/** Apply inbound AD user objects (from direct LDAP or on-prem agent). */
+export async function processInboundAdUsers(
+  adUsers: Record<string, unknown>[],
+  dirConfig: AdDirectoryConfig,
+  errors: string[],
+  options?: { adapter?: ADAdapter | null },
+): Promise<{
+  found: number;
+  imported: number;
+  linked: number;
+  skipped: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  repaired: number;
+  migrated: number;
+  diag: string;
+}> {
+  const adapter = options?.adapter ?? null;
   let imported = 0;
   let linked = 0;
   let skipped = 0;
@@ -545,19 +587,22 @@ async function importAdDirectoryUsers(
     logger.info({ repaired }, 'AD sync inbound: repaired orphan identity links');
   }
 
-  const dbRepaired = await repairDatabaseOrphanAdLinks(adapter, errors);
-  if (dbRepaired > 0) {
-    logger.info({ dbRepaired }, 'AD sync inbound: repaired database orphan identity links');
+  let dbRepaired = 0;
+  let dbMigrated = 0;
+  if (adapter) {
+    dbRepaired = await repairDatabaseOrphanAdLinks(adapter, errors);
+    if (dbRepaired > 0) {
+      logger.info({ dbRepaired }, 'AD sync inbound: repaired database orphan identity links');
+    }
+    dbMigrated = await repairDatabasePlaceholderEmpIds(adapter, errors);
+    if (dbMigrated > 0) {
+      logger.info({ dbMigrated }, 'AD sync inbound: migrated database placeholder emp_ids');
+    }
   }
 
   const migrated = await repairPlaceholderEmpIds(adUsers as Record<string, unknown>[], errors);
   if (migrated > 0) {
     logger.info({ migrated }, 'AD sync inbound: migrated placeholder emp_ids');
-  }
-
-  const dbMigrated = await repairDatabasePlaceholderEmpIds(adapter, errors);
-  if (dbMigrated > 0) {
-    logger.info({ dbMigrated }, 'AD sync inbound: migrated database placeholder emp_ids');
   }
 
   return {
@@ -993,4 +1038,146 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   );
 
   return { runId, connectorId, itemsProcessed, itemsSucceeded, itemsFailed, errors };
+}
+
+/** Build outbound reconcile actions for the on-prem AD agent (no direct LDAP from IdP). */
+export async function buildAdOutboundPlanForAgent(
+  dirConfig: AdDirectoryConfig,
+  cfg: Record<string, unknown>,
+): Promise<AdOutboundAction[]> {
+  const upnDomain = (cfg['upnDomain'] as string | undefined)?.trim()
+    || (cfg['customerDomain'] as string | undefined)?.trim()
+    || undefined;
+
+  const employees = await query<EmployeeRow>(
+    `SELECT emp_id, full_name, email_corp, dept_id, role, ilg_state
+       FROM employees
+      ORDER BY emp_id`,
+    [],
+  );
+
+  const plan: AdOutboundAction[] = [];
+
+  for (const emp of employees) {
+    const link = await queryOne<IdentityLinkRow>(
+      `SELECT id, external_id, status
+         FROM identity_links
+        WHERE emp_id = ? AND \`system\` = 'AD' AND status NOT IN ('DELETED')`,
+      [emp.emp_id],
+    );
+
+    const isActive = emp.ilg_state === 'ACTIVE' || emp.ilg_state === 'REACTIVATED';
+    const isInactive = emp.ilg_state === 'SUSPENDED_HR'
+      || emp.ilg_state === 'SUSPENDED_AUTO'
+      || emp.ilg_state === 'DEPARTED'
+      || emp.ilg_state === 'DEPROVISIONED';
+
+    if (isActive && !link) {
+      plan.push({
+        action: 'PROVISION',
+        empId: emp.emp_id,
+        fullName: emp.full_name,
+        emailCorp: emp.email_corp,
+        deptId: emp.dept_id,
+        role: emp.role,
+        suggestedSam: generateSamAccountName(emp.full_name),
+        provisionOuRdn: dirConfig.provisionOuRdn,
+        ...(upnDomain ? { upnDomain } : {}),
+      });
+    } else if (isInactive && link && link.status === 'ACTIVE') {
+      plan.push({
+        action: 'DISABLE',
+        empId: emp.emp_id,
+        fullName: emp.full_name,
+        emailCorp: emp.email_corp,
+        deptId: emp.dept_id,
+        role: emp.role,
+        externalId: link.external_id,
+      });
+    } else if (isActive && link && link.status === 'DISABLED') {
+      plan.push({
+        action: 'ENABLE',
+        empId: emp.emp_id,
+        fullName: emp.full_name,
+        emailCorp: emp.email_corp,
+        deptId: emp.dept_id,
+        role: emp.role,
+        externalId: link.external_id,
+      });
+    } else {
+      plan.push({
+        action: 'NOOP',
+        empId: emp.emp_id,
+        fullName: emp.full_name,
+        emailCorp: emp.email_corp,
+        deptId: emp.dept_id,
+        role: emp.role,
+        ...(link?.external_id ? { externalId: link.external_id } : {}),
+      });
+    }
+  }
+
+  return plan;
+}
+
+/** Apply outbound results reported by the on-prem AD agent. */
+export async function applyAdOutboundResultsFromAgent(
+  results: AdOutboundResult[],
+): Promise<{ processed: number; succeeded: number; failed: number; errors: string[] }> {
+  let processed = 0;
+  let succeeded = 0;
+  let failed = 0;
+  const errors: string[] = [];
+
+  for (const r of results) {
+    if (r.action === 'NOOP') {
+      processed++;
+      succeeded++;
+      continue;
+    }
+
+    processed++;
+
+    if (!r.success) {
+      failed++;
+      errors.push(`${r.empId}: ${r.error ?? 'agent reported failure'}`);
+      continue;
+    }
+
+    try {
+      if (r.action === 'PROVISION' || r.action === 'LINK') {
+        const sam = r.externalId?.trim();
+        if (!sam) throw new Error('missing externalId (sAMAccountName) after provision/link');
+        await upsertAdIdentityLink(r.empId, sam, 'ACTIVE');
+        succeeded++;
+      } else if (r.action === 'DISABLE') {
+        const link = await queryOne<IdentityLinkRow>(
+          `SELECT id FROM identity_links
+            WHERE emp_id = ? AND \`system\` = 'AD' AND status = 'ACTIVE'`,
+          [r.empId],
+        );
+        if (link) {
+          await execute(`UPDATE identity_links SET status = 'DISABLED' WHERE id = ?`, [link.id]);
+        }
+        succeeded++;
+      } else if (r.action === 'ENABLE') {
+        const link = await queryOne<IdentityLinkRow>(
+          `SELECT id FROM identity_links
+            WHERE emp_id = ? AND \`system\` = 'AD' AND status = 'DISABLED'`,
+          [r.empId],
+        );
+        if (link) {
+          await execute(`UPDATE identity_links SET status = 'ACTIVE' WHERE id = ?`, [link.id]);
+        }
+        succeeded++;
+      } else {
+        succeeded++;
+      }
+    } catch (err) {
+      failed++;
+      errors.push(`${r.empId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return { processed, succeeded, failed, errors };
 }

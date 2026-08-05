@@ -1,0 +1,33 @@
+{
+  "name": "@lenskart/lilg-ad-connector",
+  "version": "1.0.0",
+  "description": "On-prem Active Directory connector agent for LILG IdP (HTTPS :443 bidirectional sync)",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": "dist/index.js",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "node --watch dist/index.js",
+    "package:win": "npm run build && npx pkg dist/index.js --targets node22-win-x64 --output dist/lilg-ad-connector.exe --compress GZip",
+    "install:task": "powershell -ExecutionPolicy Bypass -File scripts/install-scheduled-task.ps1",
+    "install:service": "powershell -ExecutionPolicy Bypass -File scripts/install-service-nssm.ps1"
+  },
+  "dependencies": {
+    "axios": "^1.18.1",
+    "ldapts": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "pkg": "^5.8.1",
+    "typescript": "^5.5.3"
+  },
+  "pkg": {
+    "assets": [],
+    "outputPath": "dist"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
