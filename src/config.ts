@@ -1,7 +1,10 @@
 import { z } from 'zod';
+import { loadVaultSecretsIntoEnv } from './vault/load-secrets.js';
 import { ensureSamlKeys } from './services/saml-auto-keys.js';
 
-// Auto-generate SAML keys if not configured — must run before env is parsed
+await loadVaultSecretsIntoEnv();
+
+// Auto-generate SAML keys if not configured — after Vault load
 ensureSamlKeys();
 
 // ---------------------------------------------------------------------------

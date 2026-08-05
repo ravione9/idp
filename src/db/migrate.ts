@@ -296,12 +296,16 @@ export async function runMigrations(): Promise<void> {
       applied.set(r['name'] as string, r['checksum'] as string);
     }
 
-    let pending = 0;
+    let appliedCount = 0;
+    let skippedCount = 0;
     for (const m of migrations) {
       const existingChecksum = applied.get(m.name);
       if (existingChecksum !== undefined) {
+        skippedCount++;
         if (existingChecksum !== m.checksum) {
           logger.warn({ name: m.name }, 'Migration file changed after apply (checksum mismatch); skipping');
+        } else {
+          logger.debug({ name: m.name }, 'Migration already applied — skipping');
         }
         continue;
       }
@@ -316,17 +320,23 @@ export async function runMigrations(): Promise<void> {
           [m.name, m.checksum, duration],
         );
         logger.info({ name: m.name, durationMs: duration }, 'Migration applied');
-        pending++;
+        appliedCount++;
       } catch (err) {
         logger.error({ name: m.name, err }, 'Migration failed — aborting startup');
         throw err;
       }
     }
 
-    if (pending === 0) {
-      logger.info({ total: migrations.length }, 'Schema is up to date');
+    if (appliedCount === 0) {
+      logger.info(
+        { total: migrations.length, skipped: skippedCount },
+        'Schema is up to date — all migrations already applied',
+      );
     } else {
-      logger.info({ applied: pending, total: migrations.length }, 'Migrations applied');
+      logger.info(
+        { applied: appliedCount, skipped: skippedCount, total: migrations.length },
+        'Migrations applied (already-applied files were skipped)',
+      );
     }
   } finally {
     await conn.query('SELECT RELEASE_LOCK(?)', [LOCK_NAME]);
