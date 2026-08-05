@@ -368,6 +368,7 @@ Object.assign(api, {
   getMfaPolicy:        () => f('/api/admin/users/mfa-policy'),
   getMfaDeliveryStatus: () => f('/api/admin/users/mfa-delivery-status'),
   saveMfaDelivery:     (data) => f('/api/admin/users/mfa-delivery', { method: 'PUT', body: JSON.stringify(data) }),
+  testMfaDelivery:     (data) => f('/api/admin/users/mfa-delivery/test', { method: 'POST', body: JSON.stringify(data || {}) }),
   updateMfaPolicy:     (data) => f('/api/admin/users/mfa-policy', { method: 'POST', body: JSON.stringify(data) }),
   listMfaCriticalApps: () => f('/api/admin/users/mfa-critical-apps'),
   setMfaCriticalApp:   (id, data) => f(`/api/admin/users/mfa-critical-apps/${encodeURIComponent(id)}`, {

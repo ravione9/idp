@@ -93,6 +93,7 @@ export async function deliverEmail(
     host: smtp.host,
     port: smtp.port,
     secure: smtp.secure,
+    requireTLS: !smtp.secure && smtp.port === 587,
     auth: smtp.user
       ? { user: smtp.user, pass: smtp.pass }
       : undefined,

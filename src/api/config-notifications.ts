@@ -6,8 +6,28 @@ import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
-import { query, queryOne } from '../db/connection.js';
-import { sendNotification, dispatchPendingNotifications } from '../services/notification.js';
+import { query, queryOne, execute } from '../db/connection.js';
+import { sendNotification, dispatchPendingNotifications, deliverEmail } from '../services/notification.js';
+import { v4 as uuidv4 } from 'uuid';
+
+async function resolveEmployeeByRecipient(input: string): Promise<{ emp_id: string; email_corp: string | null } | null> {
+  const r = input.trim();
+  if (!r) return null;
+
+  const byId = await queryOne<{ emp_id: string; email_corp: string | null }>(
+    `SELECT emp_id, email_corp FROM employees WHERE emp_id = ? LIMIT 1`,
+    [r],
+  );
+  if (byId) return byId;
+
+  const email = r.toLowerCase();
+  return queryOne<{ emp_id: string; email_corp: string | null }>(
+    `SELECT emp_id, email_corp FROM employees
+      WHERE LOWER(email_corp) = ? OR LOWER(COALESCE(email_personal, '')) = ?
+      LIMIT 1`,
+    [email, email],
+  );
+}
 
 const router = Router();
 router.use(requireAuth);
@@ -60,27 +80,53 @@ router.post('/test', requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(async (re
   let recipientEmpId = bodyIn.recipientEmpId?.trim();
   // Accept email/emp_id in legacy `recipient` field from UI.
   if (!recipientEmpId && bodyIn.recipient) {
-    const r = bodyIn.recipient.trim();
-    const byId = await queryOne<{ emp_id: string }>(`SELECT emp_id FROM employees WHERE emp_id = ?`, [r]);
-    if (byId) recipientEmpId = byId.emp_id;
-    else {
-      const byEmail = await queryOne<{ emp_id: string }>(
-        `SELECT emp_id FROM employees WHERE email = ? LIMIT 1`, [r],
-      );
-      recipientEmpId = byEmail?.emp_id;
-    }
+    const emp = await resolveEmployeeByRecipient(bodyIn.recipient);
+    recipientEmpId = emp?.emp_id;
   }
   if (!recipientEmpId || !bodyIn.subject || !bodyIn.body) {
     res.status(400).json({ error: 'recipientEmpId (or recipient), subject, body required' }); return;
   }
-  const emp = await queryOne<{ emp_id: string }>(
-    `SELECT emp_id FROM employees WHERE emp_id = ?`, [recipientEmpId],
+  const emp = await queryOne<{ emp_id: string; email_corp: string | null }>(
+    `SELECT emp_id, email_corp FROM employees WHERE emp_id = ?`, [recipientEmpId],
   );
   if (!emp) { res.status(404).json({ error: 'Employee not found' }); return; }
 
+  const channel = (bodyIn.channel ?? 'EMAIL') as 'EMAIL' | 'SLACK' | 'TEAMS' | 'IN_APP';
+  if (channel === 'EMAIL') {
+    const to = emp.email_corp?.trim();
+    if (!to) {
+      res.status(400).json({ error: 'Employee has no corporate email on file' });
+      return;
+    }
+    try {
+      await deliverEmail(to, bodyIn.subject, bodyIn.body);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: `Email delivery failed: ${msg}` });
+      return;
+    }
+    const notificationId = uuidv4();
+    await execute(
+      `INSERT INTO notifications
+         (id, recipient_emp_id, recipient, channel, subject, body,
+          template, template_id, payload, status, created_at, sent_at)
+       VALUES (?, ?, ?, 'EMAIL', ?, ?, 'test', 'test', ?, 'SENT', UTC_TIMESTAMP(), UTC_TIMESTAMP())`,
+      [
+        notificationId,
+        recipientEmpId,
+        to,
+        bodyIn.subject,
+        bodyIn.body,
+        JSON.stringify({ subject: bodyIn.subject, test: true }),
+      ],
+    );
+    res.json({ success: true, sentTo: to });
+    return;
+  }
+
   await sendNotification({
     recipientEmpId,
-    channel: (bodyIn.channel ?? 'EMAIL') as 'EMAIL' | 'SLACK' | 'TEAMS' | 'IN_APP',
+    channel,
     subject: bodyIn.subject,
     body: bodyIn.body,
   });
