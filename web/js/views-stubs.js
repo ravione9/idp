@@ -17,6 +17,57 @@ function kpiStrip(items) {
     </div>`).join('');
 }
 
+function connectorTypeKey(type) {
+  const t = type === 'GOOGLE' ? 'GOOGLE_WORKSPACE' : type;
+  return {
+    AD: 'ad', AD_AGENT: 'agent', LDAP: 'ad', GOOGLE_WORKSPACE: 'google',
+    AZURE_AD: 'azure', OKTA: 'okta', SCIM: 'default', ZOHO: 'default', HRMS: 'default',
+  }[t] || 'default';
+}
+
+function connectorIconClass(type) {
+  return `connector-cell-icon--${connectorTypeKey(type)}`;
+}
+
+const CONNECTOR_SVG_ICON = {
+  AD: 'server', AD_AGENT: 'server', LDAP: 'server', GOOGLE_WORKSPACE: 'app',
+  AZURE_AD: 'oidc', OKTA: 'key', SCIM: 'plug', ZOHO: 'users', HRMS: 'users',
+};
+
+function connectorSvg(type) {
+  return svgIcon(CONNECTOR_SVG_ICON[normalizeConnectorType(type)] || 'plug');
+}
+
+function dsGuideCardsHtml() {
+  return `
+    <div class="ds-guide-grid">
+      <div class="ds-guide-card ds-guide-card--google">
+        <div class="ds-guide-card__head">
+          <span class="ds-guide-card__icon connector-cell-icon connector-cell-icon--google">${svgIcon('app')}</span>
+          <h4>Google Workspace</h4>
+        </div>
+        <p>Service account + domain-wide delegation for user and group sync. Configure OAuth separately for portal sign-in.</p>
+        <ol><li>Add Workspace domains and super-admin email</li><li>Paste service account JSON key</li><li>Run <strong>Test</strong>, then <strong>Sync</strong></li></ol>
+      </div>
+      <div class="ds-guide-card ds-guide-card--ad">
+        <div class="ds-guide-card__head">
+          <span class="ds-guide-card__icon connector-cell-icon connector-cell-icon--ad">${svgIcon('server')}</span>
+          <h4>Active Directory</h4>
+        </div>
+        <p>Direct LDAP/LDAPS from the IdP when the directory is reachable on the network.</p>
+        <ol><li>Bind DN, password, base DN, and target OU</li><li>Use LDAPS or StartTLS in production</li><li>Optionally scope security groups to mirror</li></ol>
+      </div>
+      <div class="ds-guide-card ds-guide-card--agent">
+        <div class="ds-guide-card__head">
+          <span class="ds-guide-card__icon connector-cell-icon connector-cell-icon--agent">${svgIcon('server')}</span>
+          <h4>AD on-prem agent</h4>
+        </div>
+        <p>For firewalled AD — credentials stay on the domain server; sync over HTTPS&nbsp;:443.</p>
+        <ol><li>Download agent package + install on domain server</li><li>Edit <code>config.json</code> with LDAP settings</li><li>Create source and paste one-time agent token</li></ol>
+      </div>
+    </div>`;
+}
+
 function statCard(iconName, label, value, sub = '', cls = 'primary') {
   return `<div class="stat-card">
     <div class="stat-icon ${cls}">${svgIcon(iconName)}</div>
@@ -1149,6 +1200,7 @@ export async function viewMfaMethods(content) {
                   <div id="mfa-smtp-msg" style="margin:0.65rem 0"></div>
                   <div class="mfa-delivery-actions">
                     <button type="submit" class="btn btn-primary" id="mfa-smtp-save">Save email delivery</button>
+                    <button type="button" class="btn btn-secondary" id="mfa-smtp-test">Send test email</button>
                     <button type="button" class="btn btn-secondary" id="mfa-smtp-clear">Clear email settings</button>
                   </div>
                 </form>
@@ -1556,6 +1608,23 @@ export async function viewMfaMethods(content) {
           await loadMfaPage();
         } catch (err) {
           msg.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to clear')}</div>`;
+        }
+      });
+
+      wrap.querySelector('#mfa-smtp-test')?.addEventListener('click', async () => {
+        const msg = wrap.querySelector('#mfa-smtp-msg');
+        const btn = wrap.querySelector('#mfa-smtp-test');
+        btn.disabled = true;
+        btn.textContent = 'Sending…';
+        msg.innerHTML = '';
+        try {
+          const r = await api.testMfaDelivery({});
+          msg.innerHTML = `<div class="alert alert-success">Test email sent to ${esc(r.sentTo || 'your address')}.</div>`;
+        } catch (err) {
+          msg.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Test email failed')}</div>`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Send test email';
         }
       });
 
@@ -4055,13 +4124,20 @@ function connectorStatusBadge(status) {
 export async function viewDirectorySync(content, initialTab = 'sources', me = null) {
   const allowed = new Set(['sources', 'users', 'mapping', 'sync']);
   const validTab = allowed.has(initialTab) ? initialTab : 'sources';
-  content.replaceChildren(el(`<div class="admin-page">
-    ${header('Universal Directory', 'Identity sources and hybrid users across AD, Google, and local directories', `<a class="btn btn-secondary btn-sm" href="${esc(api.adAgentPackageUrl())}" download="lilg-ad-connector.zip" style="margin-right:0.5rem">⬇ AD Agent</a><button class="btn btn-primary btn-sm" id="ds-add-header-btn">+ Add Source</button>`)}
-    <div class="tabs tabs--compact">
-      <button class="tab${validTab === 'sources' ? ' active' : ''}" data-tab="sources">Directory Sources</button>
-      <button class="tab${validTab === 'users' ? ' active' : ''}" data-tab="users">Users</button>
-      <button class="tab${validTab === 'mapping' ? ' active' : ''}" data-tab="mapping">Attribute Mapping</button>
-      <button class="tab${validTab === 'sync' ? ' active' : ''}" data-tab="sync">Sync Settings</button>
+  const headerActions = `
+    <a class="btn btn-secondary btn-sm btn-with-icon" href="${esc(api.adAgentPackageUrl())}" download="lilg-ad-connector.zip">
+      ${svgIcon('download')}<span>AD Agent</span>
+    </a>
+    <button type="button" class="btn btn-primary btn-sm btn-with-icon" id="ds-add-header-btn">
+      ${svgIcon('plus')}<span>Add Source</span>
+    </button>`;
+  content.replaceChildren(el(`<div class="admin-page ds-page">
+    ${header('Universal Directory', 'Identity sources and hybrid users across AD, Google, and local directories', headerActions)}
+    <div class="inline-tabs ds-tabs" id="ds-tabs">
+      <button type="button" class="inline-tab${validTab === 'sources' ? ' active' : ''}" data-tab="sources">Directory Sources</button>
+      <button type="button" class="inline-tab${validTab === 'users' ? ' active' : ''}" data-tab="users">Users</button>
+      <button type="button" class="inline-tab${validTab === 'mapping' ? ' active' : ''}" data-tab="mapping">Attribute Mapping</button>
+      <button type="button" class="inline-tab${validTab === 'sync' ? ' active' : ''}" data-tab="sync">Sync Settings</button>
     </div>
     <div id="tab-sources"></div>
     <div id="tab-users" style="display:none"></div>
@@ -4071,7 +4147,7 @@ export async function viewDirectorySync(content, initialTab = 'sources', me = nu
   const wrap = content.firstChild;
 
   function showTab(name) {
-    wrap.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
+    wrap.querySelectorAll('#ds-tabs .inline-tab').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
     ['sources', 'users', 'mapping', 'sync'].forEach((t) => {
       const elTab = wrap.querySelector('#tab-' + t);
       if (elTab) elTab.style.display = name === t ? '' : 'none';
@@ -4080,7 +4156,7 @@ export async function viewDirectorySync(content, initialTab = 'sources', me = nu
     if (addBtn) addBtn.style.display = name === 'sources' ? '' : 'none';
     syncAppUrl('directorySync', name, 'sources');
   }
-  wrap.querySelectorAll('.tab').forEach(t => {
+  wrap.querySelectorAll('#ds-tabs .inline-tab').forEach(t => {
     t.addEventListener('click', () => showTab(t.dataset.tab));
   });
 
@@ -4097,8 +4173,10 @@ export async function viewDirectorySync(content, initialTab = 'sources', me = nu
 // ╚══════════════════════════════════════════════════════════════╝
 function initSourcesTab(panel) {
   panel.innerHTML = `
-    <div class="page-toolbar" id="ds-toolbar" hidden>
-      <div id="ds-stats" class="kpi-strip"></div>
+    <div id="ds-overview" class="ds-overview" hidden>
+      <div id="ds-stats" class="stat-grid ds-stat-grid"></div>
+      <div class="ds-actions-bar" id="ds-actions"></div>
+      <div class="ds-callout" id="ds-callout"></div>
     </div>
     <div id="ds-area">${loading()}</div>`;
 
@@ -4111,32 +4189,44 @@ function initSourcesTab(panel) {
       if (!c.last_sync_at) return best;
       return !best || new Date(c.last_sync_at) > new Date(best) ? c.last_sync_at : best;
     }, null);
-    const toolbar = panel.querySelector('#ds-toolbar');
-    toolbar.hidden = false;
-    panel.querySelector('#ds-stats').innerHTML = kpiStrip([
-      [total, 'Sources', 'accent'],
-      [active, 'Connected', 'success'],
-      [configured, 'Not tested', 'info'],
-      [errors, 'Errors', errors ? 'danger' : 'neutral'],
-      [lastSync ? fmtDate(lastSync) : '—', 'Last sync', 'neutral'],
-    ]) + `<div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
-      <button type="button" class="btn btn-secondary btn-sm" id="ds-harvest-all">Harvest All Roles</button>
-      <a class="btn btn-secondary btn-sm" id="ds-download-ad-agent" href="${esc(api.adAgentPackageUrl())}" download="${esc('lilg-ad-connector.zip')}">⬇ Download AD Agent</a>
-      <a class="btn btn-ghost btn-sm" href="/?v=entitlementCatalog">View entitlements catalog →</a>
-    </div>
-    <div class="alert alert-info" style="font-size:0.82rem;margin-top:0.75rem;margin-bottom:0;line-height:1.45">
-      <strong>Active Directory (Agent):</strong> download the on-prem connector package (includes <code>README.md</code> with install steps).
-      Install on a domain server, configure <code>config.json</code>, then create an <strong>Active Directory (Agent)</strong> source and paste the agent token.
-    </div>`;
+    const overview = panel.querySelector('#ds-overview');
+    overview.hidden = false;
+
+    panel.querySelector('#ds-stats').innerHTML = [
+      statCard('plug', 'Directory sources', total, `${active} connected · ${configured} pending test`, 'primary'),
+      statCard('link', 'Healthy', active, errors ? `${errors} source(s) in error` : 'All sources connected', errors ? 'warning' : 'success'),
+      statCard('refresh', 'Last sync', lastSync ? fmtDate(lastSync) : 'Never', lastSync ? 'Most recent directory run' : 'No sync completed yet', 'info'),
+      statCard('check', 'Pending test', configured, configured ? 'Run connectivity test on new sources' : 'All sources verified', configured ? 'warning' : 'teal'),
+    ].join('');
+
+    panel.querySelector('#ds-actions').innerHTML = `
+      <div class="ds-actions-bar__left">
+        <span class="ds-actions-bar__title">${esc(String(total))} source${total === 1 ? '' : 's'}</span>
+        <span class="ds-actions-bar__sep" aria-hidden="true"></span>
+        <button type="button" class="btn btn-secondary btn-sm btn-with-icon" id="ds-harvest-all">
+          ${svgIcon('refresh')}<span>Harvest all roles</span>
+        </button>
+        <a class="btn btn-secondary btn-sm btn-with-icon" id="ds-download-ad-agent" href="${esc(api.adAgentPackageUrl())}" download="${esc('lilg-ad-connector.zip')}">
+          ${svgIcon('download')}<span>Download AD agent</span>
+        </a>
+      </div>
+      <a class="btn btn-ghost btn-sm btn-with-icon" href="/?v=entitlementCatalog">
+        <span>View entitlements catalog</span>${svgIcon('arrowRight')}
+      </a>`;
+
+    panel.querySelector('#ds-callout').innerHTML = dsGuideCardsHtml();
+
     panel.querySelector('#ds-harvest-all')?.addEventListener('click', async () => {
       if (!confirm('Harvest groups/roles from all AD and Google connectors into the entitlements catalog?')) return;
       const btn = panel.querySelector('#ds-harvest-all');
-      btn.disabled = true; btn.textContent = 'Harvesting…';
+      btn.disabled = true;
+      btn.innerHTML = `${svgIcon('refresh')}<span>Harvesting…</span>`;
       try {
         const r = await api.harvestAllEntitlements();
         showToast(`Done — ${r.harvested ?? 0} new, ${r.updated ?? 0} updated across ${r.connectors ?? 0} connector(s).`);
       } catch (e) { showToast(e.message || 'Harvest all failed', true); }
-      btn.disabled = false; btn.textContent = 'Harvest All Roles';
+      btn.disabled = false;
+      btn.innerHTML = `${svgIcon('refresh')}<span>Harvest all roles</span>`;
     });
   }
 
@@ -4144,12 +4234,12 @@ function initSourcesTab(panel) {
     const rows = connectors.map((c) => {
       const meta = CONNECTOR_TYPES[normalizeConnectorType(c.connector_type)] || { label: c.connector_type, icon: '⚙️', badge: 'badge-neutral' };
       const errHint = c.last_error
-        ? `<span class="text-danger" title="${esc(c.last_error)}" style="margin-left:0.25rem">⚠</span>`
+        ? `<span class="ds-row-error" title="${esc(c.last_error)}">${svgIcon('alert')}</span>`
         : '';
       return `<tr data-cid="${esc(String(c.id))}">
         <td>
           <div class="connector-cell">
-            <div class="connector-cell-icon">${meta.icon}</div>
+            <div class="connector-cell-icon ${connectorIconClass(c.connector_type)}" aria-hidden="true">${meta.icon}</div>
             <div class="connector-cell-body">
               <div class="connector-cell-name">${esc(c.name)}</div>
               <div class="connector-cell-meta">${esc(meta.label)} · ${esc(c.sync_mode || 'INCREMENTAL')}</div>
@@ -4159,16 +4249,19 @@ function initSourcesTab(panel) {
         <td><span class="badge badge-neutral">${esc(c.direction || '—')}</span></td>
         <td class="muted">${esc(formatConnectorScheduleLabel(c.sync_schedule))}</td>
         <td class="muted">${c.last_sync_at ? fmtDate(c.last_sync_at) : 'Never'}</td>
-        <td>${connectorStatusBadge(c.status)}${errHint}
-          ${c.last_health_check_at ? `<div class="muted" style="font-size:0.72rem;margin-top:0.2rem">Checked ${fmtDate(c.last_health_check_at)}</div>` : ''}
+        <td>
+          <div class="ds-status-cell">
+            ${connectorStatusBadge(c.status)}${errHint}
+            ${c.last_health_check_at ? `<div class="muted ds-status-sub">Checked ${fmtDate(c.last_health_check_at)}</div>` : ''}
+          </div>
         </td>
         <td class="actions">
-          <div class="row-actions">
+          <div class="row-actions row-actions--compact">
             <button class="btn btn-sm btn-primary ds-sync" data-id="${esc(String(c.id))}">Sync</button>
-            <button class="btn btn-sm btn-secondary ds-harvest" data-id="${esc(String(c.id))}" title="Import groups/roles into IGA entitlements catalog">Harvest Roles</button>
             <button class="btn btn-sm btn-secondary ds-test" data-id="${esc(String(c.id))}">Test</button>
             <button class="btn btn-sm btn-ghost ds-edit" data-id="${esc(String(c.id))}" data-type="${esc(c.connector_type)}" data-name="${esc(c.name)}" data-mode="${esc(c.sync_mode || '')}" data-sched="${esc(c.sync_schedule || '')}">Edit</button>
-            ${normalizeConnectorType(c.connector_type) === 'AD_AGENT' ? `<a class="btn btn-sm btn-secondary" href="${esc(api.adAgentPackageUrl())}" download="lilg-ad-connector.zip" title="Download on-prem agent package">Agent ZIP</a>` : ''}
+            <button class="btn btn-sm btn-ghost ds-harvest" data-id="${esc(String(c.id))}" title="Import groups/roles into IGA entitlements catalog">Harvest</button>
+            ${normalizeConnectorType(c.connector_type) === 'AD_AGENT' ? `<a class="btn btn-sm btn-secondary btn-with-icon" href="${esc(api.adAgentPackageUrl())}" download="lilg-ad-connector.zip" title="Download on-prem agent package">${svgIcon('download')}<span>ZIP</span></a>` : ''}
             <button class="btn btn-sm btn-ghost ds-logs" data-id="${esc(String(c.id))}" data-name="${esc(c.name)}">History</button>
             <button class="btn btn-sm btn-danger ds-del" data-id="${esc(String(c.id))}">Delete</button>
           </div>
@@ -4177,13 +4270,23 @@ function initSourcesTab(panel) {
     }).join('');
 
     panel.querySelector('#ds-area').innerHTML = `
-      <div class="table-wrap table-wrap--flat">
-        <table class="dense-table">
-          <thead><tr>
-            <th>Source</th><th>Direction</th><th>Schedule</th><th>Last sync</th><th>Status</th><th></th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+      <div class="ent-panel ds-sources-panel">
+        <div class="ent-panel-head">
+          <div class="panel-meta">
+            <h2>Configured sources</h2>
+            <p class="subtitle">Manage sync, connectivity tests, and role harvest per directory</p>
+          </div>
+        </div>
+        <div class="ent-panel-body ent-panel-body--flush">
+          <div class="table-wrap table-wrap--flat">
+            <table class="dense-table ds-sources-table">
+              <thead><tr>
+                <th>Source</th><th>Direction</th><th>Schedule</th><th>Last sync</th><th>Status</th><th class="actions-col">Actions</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
       </div>`;
     bindCardActions();
   }
@@ -4195,17 +4298,23 @@ function initSourcesTab(panel) {
       const connectors = (r && r.data) ? r.data : (Array.isArray(r) ? r : []);
 
       if (!connectors.length) {
-        panel.querySelector('#ds-toolbar').hidden = true;
+        panel.querySelector('#ds-overview').hidden = true;
         panel.querySelector('#ds-area').innerHTML = `
-          <div class="empty-panel">
-            <div class="empty-panel-icon">🔌</div>
+          <div class="empty-panel ds-empty-panel">
+            <div class="ds-empty-icon">${svgIcon('plug')}</div>
             <h2>No directory sources configured</h2>
-            <p class="muted">Connect Active Directory, Google Workspace, Azure AD, or any SCIM directory to start syncing identities.</p>
-            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:center;margin-bottom:1rem">
-              <button class="btn btn-primary btn-sm" id="ds-empty-add">+ Add Directory Source</button>
-              <a class="btn btn-secondary btn-sm" href="${esc(api.adAgentPackageUrl())}" download="${esc('lilg-ad-connector.zip')}">⬇ Download AD Agent</a>
+            <p class="muted">Connect Active Directory, Google Workspace, Azure AD, or any SCIM directory to start syncing identities into Universal Directory.</p>
+            <div class="ds-empty-actions">
+              <button type="button" class="btn btn-primary btn-with-icon" id="ds-empty-add">${svgIcon('plus')}<span>Add directory source</span></button>
+              <a class="btn btn-secondary btn-with-icon" href="${esc(api.adAgentPackageUrl())}" download="${esc('lilg-ad-connector.zip')}">${svgIcon('download')}<span>Download AD agent</span></a>
             </div>
-            <p class="muted" style="font-size:0.82rem;max-width:36rem;margin:0 auto">For firewalled AD, use <strong>Active Directory (Agent)</strong>. The ZIP includes <code>README.md</code> with Windows install steps.</p>
+            <div class="ds-callout ds-callout--inline">
+              <div class="ds-callout__icon">${svgIcon('server')}</div>
+              <div class="ds-callout__body">
+                <h3 class="ds-callout__title">Firewalled Active Directory?</h3>
+                <p class="ds-callout__text">Use the on-prem agent package — includes <code>README.md</code> with Windows install steps and service setup.</p>
+              </div>
+            </div>
           </div>`;
         panel.querySelector('#ds-empty-add').addEventListener('click', openAddWizard);
         return;
@@ -4296,30 +4405,33 @@ function initSourcesTab(panel) {
   // ── step-1: choose connector type ───────────────────────────────────────────
   function openAddWizard() {
     const typeCards = Object.entries(CONNECTOR_TYPES).map(([k, v]) =>
-      `<div class="ds-type-card" data-type="${k}" style="cursor:pointer;border:2px solid var(--border);border-radius:8px;
-        padding:1rem;display:flex;align-items:center;gap:0.75rem;transition:border-color 0.15s">
-        <span style="font-size:1.75rem">${v.icon}</span>
-        <div>
-          <div style="font-weight:600">${esc(v.label)}</div>
-          <div class="muted" style="font-size:0.78rem">${esc(v.desc)}</div>
-        </div>
-      </div>`).join('');
+      `<button type="button" class="ds-type-card ds-type-card--${connectorTypeKey(k)}" data-type="${k}">
+        <span class="ds-type-card__icon connector-cell-icon ${connectorIconClass(k)}">${connectorSvg(k)}</span>
+        <span class="ds-type-card__body">
+          <span class="ds-type-card__label">${esc(v.label)}</span>
+          <span class="ds-type-card__desc">${esc(v.desc)}</span>
+        </span>
+        ${svgIcon('arrowRight')}
+      </button>`).join('');
 
-    const bd = openModal(`<div class="modal" style="width:600px;max-width:96vw">
-      <div class="modal-header"><h2>Add Directory Source — Step 1: Choose Type</h2></div>
+    const bd = openModal(`<div class="modal ds-modal">
+      <div class="modal-header">
+        <div>
+          <h2>Add directory source</h2>
+          <p class="modal-subtitle">Choose a connector type — Google Workspace, Active Directory, SCIM, and more</p>
+        </div>
+      </div>
       <div class="modal-body">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">${typeCards}</div>
+        <div class="ds-type-grid">${typeCards}</div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" id="wiz-cancel">Cancel</button>
+        <button type="button" class="btn btn-secondary" id="wiz-cancel">Cancel</button>
       </div>
     </div>`);
 
     bd.querySelector('#wiz-cancel').addEventListener('click', () => bd.remove());
 
     bd.querySelectorAll('.ds-type-card').forEach(card => {
-      card.addEventListener('mouseenter', () => { card.style.borderColor = 'var(--accent)'; });
-      card.addEventListener('mouseleave', () => { card.style.borderColor = 'var(--border)'; });
       card.addEventListener('click', () => {
         bd.remove();
         openConfigModal(null, card.dataset.type, {});
@@ -4478,71 +4590,84 @@ function initSourcesTab(panel) {
           </div>`;
 
     const scopedFieldsBlock = useScopeTabs ? `
-        <div class="cfg-tab-bar" style="display:flex;gap:0.5rem;margin-bottom:1rem;border-bottom:1px solid var(--border);flex-wrap:wrap">
-          <button type="button" class="cfg-tab btn btn-sm btn-secondary active" data-pane="conn" style="border-radius:6px 6px 0 0;margin-bottom:-1px">🔌 Connection</button>
-          ${isGoogle ? `<button type="button" class="cfg-tab btn btn-sm btn-secondary" data-pane="auth" style="border-radius:6px 6px 0 0;margin-bottom:-1px">🔑 Portal sign-in</button>` : ''}
-          <button type="button" class="cfg-tab btn btn-sm btn-secondary" data-pane="scope" style="border-radius:6px 6px 0 0;margin-bottom:-1px">🎯 Sync Scope</button>
+        <div class="inline-tabs ds-cfg-tabs" role="tablist">
+          <button type="button" class="inline-tab cfg-tab active" data-pane="conn">Connection</button>
+          ${isGoogle ? `<button type="button" class="inline-tab cfg-tab" data-pane="auth">Portal sign-in</button>` : ''}
+          <button type="button" class="inline-tab cfg-tab" data-pane="scope">Sync scope</button>
         </div>
-        <div id="cfg-pane-conn" class="cfg-pane">
-          <div style="display:grid;grid-template-columns:1fr;gap:0">${isGoogle ? googleConnFields : adConnFields}</div>
-          ${isAdAgent ? `<div class="alert alert-info" style="font-size:0.8rem;margin-top:1rem;line-height:1.45">
-            <strong>On-prem agent required.</strong>
-            <a href="${esc(api.adAgentPackageUrl())}" download="lilg-ad-connector.zip" class="btn btn-secondary btn-sm" style="margin:0.35rem 0.5rem 0.35rem 0">⬇ Download package</a>
-            includes <code>README.md</code> with install steps.
-            Configure AD LDAP settings (host, bind DN, password) in the agent <code>config.json</code> — not in this form.
-            The agent connects <em>outbound</em> to IdP on HTTPS :443 using the connector ID and agent token shown once at creation.
+        <div id="cfg-pane-conn" class="cfg-pane ds-cfg-pane">
+          <div class="ds-form-grid">${isGoogle ? googleConnFields : adConnFields}</div>
+          ${isAdAgent ? `<div class="ds-callout ds-callout--compact">
+            <div class="ds-callout__icon">${svgIcon('server')}</div>
+            <div class="ds-callout__body">
+              <h3 class="ds-callout__title">On-prem agent required</h3>
+              <p class="ds-callout__text">LDAP credentials belong in the agent <code>config.json</code>, not here. The agent connects outbound to IdP on HTTPS&nbsp;:443.</p>
+              <a href="${esc(api.adAgentPackageUrl())}" download="lilg-ad-connector.zip" class="btn btn-secondary btn-sm btn-with-icon">${svgIcon('download')}<span>Download package</span></a>
+            </div>
           </div>` : ''}
-          ${isGoogle ? `<div class="alert alert-info" style="font-size:0.8rem;margin-top:1rem;line-height:1.45">
-            <strong>Domain-wide delegation</strong> (one-time in Google): Cloud Console → Service account → enable delegation → Admin Console → API controls → add SA Client ID with scopes
-            <code style="font-size:0.72rem">https://www.googleapis.com/auth/admin.directory.user</code>
-            and
-            <code style="font-size:0.72rem">https://www.googleapis.com/auth/admin.directory.group.readonly</code>
+          ${isGoogle ? `<div class="ds-callout ds-callout--compact ds-callout--google">
+            <div class="ds-callout__icon connector-cell-icon connector-cell-icon--google">${svgIcon('app')}</div>
+            <div class="ds-callout__body">
+              <h3 class="ds-callout__title">Domain-wide delegation</h3>
+              <p class="ds-callout__text">In Google Admin → Security → API controls, authorize the service account Client ID with scopes <code>admin.directory.user</code> and <code>admin.directory.group.readonly</code>.</p>
+            </div>
+          </div>` : ''}
+          ${isAd ? `<div class="ds-callout ds-callout--compact ds-callout--ad">
+            <div class="ds-callout__icon connector-cell-icon connector-cell-icon--ad">${svgIcon('server')}</div>
+            <div class="ds-callout__body">
+              <h3 class="ds-callout__title">LDAP connectivity</h3>
+              <p class="ds-callout__text">Use LDAPS or StartTLS in production. The IdP must reach your domain controller on port 389 or 636.</p>
+            </div>
           </div>` : ''}
         </div>
-        ${isGoogle ? `<div id="cfg-pane-auth" class="cfg-pane" style="display:none">${googleAuthFields}</div>` : ''}
-        <div id="cfg-pane-scope" class="cfg-pane" style="display:none">
-          ${isGoogle
-            ? '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">Choose which OUs / users to import. Leave blank to sync the <strong>entire</strong> directory. <strong>Sync Groups</strong> mirrors Workspace groups into Identity → Groups (blank or <code>*</code> = auto up to 200). Domain-wide delegation must include <code>admin.directory.group.readonly</code>.</p>'
-            : '<p class="muted" style="font-size:0.82rem;margin:0 0 1rem">List AD groups to mirror into <strong>Identity → Groups</strong>. User sync must run first so members can be linked. Leave blank to auto-sync up to <strong>200 security groups</strong>.</p>'}
-          <div style="display:grid;grid-template-columns:1fr;gap:0">${isGoogle ? googleScopeFields : adScopeFields}</div>
+        ${isGoogle ? `<div id="cfg-pane-auth" class="cfg-pane ds-cfg-pane" style="display:none">${googleAuthFields}</div>` : ''}
+        <div id="cfg-pane-scope" class="cfg-pane ds-cfg-pane" style="display:none">
+          <p class="ds-cfg-pane-intro">${isGoogle
+            ? 'Choose which OUs and users to import. Leave blank to sync the entire directory. <strong>Sync Groups</strong> mirrors Workspace groups into Identity → Groups.'
+            : 'List AD groups to mirror into Identity → Groups. User sync must run first so members can be linked.'}</p>
+          <div class="ds-form-grid">${isGoogle ? googleScopeFields : adScopeFields}</div>
         </div>` : `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">${configFields}</div>`;
+        <div class="ds-form-grid ds-form-grid--2col">${configFields}</div>`;
 
-    const bd = openModal(`<div class="modal" style="width:680px;max-width:96vw">
-      <div class="modal-header">
-        <h2>${isEdit ? 'Edit' : 'Configure'} — ${esc(meta.icon||'')} ${esc(meta.label||connectorType)}</h2>
+    const bd = openModal(`<div class="modal ds-modal ds-config-modal">
+      <div class="modal-header ds-config-modal__head">
+        <span class="ds-config-modal__badge connector-cell-icon ${connectorIconClass(connectorType)}">${connectorSvg(connectorType)}</span>
+        <div>
+          <h2>${isEdit ? 'Edit' : 'Configure'} ${esc(meta.label || connectorType)}</h2>
+          <p class="modal-subtitle">${esc(meta.desc || 'Directory connector settings')}</p>
+        </div>
       </div>
-      <div class="modal-body" style="max-height:72vh;overflow-y:auto">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 1rem">
+      <div class="modal-body ds-config-modal__body">
+        <div class="ds-form-grid ds-form-grid--2col ds-config-basics">
           <div class="form-group">
-            <label class="form-label">Display Name <span style="color:var(--danger)">*</span></label>
+            <label class="form-label">Display name <span class="text-danger">*</span></label>
             <input class="form-input" id="cfg-name" value="${esc(defaults.name||meta.label||'')}">
           </div>
           <div class="form-group">
-            <label class="form-label">Slug <span class="muted" style="font-size:0.75rem">(URL-safe ID)</span></label>
+            <label class="form-label">Slug <span class="muted">(URL-safe ID)</span></label>
             <input class="form-input" id="cfg-slug" value="${esc(defaults.slug||connectorType.toLowerCase().replace(/_/g,'-'))}">
           </div>
           <div class="form-group">
             <label class="form-label">Direction</label>
             <select class="form-select" id="cfg-direction">
-              <option ${defaults.direction==='INBOUND'?'selected':''} value="INBOUND">INBOUND (read users from source)</option>
-              <option ${defaults.direction==='OUTBOUND'?'selected':''} value="OUTBOUND">OUTBOUND (provision to source)</option>
+              <option ${defaults.direction==='INBOUND'?'selected':''} value="INBOUND">INBOUND — read users from source</option>
+              <option ${defaults.direction==='OUTBOUND'?'selected':''} value="OUTBOUND">OUTBOUND — provision to source</option>
               <option ${(!defaults.direction||defaults.direction==='BIDIRECTIONAL')?'selected':''} value="BIDIRECTIONAL">BIDIRECTIONAL</option>
             </select>
           </div>
           ${renderConnectorScheduleFields(defaults)}
         </div>
-        ${isGoogle ? '' : `<hr style="border:none;border-top:1px solid var(--border);margin:0.5rem 0 1rem">
-        <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:0.75rem;color:var(--text-dim)">CONNECTION SETTINGS</h3>`}
-        ${isGoogle ? `<h3 style="font-size:0.9rem;font-weight:600;margin:0.5rem 0 0.75rem;color:var(--text-dim)">GOOGLE WORKSPACE</h3>` : ''}
+        ${useScopeTabs ? `<div class="ds-config-section"><h3 class="ds-config-section__title">${isGoogle ? 'Google Workspace' : isAdAgent ? 'Agent connector' : 'Active Directory'}</h3>` : ''}
         ${scopedFieldsBlock}
+        ${useScopeTabs ? '</div>' : ''}
         <div id="cfg-err"></div>
       </div>
-      <div class="modal-footer" style="gap:0.5rem">
-        ${!isEdit ? `<button class="btn btn-secondary" id="cfg-back">‹ Back</button>` : ''}
-        <button class="btn btn-secondary" id="cfg-test-btn">✓ Test Connection</button>
-        <button class="btn btn-primary"   id="cfg-save">${isEdit ? 'Save Changes' : 'Add Source'}</button>
-        <button class="btn btn-secondary" id="cfg-cancel">Cancel</button>
+      <div class="modal-footer ds-config-modal__footer">
+        ${!isEdit ? `<button type="button" class="btn btn-secondary btn-with-icon" id="cfg-back">${svgIcon('chevronLeft')}<span>Back</span></button>` : ''}
+        <span class="modal-footer-spacer"></span>
+        <button type="button" class="btn btn-secondary" id="cfg-cancel">Cancel</button>
+        <button type="button" class="btn btn-secondary btn-with-icon" id="cfg-test-btn">${svgIcon('check')}<span>Test connection</span></button>
+        <button type="button" class="btn btn-primary btn-with-icon" id="cfg-save">${svgIcon('check')}<span>${isEdit ? 'Save changes' : 'Add source'}</span></button>
       </div>
     </div>`);
 
@@ -4554,13 +4679,8 @@ function initSourcesTab(panel) {
     if (useScopeTabs) {
       bd.querySelectorAll('.cfg-tab').forEach(tab => {
         tab.addEventListener('click', () => {
-          bd.querySelectorAll('.cfg-tab').forEach(t => {
-            t.classList.remove('active');
-            t.classList.add('btn-secondary');
-            t.classList.remove('btn-primary');
-          });
-          tab.classList.add('active', 'btn-primary');
-          tab.classList.remove('btn-secondary');
+          bd.querySelectorAll('.cfg-tab').forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
           const pane = tab.dataset.pane;
           bd.querySelector('#cfg-pane-conn').style.display = pane === 'conn' ? '' : 'none';
           const authPane = bd.querySelector('#cfg-pane-auth');
@@ -4721,30 +4841,37 @@ function initSourcesTab(panel) {
 
   // ── sync history modal ───────────────────────────────────────────────────────
   async function openLogsModal(connectorId, connectorName) {
-    const bd = openModal(`<div class="modal" style="width:760px;max-width:96vw">
-      <div class="modal-header"><h2>Sync History — ${esc(connectorName)}</h2></div>
-      <div class="modal-body" id="logs-body">${loading()}</div>
-      <div class="modal-footer"><button class="btn btn-secondary" id="logs-close">Close</button></div>
+    const bd = openModal(`<div class="modal ds-modal ds-logs-modal">
+      <div class="modal-header">
+        <div>
+          <h2>Sync history</h2>
+          <p class="modal-subtitle">${esc(connectorName)}</p>
+        </div>
+      </div>
+      <div class="modal-body ent-panel-body--flush" id="logs-body">${loading()}</div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="logs-close">Close</button>
+      </div>
     </div>`);
     bd.querySelector('#logs-close').addEventListener('click', () => bd.remove());
     try {
       const r = await api.getConnectorRuns(connectorId, 20);
       const runs = (r && r.data) ? r.data : [];
       if (!runs.length) {
-        bd.querySelector('#logs-body').innerHTML = `<div class="empty-state"><div class="empty-icon">◎</div><p>No sync runs yet.</p></div>`;
+        bd.querySelector('#logs-body').innerHTML = `<div class="empty-panel ds-empty-panel ds-empty-panel--compact"><div class="ds-empty-icon">${svgIcon('refresh')}</div><p class="muted">No sync runs yet for this source.</p></div>`;
         return;
       }
       const rows = runs.map(r2 => `<tr>
-        <td class="muted" style="font-size:0.8rem">${r2.started_at ? fmtDate(r2.started_at) : '—'}</td>
+        <td class="muted">${r2.started_at ? fmtDate(r2.started_at) : '—'}</td>
         <td><span class="badge badge-neutral">${esc(r2.run_type||'—')}</span></td>
         <td><span class="badge ${r2.status==='SUCCESS'?'badge-success':r2.status==='FAILED'?'badge-danger':'badge-warning'}">${esc(r2.status||'—')}</span></td>
         <td>${r2.items_processed ?? '—'}</td>
-        <td style="color:var(--success)">${r2.items_succeeded ?? '—'}</td>
-        <td style="color:${r2.items_failed?'var(--danger)':'inherit'}">${r2.items_failed ?? '—'}</td>
-        <td class="muted" style="font-size:0.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(r2.error_summary||'')}">${r2.error_summary ? esc(r2.error_summary.slice(0,80)) : '—'}</td>
+        <td class="text-success">${r2.items_succeeded ?? '—'}</td>
+        <td class="${r2.items_failed?'text-danger':''}">${r2.items_failed ?? '—'}</td>
+        <td class="muted ds-log-error" title="${esc(r2.error_summary||'')}">${r2.error_summary ? esc(r2.error_summary.slice(0,80)) : '—'}</td>
       </tr>`).join('');
       bd.querySelector('#logs-body').innerHTML = `
-        <div class="table-wrap"><table>
+        <div class="table-wrap table-wrap--flat"><table class="dense-table">
           <thead><tr><th>Started</th><th>Type</th><th>Status</th><th>Processed</th><th>OK</th><th>Failed</th><th>Error</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>`;
@@ -4795,17 +4922,17 @@ function initAttrMappingTab(panel) {
   ];
 
   panel.innerHTML = `
-    <div class="ent-panel">
-      <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
-        <div>
-          <h2 style="margin:0;font-size:1.05rem">Google Attribute Mapping</h2>
-          <p class="muted" style="margin:0.35rem 0 0;font-size:0.85rem">Map Google Workspace attributes to local directory fields. Changes apply on the next sync.</p>
+    <div class="ent-panel ds-mapping-panel">
+      <div class="ent-panel-head">
+        <div class="panel-meta">
+          <h2>Google Workspace attribute mapping</h2>
+          <p class="subtitle">Map Google directory fields to local employee attributes — applied on the next sync</p>
         </div>
-        <button class="btn btn-primary btn-sm" id="am-save">Save Mapping</button>
+        <button type="button" class="btn btn-primary btn-sm btn-with-icon" id="am-save">${svgIcon('check')}<span>Save mapping</span></button>
       </div>
       <div id="am-banner"></div>
-      <div class="card-body" id="am-body">${loading()}</div>
-      <div id="am-msg"></div>
+      <div class="ent-panel-body ent-panel-body--flush" id="am-body">${loading()}</div>
+      <div class="ent-panel-body" id="am-msg"></div>
     </div>`;
 
   let sourceOptions = DEFAULT_SOURCE.slice();
@@ -4852,11 +4979,15 @@ function initAttrMappingTab(panel) {
             <button class="btn btn-sm btn-secondary am-dn" title="Move down">↓</button></td>
       </tr>`).join('');
     panel.querySelector('#am-body').innerHTML = `
-      <div class="table-wrap"><table class="dense-table">
-        <thead><tr><th>Google Attribute</th><th></th><th>Local Attribute</th><th>On</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>
-      <button class="btn btn-secondary btn-sm" id="am-add" style="margin-top:0.75rem">+ Add mapping</button>`;
+      <div class="table-wrap table-wrap--flat">
+        <table class="dense-table ds-mapping-table">
+          <thead><tr><th>Google attribute</th><th></th><th>Local attribute</th><th>Enabled</th><th>Order</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="ds-mapping-actions">
+        <button type="button" class="btn btn-secondary btn-sm btn-with-icon" id="am-add">${svgIcon('plus')}<span>Add mapping</span></button>
+      </div>`;
 
     panel.querySelector('#am-add')?.addEventListener('click', () => {
       maps.push({ source_attr: sourceOptions[0] || 'employeeId', local_attr: 'employee_number', enabled: 1 });
@@ -4904,17 +5035,29 @@ function initAttrMappingTab(panel) {
 
 function initSyncSettingsTab(panel) {
   panel.innerHTML = `
-    <div class="ent-panel" style="margin-bottom:1rem">
-      <div class="card-head"><h2 style="margin:0;font-size:1.05rem">Google Sync Settings</h2></div>
-      <div class="card-body" id="ss-body">${loading()}</div>
-      <div id="ss-msg"></div>
-    </div>
-    <div class="ent-panel">
-      <div class="card-head" style="display:flex;justify-content:space-between;align-items:center">
-        <h2 style="margin:0;font-size:1.05rem">Sync Logs</h2>
-        <button class="btn btn-secondary btn-sm" id="ss-refresh-logs">Refresh</button>
+    <div id="ss-stats" class="stat-grid ds-stat-grid ds-stat-grid--placeholder" hidden></div>
+    <div class="ent-panel ds-sync-panel">
+      <div class="ent-panel-head">
+        <div class="panel-meta">
+          <span class="ds-sync-panel__badge connector-cell-icon connector-cell-icon--google">${svgIcon('app')}</span>
+          <div>
+            <h2>Google Workspace sync</h2>
+            <p class="subtitle">Field-level sync options and manual run controls for Google directory connectors</p>
+          </div>
+        </div>
       </div>
-      <div class="card-body" id="ss-logs">${loading()}</div>
+      <div class="ent-panel-body" id="ss-body">${loading()}</div>
+      <div class="ent-panel-body" id="ss-msg"></div>
+    </div>
+    <div class="ent-panel ds-sync-logs-panel">
+      <div class="ent-panel-head">
+        <div class="panel-meta">
+          <h2>Sync history</h2>
+          <p class="subtitle">Recent connector runs and directory audit events</p>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm btn-with-icon" id="ss-refresh-logs">${svgIcon('refresh')}<span>Refresh</span></button>
+      </div>
+      <div class="ent-panel-body ent-panel-body--flush" id="ss-logs">${loading()}</div>
     </div>`;
 
   async function loadSettings() {
@@ -4949,36 +5092,41 @@ function initSyncSettingsTab(panel) {
       };
       const chk = (id, on) => `<label class="form-check-row"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}> ${labels[id] || id}</label>`;
       panel.querySelector('#ss-body').innerHTML = `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem 1.5rem">
-          ${chk('ss_sync_employee_id', s.sync_employee_id)}
-          ${chk('ss_sync_department', s.sync_department)}
-          ${chk('ss_sync_designation', s.sync_designation)}
-          ${chk('ss_sync_manager', s.sync_manager)}
-          ${chk('ss_sync_cost_center', s.sync_cost_center)}
-          ${chk('ss_sync_mobile', s.sync_mobile)}
-          ${chk('ss_sync_location', s.sync_location)}
-          ${chk('ss_sync_profile_photo', s.sync_profile_photo)}
-          ${chk('ss_sync_office_address', s.sync_office_address)}
-          ${chk('ss_disable_deleted', s.disable_deleted)}
+        <div class="ds-sync-options">
+          <h3 class="ds-config-section__title">Attributes to sync</h3>
+          <div class="ds-sync-checkgrid">
+            ${chk('ss_sync_employee_id', s.sync_employee_id)}
+            ${chk('ss_sync_department', s.sync_department)}
+            ${chk('ss_sync_designation', s.sync_designation)}
+            ${chk('ss_sync_manager', s.sync_manager)}
+            ${chk('ss_sync_cost_center', s.sync_cost_center)}
+            ${chk('ss_sync_mobile', s.sync_mobile)}
+            ${chk('ss_sync_location', s.sync_location)}
+            ${chk('ss_sync_profile_photo', s.sync_profile_photo)}
+            ${chk('ss_sync_office_address', s.sync_office_address)}
+            ${chk('ss_disable_deleted', s.disable_deleted)}
+          </div>
         </div>
-        <div class="form-group" style="margin-top:1rem;max-width:240px">
-          <label class="form-label">Sync Frequency</label>
-          <select class="form-select" id="ss_frequency">
-            <option value="15m" ${s.frequency === '15m' ? 'selected' : ''}>15 Minutes</option>
-            <option value="30m" ${s.frequency === '30m' ? 'selected' : ''}>30 Minutes</option>
-            <option value="1h" ${s.frequency === '1h' ? 'selected' : ''}>1 Hour</option>
-            <option value="manual" ${!s.frequency || s.frequency === 'manual' ? 'selected' : ''}>Manual</option>
-          </select>
+        <div class="ds-sync-schedule">
+          <div class="form-group" style="max-width:280px;margin:0">
+            <label class="form-label">Sync frequency</label>
+            <select class="form-select" id="ss_frequency">
+              <option value="15m" ${s.frequency === '15m' ? 'selected' : ''}>Every 15 minutes</option>
+              <option value="30m" ${s.frequency === '30m' ? 'selected' : ''}>Every 30 minutes</option>
+              <option value="1h" ${s.frequency === '1h' ? 'selected' : ''}>Every hour</option>
+              <option value="manual" ${!s.frequency || s.frequency === 'manual' ? 'selected' : ''}>Manual only</option>
+            </select>
+          </div>
         </div>
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:1rem">
-          <button class="btn btn-primary" id="ss-save">Save</button>
-          <button class="btn btn-secondary" id="ss-sync-now">Sync Now</button>
-          <button class="btn btn-secondary" id="ss-full-sync">Run Full Sync</button>
+        <div class="ds-sync-actions">
+          <button type="button" class="btn btn-primary btn-with-icon" id="ss-save">${svgIcon('check')}<span>Save settings</span></button>
+          <button type="button" class="btn btn-secondary btn-with-icon" id="ss-sync-now">${svgIcon('refresh')}<span>Sync now</span></button>
+          <button type="button" class="btn btn-secondary" id="ss-full-sync">Run full sync</button>
         </div>
-        <div id="ss-sync-progress" hidden style="margin-top:1rem">
-          <div class="muted" style="font-size:0.8rem;margin-bottom:0.35rem" id="ss-prog-label">Syncing…</div>
-          <div style="height:8px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden">
-            <div id="ss-prog-bar" style="height:100%;width:15%;background:var(--accent,#4c8bf5)"></div>
+        <div id="ss-sync-progress" class="ds-sync-progress" hidden>
+          <div class="muted ds-sync-progress__label" id="ss-prog-label">Syncing…</div>
+          <div class="ds-sync-progress__track">
+            <div class="ds-sync-progress__bar" id="ss-prog-bar"></div>
           </div>
         </div>`;
 
@@ -5055,30 +5203,34 @@ function initSyncSettingsTab(panel) {
       const runs = r.data?.runs || [];
       const audit = r.data?.audit || [];
       panel.querySelector('#ss-logs').innerHTML = `
-        <p class="pp-section-title">Connector runs</p>
-        <div class="table-wrap" style="margin-bottom:1rem"><table class="dense-table">
-          <thead><tr><th>Type</th><th>Status</th><th>Processed</th><th>OK</th><th>Failed</th><th>Started</th></tr></thead>
-          <tbody>${runs.length ? runs.map((x) => `<tr>
-            <td>${esc(x.run_type || '')}</td>
-            <td><span class="badge ${x.status === 'SUCCESS' ? 'badge-success' : x.status === 'FAILED' ? 'badge-danger' : 'badge-warning'}">${esc(x.status || '')}</span></td>
-            <td>${esc(String(x.items_processed ?? ''))}</td>
-            <td>${esc(String(x.items_succeeded ?? ''))}</td>
-            <td>${esc(String(x.items_failed ?? ''))}</td>
-            <td class="muted" style="font-size:0.78rem">${x.started_at ? fmtDate(x.started_at) : '—'}</td>
-          </tr>`).join('') : '<tr><td colspan="6" class="muted">No runs yet</td></tr>'}
-          </tbody>
-        </table></div>
-        <p class="pp-section-title">Directory audit</p>
-        <div class="table-wrap"><table class="dense-table">
-          <thead><tr><th>Action</th><th>User</th><th>Admin</th><th>When</th></tr></thead>
-          <tbody>${audit.length ? audit.map((a) => `<tr>
-            <td>${esc(a.action || '')}</td>
-            <td>${esc(a.emp_id || '—')}</td>
-            <td>${esc(a.admin_emp_id || '—')}</td>
-            <td class="muted" style="font-size:0.78rem">${a.created_at ? fmtDate(a.created_at) : '—'}</td>
-          </tr>`).join('') : '<tr><td colspan="4" class="muted">No audit entries</td></tr>'}
-          </tbody>
-        </table></div>`;
+        <div class="ds-log-section">
+          <h3 class="ds-config-section__title">Connector runs</h3>
+          <div class="table-wrap table-wrap--flat"><table class="dense-table">
+            <thead><tr><th>Type</th><th>Status</th><th>Processed</th><th>OK</th><th>Failed</th><th>Started</th></tr></thead>
+            <tbody>${runs.length ? runs.map((x) => `<tr>
+              <td><span class="badge badge-neutral">${esc(x.run_type || '')}</span></td>
+              <td><span class="badge ${x.status === 'SUCCESS' ? 'badge-success' : x.status === 'FAILED' ? 'badge-danger' : 'badge-warning'}">${esc(x.status || '')}</span></td>
+              <td>${esc(String(x.items_processed ?? ''))}</td>
+              <td class="text-success">${esc(String(x.items_succeeded ?? ''))}</td>
+              <td class="${x.items_failed ? 'text-danger' : ''}">${esc(String(x.items_failed ?? ''))}</td>
+              <td class="muted">${x.started_at ? fmtDate(x.started_at) : '—'}</td>
+            </tr>`).join('') : '<tr><td colspan="6" class="muted">No runs yet</td></tr>'}
+            </tbody>
+          </table></div>
+        </div>
+        <div class="ds-log-section">
+          <h3 class="ds-config-section__title">Directory audit</h3>
+          <div class="table-wrap table-wrap--flat"><table class="dense-table">
+            <thead><tr><th>Action</th><th>User</th><th>Admin</th><th>When</th></tr></thead>
+            <tbody>${audit.length ? audit.map((a) => `<tr>
+              <td>${esc(a.action || '')}</td>
+              <td>${esc(a.emp_id || '—')}</td>
+              <td>${esc(a.admin_emp_id || '—')}</td>
+              <td class="muted">${a.created_at ? fmtDate(a.created_at) : '—'}</td>
+            </tr>`).join('') : '<tr><td colspan="4" class="muted">No audit entries</td></tr>'}
+            </tbody>
+          </table></div>
+        </div>`;
     } catch (e) {
       const msg = e.status === 404
         ? 'Sync logs will appear here after the API is rebuilt and a sync has run.'
@@ -5113,9 +5265,8 @@ function initUsersTab(panel, me = null) {
 
   function srcBadge(src) {
     const b = SRC_BADGE[src] || { label: src, color: '#555', bg: '#eee' };
-    return `<span style="display:inline-block;padding:0.15rem 0.45rem;border-radius:4px;
-      font-size:0.72rem;font-weight:600;margin-right:0.25rem;
-      background:${b.bg};color:${b.color};border:1px solid ${b.color}33">${esc(b.label)}</span>`;
+    const cls = { AD: 'ad', GOOGLE: 'google', LOCAL: 'local' }[src] || 'default';
+    return `<span class="ds-src-badge ds-src-badge--${cls}">${esc(b.label)}</span>`;
   }
 
   function stateBadge(s) {
@@ -5125,51 +5276,62 @@ function initUsersTab(panel, me = null) {
 
   // ── Build shell ──────────────────────────────────────────────────────────────
   panel.innerHTML = `
-    <div class="filter-toolbar" style="flex-wrap:wrap;gap:0.5rem">
-      <input class="form-input filter-toolbar-search" id="ud-search" placeholder="Search name, email, ID…">
-      <select class="form-select" id="ud-src-filter">
-        <option value="">All Sources</option>
-        <option value="AD">Active Directory</option>
-        <option value="GOOGLE">Google Workspace</option>
-        <option value="LOCAL">Local Only</option>
-      </select>
-      <select class="form-select" id="ud-state-filter">
-        <option value="">Available</option>
-        <option value="SUSPENDED">Suspended</option>
-        <option value="__all__">All states</option>
-      </select>
-      <input class="form-input" id="ud-dept-filter" placeholder="Department" style="max-width:140px">
-      <input class="form-input" id="ud-mgr-filter" placeholder="Manager" style="max-width:140px">
-      <input class="form-input" id="ud-loc-filter" placeholder="Location" style="max-width:120px">
-      <select class="form-select" id="ud-type-filter">
-        <option value="">All types</option>
-        <option value="CORPORATE">Corporate</option>
-        <option value="STORE">Store</option>
-        <option value="PLANT">Plant</option>
-        <option value="DC">DC</option>
-      </select>
-      <div class="filter-toolbar-spacer"></div>
-      <button class="btn btn-secondary btn-sm" id="ud-refresh-btn">Refresh</button>
-      <button class="btn btn-secondary btn-sm" id="ud-bulk-upload-btn">Bulk Upload</button>
-      <button class="btn btn-primary btn-sm" id="ud-create-btn">+ Local User</button>
-    </div>
-    <div id="ud-bulk-bar" class="filter-toolbar ud-bulk-bar" hidden style="display:none;margin-top:0.35rem;background:var(--surface-2,rgba(255,255,255,0.03));padding:0.5rem 0.75rem;border-radius:8px">
-      <span class="muted" style="font-size:0.85rem"><span id="ud-sel-count">0</span> selected</span>
-      <select class="form-select" id="ud-bulk-action" style="max-width:200px">
-        <option value="">Bulk actions…</option>
-        <option value="enable">Bulk Enable</option>
-        <option value="disable">Bulk Disable</option>
-        <option value="delete">Bulk Delete</option>
-        <option value="reset_password">Bulk Reset Password</option>
-        <option value="send_welcome">Bulk Send Welcome Email</option>
-        <option value="export">Bulk Export</option>
-      </select>
-      <button class="btn btn-sm btn-primary" id="ud-bulk-run">Apply</button>
-      <button class="btn btn-sm btn-secondary" id="ud-bulk-clear">Clear</button>
-    </div>
-    <div id="ud-toast" style="margin:0.5rem 0"></div>
-    <div id="ud-stats" class="kpi-strip kpi-strip--spaced" hidden></div>
-    <div id="ud-table-area">${loading()}</div>`;
+    <div id="ud-stats" class="stat-grid ds-stat-grid" hidden></div>
+    <div class="ent-panel ds-users-panel">
+      <div class="ent-panel-head">
+        <div class="panel-meta">
+          <h2>Hybrid directory users</h2>
+          <p class="subtitle">Unified view across Active Directory, Google Workspace, and local accounts</p>
+        </div>
+        <div class="page-toolbar-actions">
+          <button type="button" class="btn btn-secondary btn-sm btn-with-icon" id="ud-refresh-btn">${svgIcon('refresh')}<span>Refresh</span></button>
+          <button type="button" class="btn btn-secondary btn-sm" id="ud-bulk-upload-btn">Bulk upload</button>
+          <button type="button" class="btn btn-primary btn-sm btn-with-icon" id="ud-create-btn">${svgIcon('plus')}<span>Local user</span></button>
+        </div>
+      </div>
+      <div class="ent-panel-body">
+        <div class="filter-toolbar ds-users-filters">
+          <input class="form-input filter-toolbar-search" id="ud-search" placeholder="Search name, email, employee ID…">
+          <select class="form-select" id="ud-src-filter">
+            <option value="">All sources</option>
+            <option value="AD">Active Directory</option>
+            <option value="GOOGLE">Google Workspace</option>
+            <option value="LOCAL">Local only</option>
+          </select>
+          <select class="form-select" id="ud-state-filter">
+            <option value="">Available</option>
+            <option value="SUSPENDED">Suspended</option>
+            <option value="__all__">All states</option>
+          </select>
+          <input class="form-input" id="ud-dept-filter" placeholder="Department" style="max-width:140px">
+          <input class="form-input" id="ud-mgr-filter" placeholder="Manager" style="max-width:140px">
+          <input class="form-input" id="ud-loc-filter" placeholder="Location" style="max-width:120px">
+          <select class="form-select" id="ud-type-filter">
+            <option value="">All types</option>
+            <option value="CORPORATE">Corporate</option>
+            <option value="STORE">Store</option>
+            <option value="PLANT">Plant</option>
+            <option value="DC">DC</option>
+          </select>
+        </div>
+        <div id="ud-bulk-bar" class="ds-bulk-bar" hidden>
+          <span class="muted"><strong id="ud-sel-count">0</strong> selected</span>
+          <select class="form-select" id="ud-bulk-action" style="max-width:220px">
+            <option value="">Bulk actions…</option>
+            <option value="enable">Bulk enable</option>
+            <option value="disable">Bulk disable</option>
+            <option value="delete">Bulk delete</option>
+            <option value="reset_password">Bulk reset password</option>
+            <option value="send_welcome">Bulk send welcome email</option>
+            <option value="export">Bulk export</option>
+          </select>
+          <button type="button" class="btn btn-sm btn-primary" id="ud-bulk-run">Apply</button>
+          <button type="button" class="btn btn-sm btn-secondary" id="ud-bulk-clear">Clear</button>
+        </div>
+        <div id="ud-toast" class="ds-inline-toast"></div>
+        <div id="ud-table-area">${loading()}</div>
+      </div>
+    </div>`;
 
   let allUsers = [];
   let searchTimer = null;
@@ -5225,12 +5387,12 @@ function initUsersTab(panel, me = null) {
   function renderStats() {
     const statsEl = panel.querySelector('#ud-stats');
     statsEl.hidden = false;
-    statsEl.innerHTML = kpiStrip([
-      [listTotal, 'Users', 'accent'],
-      [listStats.withAd, 'With AD', 'info'],
-      [listStats.withGoogle, 'With Google', 'success'],
-      [listStats.localOnly, 'Local only', 'neutral'],
-    ]);
+    statsEl.innerHTML = [
+      statCard('users', 'Directory users', listTotal, 'Matching current filters', 'primary'),
+      statCard('server', 'With AD', listStats.withAd, 'Linked to Active Directory', 'info'),
+      statCard('app', 'With Google', listStats.withGoogle, 'Linked to Google Workspace', 'success'),
+      statCard('user', 'Local only', listStats.localOnly, 'No external directory link', 'teal'),
+    ].join('');
   }
 
   function updateBulkBar() {
@@ -5238,7 +5400,6 @@ function initUsersTab(panel, me = null) {
     const count = selected.size;
     if (bar) {
       bar.hidden = count === 0;
-      bar.style.display = count === 0 ? 'none' : '';
       const c = panel.querySelector('#ud-sel-count');
       if (c) c.textContent = String(count);
     }
@@ -5247,9 +5408,9 @@ function initUsersTab(panel, me = null) {
   function renderTable(users) {
     if (!users.length) {
       panel.querySelector('#ud-table-area').innerHTML = `
-        <div class="empty-panel empty-panel--compact">
-          <div class="empty-panel-icon">👤</div>
-          <p class="muted">No users match your filter.</p>
+        <div class="empty-panel ds-empty-panel ds-empty-panel--compact">
+          <div class="ds-empty-icon">${svgIcon('users')}</div>
+          <p class="muted">No users match your filters.</p>
         </div>`;
       return;
     }
@@ -5293,20 +5454,20 @@ function initUsersTab(panel, me = null) {
 
     panel.querySelector('#ud-table-area').innerHTML = `
       <div class="table-wrap table-wrap--flat">
-        <table class="dense-table">
+        <table class="dense-table ds-users-table">
           <thead><tr>
             <th style="width:28px"><input type="checkbox" id="ud-check-all" title="Select page"></th>
-            <th>User</th><th>Email</th><th>Department</th><th>Designation</th><th>State</th><th>Sources</th><th></th>
+            <th>User</th><th>Email</th><th>Department</th><th>Designation</th><th>State</th><th>Sources</th><th class="actions-col"></th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
-      <div class="filter-toolbar" style="margin-top:0.75rem;justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
-        <span class="muted" style="font-size:0.82rem">Showing ${from.toLocaleString()}–${to.toLocaleString()} of ${listTotal.toLocaleString()}</span>
-        <div style="display:flex;gap:0.4rem;align-items:center">
-          <button type="button" class="btn btn-sm btn-secondary" id="ud-page-prev" ${canPrev ? '' : 'disabled'}>← Prev</button>
-          <span class="muted" style="font-size:0.82rem">Page ${page} / ${pages}</span>
-          <button type="button" class="btn btn-sm btn-secondary" id="ud-page-next" ${canNext ? '' : 'disabled'}>Next →</button>
+      <div class="ds-table-footer">
+        <span class="muted">Showing ${from.toLocaleString()}–${to.toLocaleString()} of ${listTotal.toLocaleString()}</span>
+        <div class="ds-table-footer__pager">
+          <button type="button" class="btn btn-sm btn-secondary" id="ud-page-prev" ${canPrev ? '' : 'disabled'}>Previous</button>
+          <span class="muted">Page ${page} / ${pages}</span>
+          <button type="button" class="btn btn-sm btn-secondary" id="ud-page-next" ${canNext ? '' : 'disabled'}>Next</button>
         </div>
       </div>`;
 

@@ -581,6 +581,7 @@ To add a new migration:
 | `DELETE` | `/api/admin/users/mfa-group-policies/:id` | Delete group MFA policy |
 | `GET` | `/api/admin/users/mfa-delivery-status` | Email/SMS OTP delivery config for Admin GUI (no secrets; `hasSmtpPass` / `hasSmsApiKey`) |
 | `PUT` | `/api/admin/users/mfa-delivery` | Save SMTP + SMS gateway settings into `general_settings` (GUI takes precedence over env) |
+| `POST` | `/api/admin/users/mfa-delivery/test` | Send test email using current SMTP/API settings (defaults to admin's `email_corp`) |
 | `POST` | `/api/admin/users/:empId/reset-password` | Admin password reset with AD/Google writeback |
 | `POST` | `/api/admin/users/:empId/link-identity` | Attach an external identity link |
 | `DELETE` | `/api/admin/users/:empId/identity-links/:linkId` | Remove an identity link |
@@ -1105,6 +1106,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-05 — Fix portal outbound email delivery
+
+**Why** — Test notifications and MFA OTP emails failed silently or could not resolve recipients by corporate email.
+
+**What changed:**
+
+- **`POST /api/admin/notifications/test`** — resolve recipients via `email_corp` / `email_personal` (not nonexistent `employees.email`); return SMTP/API error to the UI instead of always `{ success: true }`.
+- **`POST /api/admin/users/mfa-delivery/test`** — send a test message using current SMTP/API settings; **Send test email** button on Strong Auth → OTP delivery channels.
+- **`deliverEmail`** — require STARTTLS on port 587 (common relay requirement).
 
 ### (pending) — 2026-08-05 — Directory Sync: download AD agent package from console
 

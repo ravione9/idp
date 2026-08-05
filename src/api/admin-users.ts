@@ -645,6 +645,59 @@ router.put('/mfa-delivery', async (req: Request, res: Response): Promise<void> =
   res.json({ success: true, data: publicDeliveryStatus(cfg) });
 });
 
+router.post('/mfa-delivery/test', async (req: Request, res: Response): Promise<void> => {
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId
+    ?? (req as unknown as { session?: { emp_id?: string } }).session?.emp_id;
+  const toRaw = typeof req.body?.to === 'string' ? req.body.to.trim() : '';
+
+  let toEmail = toRaw;
+  if (!toEmail && adminId) {
+    const admin = await queryOne<{ email_corp: string | null }>(
+      `SELECT email_corp FROM employees WHERE emp_id = ? LIMIT 1`,
+      [adminId],
+    );
+    toEmail = admin?.email_corp?.trim() ?? '';
+  }
+
+  if (!toEmail) {
+    res.status(400).json({
+      error: 'No test recipient — enter an address or ensure your employee profile has email_corp.',
+    });
+    return;
+  }
+
+  const { deliverEmail } = await import('../services/notification.js');
+  const { getMfaDeliveryConfig, publicDeliveryStatus } = await import('../services/mfa-delivery-config.js');
+  const cfg = await getMfaDeliveryConfig();
+  if (cfg.emailMode === 'none') {
+    res.status(400).json({
+      error: 'Email delivery is not configured — save SMTP or Email API settings first.',
+      data: publicDeliveryStatus(cfg),
+    });
+    return;
+  }
+
+  const subject = 'Lenskart IdP — test email';
+  const body = [
+    'This is a test message from the Lenskart IdP portal.',
+    '',
+    `Sent at: ${new Date().toISOString()}`,
+    `Transport: ${cfg.emailTransport}`,
+    '',
+    'If you received this, outbound email from the portal is working.',
+  ].join('\n');
+
+  try {
+    await deliverEmail(toEmail, subject, body);
+    logger.info({ by: adminId, toEmail }, 'MFA delivery test email sent');
+    res.json({ success: true, sentTo: toEmail, transport: cfg.emailTransport });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ by: adminId, toEmail, error: msg }, 'MFA delivery test email failed');
+    res.status(502).json({ error: `Email delivery failed: ${msg}` });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Group-wise MFA method policies
 // ---------------------------------------------------------------------------
