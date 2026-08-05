@@ -25,6 +25,12 @@ import { fulfillEntitlementOnTarget } from '../services/entitlement-fulfillment.
 import { submitAccessRequest, processDecision, repairAccessRequestFulfillment } from '../services/access-request-workflow.js';
 import { isValidSyncSchedule } from '../utils/sync-schedule.js';
 import { jsonSafeRow, jsonSafeString } from '../utils/json-safe.js';
+import { generateAgentToken, hashAgentToken } from '../utils/agent-token.js';
+import {
+  buildAdAgentPackageZip,
+  adAgentPackageFingerprint,
+  adAgentPackageFilename,
+} from '../services/ad-agent-package.js';
 import {
   explainJitCatalogForUser,
   expireStaleAccessRequests,
@@ -254,6 +260,14 @@ router.post(
       return;
     }
     const id = uuidv4();
+    let agentTokenPlain: string | undefined;
+    const cfg: Record<string, unknown> = { ...(parsed.data.configJson ?? {}) };
+
+    if (parsed.data.connectorType.toUpperCase() === 'AD_AGENT') {
+      agentTokenPlain = generateAgentToken();
+      cfg['agentTokenHash'] = hashAgentToken(agentTokenPlain);
+    }
+
     try {
       await execute(
         `INSERT INTO connectors
@@ -268,11 +282,15 @@ router.post(
           parsed.data.direction,
           parsed.data.syncMode,
           parsed.data.syncSchedule ?? null,
-          JSON.stringify(parsed.data.configJson ?? {}),
+          JSON.stringify(cfg),
         ],
       );
       logger.info({ id, slug: parsed.data.slug }, 'Connector registered');
-      res.status(201).json({ id, slug: parsed.data.slug });
+      res.status(201).json({
+        id,
+        slug: parsed.data.slug,
+        ...(agentTokenPlain ? { agentToken: agentTokenPlain } : {}),
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Insert failed';
       if (msg.includes('Duplicate')) {
@@ -280,6 +298,33 @@ router.post(
         return;
       }
       res.status(400).json({ error: msg });
+    }
+  }),
+);
+
+/** Download on-prem AD connector agent ZIP (must be before /connectors/:id). */
+router.get(
+  '/connectors/ad-agent-package.zip',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    try {
+      const zip = buildAdAgentPackageZip();
+      const etag = `"${adAgentPackageFingerprint(zip)}"`;
+      if (req.headers['if-none-match'] === etag) {
+        res.status(304).end();
+        return;
+      }
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${adAgentPackageFilename()}"`);
+      res.setHeader('Content-Length', String(zip.length));
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.setHeader('ETag', etag);
+      res.send(zip);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, 'AD agent package download failed');
+      res.status(503).json({ error: msg });
     }
   }),
 );
@@ -409,9 +454,10 @@ router.get(
         : (row['config_json'] ?? {});
       // Redact secret fields
       const safe: Record<string, unknown> = { ...cfg };
-      for (const k of ['bindPassword', 'password', 'secret', 'apiKey', 'serviceAccountKey', 'clientSecret']) {
+      for (const k of ['bindPassword', 'password', 'secret', 'apiKey', 'serviceAccountKey', 'clientSecret', 'agentToken']) {
         if (k in safe) safe[k] = '••••••••';
       }
+      if ('agentTokenHash' in safe) safe['agentTokenHash'] = '••••••••';
       row['config'] = safe;
     } catch { row['config'] = {}; }
     delete row['config_json'];

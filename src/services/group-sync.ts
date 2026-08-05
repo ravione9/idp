@@ -151,9 +151,9 @@ async function resolveEmpIdByAdSam(sam: string, email?: string): Promise<string 
 
 async function resolveEmpIdByAdMember(member: {
   sam: string;
-  mail?: string;
-  upn?: string;
-  employeeId?: string;
+  mail?: string | undefined;
+  upn?: string | undefined;
+  employeeId?: string | undefined;
 }): Promise<string | null> {
   if (member.employeeId) {
     const byEmp = await queryOne<{ emp_id: string }>(
@@ -349,6 +349,54 @@ async function resolveAdGroupKeys(
   return { keys: dns, errors: [] };
 }
 
+export interface AdAgentGroupPayload {
+  dn: string;
+  name: string;
+  sam?: string | undefined;
+  members: Array<{ sam: string; mail?: string | undefined; upn?: string | undefined; employeeId?: string | undefined }>;
+}
+
+/** Apply AD group membership snapshot posted by the on-prem agent. */
+export async function processAdGroupsFromAgent(
+  connectorId: string,
+  groups: AdAgentGroupPayload[],
+): Promise<GroupSyncSummary> {
+  const summary: GroupSyncSummary = { groupsSynced: 0, membersSynced: 0, errors: [] };
+
+  if (!(await isGroupSyncSchemaReady())) {
+    summary.errors.push('Migration 014 not applied — restart API after deploy');
+    return summary;
+  }
+
+  for (const g of groups) {
+    try {
+      if (!g.dn?.trim()) {
+        summary.errors.push(`${g.name || '?'}: missing group DN`);
+        continue;
+      }
+      const groupId = await upsertSyncedGroup({
+        name: g.name || g.dn,
+        sourceSystem: 'AD',
+        externalId: g.dn,
+        connectorId,
+        description: `Synced from Active Directory (${g.dn})`,
+      });
+      summary.groupsSynced++;
+
+      const empIds: string[] = [];
+      for (const m of g.members ?? []) {
+        const empId = await resolveEmpIdByAdMember(m);
+        if (empId) empIds.push(empId);
+      }
+      summary.membersSynced += await replaceGroupMembers(groupId, [...new Set(empIds)]);
+    } catch (err) {
+      summary.errors.push(`${g.dn || g.name}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return summary;
+}
+
 export async function syncAdDirectoryGroups(
   connectorId: string,
   cfg: Record<string, unknown>,
@@ -449,6 +497,7 @@ export async function syncAllDirectoryGroups(): Promise<GroupSyncSummary> {
       total.membersSynced += part.membersSynced;
       total.errors.push(...part.errors);
     }
+    // AD_AGENT groups sync during agent sync jobs (POST .../groups), not here.
   }
 
   return total;
