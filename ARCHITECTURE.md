@@ -483,7 +483,7 @@ To add a new migration:
 | Table | Purpose |
 |---|---|
 | `audit_log` | Tamper-evident hash-chained audit trail |
-| `adapter_outbox` | Outbox pattern for downstream sync |
+| `adapter_outbox` | **(060)** Outbox pattern for downstream sync (Google / Zoho / AD adapter ops) |
 | `attendance_events`, `leave_records` | HRMS-driven lifecycle inputs |
 | `abac_policies`, `role_bindings` | Legacy authorization model (will fold into `business_roles` + `entitlements`) |
 | `workflow_definitions` | **(007)** Workflow library definitions (`steps_json`, `trigger_event`) — backs `/api/admin/workflows` |
@@ -1106,6 +1106,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### `dc1915e` — 2026-08-09 — Migration: create missing `adapter_outbox` table
+
+**Why** — Production logs showed `ER_NO_SUCH_TABLE` every 5s from the outbox worker; the table existed in `schema.sql` but was never shipped as a numbered migration, so migration-only databases never created it.
+
+**What changed:**
+
+- **Migration `060_adapter_outbox.sql`** — `CREATE TABLE IF NOT EXISTS adapter_outbox` (poll index, op enum, status lifecycle columns) aligned with `src/db/schema.sql`.
 
 ### (pending) — 2026-08-05 — Fix portal outbound email delivery
 
