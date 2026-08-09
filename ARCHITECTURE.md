@@ -1107,7 +1107,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-09 — Migration: create missing `adapter_outbox` table
+### `50df306` — 2026-08-09 — Migration: create missing `adapter_outbox` table
 
 **Why** — Production logs showed `ER_NO_SUCH_TABLE` every 5s from the outbox worker; the table existed in `schema.sql` but was never shipped as a numbered migration, so migration-only databases never created it.
 
