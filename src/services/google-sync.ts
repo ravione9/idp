@@ -31,6 +31,7 @@ import {
   listGoogleAttrMaps,
 } from './google-attr-map.js';
 import { failConnectorRunIfActive, updateConnectorRunProgress } from './connector-run-lifecycle.js';
+import { withSyncTimeout } from '../utils/sync-timeout.js';
 
 // ---------------------------------------------------------------------------
 // Re-export SyncResult type (same shape as ad-sync)
@@ -141,6 +142,174 @@ function preferEmpId(gUser: admin_directory_v1.Schema$User, attrs: ExtractedAttr
   return deriveEmpIdFromGoogle(gUser);
 }
 
+const INBOUND_USER_TIMEOUT_MS = 45_000;
+
+async function importOneGoogleUser(
+  gUser: admin_directory_v1.Schema$User,
+  ctx: {
+    attrMaps: DirectoryAttrMapRow[];
+    syncSettings: GoogleSyncSettings;
+    seenGoogleIds: Set<string>;
+  },
+): Promise<{
+  imported: number;
+  linked: number;
+  updated: number;
+  skipped: number;
+  disabled: number;
+  succeeded: number;
+  failed: number;
+  error?: string;
+}> {
+  let imported = 0;
+  let linked = 0;
+  let updated = 0;
+  let skipped = 0;
+  let disabled = 0;
+
+  const email = (gUser.primaryEmail ?? '').trim().toLowerCase();
+  const googleId = gUser.id ?? email;
+  const { attrMaps, syncSettings, seenGoogleIds } = ctx;
+
+  if (!email || !googleId) {
+    return { imported, linked, updated, skipped: 1, disabled, succeeded: 1, failed: 0 };
+  }
+  seenGoogleIds.add(googleId);
+
+  const attrs = await extractGoogleAttrs(gUser, attrMaps, syncSettings);
+  const fullName = attrs.full_name || email.split('@')[0] || email;
+  const suspended = gUser.suspended === true;
+  const attrOpts = { syncSettings, resolveManager: false as const };
+
+  const existingLink = await queryOne<{ id: number; emp_id: string }>(
+    `SELECT id, emp_id FROM identity_links WHERE \`system\` = 'GOOGLE' AND external_id = ?`,
+    [googleId],
+  );
+
+  if (suspended) {
+    const targetEmpId = existingLink?.emp_id
+      ?? (await queryOne<{ emp_id: string }>(`SELECT emp_id FROM employees WHERE email_corp = ?`, [email]))?.emp_id;
+    if (targetEmpId) {
+      await upsertGoogleIdentityLink(targetEmpId, googleId, 'DISABLED');
+      await execute(
+        `UPDATE employees SET full_name = ?, ilg_state = 'SUSPENDED_AUTO', sync_status = 'DISABLED',
+                updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+        [fullName, targetEmpId],
+      );
+      await applyAttrsToEmployee(targetEmpId, attrs, attrOpts);
+      linked++;
+      disabled++;
+    }
+    return { imported, linked, updated, skipped: 1, disabled, succeeded: 1, failed: 0 };
+  }
+
+  const linkStatus = 'ACTIVE';
+  const ilgState = 'ACTIVE';
+
+  if (existingLink) {
+    await upsertGoogleIdentityLink(existingLink.emp_id, googleId, linkStatus);
+    await execute(
+      `UPDATE employees SET ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+      [ilgState, existingLink.emp_id],
+    );
+    const applied = await applyAttrsToEmployee(existingLink.emp_id, attrs, attrOpts);
+    if (applied.updated) {
+      updated++;
+      await writeDirectoryUserAudit({
+        empId: existingLink.emp_id,
+        action: 'GOOGLE_SYNC_UPDATE',
+        source: 'GOOGLE',
+        changedFields: Object.keys(applied.changes),
+        oldValues: Object.fromEntries(Object.entries(applied.changes).map(([k, v]) => [k, v.old])),
+        newValues: Object.fromEntries(Object.entries(applied.changes).map(([k, v]) => [k, v.new])),
+      });
+    }
+    linked++;
+    return { imported, linked, updated, skipped, disabled, succeeded: 1, failed: 0 };
+  }
+
+  let empId = preferEmpId(gUser, attrs);
+  const byEmail = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees WHERE email_corp = ?`,
+    [email],
+  );
+  const byEmpId = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees WHERE emp_id = ?`,
+    [empId],
+  );
+  const byEmpNumber = attrs.employee_number
+    ? await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM employees WHERE employee_number = ? LIMIT 1`,
+      [attrs.employee_number],
+    )
+    : null;
+
+  if (byEmail) {
+    empId = byEmail.emp_id;
+    await execute(
+      `UPDATE employees SET ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+      [ilgState, empId],
+    );
+    const applied = await applyAttrsToEmployee(empId, attrs, attrOpts);
+    if (applied.updated) updated++;
+    linked++;
+  } else if (byEmpNumber) {
+    empId = byEmpNumber.emp_id;
+    await execute(
+      `UPDATE employees SET email_corp = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+      [email, ilgState, empId],
+    );
+    const applied = await applyAttrsToEmployee(empId, attrs, attrOpts);
+    if (applied.updated) updated++;
+    linked++;
+  } else if (byEmpId) {
+    await execute(
+      `UPDATE employees SET email_corp = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+      [email, ilgState, empId],
+    );
+    const applied = await applyAttrsToEmployee(empId, attrs, attrOpts);
+    if (applied.updated) updated++;
+    linked++;
+  } else {
+    await insertEmployeeFromGoogleAttrs(empId, email, ilgState, attrs);
+    imported++;
+    await writeDirectoryUserAudit({
+      empId,
+      action: 'GOOGLE_SYNC_CREATE',
+      source: 'GOOGLE',
+      newValues: { email, ...attrs },
+    });
+  }
+
+  await upsertGoogleIdentityLink(empId, googleId, linkStatus);
+  return { imported, linked, updated, skipped, disabled, succeeded: 1, failed: 0 };
+}
+
+async function resolveGoogleManagerLinks(
+  googleUsers: admin_directory_v1.Schema$User[],
+  attrMaps: DirectoryAttrMapRow[],
+  syncSettings: GoogleSyncSettings,
+  reportPhase?: (phase: string, detail: string) => void | Promise<void>,
+): Promise<number> {
+  if (!syncSettings.sync_manager) return 0;
+  if (reportPhase) await reportPhase('managers', 'Linking manager relationships');
+  let linked = 0;
+  for (const gUser of googleUsers) {
+    const email = (gUser.primaryEmail ?? '').trim().toLowerCase();
+    if (!email) continue;
+    const attrs = await extractGoogleAttrs(gUser, attrMaps, syncSettings);
+    if (!attrs.manager_email) continue;
+    const row = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM employees WHERE email_corp = ? LIMIT 1`,
+      [email],
+    );
+    if (!row) continue;
+    const applied = await applyAttrsToEmployee(row.emp_id, attrs, { syncSettings, resolveManager: true });
+    if (applied.updated) linked++;
+  }
+  return linked;
+}
+
 /** Import Google Workspace users into employees + identity_links (merge by email). */
 async function importGoogleDirectoryUsers(
   directory: admin_directory_v1.Admin,
@@ -233,131 +402,35 @@ async function importGoogleDirectoryUsers(
     const googleId = gUser.id ?? email;
 
     try {
-      if (!email || !googleId) {
-        skipped++;
-        succeeded++;
-        continue;
-      }
-      seenGoogleIds.add(googleId);
-
-      const attrs = await extractGoogleAttrs(gUser, attrMaps, syncSettings);
-      const fullName = attrs.full_name || email.split('@')[0] || email;
-      const suspended = gUser.suspended === true;
-
-      const existingLink = await queryOne<{ id: number; emp_id: string }>(
-        `SELECT id, emp_id FROM identity_links WHERE \`system\` = 'GOOGLE' AND external_id = ?`,
-        [googleId],
+      const result = await withSyncTimeout(
+        importOneGoogleUser(gUser, { attrMaps, syncSettings, seenGoogleIds }),
+        INBOUND_USER_TIMEOUT_MS,
+        email || googleId,
       );
-
-      if (suspended) {
-        const targetEmpId = existingLink?.emp_id
-          ?? (await queryOne<{ emp_id: string }>(`SELECT emp_id FROM employees WHERE email_corp = ?`, [email]))?.emp_id;
-        if (targetEmpId) {
-          await upsertGoogleIdentityLink(targetEmpId, googleId, 'DISABLED');
-          await execute(
-            `UPDATE employees SET full_name = ?, ilg_state = 'SUSPENDED_AUTO', sync_status = 'DISABLED',
-                    updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
-            [fullName, targetEmpId],
-          );
-          await applyAttrsToEmployee(targetEmpId, attrs, { syncSettings });
-          linked++;
-          disabled++;
-        }
-        skipped++;
-        succeeded++;
-        continue;
-      }
-
-      const linkStatus = 'ACTIVE';
-      const ilgState = 'ACTIVE';
-
-      if (existingLink) {
-        await upsertGoogleIdentityLink(existingLink.emp_id, googleId, linkStatus);
-        await execute(
-          `UPDATE employees SET ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
-          [ilgState, existingLink.emp_id],
-        );
-        const applied = await applyAttrsToEmployee(existingLink.emp_id, attrs, { syncSettings });
-        if (applied.updated) {
-          updated++;
-          await writeDirectoryUserAudit({
-            empId: existingLink.emp_id,
-            action: 'GOOGLE_SYNC_UPDATE',
-            source: 'GOOGLE',
-            changedFields: Object.keys(applied.changes),
-            oldValues: Object.fromEntries(Object.entries(applied.changes).map(([k, v]) => [k, v.old])),
-            newValues: Object.fromEntries(Object.entries(applied.changes).map(([k, v]) => [k, v.new])),
-          });
-        }
-        linked++;
-        succeeded++;
-        continue;
-      }
-
-      let empId = preferEmpId(gUser, attrs);
-      const byEmail = await queryOne<{ emp_id: string }>(
-        `SELECT emp_id FROM employees WHERE email_corp = ?`,
-        [email],
-      );
-      const byEmpId = await queryOne<{ emp_id: string }>(
-        `SELECT emp_id FROM employees WHERE emp_id = ?`,
-        [empId],
-      );
-      const byEmpNumber = attrs.employee_number
-        ? await queryOne<{ emp_id: string }>(
-          `SELECT emp_id FROM employees WHERE employee_number = ? LIMIT 1`,
-          [attrs.employee_number],
-        )
-        : null;
-
-      if (byEmail) {
-        empId = byEmail.emp_id;
-        await execute(
-          `UPDATE employees SET ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
-          [ilgState, empId],
-        );
-        const applied = await applyAttrsToEmployee(empId, attrs, { syncSettings });
-        if (applied.updated) updated++;
-        linked++;
-      } else if (byEmpNumber) {
-        empId = byEmpNumber.emp_id;
-        await execute(
-          `UPDATE employees SET email_corp = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
-          [email, ilgState, empId],
-        );
-        const applied = await applyAttrsToEmployee(empId, attrs, { syncSettings });
-        if (applied.updated) updated++;
-        linked++;
-      } else if (byEmpId) {
-        await execute(
-          `UPDATE employees SET email_corp = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
-          [email, ilgState, empId],
-        );
-        const applied = await applyAttrsToEmployee(empId, attrs, { syncSettings });
-        if (applied.updated) updated++;
-        linked++;
-      } else {
-        await insertEmployeeFromGoogleAttrs(empId, email, ilgState, attrs);
-        if (attrs.manager_email) {
-          await applyAttrsToEmployee(empId, attrs, { syncSettings });
-        }
-        imported++;
-        await writeDirectoryUserAudit({
-          empId,
-          action: 'GOOGLE_SYNC_CREATE',
-          source: 'GOOGLE',
-          newValues: { email, ...attrs },
-        });
-      }
-
-      await upsertGoogleIdentityLink(empId, googleId, linkStatus);
-      succeeded++;
+      imported += result.imported;
+      linked += result.linked;
+      updated += result.updated;
+      skipped += result.skipped;
+      disabled += result.disabled;
+      succeeded += result.succeeded;
+      failed += result.failed;
+      if (result.error) errors.push(result.error);
     } catch (err) {
       failed++;
       const msg = `${email || googleId}: ${err instanceof Error ? err.message : String(err)}`;
       errors.push(msg);
       logger.error({ email, googleId, err }, 'Google sync inbound: user import failed');
     }
+  }
+
+  const managersLinked = await resolveGoogleManagerLinks(
+    googleUsers,
+    attrMaps,
+    syncSettings,
+    opts.reportPhase,
+  );
+  if (managersLinked > 0) {
+    logger.info({ managersLinked }, 'Google sync inbound: linked manager relationships');
   }
 
   // Optional: disable local Google-linked users missing from this full sync scope

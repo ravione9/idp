@@ -1110,6 +1110,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### *(this commit)* — 2026-08-10 — Google inbound sync: per-user timeout and deferred manager linking
+
+**Why** — Large Google syncs hung near completion (e.g. 11250/11324 inbound) when a single user import blocked indefinitely on DB/manager lookups; manager resolution during import also left users unsynced when managers appeared later in the batch.
+
+**What changed:**
+
+- **`src/utils/sync-timeout.ts`** — `withSyncTimeout()` helper (45s per user).
+- **`src/services/google-sync.ts`** — inbound import wrapped in per-user timeout (fail user, continue run); manager links resolved in a second pass after all users imported; reports `managers` phase in run progress.
+
 ### `a1c7a1f` — 2026-08-10 — Harden connector sync recovery (force reclaim + auth error handling)
 
 **Why** — Sync still blocked after Aug 4: zombie `RUNNING` rows, manual Sync did not clear them until deploy, and Google auth/setup errors left runs stuck with 0 processed.
