@@ -1108,7 +1108,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-10 — Fix Google portal OAuth invalid_client from mixed credentials
+### `63de512` — 2026-08-10 — Fix Google portal OAuth invalid_client from mixed credentials
 
 **Why** — Prod login failed with `invalid_client` when DB stored Client ID but Client Secret fell back to a different env/Vault pair.
 
