@@ -1110,7 +1110,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### *(this commit)* — 2026-08-10 — Google inbound sync: per-user timeout and deferred manager linking
+### `42b720e` — 2026-08-10 — Google inbound sync: per-user timeout and deferred manager linking
 
 **Why** — Large Google syncs hung near completion (e.g. 11250/11324 inbound) when a single user import blocked indefinitely on DB/manager lookups; manager resolution during import also left users unsynced when managers appeared later in the batch.
 
