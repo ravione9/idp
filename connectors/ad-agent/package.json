@@ -10,7 +10,7 @@
     "build": "tsc --project tsconfig.json",
     "start": "node dist/index.js",
     "dev": "node --watch dist/index.js",
-    "package:win": "npm run build && npx pkg dist/index.js --targets node22-win-x64 --output dist/lilg-ad-connector.exe --compress GZip",
+    "package:win": "npm run build && npx pkg dist/index.js --targets node18-win-x64 --output dist/lilg-ad-connector.exe --compress GZip",
     "install:task": "powershell -ExecutionPolicy Bypass -File scripts/install-scheduled-task.ps1",
     "install:service": "powershell -ExecutionPolicy Bypass -File scripts/install-service-nssm.ps1"
   },
@@ -28,6 +28,6 @@
     "outputPath": "dist"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=18.0.0"
   }
 }
