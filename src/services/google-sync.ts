@@ -16,6 +16,7 @@ import {
   buildGoogleJwtAuth,
   employeeEligibleForGoogleOutbound,
   listScopedGoogleUsers,
+  lookupGoogleDirectoryIdentity,
   resolveGoogleSyncScope,
   type GoogleSyncScope,
 } from './google-directory-config.js';
@@ -986,4 +987,224 @@ export async function runGoogleSync(
 /** Full directory resync — same pipeline with FULL_SYNC run type + optional disable-deleted. */
 export async function runGoogleFullSync(connectorId: string) {
   return runGoogleSync(connectorId, { runType: 'FULL_SYNC' });
+}
+
+export interface GoogleUserSyncDiagnostic {
+  ok: boolean;
+  kind: 'user' | 'group' | 'not_found';
+  lookupEmail: string;
+  primaryEmail?: string;
+  empId?: string;
+  imported?: boolean;
+  updated?: boolean;
+  linked?: boolean;
+  message: string;
+  local?: {
+    empId: string;
+    emailCorp: string;
+    employeeNumber: string | null;
+    deptId: string | null;
+    ilgState: string;
+    syncStatus: string | null;
+    googleLinkStatus: string | null;
+  } | null;
+  google?: {
+    suspended?: boolean;
+    orgUnitPath?: string;
+    aliases?: string[];
+  };
+}
+
+async function loadGoogleConnectorConfig(connectorId: string): Promise<Record<string, unknown>> {
+  const connRow = await queryOne<{ config_json: string | Record<string, unknown> }>(
+    `SELECT config_json FROM connectors WHERE id = ?`,
+    [connectorId],
+  );
+  if (!connRow) throw new Error(`Connector not found: ${connectorId}`);
+  return typeof connRow.config_json === 'string'
+    ? JSON.parse(connRow.config_json || '{}') as Record<string, unknown>
+    : (connRow.config_json ?? {});
+}
+
+/** Diagnose and optionally import a single Google user by email or alias (bypasses sync scope). */
+export async function syncGoogleUserByEmail(
+  connectorId: string,
+  email: string,
+  opts: { importUser?: boolean } = {},
+): Promise<GoogleUserSyncDiagnostic> {
+  const lookupEmail = email.trim().toLowerCase();
+  const importUser = opts.importUser !== false;
+  const cfg = await loadGoogleConnectorConfig(connectorId);
+  const auth = buildGoogleJwtAuth(cfg);
+  const directory = google.admin({ version: 'directory_v1', auth });
+
+  const local = await queryOne<{
+    emp_id: string;
+    email_corp: string;
+    employee_number: string | null;
+    dept_id: string | null;
+    ilg_state: string;
+    sync_status: string | null;
+    google_link_status: string | null;
+  }>(
+    `SELECT e.emp_id, e.email_corp, e.employee_number, e.dept_id, e.ilg_state, e.sync_status,
+            il.status AS google_link_status
+       FROM employees e
+       LEFT JOIN identity_links il ON il.emp_id = e.emp_id AND il.\`system\` = 'GOOGLE' AND il.status != 'DELETED'
+      WHERE e.email_corp = ?
+      LIMIT 1`,
+    [lookupEmail],
+  );
+
+  const identity = await lookupGoogleDirectoryIdentity(directory, lookupEmail);
+
+  if (identity.kind === 'group') {
+    return {
+      ok: false,
+      kind: 'group',
+      lookupEmail,
+      message: `${lookupEmail} is a Google Group${identity.name ? ` (“${identity.name}”)` : ''}, not a user account. Groups sync to IdP Groups — they do not appear as Universal Directory users.`,
+      local: local
+        ? {
+          empId: local.emp_id,
+          emailCorp: local.email_corp,
+          employeeNumber: local.employee_number,
+          deptId: local.dept_id,
+          ilgState: local.ilg_state,
+          syncStatus: local.sync_status,
+          googleLinkStatus: local.google_link_status,
+        }
+        : null,
+    };
+  }
+
+  if (identity.kind === 'not_found') {
+    return {
+      ok: false,
+      kind: 'not_found',
+      lookupEmail,
+      message: `No Google Workspace user or group found for ${lookupEmail}. Verify the address in Google Admin or add it to Sync Users and re-run sync.`,
+      local: local
+        ? {
+          empId: local.emp_id,
+          emailCorp: local.email_corp,
+          employeeNumber: local.employee_number,
+          deptId: local.dept_id,
+          ilgState: local.ilg_state,
+          syncStatus: local.sync_status,
+          googleLinkStatus: local.google_link_status,
+        }
+        : null,
+    };
+  }
+
+  const gUser = identity.user;
+  const primaryEmail = (gUser.primaryEmail ?? '').trim().toLowerCase();
+  const aliases = (gUser.aliases ?? []).map((a) => a.trim().toLowerCase()).filter(Boolean);
+  const googleMeta: GoogleUserSyncDiagnostic['google'] = {
+    suspended: gUser.suspended === true,
+    aliases,
+  };
+  if (gUser.orgUnitPath) googleMeta.orgUnitPath = gUser.orgUnitPath;
+
+  if (!importUser) {
+    const localByPrimary = primaryEmail !== lookupEmail
+      ? await queryOne<{ emp_id: string; email_corp: string; employee_number: string | null; dept_id: string | null; ilg_state: string; sync_status: string | null; google_link_status: string | null }>(
+        `SELECT e.emp_id, e.email_corp, e.employee_number, e.dept_id, e.ilg_state, e.sync_status,
+                il.status AS google_link_status
+           FROM employees e
+           LEFT JOIN identity_links il ON il.emp_id = e.emp_id AND il.\`system\` = 'GOOGLE' AND il.status != 'DELETED'
+          WHERE e.email_corp = ?
+          LIMIT 1`,
+        [primaryEmail],
+      )
+      : local;
+
+    return {
+      ok: true,
+      kind: 'user',
+      lookupEmail,
+      primaryEmail,
+      ...(localByPrimary?.emp_id ? { empId: localByPrimary.emp_id } : {}),
+      message: primaryEmail !== lookupEmail
+        ? `Google user found. Primary email is ${primaryEmail} (you looked up alias ${lookupEmail}).`
+        : `Google user found for ${primaryEmail}.`,
+      local: localByPrimary
+        ? {
+          empId: localByPrimary.emp_id,
+          emailCorp: localByPrimary.email_corp,
+          employeeNumber: localByPrimary.employee_number,
+          deptId: localByPrimary.dept_id,
+          ilgState: localByPrimary.ilg_state,
+          syncStatus: localByPrimary.sync_status,
+          googleLinkStatus: localByPrimary.google_link_status,
+        }
+        : null,
+      google: googleMeta,
+    };
+  }
+
+  const attrMaps = await listGoogleAttrMaps();
+  const syncSettings = await getGoogleSyncSettings();
+  const seenGoogleIds = new Set<string>();
+  const result = await importOneGoogleUser(gUser, { attrMaps, syncSettings, seenGoogleIds });
+
+  const empRow = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees WHERE email_corp = ? LIMIT 1`,
+    [primaryEmail],
+  );
+  if (empRow) {
+    const attrs = await extractGoogleAttrs(gUser, attrMaps, syncSettings);
+    await applyAttrsToEmployee(empRow.emp_id, attrs, {
+      syncSettings,
+      resolveManager: true,
+      googleSourceOfTruth: true,
+    });
+  }
+
+  const after = await queryOne<{
+    emp_id: string;
+    email_corp: string;
+    employee_number: string | null;
+    dept_id: string | null;
+    ilg_state: string;
+    sync_status: string | null;
+    google_link_status: string | null;
+  }>(
+    `SELECT e.emp_id, e.email_corp, e.employee_number, e.dept_id, e.ilg_state, e.sync_status,
+            il.status AS google_link_status
+       FROM employees e
+       LEFT JOIN identity_links il ON il.emp_id = e.emp_id AND il.\`system\` = 'GOOGLE' AND il.status != 'DELETED'
+      WHERE e.email_corp = ?
+      LIMIT 1`,
+    [primaryEmail],
+  );
+
+  const aliasNote = primaryEmail !== lookupEmail
+    ? ` Primary email in Google is ${primaryEmail} — search Universal Directory using that address.`
+    : '';
+
+  return {
+    ok: true,
+    kind: 'user',
+    lookupEmail,
+    primaryEmail,
+    ...(after?.emp_id ? { empId: after.emp_id } : {}),
+    imported: result.imported > 0,
+    updated: result.updated > 0,
+    linked: result.linked > 0,
+    message: `Synced Google user ${primaryEmail}.${aliasNote}`,
+    local: after
+      ? {
+        empId: after.emp_id,
+        emailCorp: after.email_corp,
+        employeeNumber: after.employee_number,
+        deptId: after.dept_id,
+        ilgState: after.ilg_state,
+        syncStatus: after.sync_status,
+        googleLinkStatus: after.google_link_status,
+      }
+      : null,
+    google: googleMeta,
+  };
 }

@@ -596,6 +596,8 @@ To add a new migration:
 | `GET/PUT` | `/api/admin/directory/google/sync-settings` | Per-attribute sync toggles + frequency |
 | `POST` | `/api/admin/directory/google/sync-now` | Synchronous incremental Google sync |
 | `POST` | `/api/admin/directory/google/full-sync` | Full Google directory resync |
+| `GET` | `/api/admin/directory/google/lookup?email=` | Diagnose a Google email (user vs group vs missing; alias → primary) |
+| `POST` | `/api/admin/directory/google/sync-user` | Import/sync one Google user by email or alias (bypasses sync scope) |
 | `GET` | `/api/admin/directory/google/logs` | Sync runs + directory audit |
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD (**SUPER_ADMIN** session; includes `/status`) |
 | `GET` | `/auth/local/bootstrap-status` | Public boolean `{ bootstrapEnabled }` only (no admin count) |

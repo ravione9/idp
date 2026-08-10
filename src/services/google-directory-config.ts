@@ -227,6 +227,43 @@ function isGoogleUserNotFound(err: unknown): boolean {
   return e?.code === 404 || e?.response?.status === 404;
 }
 
+export type GoogleDirectoryIdentity =
+  | { kind: 'user'; user: admin_directory_v1.Schema$User; lookupEmail: string }
+  | { kind: 'group'; groupEmail: string; name?: string }
+  | { kind: 'not_found'; lookupEmail: string };
+
+/** Resolve a Workspace login email to a user (incl. alias) or group. */
+export async function lookupGoogleDirectoryIdentity(
+  directory: admin_directory_v1.Admin,
+  email: string,
+): Promise<GoogleDirectoryIdentity> {
+  const lookupEmail = email.trim().toLowerCase();
+  if (!lookupEmail) return { kind: 'not_found', lookupEmail };
+
+  try {
+    const res = await directory.users.get({ userKey: lookupEmail, projection: 'full' });
+    if (res.data) return { kind: 'user', user: res.data, lookupEmail };
+  } catch (err) {
+    if (!isGoogleUserNotFound(err)) throw err;
+  }
+
+  try {
+    const gRes = await directory.groups.get({ groupKey: lookupEmail });
+    if (gRes.data) {
+      const out: Extract<GoogleDirectoryIdentity, { kind: 'group' }> = {
+        kind: 'group',
+        groupEmail: (gRes.data.email ?? lookupEmail).toLowerCase(),
+      };
+      if (gRes.data.name) out.name = gRes.data.name;
+      return out;
+    }
+  } catch (err) {
+    if (!isGoogleUserNotFound(err)) throw err;
+  }
+
+  return { kind: 'not_found', lookupEmail };
+}
+
 /** Direct lookup by primary email — reliable for explicit Sync Users allowlists. */
 async function fetchGoogleUsersByEmail(
   directory: admin_directory_v1.Admin,

@@ -9,7 +9,7 @@ import { requireRole, requireAnyPortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne } from '../db/connection.js';
 import { triggerConnectorSync } from '../services/connector-dispatcher.js';
-import { runGoogleFullSync, runGoogleSync } from '../services/google-sync.js';
+import { runGoogleFullSync, runGoogleSync, syncGoogleUserByEmail } from '../services/google-sync.js';
 import {
   GOOGLE_SOURCE_ATTR_OPTIONS,
   LOCAL_ATTR_OPTIONS,
@@ -214,6 +214,47 @@ router.post('/sync-now', asyncHandler(async (req: Request, res: Response) => {
     durationMs: result.durationMs ?? 0,
     errors: result.errors.slice(0, 25),
   });
+}));
+
+const emailLookupSchema = z.object({
+  email: z.string().email().max(255),
+});
+
+router.get('/lookup', asyncHandler(async (req: Request, res: Response) => {
+  const parsed = emailLookupSchema.safeParse({ email: String(req.query['email'] ?? '').trim().toLowerCase() });
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Valid email query parameter required' });
+    return;
+  }
+  const conn = await findActiveGoogleConnector();
+  if (!conn) {
+    res.status(404).json({ error: 'No active Google Workspace connector found' });
+    return;
+  }
+  const result = await syncGoogleUserByEmail(conn.id, parsed.data.email, { importUser: false });
+  res.json({ data: result });
+}));
+
+router.post('/sync-user', asyncHandler(async (req: Request, res: Response) => {
+  const parsed = emailLookupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+  const conn = await findActiveGoogleConnector();
+  if (!conn) {
+    res.status(404).json({ error: 'No active Google Workspace connector found' });
+    return;
+  }
+  const adminId = actor(req);
+  const result = await syncGoogleUserByEmail(conn.id, parsed.data.email, { importUser: true });
+  await writeDirectoryUserAudit({
+    action: 'GOOGLE_SYNC_USER',
+    adminEmpId: adminId,
+    source: 'GOOGLE',
+    detail: { email: parsed.data.email, ...result },
+  });
+  res.status(result.ok ? 200 : 409).json({ data: result });
 }));
 
 router.get('/logs', asyncHandler(async (req: Request, res: Response) => {
