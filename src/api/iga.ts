@@ -19,6 +19,7 @@ import { safeQuery } from '../db/safe-query.js';
 import logger from '../utils/logger.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { triggerConnectorSync } from '../services/connector-dispatcher.js';
+import { forceReclaimConnectorRuns } from '../services/connector-run-lifecycle.js';
 import { runConnectorConnectivityTest } from '../services/connector-health.js';
 import { harvestConnectorEntitlements } from '../services/entitlement-harvest.js';
 import { fulfillEntitlementOnTarget } from '../services/entitlement-fulfillment.js';
@@ -381,6 +382,22 @@ router.post(
       updated: results.reduce((n, r) => n + (Number(r['updated']) || 0), 0),
       results,
     });
+  }),
+);
+
+router.post(
+  '/connectors/:id/runs/reclaim',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('connections'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const connectorId = req.params['id']!;
+    const row = await queryOne<{ id: string }>(`SELECT id FROM connectors WHERE id = ?`, [connectorId]);
+    if (!row) {
+      res.status(404).json({ error: 'Connector not found' });
+      return;
+    }
+    const reclaimed = await forceReclaimConnectorRuns(connectorId);
+    res.json({ ok: true, reclaimed });
   }),
 );
 

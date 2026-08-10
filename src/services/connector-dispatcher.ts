@@ -39,6 +39,7 @@ interface ConnectorRow {
 export async function triggerConnectorSync(
   connectorId: string,
   triggeredBy: string,
+  opts: { force?: boolean } = {},
 ): Promise<ConnectorRunRef> {
   const connector = await queryOne<ConnectorRow>(
     `SELECT id, name, slug, connector_type, status FROM connectors WHERE id = ?`,
@@ -53,7 +54,7 @@ export async function triggerConnectorSync(
     throw new Error('Connector is not connected — run Test Connection successfully first');
   }
 
-  await assertConnectorSyncCanStart(connectorId);
+  await assertConnectorSyncCanStart(connectorId, { force: opts.force ?? triggeredBy !== 'connector-scheduler' });
 
   logger.info(
     { connectorId, connectorName: connector.name, triggeredBy },

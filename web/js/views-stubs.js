@@ -4335,7 +4335,8 @@ function initSourcesTab(panel) {
           await api.syncConnector(btn.dataset.id);
           showToast('Sync triggered — check history for results.');
           await load();
-        } catch(e) { showToast(e.message || 'Sync failed', true); btn.disabled = false; btn.textContent = 'Sync'; }
+        } catch(e) { showToast(e.message || 'Sync failed', true); }
+        finally { btn.disabled = false; btn.textContent = 'Sync'; }
       });
     });
 
