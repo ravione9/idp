@@ -30,7 +30,8 @@ import {
   type GoogleSyncSettings,
   listGoogleAttrMaps,
 } from './google-attr-map.js';
-import { failConnectorRunIfActive } from './connector-run-lifecycle.js';
+import { failConnectorRunIfActive, updateConnectorRunProgress } from './connector-run-lifecycle.js';
+import type { ConnectorRunUserResult } from './connector-run-export.js';
 
 // ---------------------------------------------------------------------------
 // Re-export SyncResult type (same shape as ad-sync)
@@ -141,12 +142,39 @@ function preferEmpId(gUser: admin_directory_v1.Schema$User, attrs: ExtractedAttr
   return deriveEmpIdFromGoogle(gUser);
 }
 
+function recordGoogleInboundUser(
+  userResults: ConnectorRunUserResult[],
+  email: string,
+  fullName: string,
+  attrs: ExtractedAttrs,
+  empId: string | undefined,
+  action: string,
+  status: 'OK' | 'FAILED' = 'OK',
+  error?: string,
+): void {
+  const row: ConnectorRunUserResult = { email, status, action };
+  if (fullName) row.fullName = fullName;
+  if (empId) row.empId = empId;
+  if (attrs.employee_number) row.employeeNumber = attrs.employee_number;
+  if (attrs.dept_id) row.department = attrs.dept_id;
+  if (error) row.error = error;
+  userResults.push(row);
+}
+
 /** Import Google Workspace users into employees + identity_links (merge by email). */
 async function importGoogleDirectoryUsers(
   directory: admin_directory_v1.Admin,
   scope: GoogleSyncScope,
   errors: string[],
-  opts: { runType?: 'INCREMENTAL' | 'FULL_SYNC'; disableDeleted?: boolean } = {},
+  opts: {
+    runType?: 'INCREMENTAL' | 'FULL_SYNC';
+    disableDeleted?: boolean;
+    onUserResults?: (
+      results: ConnectorRunUserResult[],
+      partial: boolean,
+      counts: { processed: number; succeeded: number; failed: number },
+    ) => void | Promise<void>;
+  } = {},
 ): Promise<{
   found: number;
   imported: number;
@@ -159,11 +187,21 @@ async function importGoogleDirectoryUsers(
   disabled: number;
   repaired: number;
   notFoundEmails: string[];
+  userResults: ConnectorRunUserResult[];
 }> {
   const scoped = await listScopedGoogleUsers(directory, scope);
   const googleUsers = scoped.users;
   for (const email of scoped.notFoundEmails) {
     errors.push(`Google user not found: ${email}`);
+  }
+  const userResults: ConnectorRunUserResult[] = scoped.notFoundEmails.map((email) => ({
+    email: email.trim().toLowerCase(),
+    status: 'FAILED',
+    action: 'not_found',
+    error: 'User not found in Google Workspace',
+  }));
+  if (opts.onUserResults && userResults.length) {
+    await opts.onUserResults(userResults, true, { processed: 0, succeeded: 0, failed: userResults.length });
   }
   let imported = 0;
   let linked = 0;
@@ -235,6 +273,7 @@ async function importGoogleDirectoryUsers(
           await applyAttrsToEmployee(targetEmpId, attrs, { syncSettings });
           linked++;
           disabled++;
+          recordGoogleInboundUser(userResults, email, fullName, attrs, targetEmpId, 'disabled');
         }
         skipped++;
         succeeded++;
@@ -264,10 +303,19 @@ async function importGoogleDirectoryUsers(
         }
         linked++;
         succeeded++;
+        recordGoogleInboundUser(
+          userResults,
+          email,
+          fullName,
+          attrs,
+          existingLink.emp_id,
+          applied.updated ? 'updated' : 'linked',
+        );
         continue;
       }
 
       let empId = preferEmpId(gUser, attrs);
+      let userAction = 'linked';
       const byEmail = await queryOne<{ emp_id: string }>(
         `SELECT emp_id FROM employees WHERE email_corp = ?`,
         [email],
@@ -290,7 +338,7 @@ async function importGoogleDirectoryUsers(
           [ilgState, empId],
         );
         const applied = await applyAttrsToEmployee(empId, attrs, { syncSettings });
-        if (applied.updated) updated++;
+        if (applied.updated) { updated++; userAction = 'updated'; }
         linked++;
       } else if (byEmpNumber) {
         empId = byEmpNumber.emp_id;
@@ -299,7 +347,7 @@ async function importGoogleDirectoryUsers(
           [email, ilgState, empId],
         );
         const applied = await applyAttrsToEmployee(empId, attrs, { syncSettings });
-        if (applied.updated) updated++;
+        if (applied.updated) { updated++; userAction = 'updated'; }
         linked++;
       } else if (byEmpId) {
         await execute(
@@ -307,7 +355,7 @@ async function importGoogleDirectoryUsers(
           [email, ilgState, empId],
         );
         const applied = await applyAttrsToEmployee(empId, attrs, { syncSettings });
-        if (applied.updated) updated++;
+        if (applied.updated) { updated++; userAction = 'updated'; }
         linked++;
       } else {
         await insertEmployeeFromGoogleAttrs(empId, email, ilgState, attrs);
@@ -315,6 +363,7 @@ async function importGoogleDirectoryUsers(
           await applyAttrsToEmployee(empId, attrs, { syncSettings });
         }
         imported++;
+        userAction = 'imported';
         await writeDirectoryUserAudit({
           empId,
           action: 'GOOGLE_SYNC_CREATE',
@@ -325,11 +374,27 @@ async function importGoogleDirectoryUsers(
 
       await upsertGoogleIdentityLink(empId, googleId, linkStatus);
       succeeded++;
+      recordGoogleInboundUser(userResults, email, fullName, attrs, empId, userAction);
     } catch (err) {
       failed++;
       const msg = `${email || googleId}: ${err instanceof Error ? err.message : String(err)}`;
       errors.push(msg);
+      if (email) {
+        recordGoogleInboundUser(
+          userResults,
+          email,
+          email.split('@')[0] || email,
+          { full_name: email.split('@')[0] || email } as ExtractedAttrs,
+          undefined,
+          'failed',
+          'FAILED',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
       logger.error({ email, googleId, err }, 'Google sync inbound: user import failed');
+    }
+    if (opts.onUserResults && (processed === 1 || processed % 500 === 0)) {
+      await opts.onUserResults(userResults, true, { processed, succeeded, failed });
     }
   }
 
@@ -372,6 +437,10 @@ async function importGoogleDirectoryUsers(
     logger.info({ repaired }, 'Google sync inbound: repaired orphan identity links');
   }
 
+  if (opts.onUserResults) {
+    await opts.onUserResults(userResults, false, { processed, succeeded, failed });
+  }
+
   return {
     found: googleUsers.length,
     imported,
@@ -384,6 +453,7 @@ async function importGoogleDirectoryUsers(
     disabled,
     repaired,
     notFoundEmails: scoped.notFoundEmails,
+    userResults,
   };
 }
 
@@ -511,6 +581,7 @@ export async function runGoogleSync(
   const errors: string[] = [];
   let inboundSummary = '';
   let direction = 'BIDIRECTIONAL';
+  let userResults: ConnectorRunUserResult[] = [];
 
   try {
   const connRow = await queryOne<{ direction: string; config_json: string | Record<string, unknown> }>(
@@ -535,10 +606,27 @@ export async function runGoogleSync(
   const directory = google.admin({ version: 'directory_v1', auth });
 
     if (runInbound) {
-      const inbound = await importGoogleDirectoryUsers(directory, scope, errors, { runType });
-      itemsProcessed += inbound.processed;
-      itemsSucceeded += inbound.succeeded;
-      itemsFailed += inbound.failed;
+      const inbound = await importGoogleDirectoryUsers(directory, scope, errors, {
+        runType,
+        onUserResults: async (results, partial, counts) => {
+          userResults = results;
+          itemsProcessed = counts.processed;
+          itemsSucceeded = counts.succeeded;
+          itemsFailed = counts.failed;
+          await updateConnectorRunProgress(runId, {
+            phase: partial ? 'inbound' : 'inbound-complete',
+            itemsProcessed,
+            itemsSucceeded,
+            itemsFailed,
+            userResults,
+            partial,
+          });
+        },
+      });
+      itemsProcessed = inbound.processed;
+      itemsSucceeded = inbound.succeeded;
+      itemsFailed = inbound.failed;
+      userResults = inbound.userResults;
       usersAdded = inbound.imported;
       usersUpdated = inbound.updated;
       usersDisabled = inbound.disabled;
@@ -694,13 +782,20 @@ export async function runGoogleSync(
     errors.length > 0 ? errors.slice(0, 10).join('; ') : '',
   ].filter(Boolean).join(' — ') || null;
 
+  const finalPayload = JSON.stringify({
+    userResults,
+    partial: false,
+    phase: 'complete',
+    progressAt: new Date().toISOString(),
+  });
+
   await execute(
     `UPDATE connector_runs
         SET status = ?, ended_at = UTC_TIMESTAMP(),
             items_processed = ?, items_succeeded = ?, items_failed = ?,
-            error_summary = ?
+            error_summary = ?, payload = ?
       WHERE id = ?`,
-    [finalStatus, itemsProcessed, itemsSucceeded, itemsFailed, errorSummary, runId],
+    [finalStatus, itemsProcessed, itemsSucceeded, itemsFailed, errorSummary, finalPayload, runId],
   );
 
   await execute(

@@ -139,3 +139,44 @@ export async function failConnectorRunIfActive(
     ],
   );
 }
+
+/** Persist live sync progress + optional per-user results while status is RUNNING. */
+export async function updateConnectorRunProgress(
+  runId: string,
+  progress: {
+    phase: string;
+    itemsProcessed: number;
+    itemsSucceeded: number;
+    itemsFailed: number;
+    detail?: string;
+    userResults?: import('./connector-run-export.js').ConnectorRunUserResult[];
+    partial?: boolean;
+  },
+): Promise<void> {
+  const payload: Record<string, unknown> = {
+    phase: progress.phase,
+    detail: progress.detail ?? null,
+    progressAt: new Date().toISOString(),
+  };
+  if (progress.userResults?.length) {
+    payload.userResults = progress.userResults;
+    payload.partial = progress.partial ?? true;
+  }
+  await execute(
+    `UPDATE connector_runs
+        SET items_processed = ?,
+            items_succeeded = ?,
+            items_failed = ?,
+            payload = ?
+      WHERE id = ?
+        AND status IN ('RUNNING', 'PENDING_AGENT')
+        AND ended_at IS NULL`,
+    [
+      progress.itemsProcessed,
+      progress.itemsSucceeded,
+      progress.itemsFailed,
+      JSON.stringify(payload),
+      runId,
+    ],
+  );
+}
