@@ -61,6 +61,44 @@ export interface ExtractedAttrs {
   full_name?: string;
 }
 
+/** Max lengths aligned with employees table columns (post-061 migration). */
+export const EMPLOYEE_ATTR_LIMITS: Partial<Record<LocalAttrKey, number>> = {
+  employee_number: 64,
+  dept_id: 128,
+  role: 255,
+  cost_center: 80,
+  location: 200,
+  mobile: 40,
+  photo_url: 500,
+  first_name: 100,
+  last_name: 100,
+  full_name: 255,
+  email_corp: 255,
+};
+
+function truncateAttr(key: LocalAttrKey, value: string): string {
+  const max = EMPLOYEE_ATTR_LIMITS[key];
+  if (!max || value.length <= max) return value;
+  logger.warn({ field: key, length: value.length, max }, 'Google sync: truncating attribute value');
+  return value.slice(0, max);
+}
+
+/** Trim string attrs to DB column limits so one long title does not fail the whole run. */
+export function sanitizeExtractedAttrs(attrs: ExtractedAttrs): ExtractedAttrs {
+  const out: ExtractedAttrs = { ...attrs };
+  for (const key of Object.keys(out) as Array<keyof ExtractedAttrs>) {
+    const val = out[key];
+    if (typeof val !== 'string' || !val) continue;
+    const max = EMPLOYEE_ATTR_LIMITS[key as LocalAttrKey];
+    if (!max || val.length <= max) {
+      (out as Record<string, string>)[key] = val.trim();
+      continue;
+    }
+    (out as Record<string, string>)[key] = truncateAttr(key as LocalAttrKey, val.trim());
+  }
+  return out;
+}
+
 const DEFAULT_MAPS: Array<{ source_attr: string; local_attr: LocalAttrKey; sort_order: number }> = [
   { source_attr: 'employeeId', local_attr: 'employee_number', sort_order: 10 },
   { source_attr: 'organizations.department', local_attr: 'dept_id', sort_order: 20 },
@@ -208,7 +246,7 @@ function primaryOrg(gUser: admin_directory_v1.Schema$User): admin_directory_v1.S
 function extractDepartment(gUser: admin_directory_v1.Schema$User): string | undefined {
   const orgs = gUser.organizations ?? [];
   for (const o of orgs) {
-    const d = o.department?.trim();
+    const d = o.department?.trim() || o.name?.trim();
     if (d) return d;
   }
   const ou = (gUser.orgUnitPath || '').replace(/^\/+/, '').trim();
@@ -351,7 +389,21 @@ export async function extractGoogleAttrs(
     if (!out.last_name && parts.length > 1) out.last_name = parts.slice(1).join(' ');
   }
 
-  return out;
+  // Always attempt core HR fields from Google even when attr maps omit them.
+  if (syncSettings.sync_employee_id && !out.employee_number) {
+    const id = extractEmployeeId(gUser);
+    if (id) out.employee_number = id;
+  }
+  if (syncSettings.sync_department && !out.dept_id) {
+    const dept = extractDepartment(gUser);
+    if (dept) out.dept_id = dept;
+  }
+  if (syncSettings.sync_designation && !out.role) {
+    const title = extractTitle(gUser);
+    if (title) out.role = title;
+  }
+
+  return sanitizeExtractedAttrs(out);
 }
 
 /** Resolve manager email → local emp_id (Google relation stores email). */
@@ -394,7 +446,9 @@ export async function applyAttrsToEmployee(
   if (attrs.full_name) candidates.push(['full_name', attrs.full_name]);
   if (attrs.first_name) candidates.push(['first_name', attrs.first_name]);
   if (attrs.last_name) candidates.push(['last_name', attrs.last_name]);
-  if (attrs.employee_number && settings.sync_employee_id) candidates.push(['employee_number', attrs.employee_number]);
+  if (attrs.employee_number && settings.sync_employee_id) {
+    candidates.push(['employee_number', attrs.employee_number]);
+  }
   if (attrs.dept_id && settings.sync_department) candidates.push(['dept_id', attrs.dept_id]);
   if (attrs.role && settings.sync_designation) candidates.push(['role', attrs.role]);
   if (attrs.cost_center && settings.sync_cost_center) candidates.push(['cost_center', attrs.cost_center]);
@@ -412,11 +466,15 @@ export async function applyAttrsToEmployee(
 
   for (const [col, val] of candidates) {
     if (val === undefined || val === null || val === '') continue;
+    const limit = EMPLOYEE_ATTR_LIMITS[col as LocalAttrKey];
+    const normalized = typeof val === 'string' && limit
+      ? truncateAttr(col as LocalAttrKey, val)
+      : val;
     const old = current[col];
-    if (String(old ?? '') === String(val)) continue;
-    changes[col] = { old: old ?? null, new: val };
+    if (String(old ?? '') === String(normalized)) continue;
+    changes[col] = { old: old ?? null, new: normalized };
     sets.push(`${col} = ?`);
-    params.push(val);
+    params.push(normalized);
   }
 
   sets.push('attrs_synced_at = UTC_TIMESTAMP()', `sync_status = 'SYNCED'`, 'updated_at = UTC_TIMESTAMP()');
