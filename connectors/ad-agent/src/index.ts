@@ -6,7 +6,7 @@
  * over HTTPS :443 for bidirectional directory sync. AD LDAP credentials are
  * configured locally in config.json only.
  */
-import { loadConfig, AGENT_VERSION } from './config.js';
+import { loadConfig, AGENT_VERSION, type AgentConfig } from './config.js';
 import { IdpClient } from './idp-client.js';
 import { AdLdapClient } from './ad-ldap.js';
 import { runSyncJob } from './sync-runner.js';
@@ -22,7 +22,7 @@ async function sendHeartbeat(idp: IdpClient, ldap: AdLdapClient): Promise<void> 
   log(test.ok ? 'info' : 'warn', 'heartbeat', { adReachable: test.ok, message: test.message });
 }
 
-async function pollJobs(cfg: ReturnType<typeof loadConfig>, idp: IdpClient, ldap: AdLdapClient): Promise<void> {
+async function pollJobs(cfg: AgentConfig, idp: IdpClient, ldap: AdLdapClient): Promise<void> {
   const job = await idp.fetchNextJob();
   if (!job) return;
   log('info', 'sync job received', { runId: job.runId, inbound: job.runInbound, outbound: job.runOutbound });
@@ -31,7 +31,7 @@ async function pollJobs(cfg: ReturnType<typeof loadConfig>, idp: IdpClient, ldap
 }
 
 async function main(): Promise<void> {
-  const cfg = loadConfig();
+  const { config: cfg, configPath } = loadConfig();
   const idp = new IdpClient(cfg);
   const ldap = new AdLdapClient(cfg.ad);
 
@@ -40,6 +40,7 @@ async function main(): Promise<void> {
     idpUrl: cfg.idpUrl,
     connectorId: cfg.connectorId,
     adHost: cfg.ad.host,
+    configPath,
   });
 
   await sendHeartbeat(idp, ldap);

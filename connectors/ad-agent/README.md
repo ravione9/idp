@@ -79,12 +79,14 @@ On-prem Windows agent for **bidirectional** directory sync between **Microsoft A
 
 ### Option A — Pre-built JavaScript (included `dist/` folder)
 
-Requires **Node.js 22+** on the server:
+Requires **Node.js 18+** on the server:
 
 ```powershell
 cd C:\LILG\ad-connector
 node dist\index.js
 ```
+
+`config.json` must be **valid JSON** in the install folder (same directory you run from). Do not paste README or shell comments into the file — copy `config.example.json` and edit values only.
 
 ### Option B — Build from source
 
@@ -102,7 +104,11 @@ On a build machine with Node.js:
 ```powershell
 npm install
 npm run package:win
-# Produces dist\lilg-ad-connector.exe — copy exe + config.json to the server
+```
+
+Produces `dist\lilg-ad-connector.exe` (Node 18 runtime bundled via `pkg`). Copy the EXE and `config.json` to the server, then:
+
+```powershell
 .\dist\lilg-ad-connector.exe
 ```
 
@@ -152,6 +158,7 @@ powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 
 | Symptom | Check |
 |---------|--------|
+| `Unexpected non-whitespace character after JSON` | `config.json` has extra text (README paste or `#` comments). Recopy from `config.example.json` — JSON only, no trailing lines |
 | Connector stays “Waiting for agent” | Agent running? `idpUrl` reachable on 443? Token/connector ID correct? |
 | Heartbeat OK but sync fails | AD bind DN/password; Base DN; firewall to DC on 389/636 |
 | Outbound provision fails | Use LDAPS or StartTLS; target OU must exist in AD |
