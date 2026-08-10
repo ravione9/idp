@@ -1112,7 +1112,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### *(this commit)* — 2026-08-10 — Google sync: union explicit Sync Users; import service accounts like it_software@
+### `8668557` — 2026-08-10 — Google sync: union explicit Sync Users; import service accounts like it_software@
 
 **Why** — `it_software@lenskart.in` is an active Google user under OU `valyoo.in/IT` but missing from IdP when OU scope excluded that tree; explicit Sync Users previously AND-filtered with OU instead of always including listed emails.
 
