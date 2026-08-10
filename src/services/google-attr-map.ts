@@ -242,11 +242,40 @@ function primaryOrg(gUser: admin_directory_v1.Schema$User): admin_directory_v1.S
   return orgs.find((o: admin_directory_v1.Schema$UserOrganization) => o.primary) ?? orgs[0];
 }
 
+function readCustomSchemaField(schema: Record<string, unknown>, field: string): string | undefined {
+  const v = schema[field];
+  if (typeof v === 'string' && v.trim()) return v.trim();
+  if (v && typeof v === 'object' && 'value' in (v as object)) {
+    const val = String((v as { value?: unknown }).value ?? '').trim();
+    if (val) return val;
+  }
+  return undefined;
+}
+
+function extractCustomSchemaAttr(gUser: admin_directory_v1.Schema$User, sourceAttr: string): string | undefined {
+  const schemas = gUser.customSchemas ?? {};
+  if (sourceAttr.includes('.')) {
+    const [schemaName, ...rest] = sourceAttr.split('.');
+    const field = rest.join('.');
+    const schema = schemas[schemaName];
+    if (schema && typeof schema === 'object') {
+      return readCustomSchemaField(schema as Record<string, unknown>, field);
+    }
+    return undefined;
+  }
+  for (const schema of Object.values(schemas)) {
+    if (!schema || typeof schema !== 'object') continue;
+    const hit = readCustomSchemaField(schema as Record<string, unknown>, sourceAttr);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 /** Best-effort department from Google org data or OU path. */
 function extractDepartment(gUser: admin_directory_v1.Schema$User): string | undefined {
   const orgs = gUser.organizations ?? [];
   for (const o of orgs) {
-    const d = o.department?.trim() || o.name?.trim();
+    const d = o.department?.trim() || o.name?.trim() || o.description?.trim();
     if (d) return d;
   }
   const ou = (gUser.orgUnitPath || '').replace(/^\/+/, '').trim();
@@ -283,7 +312,7 @@ function extractEmployeeId(gUser: admin_directory_v1.Schema$User): string | unde
   for (const schema of Object.values(schemas)) {
     if (!schema || typeof schema !== 'object') continue;
     for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
-      if (!/employee.?id|emp.?id|employee.?number/i.test(k)) continue;
+      if (!/employee.?id|emp.?id|employee.?number|staff.?id|worker.?id/i.test(k)) continue;
       if (typeof v === 'string' && v.trim()) return v.trim();
       if (v && typeof v === 'object' && 'value' in (v as object)) {
         const val = String((v as { value?: unknown }).value ?? '').trim();
@@ -291,6 +320,12 @@ function extractEmployeeId(gUser: admin_directory_v1.Schema$User): string | unde
       }
     }
   }
+
+  // Some tenants store HR id on the primary org record.
+  const org = primaryOrg(gUser);
+  const orgId = (org as admin_directory_v1.Schema$UserOrganization & { employeeId?: string })?.employeeId?.trim();
+  if (orgId) return orgId;
+
   return undefined;
 }
 
@@ -344,7 +379,7 @@ function extractSourceValue(gUser: admin_directory_v1.Schema$User, sourceAttr: s
     case 'primaryEmail':
       return (gUser.primaryEmail ?? '').trim().toLowerCase() || undefined;
     default:
-      return undefined;
+      return extractCustomSchemaAttr(gUser, sourceAttr);
   }
 }
 
@@ -398,6 +433,10 @@ export async function extractGoogleAttrs(
     const dept = extractDepartment(gUser);
     if (dept) out.dept_id = dept;
   }
+  if (syncSettings.sync_department && !out.dept_id) {
+    const ou = extractSourceValue(gUser, 'orgUnitPath');
+    if (ou) out.dept_id = ou.split('/').filter(Boolean).pop() || ou;
+  }
   if (syncSettings.sync_designation && !out.role) {
     const title = extractTitle(gUser);
     if (title) out.role = title;
@@ -421,11 +460,15 @@ export interface ApplyAttrsResult {
   changes: Record<string, { old: unknown; new: unknown }>;
 }
 
+function normAttrValue(v: unknown): string {
+  return String(v ?? '').trim();
+}
+
 /** Apply extracted attrs onto an existing employee (updates only changed fields). */
 export async function applyAttrsToEmployee(
   empId: string,
   attrs: ExtractedAttrs,
-  opts: { syncSettings?: GoogleSyncSettings; resolveManager?: boolean } = {},
+  opts: { syncSettings?: GoogleSyncSettings; resolveManager?: boolean; googleSourceOfTruth?: boolean } = {},
 ): Promise<ApplyAttrsResult> {
   const settings = opts.syncSettings ?? await getGoogleSyncSettings();
   const current = await queryOne<Record<string, unknown>>(
@@ -471,7 +514,9 @@ export async function applyAttrsToEmployee(
       ? truncateAttr(col as LocalAttrKey, val)
       : val;
     const old = current[col];
-    if (String(old ?? '') === String(normalized)) continue;
+    if (normAttrValue(old) === normAttrValue(normalized)) continue;
+    // Google directory sync owns HR attrs — overwrite stale IdP values when Google has data.
+    if (opts.googleSourceOfTruth && normAttrValue(normalized) === '') continue;
     changes[col] = { old: old ?? null, new: normalized };
     sets.push(`${col} = ?`);
     params.push(normalized);

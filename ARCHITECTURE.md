@@ -1110,6 +1110,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### *(this commit)* — 2026-08-10 — Google sync: reconcile missing users and force HR attr refresh from Workspace
+
+**Why** — A few users still appeared missing or without Employee ID / Department after sync; extraction missed custom-schema fields, suspended users without a local row were skipped, and stale IdP values were not always overwritten from Google.
+
+**What changed:**
+
+- **`google-attr-map.ts`** — custom-schema attr extraction (`Schema.field`); broader employee ID discovery; department fallbacks (org description, OU path).
+- **`google-sync.ts`** — reconcile pass re-imports missing users, repairs links, and refreshes all HR attrs from Google; imports suspended Google users when no local row exists.
+
 ### `8592088` — 2026-08-10 — Google sync: widen role/dept columns, backfill employee ID and department
 
 **Why** — Sync failed with `Data too long for column 'role'` (long Google job titles); manager-link pass threw uncaught and marked the whole run FAILED. Many users showed blank Employee ID / Department because attrs were not backfilled after partial failures.

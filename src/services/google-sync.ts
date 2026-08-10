@@ -181,7 +181,7 @@ async function importOneGoogleUser(
   const attrs = await extractGoogleAttrs(gUser, attrMaps, syncSettings);
   const fullName = attrs.full_name || email.split('@')[0] || email;
   const suspended = gUser.suspended === true;
-  const attrOpts = { syncSettings, resolveManager: false as const };
+  const attrOpts = { syncSettings, resolveManager: false as const, googleSourceOfTruth: true as const };
 
   const existingLink = await queryOne<{ id: number; emp_id: string }>(
     `SELECT id, emp_id FROM identity_links WHERE \`system\` = 'GOOGLE' AND external_id = ?`,
@@ -189,8 +189,19 @@ async function importOneGoogleUser(
   );
 
   if (suspended) {
-    const targetEmpId = existingLink?.emp_id
+    let targetEmpId = existingLink?.emp_id
       ?? (await queryOne<{ emp_id: string }>(`SELECT emp_id FROM employees WHERE email_corp = ?`, [email]))?.emp_id;
+    if (!targetEmpId) {
+      targetEmpId = preferEmpId(gUser, attrs);
+      await insertEmployeeFromGoogleAttrs(targetEmpId, email, 'SUSPENDED_AUTO', attrs);
+      imported++;
+      await writeDirectoryUserAudit({
+        empId: targetEmpId,
+        action: 'GOOGLE_SYNC_CREATE',
+        source: 'GOOGLE',
+        newValues: { email, suspended: true, ...attrs },
+      });
+    }
     if (targetEmpId) {
       await upsertGoogleIdentityLink(targetEmpId, googleId, 'DISABLED');
       await execute(
@@ -318,45 +329,76 @@ async function resolveGoogleManagerLinks(
   return linked;
 }
 
-/** Fill employee_number / dept_id when Google has values but the local row is still empty. */
-async function backfillMissingGoogleDirectoryAttrs(
+/** Re-import missing users, repair links, and refresh HR attrs from Google (source of truth). */
+async function reconcileGoogleDirectoryFromWorkspace(
   googleUsers: admin_directory_v1.Schema$User[],
-  attrMaps: DirectoryAttrMapRow[],
-  syncSettings: GoogleSyncSettings,
+  ctx: {
+    attrMaps: DirectoryAttrMapRow[];
+    syncSettings: GoogleSyncSettings;
+    seenGoogleIds: Set<string>;
+  },
   errors: string[],
   reportPhase?: (phase: string, detail: string) => void | Promise<void>,
-): Promise<number> {
-  if (!syncSettings.sync_employee_id && !syncSettings.sync_department) return 0;
-  if (reportPhase) await reportPhase('attrs-backfill', 'Filling missing employee ID and department');
-  let filled = 0;
+): Promise<{ ensured: number; attrsUpdated: number }> {
+  if (reportPhase) await reportPhase('reconcile', 'Reconciling employee ID, department, and profile from Google');
+  let ensured = 0;
+  let attrsUpdated = 0;
+
   for (const gUser of googleUsers) {
     const email = (gUser.primaryEmail ?? '').trim().toLowerCase();
-    if (!email) continue;
+    const googleId = gUser.id ?? email;
+    if (!email || !googleId) continue;
+
     try {
-      const row = await queryOne<{ emp_id: string; employee_number: string | null; dept_id: string | null }>(
+      let row = await queryOne<{ emp_id: string; employee_number: string | null; dept_id: string | null }>(
         `SELECT emp_id, employee_number, dept_id FROM employees WHERE email_corp = ? LIMIT 1`,
         [email],
       );
-      if (!row) continue;
 
-      const needsEmpId = syncSettings.sync_employee_id && !(row.employee_number ?? '').trim();
-      const needsDept = syncSettings.sync_department && !(row.dept_id ?? '').trim();
-      if (!needsEmpId && !needsDept) continue;
+      if (!row) {
+        const result = await withSyncTimeout(
+          importOneGoogleUser(gUser, ctx),
+          INBOUND_USER_TIMEOUT_MS,
+          email,
+        );
+        if (result.imported > 0 || result.linked > 0) ensured++;
+        if (result.error) errors.push(result.error);
+        continue;
+      }
 
-      const attrs = await extractGoogleAttrs(gUser, attrMaps, syncSettings);
-      const patch: ExtractedAttrs = {};
-      if (needsEmpId && attrs.employee_number) patch.employee_number = attrs.employee_number;
-      if (needsDept && attrs.dept_id) patch.dept_id = attrs.dept_id;
-      if (Object.keys(patch).length === 0) continue;
+      const link = await queryOne<{ id: number }>(
+        `SELECT id FROM identity_links WHERE \`system\` = 'GOOGLE' AND external_id = ? LIMIT 1`,
+        [googleId],
+      );
+      if (!link) {
+        const linkStatus = gUser.suspended === true ? 'DISABLED' : 'ACTIVE';
+        await upsertGoogleIdentityLink(row.emp_id, googleId, linkStatus);
+        ensured++;
+      }
 
-      const applied = await applyAttrsToEmployee(row.emp_id, patch, { syncSettings, resolveManager: false });
-      if (applied.updated) filled++;
+      const attrs = await extractGoogleAttrs(gUser, ctx.attrMaps, ctx.syncSettings);
+      const applied = await applyAttrsToEmployee(row.emp_id, attrs, {
+        syncSettings: ctx.syncSettings,
+        resolveManager: false,
+        googleSourceOfTruth: true,
+      });
+      if (applied.updated) attrsUpdated++;
+
+      const localEmpNo = (row.employee_number ?? '').trim();
+      const localDept = (row.dept_id ?? '').trim();
+      if (ctx.syncSettings.sync_employee_id && !localEmpNo && !attrs.employee_number) {
+        logger.info({ email, empId: row.emp_id }, 'Google sync: employee ID not present in Google user record');
+      }
+      if (ctx.syncSettings.sync_department && !localDept && !attrs.dept_id) {
+        logger.info({ email, empId: row.emp_id }, 'Google sync: department not present in Google user record');
+      }
     } catch (err) {
-      errors.push(`${email}: directory attr backfill failed — ${err instanceof Error ? err.message : String(err)}`);
-      logger.warn({ email, err }, 'Google sync: directory attr backfill failed');
+      errors.push(`${email}: directory reconcile failed — ${err instanceof Error ? err.message : String(err)}`);
+      logger.warn({ email, err }, 'Google sync: directory reconcile failed');
     }
   }
-  return filled;
+
+  return { ensured, attrsUpdated };
 }
 
 /** Import Google Workspace users into employees + identity_links (merge by email). */
@@ -483,15 +525,14 @@ async function importGoogleDirectoryUsers(
     logger.info({ managersLinked }, 'Google sync inbound: linked manager relationships');
   }
 
-  const attrsBackfilled = await backfillMissingGoogleDirectoryAttrs(
+  const attrsBackfilled = await reconcileGoogleDirectoryFromWorkspace(
     googleUsers,
-    attrMaps,
-    syncSettings,
+    { attrMaps, syncSettings, seenGoogleIds },
     errors,
     opts.reportPhase,
   );
-  if (attrsBackfilled > 0) {
-    logger.info({ attrsBackfilled }, 'Google sync inbound: backfilled missing employee ID / department');
+  if (attrsBackfilled.ensured > 0 || attrsBackfilled.attrsUpdated > 0) {
+    logger.info(attrsBackfilled, 'Google sync inbound: reconciled directory fields from Google');
   }
 
   // Optional: disable local Google-linked users missing from this full sync scope
