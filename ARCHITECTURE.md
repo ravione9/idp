@@ -1112,6 +1112,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `f5aed2e` — 2026-08-10 — Google single-user lookup/sync for missing directory emails
+
+**Why** — Addresses like `it_software@lenskart.in` may be Google Groups or user aliases; bulk sync only imports Workspace **users** by primary email, so admins need a way to diagnose and force-sync one address.
+
+**What changed:**
+
+- **`GET /api/admin/directory/google/lookup?email=`** — returns user vs group vs not found; shows primary email when lookup is an alias.
+- **`POST /api/admin/directory/google/sync-user`** — imports one Google user by email/alias, bypassing connector scope filters.
+- **`lookupGoogleDirectoryIdentity()`** in `google-directory-config.ts`.
+
 ### `c7de0e2` — 2026-08-10 — Google sync: reconcile missing users and force HR attr refresh from Workspace
 
 **Why** — A few users still appeared missing or without Employee ID / Department after sync; extraction missed custom-schema fields, suspended users without a local row were skipped, and stale IdP values were not always overwritten from Google.
