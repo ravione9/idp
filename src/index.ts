@@ -83,6 +83,7 @@ import { startAttendanceIgaScheduler } from './services/attendance-iga/scheduler
 import { startAccessRequestExpiryScheduler } from './services/access-request-expiry.js';
 import { startConnectorHealthScheduler } from './services/connector-health.js';
 import { startConnectorSyncScheduler } from './services/connector-sync-scheduler.js';
+import { reclaimStaleConnectorRuns } from './services/connector-run-lifecycle.js';
 import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
 const WEB_ROOT = path.join(process.cwd(), 'web');
@@ -374,6 +375,14 @@ async function main(): Promise<void> {
   startAttendanceIgaScheduler();
   startAccessRequestExpiryScheduler();
   startConnectorHealthScheduler();
+  try {
+    const reclaimed = await reclaimStaleConnectorRuns();
+    if (reclaimed > 0) {
+      logger.warn({ reclaimed }, 'Boot: reclaimed stale connector sync runs');
+    }
+  } catch (err) {
+    logger.error({ err }, 'Boot: failed to reclaim stale connector sync runs');
+  }
   startConnectorSyncScheduler();
   startRadiusUdpServer();
 
