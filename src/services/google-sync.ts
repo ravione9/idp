@@ -150,6 +150,7 @@ async function importGoogleDirectoryUsers(
     runType?: 'INCREMENTAL' | 'FULL_SYNC';
     disableDeleted?: boolean;
     onProgress?: (p: { processed: number; succeeded: number; failed: number; total: number }) => void | Promise<void>;
+    reportPhase?: (phase: string, detail: string) => void | Promise<void>;
   } = {},
 ): Promise<{
   found: number;
@@ -220,7 +221,12 @@ async function importGoogleDirectoryUsers(
 
   for (const gUser of googleUsers) {
     processed++;
-    if (opts.onProgress && (processed === 1 || processed % 250 === 0 || processed === total)) {
+    if (opts.onProgress && (
+      processed === 1
+      || processed === total
+      || processed % 250 === 0
+      || total - processed <= 100
+    )) {
       await opts.onProgress({ processed, succeeded, failed, total });
     }
     const email = (gUser.primaryEmail ?? '').trim().toLowerCase();
@@ -356,6 +362,7 @@ async function importGoogleDirectoryUsers(
 
   // Optional: disable local Google-linked users missing from this full sync scope
   if (disableDeleted && (opts.runType === 'FULL_SYNC' || scope.users.length === 0)) {
+    if (opts.reportPhase) await opts.reportPhase('inbound-cleanup', 'Disabling users removed from Google');
     const linkedRows = await query<{ emp_id: string; external_id: string }>(
       `SELECT emp_id, external_id FROM identity_links
         WHERE \`system\` = 'GOOGLE' AND status = 'ACTIVE'`,
@@ -388,7 +395,11 @@ async function importGoogleDirectoryUsers(
     }
   }
 
-  const repaired = await repairOrphanGoogleLinks(googleUsers, errors);
+  if (opts.reportPhase) await opts.reportPhase('repair-links', 'Verifying identity links');
+  const repaired = await repairOrphanGoogleLinks(googleUsers, errors, {
+    ...(opts.runType ? { runType: opts.runType } : {}),
+    ...(opts.reportPhase ? { reportPhase: opts.reportPhase } : {}),
+  });
   if (repaired > 0) {
     logger.info({ repaired }, 'Google sync inbound: repaired orphan identity links');
   }
@@ -412,19 +423,35 @@ async function importGoogleDirectoryUsers(
 async function repairOrphanGoogleLinks(
   googleUsers: admin_directory_v1.Schema$User[],
   errors: string[],
+  opts: {
+    runType?: 'INCREMENTAL' | 'FULL_SYNC';
+    reportPhase?: (phase: string, detail: string) => void | Promise<void>;
+  } = {},
 ): Promise<number> {
+  // Incremental runs already upsert links in the main loop — skip O(n) full rescan.
+  if (opts.runType === 'INCREMENTAL') {
+    return 0;
+  }
+
   let repaired = 0;
+  const linkedRows = await query<{ external_id: string }>(
+    `SELECT external_id FROM identity_links
+      WHERE \`system\` = 'GOOGLE' AND status != 'DELETED'`,
+    [],
+  );
+  const linkedIds = new Set(linkedRows.map((r) => r.external_id));
+  let checked = 0;
 
   for (const gUser of googleUsers) {
+    checked++;
     const email = (gUser.primaryEmail ?? '').trim().toLowerCase();
     const googleId = gUser.id ?? email;
     if (!email || !googleId) continue;
+    if (linkedIds.has(googleId)) continue;
 
-    const hasLink = await queryOne<{ id: number }>(
-      `SELECT id FROM identity_links WHERE \`system\` = 'GOOGLE' AND external_id = ? AND status != 'DELETED'`,
-      [googleId],
-    );
-    if (hasLink) continue;
+    if (opts.reportPhase && checked % 500 === 0) {
+      await opts.reportPhase('repair-links', `${checked} / ${googleUsers.length} users checked`);
+    }
 
     const emp = await queryOne<{ emp_id: string }>(
       `SELECT emp_id FROM employees WHERE email_corp = ? OR emp_id = ?`,
@@ -435,6 +462,7 @@ async function repairOrphanGoogleLinks(
     const linkStatus = gUser.suspended === true ? 'DISABLED' : 'ACTIVE';
     try {
       await upsertGoogleIdentityLink(emp.emp_id, googleId, linkStatus);
+      linkedIds.add(googleId);
       repaired++;
       logger.info({ empId: emp.emp_id, googleId }, 'Google sync: repaired missing identity link');
     } catch (err) {
@@ -571,23 +599,26 @@ export async function runGoogleSync(
       await reportProgress('listing', 'Fetching users from Google Workspace');
       const inbound = await importGoogleDirectoryUsers(directory, scope, errors, {
         runType,
+        reportPhase: (phase, detail) => reportProgress(phase, detail),
         onProgress: async (p) => {
           itemsProcessed = p.processed;
           itemsSucceeded = p.succeeded;
           itemsFailed = p.failed;
-          if (p.processed === 0 || p.processed % 250 === 0) {
+          const nearEnd = p.total > 0 && p.total - p.processed <= 100;
+          if (p.processed === 0 || p.processed % 250 === 0 || p.processed === p.total || nearEnd) {
             await reportProgress('inbound', `${p.processed} / ${p.total} Google users`);
           }
         },
       });
-      itemsProcessed += inbound.processed;
-      itemsSucceeded += inbound.succeeded;
-      itemsFailed += inbound.failed;
+      itemsProcessed = inbound.processed;
+      itemsSucceeded = inbound.succeeded;
+      itemsFailed = inbound.failed;
       usersAdded = inbound.imported;
       usersUpdated = inbound.updated;
       usersDisabled = inbound.disabled;
       let groupSummary = '';
       try {
+        await reportProgress('groups', 'Syncing Google groups and memberships');
         const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope, cfg);
         const mode = gs.autoAll ? ' (auto-all)' : '';
         groupSummary =
@@ -623,6 +654,7 @@ export async function runGoogleSync(
     if (!runOutbound) {
       logger.info({ connectorId, direction }, 'Google sync: OUTBOUND skipped');
     } else {
+      await reportProgress('outbound', 'Reconciling IdP employees with Google Workspace');
       const employees = await query<EmployeeRow>(
         `SELECT emp_id, full_name, email_corp, ilg_state
            FROM employees
