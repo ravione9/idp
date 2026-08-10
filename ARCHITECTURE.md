@@ -1108,7 +1108,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-10 — Sync run CSV export (synced vs failed users)
+### `b872ea4` — 2026-08-10 — Sync run CSV export (synced vs failed users)
 
 **Why** — Sync history showed aggregate OK/FAILED counts but no way to see which users succeeded or failed.
 
