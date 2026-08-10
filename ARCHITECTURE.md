@@ -1107,7 +1107,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-10 — Harden connector sync recovery (force reclaim + auth error handling)
+### `6dcccb9` — 2026-08-10 — Harden connector sync recovery (force reclaim + auth error handling)
 
 **Why** — Sync still blocked after Aug 4: zombie `RUNNING` rows, manual Sync did not clear them until deploy, and Google auth/setup errors left runs stuck with 0 processed.
 
