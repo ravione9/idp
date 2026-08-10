@@ -246,11 +246,12 @@ app.use('/api/admin/radius', configRadiusRouter);
 
 // ---------------------------------------------------------------------------
 // Internal routes (internal token gated — no session cookie required)
+// More specific /api/internal/* mounts MUST come before the catch-all internalRouter.
 // ---------------------------------------------------------------------------
-app.use('/api/internal',      internalRouter);
+app.use('/api/internal/ad-connector', internalAdConnectorRouter);
 app.use('/api/internal/saml', internalSamlRouter);
 app.use('/api/internal/radius', internalRadiusRouter);
-app.use('/api/internal/ad-connector', internalAdConnectorRouter);
+app.use('/api/internal', internalRouter);
 
 // ---------------------------------------------------------------------------
 // Portal downloads (authenticated) — before static so .zip is not 404'd
