@@ -1110,7 +1110,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-10 — Reclaim stale connector sync runs blocking scheduler
+### `4406f79` — 2026-08-10 — Reclaim stale connector sync runs blocking scheduler
 
 **Why** — After an API pod restart (K8s rollout), `connector_runs` rows stayed `RUNNING` with 0 processed items. The scheduler treats any active run as a lock, so Google/AD sync stopped on prod and preprod from Aug 4 onward.
 
