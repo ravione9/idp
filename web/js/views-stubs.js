@@ -4842,6 +4842,28 @@ function initSourcesTab(panel) {
 
   // ── sync history modal ───────────────────────────────────────────────────────
   async function openLogsModal(connectorId, connectorName) {
+    async function downloadRunExport(runId, startedAt) {
+      const url = api.connectorRunExportUrl(connectorId, runId);
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) {
+        let msg = res.statusText;
+        try {
+          const body = await res.json();
+          msg = body.error || body.message || msg;
+        } catch { /* ignore */ }
+        throw new Error(msg || 'Export failed');
+      }
+      const blob = await res.blob();
+      const stamp = startedAt ? String(startedAt).slice(0, 10) : 'run';
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `sync-run-${stamp}-${String(runId).slice(0, 8)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+    }
+
     const bd = openModal(`<div class="modal ds-modal ds-logs-modal">
       <div class="modal-header">
         <div>
@@ -4870,12 +4892,26 @@ function initSourcesTab(panel) {
         <td class="text-success">${r2.items_succeeded ?? '—'}</td>
         <td class="${r2.items_failed?'text-danger':''}">${r2.items_failed ?? '—'}</td>
         <td class="muted ds-log-error" title="${esc(r2.error_summary||'')}">${r2.error_summary ? esc(r2.error_summary.slice(0,80)) : '—'}</td>
+        <td><button type="button" class="btn btn-secondary btn-sm ds-run-export" data-run-id="${esc(r2.id||'')}" data-started="${esc(r2.started_at||'')}">Export</button></td>
       </tr>`).join('');
       bd.querySelector('#logs-body').innerHTML = `
         <div class="table-wrap table-wrap--flat"><table class="dense-table">
-          <thead><tr><th>Started</th><th>Type</th><th>Status</th><th>Processed</th><th>OK</th><th>Failed</th><th>Error</th></tr></thead>
+          <thead><tr><th>Started</th><th>Type</th><th>Status</th><th>Processed</th><th>OK</th><th>Failed</th><th>Error</th><th>Export</th></tr></thead>
           <tbody>${rows}</tbody>
-        </table></div>`;
+        </table></div>
+        <p class="muted" style="font-size:0.82rem;margin:0.75rem 0 0">Export downloads CSV (opens in Excel) with each user marked OK or FAILED.</p>`;
+      bd.querySelectorAll('.ds-run-export').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          try {
+            await downloadRunExport(btn.dataset.runId, btn.dataset.started);
+          } catch (e) {
+            alert(e.message || 'Export failed');
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
     } catch(e) { bd.querySelector('#logs-body').innerHTML = errHtml(e.message); }
   }
 

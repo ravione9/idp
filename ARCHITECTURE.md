@@ -704,6 +704,7 @@ To add a new migration:
 | `GET` | `/api/iga/connectors` | Target-system connectors |
 | `POST` | `/api/iga/connectors` | Register connector |
 | `GET` | `/api/iga/connectors/:id/runs` | Connector run history |
+| `GET` | `/api/iga/connectors/:id/runs/:runId/export` | CSV export of per-user sync results (OK / FAILED) for a run |
 | `POST` | `/api/iga/connectors/:id/sync` | Trigger sync / outbound provision (AD, LDAP, GOOGLE, GOOGLE_WORKSPACE) |
 | `POST` | `/api/iga/connectors/:id/harvest-entitlements` | Harvest directory groups into IGA `entitlements` catalog (OIG-style) |
 | `GET` | `/api/iga/entitlements[?appId=…]` | Entitlement catalog (any authenticated user — Request Access) |
@@ -1106,6 +1107,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-10 — Sync run CSV export (synced vs failed users)
+
+**Why** — Sync history showed aggregate OK/FAILED counts but no way to see which users succeeded or failed.
+
+**What changed:**
+
+- **`connector-run-export.ts`** — build CSV from `connector_runs.payload.userResults`; fallback parses legacy `error_summary`.
+- **`google-sync.ts`** — record per-user sync result during inbound import; persist in run `payload`.
+- **`GET /api/iga/connectors/:id/runs/:runId/export`** — download CSV (Excel-compatible).
+- **Directory Sync UI** — Export button on Sync history modal.
 
 ### `6dcccb9` — 2026-08-10 — Harden connector sync recovery (force reclaim + auth error handling)
 

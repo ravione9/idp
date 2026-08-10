@@ -240,7 +240,7 @@ router.get('/logs', asyncHandler(async (req: Request, res: Response) => {
     );
   }
 
-  res.json({ data: { audit: auditRows, runs }, limit, offset });
+  res.json({ data: { connectorId: conn?.id ?? null, audit: auditRows, runs }, limit, offset });
 }));
 
 export default router;
