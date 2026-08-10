@@ -1107,10 +1107,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-<<<<<<< HEAD
-### `dc1915e` — 2026-08-09 — Migration: create missing `adapter_outbox` table
-=======
-### (pending) — 2026-08-10 — Fix AD agent API blocked by internal token middleware
+### `e27a2aa` — 2026-08-10 — Fix AD agent API blocked by internal token middleware
 
 **Why** — On-prem AD connector heartbeats returned `403 Invalid or missing X-Internal-Token` because `/api/internal` was mounted before `/api/internal/ad-connector`, so Express routed agent calls through the wrong middleware.
 
@@ -1118,8 +1115,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 - **`src/index.ts`** — mount `/api/internal/ad-connector`, `/saml`, and `/radius` **before** the catch-all `/api/internal` router.
 
-### `50df306` — 2026-08-09 — Migration: create missing `adapter_outbox` table
->>>>>>> 1736975 (Fix AD agent API routing and harden on-prem connector packaging.)
+### `dc1915e` — 2026-08-09 — Migration: create missing `adapter_outbox` table
 
 **Why** — Production logs showed `ER_NO_SUCH_TABLE` every 5s from the outbox worker; the table existed in `schema.sql` but was never shipped as a numbered migration, so migration-only databases never created it.
 
