@@ -4564,6 +4564,7 @@ function initSourcesTab(panel) {
     const redirectUri = String(defaults.oidcRedirectUri || `${window.location.origin}/auth/google/callback`);
     const oidcClientId = esc(String(defaults.oidcClientId || ''));
     const oidcHasSecret = defaults.oidcHasClientSecret ? true : false;
+    const oidcMismatch = defaults.oidcCredentialMismatch ? true : false;
     const oidcSource = defaults.oidcSource
       ? `Credentials source: Client ID from <strong>${esc(defaults.oidcSource.clientId || '—')}</strong>, Secret from <strong>${esc(defaults.oidcSource.clientSecret || '—')}</strong>.`
       : '';
@@ -4588,6 +4589,7 @@ function initSourcesTab(panel) {
             Authorized redirect URI (exact):<br>
             <code style="font-size:0.78rem;user-select:all">${esc(redirectUri)}</code>
             ${oidcSource ? `<br><span class="muted" style="font-size:0.75rem">${oidcSource}</span>` : ''}
+            ${oidcMismatch ? `<br><strong class="text-danger" style="font-size:0.75rem">Client ID and Secret may be mismatched — paste OAuth JSON again and Save.</strong>` : ''}
           </div>`;
 
     const scopedFieldsBlock = useScopeTabs ? `
@@ -4827,6 +4829,7 @@ function initSourcesTab(panel) {
           const oidc = await api.getGoogleOidcSettings();
           defaults.oidcClientId = oidc.clientId || '';
           defaults.oidcHasClientSecret = oidc.hasClientSecret;
+          defaults.oidcCredentialMismatch = oidc.credentialPairMismatch;
           defaults.oidcRedirectUri = oidc.redirectUri || `${window.location.origin}/auth/google/callback`;
           defaults.oidcSource = oidc.source || null;
           if (!defaults.customerDomain && oidc.hostedDomains?.length) {

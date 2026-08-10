@@ -7,7 +7,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requirePortalModule, requireAnyPortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { queryOne, execute } from '../db/connection.js';
-import { getGoogleOidcConfig, isGoogleOidcConfigured } from '../auth/google-oidc-config.js';
+import { getGoogleOidcConfig, googleOidcCredentialPairMismatch, isGoogleOidcConfigured } from '../auth/google-oidc-config.js';
 import { parseGoogleHostedDomains } from '../auth/google-domains.js';
 import { invalidateSessionPolicyCache } from '../services/session-policy.js';
 
@@ -65,6 +65,7 @@ router.get('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), requireAnyPortal
     hasClientSecret: Boolean(cfg.clientSecret),
     source: cfg.source,
     configured: isGoogleOidcConfigured(cfg),
+    credentialPairMismatch: googleOidcCredentialPairMismatch(cfg),
     redirectUri,
   });
 }));
@@ -80,7 +81,8 @@ router.put('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), requireAnyPortal
 
   const existing = await getGoogleOidcConfig();
   const clientId = readString(body, 'clientId') ?? jsonCreds?.clientId ?? existing.clientId;
-  const clientSecret = readString(body, 'clientSecret') ?? jsonCreds?.clientSecret ?? existing.clientSecret;
+  const clientSecretInput = readString(body, 'clientSecret') ?? jsonCreds?.clientSecret;
+  const clientSecret = clientSecretInput ?? existing.clientSecret;
   const hostedDomainRaw = readString(body, 'hostedDomain')
     ?? (existing.hostedDomains.length ? existing.hostedDomains.join('\n') : existing.hostedDomain);
   const hostedDomains = parseGoogleHostedDomains(hostedDomainRaw);
@@ -93,6 +95,12 @@ router.put('/google-oidc', requireRole('ADMIN', 'SUPER_ADMIN'), requireAnyPortal
   if (!clientId || !clientSecret) {
     res.status(400).json({
       error: 'OAuth Client ID and Client Secret are required for portal Google sign-in.',
+    });
+    return;
+  }
+  if (clientId !== existing.clientId && !clientSecretInput && !jsonCreds?.clientSecret) {
+    res.status(400).json({
+      error: 'OAuth Client ID changed — re-paste the matching Client Secret (or paste OAuth JSON).',
     });
     return;
   }

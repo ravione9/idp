@@ -38,6 +38,58 @@ function pickSetting(dbValue: string | null | undefined, envValue: string): { va
   return { value: trimString(envValue), source: 'env' };
 }
 
+/** Never pair DB client_id with a different env client_secret — causes Google invalid_client. */
+function resolveGoogleOAuthCredentials(
+  row: GoogleOidcRow | null,
+  envClientId: string,
+  envClientSecret: string,
+): { clientId: string; clientSecret: string; source: { clientId: Source; clientSecret: Source } } {
+  const dbId = trimString(row?.google_oidc_client_id);
+  const dbSecret = trimString(row?.google_oidc_client_secret);
+
+  if (dbId && dbSecret) {
+    return {
+      clientId: dbId,
+      clientSecret: dbSecret,
+      source: { clientId: 'db', clientSecret: 'db' },
+    };
+  }
+
+  if (!dbId && !dbSecret) {
+    return {
+      clientId: envClientId,
+      clientSecret: envClientSecret,
+      source: { clientId: 'env', clientSecret: 'env' },
+    };
+  }
+
+  if (dbId && !dbSecret && envClientId === dbId && envClientSecret) {
+    return {
+      clientId: dbId,
+      clientSecret: envClientSecret,
+      source: { clientId: 'db', clientSecret: 'env' },
+    };
+  }
+
+  return {
+    clientId: dbId || envClientId,
+    clientSecret: dbSecret || (dbId && envClientId === dbId ? envClientSecret : ''),
+    source: {
+      clientId: dbId ? 'db' : 'env',
+      clientSecret: dbSecret ? 'db' : (dbId && envClientId === dbId ? 'env' : dbId ? 'db' : 'env'),
+    },
+  };
+}
+
+export function googleOidcCredentialPairMismatch(
+  cfg: Pick<GoogleOidcConfig, 'clientId' | 'clientSecret' | 'source'>,
+): boolean {
+  if (!cfg.clientId) return false;
+  if (!cfg.clientSecret) return true;
+  if (cfg.source.clientId === 'db' && cfg.source.clientSecret === 'env') return false;
+  return cfg.source.clientId !== cfg.source.clientSecret;
+}
+
 async function loadConnectorHostedDomains(): Promise<string[]> {
   try {
     const row = await queryOne<{ config_json: unknown }>(
@@ -77,8 +129,7 @@ export async function getGoogleOidcConfig(): Promise<GoogleOidcConfig> {
     // Fallback to env defaults when migration is not yet applied.
   }
 
-  const clientId = pickSetting(row?.google_oidc_client_id, envClientId);
-  const clientSecret = pickSetting(row?.google_oidc_client_secret, envClientSecret);
+  const creds = resolveGoogleOAuthCredentials(row, envClientId, envClientSecret);
   const hostedDomainSetting = pickSetting(row?.google_oidc_hosted_domain, envHostedDomain);
   const connectorDomains = await loadConnectorHostedDomains();
   const oidcDomains = parseGoogleHostedDomains(hostedDomainSetting.value);
@@ -88,13 +139,13 @@ export async function getGoogleOidcConfig(): Promise<GoogleOidcConfig> {
     : (connectorDomains.length ? 'connector' : hostedDomainSetting.source);
 
   return {
-    clientId: clientId.value,
-    clientSecret: clientSecret.value,
+    clientId: creds.clientId,
+    clientSecret: creds.clientSecret,
     hostedDomain: primaryGoogleHostedDomain(hostedDomains),
     hostedDomains,
     source: {
-      clientId: clientId.source,
-      clientSecret: clientSecret.source,
+      clientId: creds.source.clientId,
+      clientSecret: creds.source.clientSecret,
       hostedDomain: hostedDomainSource,
     },
   };
