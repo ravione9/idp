@@ -1110,7 +1110,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### *(this commit)* — 2026-08-10 — Google sync: reconcile missing users and force HR attr refresh from Workspace
+### `c7de0e2` — 2026-08-10 — Google sync: reconcile missing users and force HR attr refresh from Workspace
 
 **Why** — A few users still appeared missing or without Employee ID / Department after sync; extraction missed custom-schema fields, suspended users without a local row were skipped, and stale IdP values were not always overwritten from Google.
 
