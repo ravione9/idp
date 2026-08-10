@@ -404,6 +404,10 @@ router.post(
         res.status(409).json({ error: msg });
         return;
       }
+      if (msg.includes('sync is already in progress')) {
+        res.status(409).json({ error: msg });
+        return;
+      }
       throw err;
     }
   }),

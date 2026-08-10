@@ -1110,6 +1110,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-10 — Reclaim stale connector sync runs blocking scheduler
+
+**Why** — After an API pod restart (K8s rollout), `connector_runs` rows stayed `RUNNING` with 0 processed items. The scheduler treats any active run as a lock, so Google/AD sync stopped on prod and preprod from Aug 4 onward.
+
+**What changed:**
+
+- **`src/services/connector-run-lifecycle.ts`** — mark `RUNNING` / `PENDING_AGENT` runs older than 3h as `FAILED` with a reclaim message.
+- **`connector-sync-scheduler.ts`** — reclaim stale runs each tick; treat `PENDING_AGENT` as active.
+- **`connector-dispatcher.ts`** — reclaim + reject duplicate manual sync with HTTP 409 when a non-stale run is still active.
+
 ### `1736975` — 2026-08-10 — Fix AD agent API blocked by internal token middleware
 
 **Why** — On-prem AD connector heartbeats returned `403 Invalid or missing X-Internal-Token` because `/api/internal` was mounted before `/api/internal/ad-connector`, so Express routed agent calls through the wrong middleware.

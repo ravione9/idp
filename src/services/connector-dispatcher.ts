@@ -10,6 +10,7 @@ import { runAdSync } from './ad-sync.js';
 import { runGoogleSync } from './google-sync.js';
 import { queueAdAgentSync } from './ad-agent-sync.js';
 import { isConnectorSyncEligible } from './connector-health.js';
+import { assertConnectorSyncCanStart } from './connector-run-lifecycle.js';
 import type { SyncResult } from './ad-sync.js';
 import logger from '../utils/logger.js';
 
@@ -51,6 +52,8 @@ export async function triggerConnectorSync(
   if (!isConnectorSyncEligible(connector.status)) {
     throw new Error('Connector is not connected — run Test Connection successfully first');
   }
+
+  await assertConnectorSyncCanStart(connectorId);
 
   logger.info(
     { connectorId, connectorName: connector.name, triggeredBy },
