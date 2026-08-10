@@ -339,7 +339,7 @@ router.get(
     const { limit, offset } = paginate(req);
     const rows = await safeQuery<Record<string, unknown>>(
       `SELECT id, run_type, status, started_at, ended_at,
-              items_processed, items_succeeded, items_failed, error_summary
+              items_processed, items_succeeded, items_failed, error_summary, payload
          FROM connector_runs
         WHERE connector_id = ?
         ORDER BY started_at DESC

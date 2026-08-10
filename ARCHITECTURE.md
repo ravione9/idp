@@ -1117,7 +1117,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`connector-run-export.ts`** — build CSV from `connector_runs.payload.userResults`; fallback parses legacy `error_summary`.
 - **`google-sync.ts`** — record per-user sync result during inbound import; persist in run `payload`.
 - **`GET /api/iga/connectors/:id/runs/:runId/export`** — download CSV (Excel-compatible).
-- **Directory Sync UI** — Export button on Sync history modal.
+- **Directory Sync UI** — Export button on Sync history modal; live **Progress / Error** column with 5s auto-refresh while RUNNING (reads `connector_runs.payload`).
 
 ### `6dcccb9` — 2026-08-10 — Harden connector sync recovery (force reclaim + auth error handling)
 

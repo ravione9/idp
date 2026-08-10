@@ -174,6 +174,12 @@ async function importGoogleDirectoryUsers(
       partial: boolean,
       counts: { processed: number; succeeded: number; failed: number },
     ) => void | Promise<void>;
+    onProgress?: (p: {
+      processed: number;
+      succeeded: number;
+      failed: number;
+      total: number;
+    }) => void | Promise<void>;
   } = {},
 ): Promise<{
   found: number;
@@ -191,6 +197,10 @@ async function importGoogleDirectoryUsers(
 }> {
   const scoped = await listScopedGoogleUsers(directory, scope);
   const googleUsers = scoped.users;
+  const total = googleUsers.length;
+  if (opts.onProgress) {
+    await opts.onProgress({ processed: 0, succeeded: 0, failed: 0, total });
+  }
   for (const email of scoped.notFoundEmails) {
     errors.push(`Google user not found: ${email}`);
   }
@@ -396,6 +406,13 @@ async function importGoogleDirectoryUsers(
     if (opts.onUserResults && (processed === 1 || processed % 500 === 0)) {
       await opts.onUserResults(userResults, true, { processed, succeeded, failed });
     }
+    if (opts.onProgress && (
+      processed === 1
+      || processed % 250 === 0
+      || processed === total
+    )) {
+      await opts.onProgress({ processed, succeeded, failed, total });
+    }
   }
 
   // Optional: disable local Google-linked users missing from this full sync scope
@@ -583,7 +600,20 @@ export async function runGoogleSync(
   let direction = 'BIDIRECTIONAL';
   let userResults: ConnectorRunUserResult[] = [];
 
+  const reportProgress = async (phase: string, detail?: string) => {
+    await updateConnectorRunProgress(runId, {
+      phase,
+      itemsProcessed,
+      itemsSucceeded,
+      itemsFailed,
+      ...(detail !== undefined ? { detail } : {}),
+      ...(userResults.length ? { userResults, partial: true } : {}),
+    });
+  };
+
   try {
+  await reportProgress('starting', 'Loading connector configuration');
+
   const connRow = await queryOne<{ direction: string; config_json: string | Record<string, unknown> }>(
     `SELECT direction, config_json FROM connectors WHERE id = ?`,
     [connectorId],
@@ -606,8 +636,18 @@ export async function runGoogleSync(
   const directory = google.admin({ version: 'directory_v1', auth });
 
     if (runInbound) {
+      await reportProgress('listing', 'Fetching users from Google Workspace');
       const inbound = await importGoogleDirectoryUsers(directory, scope, errors, {
         runType,
+        onProgress: async (p) => {
+          itemsProcessed = p.processed;
+          itemsSucceeded = p.succeeded;
+          itemsFailed = p.failed;
+          const nearEnd = p.total > 0 && p.total - p.processed <= 100;
+          if (p.processed === 0 || p.processed % 250 === 0 || p.processed === p.total || nearEnd) {
+            await reportProgress('inbound', `${p.processed} / ${p.total} Google users`);
+          }
+        },
         onUserResults: async (results, partial, counts) => {
           userResults = results;
           itemsProcessed = counts.processed;
@@ -632,6 +672,7 @@ export async function runGoogleSync(
       usersDisabled = inbound.disabled;
       let groupSummary = '';
       try {
+        await reportProgress('groups', 'Syncing Google groups and memberships');
         const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope, cfg);
         const mode = gs.autoAll ? ' (auto-all)' : '';
         groupSummary =
