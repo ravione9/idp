@@ -1,0 +1,107 @@
+# IDP prod CI/CD — lk-multiverse-platform-eks / namespace it-idp
+# GitLab CI variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+# Optional: GITLAB_READ_TOKEN (read multiverse-application-helm)
+
+stages:
+  - build
+  - deploy
+
+variables:
+  AWS_DEFAULT_REGION: ap-south-1
+  EKS_CLUSTER: lk-multiverse-platform-eks
+  ECR: 964059510816.dkr.ecr.ap-south-1.amazonaws.com/idp
+  RELEASE: idp
+  NAMESPACE: it-idp
+  CHART: multiverse/idp
+  VALUES_FILE: values-lk-multiverse-platform-eks.yaml
+  HELM_REPO: infra-platform/multiverse-application-helm
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - when: never
+
+build-prod:
+  stage: build
+  image: docker:24-cli
+  services:
+    - name: docker:24-dind
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    CI_SERVICES_TIMEOUT: "180"
+  tags:
+    - docker
+  before_script:
+    - |
+      for i in $(seq 1 30); do
+        docker info >/dev/null 2>&1 && break
+        echo "Waiting for Docker (${i}/30)..."
+        sleep 2
+      done
+      docker info
+    - |
+      docker run --rm \
+        -e AWS_ACCESS_KEY_ID \
+        -e AWS_SECRET_ACCESS_KEY \
+        -e AWS_DEFAULT_REGION \
+        amazon/aws-cli:2.17.18 \
+        ecr get-login-password --region "${AWS_DEFAULT_REGION}" \
+      | docker login --username AWS --password-stdin "${ECR%%/*}"
+  script:
+    - |
+      docker buildx create --name idpbuilder --driver docker-container --use 2>/dev/null || docker buildx use idpbuilder
+      docker buildx inspect --bootstrap
+      docker buildx build \
+        --platform linux/amd64 \
+        --target runner \
+        --file "${CI_PROJECT_DIR}/Dockerfile" \
+        --tag "${ECR}:${IMAGE_TAG}" \
+        --push \
+        "${CI_PROJECT_DIR}"
+  rules:
+    - when: manual
+
+deploy-prod:
+  stage: deploy
+  image:
+    name: amazon/aws-cli:2.17.18
+    entrypoint: [""]
+  tags:
+    - ec2-instance
+  needs:
+    - job: build-prod
+      optional: false
+  environment:
+    name: production
+    url: https://idp.lenskart.com
+  before_script:
+    - yum install -y git tar gzip openssl
+    - curl -fsSL "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
+    - chmod +x /usr/local/bin/kubectl
+    - |
+      HELM_VERSION="$(curl -fsSL https://get.helm.sh/helm-latest-version)"
+      curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
+        | tar -xz -C /usr/local/bin --strip-components=1 linux-amd64/helm
+    - |
+      if [ -n "${GITLAB_READ_TOKEN:-}" ]; then
+        CLONE_URL="https://oauth2:${GITLAB_READ_TOKEN}@${CI_SERVER_HOST}/${HELM_REPO}.git"
+      else
+        CLONE_URL="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${HELM_REPO}.git"
+      fi
+      git clone --depth 1 -b main "${CLONE_URL}" helm
+    - aws eks update-kubeconfig --name "${EKS_CLUSTER}" --region "${AWS_DEFAULT_REGION}"
+  script:
+    - |
+      helm upgrade --install "${RELEASE}" "./helm/${CHART}" \
+        -n "${NAMESPACE}" \
+        -f "./helm/${CHART}/${VALUES_FILE}" \
+        --set-string "image.tag=${IMAGE_TAG}" \
+        --wait --timeout 15m
+      kubectl rollout restart deployment -n "${NAMESPACE}" -l "release=${RELEASE}" || true
+      kubectl rollout status deployment -n "${NAMESPACE}" -l "release=${RELEASE}" --timeout=10m
+  rules:
+    - when: manual
