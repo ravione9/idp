@@ -1112,6 +1112,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `8905308` — 2026-08-10 — Fix mass Google sync failures and stuck group phase
+
+**Why** — Sync runs showed ~2556 FAILED during inbound (dept/role data too long for DB before migration 061) and hung on `groups:` because group member sync called `users.get` per member.
+
+**What changed:**
+
+- **`google-attr-map.ts`** — truncate dept/role to safe limits (50/100); retry attr update without manager on FK/length errors.
+- **`google-sync.ts`** — link users even when attr update fails (`safeApplyGoogleAttrs`); group sync progress callbacks.
+- **`group-sync.ts`** — resolve members by email/link only (no per-member `users.get`); report progress every 10 groups.
+
 ### `f5aed2e` — 2026-08-10 — Google single-user lookup/sync for missing directory emails
 
 **Why** — Addresses like `it_software@lenskart.in` may be Google Groups or user aliases; bulk sync only imports Workspace **users** by primary email, so admins need a way to diagnose and force-sync one address.
