@@ -1,9 +1,10 @@
-import { query, queryOne } from '../db/connection.js';
+import { query } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { withSchedLock } from '../utils/sched-lock.js';
 import { connectorSyncIsDue, parseSyncSchedule } from '../utils/sync-schedule.js';
 import { isConnectorSyncEligible } from './connector-health.js';
 import { triggerConnectorSync } from './connector-dispatcher.js';
+import { findActiveConnectorRun, reclaimStaleConnectorRuns } from './connector-run-lifecycle.js';
 
 const TICK_MS = 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -31,6 +32,8 @@ export function startConnectorSyncScheduler(): void {
 
 async function tickAll(): Promise<void> {
   try {
+    await reclaimStaleConnectorRuns();
+
     const rows = await query<ConnectorScheduleRow>(
       `SELECT id, name, status, sync_schedule, last_sync_at
          FROM connectors
@@ -51,12 +54,7 @@ async function tickAll(): Promise<void> {
       if (!connectorSyncIsDue(row.sync_schedule, row.last_sync_at, now)) continue;
       if (runningByConnector.has(row.id)) continue;
 
-      const activeRun = await queryOne<{ id: string }>(
-        `SELECT id FROM connector_runs
-          WHERE connector_id = ? AND status = 'RUNNING'
-          LIMIT 1`,
-        [row.id],
-      );
+      const activeRun = await findActiveConnectorRun(row.id);
       if (activeRun) continue;
 
       runningByConnector.add(row.id);
