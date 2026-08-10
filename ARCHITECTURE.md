@@ -1110,6 +1110,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `8592088` — 2026-08-10 — Google sync: widen role/dept columns, backfill employee ID and department
+
+**Why** — Sync failed with `Data too long for column 'role'` (long Google job titles); manager-link pass threw uncaught and marked the whole run FAILED. Many users showed blank Employee ID / Department because attrs were not backfilled after partial failures.
+
+**What changed:**
+
+- **`migrations/061_employees_role_dept_widen.sql`** — `employees.role` → VARCHAR(255), `dept_id` → VARCHAR(128).
+- **`google-attr-map.ts`** — truncate attrs to column limits; always extract employee ID / department / title from Google even when attr maps skip them; department fallback includes org `name`.
+- **`google-sync.ts`** — per-user try/catch on manager pass; dedicated backfill pass for missing employee_number / dept_id; sanitize attrs on insert.
+
 ### `42b720e` — 2026-08-10 — Google inbound sync: per-user timeout and deferred manager linking
 
 **Why** — Large Google syncs hung near completion (e.g. 11250/11324 inbound) when a single user import blocked indefinitely on DB/manager lookups; manager resolution during import also left users unsynced when managers appeared later in the batch.
