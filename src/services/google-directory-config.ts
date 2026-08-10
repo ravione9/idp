@@ -171,6 +171,7 @@ function userInOrgUnit(u: admin_directory_v1.Schema$User, ou: string, includeChi
 
 async function listAllGoogleUsers(
   directory: admin_directory_v1.Admin,
+  onPage?: (count: number) => void | Promise<void>,
 ): Promise<admin_directory_v1.Schema$User[]> {
   const users: admin_directory_v1.Schema$User[] = [];
   let pageToken: string | undefined;
@@ -184,6 +185,7 @@ async function listAllGoogleUsers(
       ...(pageToken ? { pageToken } : {}),
     });
     users.push(...(res.data.users ?? []));
+    if (onPage) await onPage(users.length);
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken);
 
@@ -258,6 +260,7 @@ export interface ScopedGoogleUsersResult {
 export async function listScopedGoogleUsers(
   directory: admin_directory_v1.Admin,
   scope: GoogleSyncScope,
+  opts: { onListingProgress?: (count: number) => void | Promise<void> } = {},
 ): Promise<ScopedGoogleUsersResult> {
   const hasOu     = scope.orgUnits.length > 0;
   const hasGroup  = scope.groups.length > 0;
@@ -265,7 +268,7 @@ export async function listScopedGoogleUsers(
   const notFoundEmails: string[] = [];
 
   if (!hasOu && !hasGroup && !hasUsers) {
-    const users = await listAllGoogleUsers(directory);
+    const users = await listAllGoogleUsers(directory, opts.onListingProgress);
     return { users, notFoundEmails };
   }
 
@@ -277,7 +280,7 @@ export async function listScopedGoogleUsers(
   let pool: admin_directory_v1.Schema$User[];
 
   if (hasOu) {
-    const all = await listAllGoogleUsers(directory);
+    const all = await listAllGoogleUsers(directory, opts.onListingProgress);
     pool = all.filter((u) =>
       scope.orgUnits.some((ou) => userInOrgUnit(u, ou, scope.includeSubOrgUnits)),
     );
@@ -292,7 +295,7 @@ export async function listScopedGoogleUsers(
     }
     pool = [...byId.values()];
   } else {
-    pool = await listAllGoogleUsers(directory);
+    pool = await listAllGoogleUsers(directory, opts.onListingProgress);
   }
 
   if (hasGroup && hasOu) {

@@ -139,3 +139,38 @@ export async function failConnectorRunIfActive(
     ],
   );
 }
+
+/** Live progress for long directory syncs — UI reads items_* + payload.phase while status is RUNNING. */
+export async function updateConnectorRunProgress(
+  runId: string,
+  progress: {
+    phase: string;
+    itemsProcessed: number;
+    itemsSucceeded: number;
+    itemsFailed: number;
+    detail?: string;
+  },
+): Promise<void> {
+  const payload = {
+    phase: progress.phase,
+    detail: progress.detail ?? null,
+    progressAt: new Date().toISOString(),
+  };
+  await execute(
+    `UPDATE connector_runs
+        SET items_processed = ?,
+            items_succeeded = ?,
+            items_failed = ?,
+            payload = ?
+      WHERE id = ?
+        AND status IN ('RUNNING', 'PENDING_AGENT')
+        AND ended_at IS NULL`,
+    [
+      progress.itemsProcessed,
+      progress.itemsSucceeded,
+      progress.itemsFailed,
+      JSON.stringify(payload),
+      runId,
+    ],
+  );
+}

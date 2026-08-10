@@ -30,7 +30,7 @@ import {
   type GoogleSyncSettings,
   listGoogleAttrMaps,
 } from './google-attr-map.js';
-import { failConnectorRunIfActive } from './connector-run-lifecycle.js';
+import { failConnectorRunIfActive, updateConnectorRunProgress } from './connector-run-lifecycle.js';
 
 // ---------------------------------------------------------------------------
 // Re-export SyncResult type (same shape as ad-sync)
@@ -146,7 +146,11 @@ async function importGoogleDirectoryUsers(
   directory: admin_directory_v1.Admin,
   scope: GoogleSyncScope,
   errors: string[],
-  opts: { runType?: 'INCREMENTAL' | 'FULL_SYNC'; disableDeleted?: boolean } = {},
+  opts: {
+    runType?: 'INCREMENTAL' | 'FULL_SYNC';
+    disableDeleted?: boolean;
+    onProgress?: (p: { processed: number; succeeded: number; failed: number; total: number }) => void | Promise<void>;
+  } = {},
 ): Promise<{
   found: number;
   imported: number;
@@ -160,8 +164,22 @@ async function importGoogleDirectoryUsers(
   repaired: number;
   notFoundEmails: string[];
 }> {
-  const scoped = await listScopedGoogleUsers(directory, scope);
+  const scoped = await listScopedGoogleUsers(
+    directory,
+    scope,
+    opts.onProgress
+      ? {
+          onListingProgress: async (count) => {
+            await opts.onProgress!({ processed: 0, succeeded: 0, failed: 0, total: count });
+          },
+        }
+      : {},
+  );
   const googleUsers = scoped.users;
+  const total = googleUsers.length;
+  if (opts.onProgress) {
+    await opts.onProgress({ processed: 0, succeeded: 0, failed: 0, total });
+  }
   for (const email of scoped.notFoundEmails) {
     errors.push(`Google user not found: ${email}`);
   }
@@ -202,6 +220,9 @@ async function importGoogleDirectoryUsers(
 
   for (const gUser of googleUsers) {
     processed++;
+    if (opts.onProgress && (processed === 1 || processed % 250 === 0 || processed === total)) {
+      await opts.onProgress({ processed, succeeded, failed, total });
+    }
     const email = (gUser.primaryEmail ?? '').trim().toLowerCase();
     const googleId = gUser.id ?? email;
 
@@ -512,7 +533,19 @@ export async function runGoogleSync(
   let inboundSummary = '';
   let direction = 'BIDIRECTIONAL';
 
+  const reportProgress = async (phase: string, detail?: string) => {
+    await updateConnectorRunProgress(runId, {
+      phase,
+      itemsProcessed,
+      itemsSucceeded,
+      itemsFailed,
+      ...(detail !== undefined ? { detail } : {}),
+    });
+  };
+
   try {
+  await reportProgress('starting', 'Loading connector configuration');
+
   const connRow = await queryOne<{ direction: string; config_json: string | Record<string, unknown> }>(
     `SELECT direction, config_json FROM connectors WHERE id = ?`,
     [connectorId],
@@ -535,7 +568,18 @@ export async function runGoogleSync(
   const directory = google.admin({ version: 'directory_v1', auth });
 
     if (runInbound) {
-      const inbound = await importGoogleDirectoryUsers(directory, scope, errors, { runType });
+      await reportProgress('listing', 'Fetching users from Google Workspace');
+      const inbound = await importGoogleDirectoryUsers(directory, scope, errors, {
+        runType,
+        onProgress: async (p) => {
+          itemsProcessed = p.processed;
+          itemsSucceeded = p.succeeded;
+          itemsFailed = p.failed;
+          if (p.processed === 0 || p.processed % 250 === 0) {
+            await reportProgress('inbound', `${p.processed} / ${p.total} Google users`);
+          }
+        },
+      });
       itemsProcessed += inbound.processed;
       itemsSucceeded += inbound.succeeded;
       itemsFailed += inbound.failed;
@@ -589,6 +633,7 @@ export async function runGoogleSync(
       logger.info({ connectorId, runId, count: employees.length }, 'Google sync outbound: processing employees');
 
       let outboundSkipped = 0;
+      const outboundTotal = employees.length;
 
       for (const emp of employees) {
         const link = await queryOne<IdentityLinkRow>(
@@ -604,6 +649,10 @@ export async function runGoogleSync(
         }
 
         itemsProcessed++;
+
+        if (itemsProcessed % 500 === 0) {
+          await reportProgress('outbound', `${itemsProcessed} employees processed (${outboundTotal} in database)`);
+        }
 
         try {
           const isActive   = emp.ilg_state === 'ACTIVE' || emp.ilg_state === 'REACTIVATED';
