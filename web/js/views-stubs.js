@@ -4564,6 +4564,7 @@ function initSourcesTab(panel) {
     const redirectUri = String(defaults.oidcRedirectUri || `${window.location.origin}/auth/google/callback`);
     const oidcClientId = esc(String(defaults.oidcClientId || ''));
     const oidcHasSecret = defaults.oidcHasClientSecret ? true : false;
+    const oidcMismatch = defaults.oidcCredentialMismatch ? true : false;
     const oidcSource = defaults.oidcSource
       ? `Credentials source: Client ID from <strong>${esc(defaults.oidcSource.clientId || '—')}</strong>, Secret from <strong>${esc(defaults.oidcSource.clientSecret || '—')}</strong>.`
       : '';
@@ -4588,6 +4589,7 @@ function initSourcesTab(panel) {
             Authorized redirect URI (exact):<br>
             <code style="font-size:0.78rem;user-select:all">${esc(redirectUri)}</code>
             ${oidcSource ? `<br><span class="muted" style="font-size:0.75rem">${oidcSource}</span>` : ''}
+            ${oidcMismatch ? `<br><strong class="text-danger" style="font-size:0.75rem">Client ID and Secret may be mismatched — paste OAuth JSON again and Save.</strong>` : ''}
           </div>`;
 
     const scopedFieldsBlock = useScopeTabs ? `
@@ -4827,6 +4829,7 @@ function initSourcesTab(panel) {
           const oidc = await api.getGoogleOidcSettings();
           defaults.oidcClientId = oidc.clientId || '';
           defaults.oidcHasClientSecret = oidc.hasClientSecret;
+          defaults.oidcCredentialMismatch = oidc.credentialPairMismatch;
           defaults.oidcRedirectUri = oidc.redirectUri || `${window.location.origin}/auth/google/callback`;
           defaults.oidcSource = oidc.source || null;
           if (!defaults.customerDomain && oidc.hostedDomains?.length) {
@@ -4841,6 +4844,21 @@ function initSourcesTab(panel) {
   }
 
   // ── sync history modal ───────────────────────────────────────────────────────
+  function runProgressHint(r2) {
+    if (r2.status !== 'RUNNING' && r2.status !== 'PENDING_AGENT') {
+      return r2.error_summary ? esc(r2.error_summary.slice(0, 80)) : '—';
+    }
+    let payload = r2.payload;
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch { payload = null; }
+    }
+    const phase = payload && payload.phase ? String(payload.phase) : 'running';
+    const detail = payload && payload.detail ? String(payload.detail) : '';
+    const processed = r2.items_processed ?? 0;
+    const text = detail || (processed > 0 ? `${processed} processed` : 'Starting…');
+    return esc(`${phase}: ${text}`);
+  }
+
   async function openLogsModal(connectorId, connectorName) {
     async function downloadRunExport(runId, startedAt) {
       const url = api.connectorRunExportUrl(connectorId, runId);
@@ -4873,46 +4891,63 @@ function initSourcesTab(panel) {
       </div>
       <div class="modal-body ent-panel-body--flush" id="logs-body">${loading()}</div>
       <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="logs-refresh">Refresh</button>
         <button type="button" class="btn btn-secondary" id="logs-close">Close</button>
       </div>
     </div>`);
-    bd.querySelector('#logs-close').addEventListener('click', () => bd.remove());
-    try {
-      const r = await api.getConnectorRuns(connectorId, 20);
-      const runs = (r && r.data) ? r.data : [];
-      if (!runs.length) {
-        bd.querySelector('#logs-body').innerHTML = `<div class="empty-panel ds-empty-panel ds-empty-panel--compact"><div class="ds-empty-icon">${svgIcon('refresh')}</div><p class="muted">No sync runs yet for this source.</p></div>`;
-        return;
-      }
-      const rows = runs.map(r2 => `<tr>
+
+    let pollTimer = null;
+
+    async function renderRuns() {
+      try {
+        const r = await api.getConnectorRuns(connectorId, 20);
+        const runs = (r && r.data) ? r.data : [];
+        if (!runs.length) {
+          bd.querySelector('#logs-body').innerHTML = `<div class="empty-panel ds-empty-panel ds-empty-panel--compact"><div class="ds-empty-icon">${svgIcon('refresh')}</div><p class="muted">No sync runs yet for this source.</p></div>`;
+          return;
+        }
+        const hasActive = runs.some((r2) => r2.status === 'RUNNING' || r2.status === 'PENDING_AGENT');
+        const rows = runs.map(r2 => `<tr>
         <td class="muted">${r2.started_at ? fmtDate(r2.started_at) : '—'}</td>
         <td><span class="badge badge-neutral">${esc(r2.run_type||'—')}</span></td>
-        <td><span class="badge ${r2.status==='SUCCESS'?'badge-success':r2.status==='FAILED'?'badge-danger':'badge-warning'}">${esc(r2.status||'—')}</span></td>
+        <td><span class="badge ${r2.status==='SUCCESS'?'badge-success':r2.status==='FAILED'?'badge-danger':r2.status==='RUNNING'?'badge-info':'badge-warning'}">${esc(r2.status||'—')}</span></td>
         <td>${r2.items_processed ?? '—'}</td>
         <td class="text-success">${r2.items_succeeded ?? '—'}</td>
         <td class="${r2.items_failed?'text-danger':''}">${r2.items_failed ?? '—'}</td>
-        <td class="muted ds-log-error" title="${esc(r2.error_summary||'')}">${r2.error_summary ? esc(r2.error_summary.slice(0,80)) : '—'}</td>
+        <td class="muted ds-log-error" title="${esc(r2.error_summary||'')}">${runProgressHint(r2)}</td>
         <td><button type="button" class="btn btn-secondary btn-sm ds-run-export" data-run-id="${esc(r2.id||'')}" data-started="${esc(r2.started_at||'')}">Export</button></td>
       </tr>`).join('');
-      bd.querySelector('#logs-body').innerHTML = `
+        bd.querySelector('#logs-body').innerHTML = `
         <div class="table-wrap table-wrap--flat"><table class="dense-table">
-          <thead><tr><th>Started</th><th>Type</th><th>Status</th><th>Processed</th><th>OK</th><th>Failed</th><th>Error</th><th>Export</th></tr></thead>
+          <thead><tr><th>Started</th><th>Type</th><th>Status</th><th>Processed</th><th>OK</th><th>Failed</th><th>Progress / Error</th><th>Export</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
-        <p class="muted" style="font-size:0.82rem;margin:0.75rem 0 0">Export downloads CSV (opens in Excel) with each user marked OK or FAILED.</p>`;
-      bd.querySelectorAll('.ds-run-export').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          btn.disabled = true;
-          try {
-            await downloadRunExport(btn.dataset.runId, btn.dataset.started);
-          } catch (e) {
-            alert(e.message || 'Export failed');
-          } finally {
-            btn.disabled = false;
-          }
+        ${hasActive ? '<p class="muted" style="font-size:0.82rem;margin:0.75rem 0 0">Live sync in progress — this view refreshes every 5s. Export downloads CSV (opens in Excel) with synced vs failed users; partial export available while RUNNING.</p>' : '<p class="muted" style="font-size:0.82rem;margin:0.75rem 0 0">Export downloads CSV (opens in Excel) listing each user, status (OK / WARNING / FAILED), and error details.</p>'}`;
+        bd.querySelectorAll('.ds-run-export').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+              await downloadRunExport(btn.dataset.runId, btn.dataset.started);
+            } catch (e) {
+              alert(e.message || 'Export failed');
+            } finally {
+              btn.disabled = false;
+            }
+          });
         });
-      });
-    } catch(e) { bd.querySelector('#logs-body').innerHTML = errHtml(e.message); }
+        if (pollTimer) clearInterval(pollTimer);
+        if (hasActive && document.body.contains(bd)) {
+          pollTimer = setInterval(() => { void renderRuns(); }, 5000);
+        }
+      } catch(e) { bd.querySelector('#logs-body').innerHTML = errHtml(e.message); }
+    }
+
+    bd.querySelector('#logs-close').addEventListener('click', () => {
+      if (pollTimer) clearInterval(pollTimer);
+      bd.remove();
+    });
+    bd.querySelector('#logs-refresh').addEventListener('click', () => { void renderRuns(); });
+    await renderRuns();
   }
 
   panel.querySelector('#ds-add-btn')?.addEventListener('click', openAddWizard);

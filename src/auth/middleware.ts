@@ -288,6 +288,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     return;
   }
 
+  let oidcForLog: Awaited<ReturnType<typeof getGoogleOidcConfig>> | null = null;
   try {
     const oidc = await Promise.race([
       getGoogleOidcConfig(),
@@ -295,6 +296,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
         setTimeout(() => reject(new Error('google oidc config timeout')), 5_000);
       }),
     ]);
+    oidcForLog = oidc;
     if (!isGoogleOidcConfigured(oidc)) {
       redirectLoginAuthError(res, 'google_not_configured', returnTo);
       return;
@@ -527,7 +529,15 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     const oauthErr = axiosData?.error;
     const oauthDesc = axiosData?.error_description;
     logger.error(
-      { err, oauthErr, oauthDesc, returnTo },
+      {
+        err,
+        oauthErr,
+        oauthDesc,
+        returnTo,
+        ...(oidcForLog
+          ? { oidcSource: oidcForLog.source, clientIdSuffix: oidcForLog.clientId.slice(-12) }
+          : {}),
+      },
       'Google OIDC callback failed',
     );
     if (

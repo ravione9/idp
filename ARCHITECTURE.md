@@ -1108,6 +1108,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `63de512` — 2026-08-10 — Fix Google portal OAuth invalid_client from mixed credentials
+
+**Why** — Prod login failed with `invalid_client` when DB stored Client ID but Client Secret fell back to a different env/Vault pair.
+
+**What changed:**
+
+- **`google-oidc-config.ts`** — resolve Client ID + Secret as a pair; never mix DB id with unrelated env secret.
+- **`config-general-settings.ts`** — reject Client ID change without re-pasting secret; expose `credentialPairMismatch` in GET.
+- **Portal sign-in UI** — warn when credentials look mismatched.
+
 ### `b872ea4` — 2026-08-10 — Sync run CSV export (synced vs failed users)
 
 **Why** — Sync history showed aggregate OK/FAILED counts but no way to see which users succeeded or failed.
@@ -1117,7 +1127,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`connector-run-export.ts`** — build CSV from `connector_runs.payload.userResults`; fallback parses legacy `error_summary`.
 - **`google-sync.ts`** — record per-user sync result during inbound import; persist in run `payload`.
 - **`GET /api/iga/connectors/:id/runs/:runId/export`** — download CSV (Excel-compatible).
-- **Directory Sync UI** — Export button on Sync history modal.
+- **Directory Sync UI** — Export button on Sync history modal; live **Progress / Error** column with 5s auto-refresh while RUNNING (reads `connector_runs.payload`).
 
 ### `6dcccb9` — 2026-08-10 — Harden connector sync recovery (force reclaim + auth error handling)
 
