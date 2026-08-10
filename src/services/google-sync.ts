@@ -30,6 +30,7 @@ import {
   type GoogleSyncSettings,
   listGoogleAttrMaps,
 } from './google-attr-map.js';
+import { failConnectorRunIfActive } from './connector-run-lifecycle.js';
 
 // ---------------------------------------------------------------------------
 // Re-export SyncResult type (same shape as ad-sync)
@@ -501,6 +502,17 @@ export async function runGoogleSync(
     [runId, connectorId, runType],
   );
 
+  let itemsProcessed = 0;
+  let itemsSucceeded = 0;
+  let itemsFailed = 0;
+  let usersAdded = 0;
+  let usersUpdated = 0;
+  let usersDisabled = 0;
+  const errors: string[] = [];
+  let inboundSummary = '';
+  let direction = 'BIDIRECTIONAL';
+
+  try {
   const connRow = await queryOne<{ direction: string; config_json: string | Record<string, unknown> }>(
     `SELECT direction, config_json FROM connectors WHERE id = ?`,
     [connectorId],
@@ -515,23 +527,13 @@ export async function runGoogleSync(
       : (connRow.config_json ?? {});
 
   const scope = resolveGoogleSyncScope(cfg);
-  const direction = (connRow.direction ?? 'BIDIRECTIONAL').toUpperCase();
+  direction = (connRow.direction ?? 'BIDIRECTIONAL').toUpperCase();
   const runInbound  = direction === 'INBOUND' || direction === 'BIDIRECTIONAL';
   const runOutbound = direction === 'OUTBOUND' || direction === 'BIDIRECTIONAL';
 
   const auth = buildGoogleJwtAuth(cfg);
   const directory = google.admin({ version: 'directory_v1', auth });
 
-  let itemsProcessed = 0;
-  let itemsSucceeded = 0;
-  let itemsFailed = 0;
-  let usersAdded = 0;
-  let usersUpdated = 0;
-  let usersDisabled = 0;
-  const errors: string[] = [];
-  let inboundSummary = '';
-
-  try {
     if (runInbound) {
       const inbound = await importGoogleDirectoryUsers(directory, scope, errors, { runType });
       itemsProcessed += inbound.processed;
@@ -682,14 +684,7 @@ export async function runGoogleSync(
     }
   } catch (fatalErr) {
     logger.error({ connectorId, runId, err: fatalErr }, 'Google sync: fatal error');
-    await execute(
-      `UPDATE connector_runs
-          SET status = 'FAILED', ended_at = UTC_TIMESTAMP(),
-              items_processed = ?, items_succeeded = ?, items_failed = ?,
-              error_summary = ?
-        WHERE id = ?`,
-      [itemsProcessed, itemsSucceeded, itemsFailed, String(fatalErr), runId],
-    );
+    await failConnectorRunIfActive(runId, fatalErr, { itemsProcessed, itemsSucceeded, itemsFailed });
     throw fatalErr;
   }
 
