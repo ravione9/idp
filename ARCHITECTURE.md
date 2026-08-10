@@ -1107,9 +1107,6 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-<<<<<<< HEAD
-### `4d7856b` — 2026-08-10 — Reclaim stale connector sync runs blocking scheduler
-=======
 ### (pending) — 2026-08-10 — Harden connector sync recovery (force reclaim + auth error handling)
 
 **Why** — Sync still blocked after Aug 4: zombie `RUNNING` rows, manual Sync did not clear them until deploy, and Google auth/setup errors left runs stuck with 0 processed.
@@ -1122,8 +1119,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`POST /api/iga/connectors/:id/runs/reclaim`** — admin endpoint to clear stuck runs.
 - **Directory Sync UI** — re-enable Sync button after trigger completes.
 
-### `4406f79` — 2026-08-10 — Reclaim stale connector sync runs blocking scheduler
->>>>>>> a1c7a1f (Harden directory sync recovery after stuck RUNNING runs.)
+### `4d7856b` — 2026-08-10 — Reclaim stale connector sync runs blocking scheduler
 
 **Why** — After an API pod restart (K8s rollout), `connector_runs` rows stayed `RUNNING` with 0 processed items. The scheduler treats any active run as a lock, so Google/AD sync stopped on prod and preprod from Aug 4 onward.
 
