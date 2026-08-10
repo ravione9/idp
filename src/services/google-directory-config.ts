@@ -293,7 +293,7 @@ export interface ScopedGoogleUsersResult {
   notFoundEmails: string[];
 }
 
-/** List users matching connector OU / group / user scope (AND across non-empty filters). */
+/** List users matching connector OU / group scope; explicit Sync Users are always unioned in. */
 export async function listScopedGoogleUsers(
   directory: admin_directory_v1.Admin,
   scope: GoogleSyncScope,
@@ -345,24 +345,27 @@ export async function listScopedGoogleUsers(
   }
 
   if (hasUsers) {
-    const allow = new Set(scope.users);
-    const matched = new Set(pool.map((u) => userEmail(u)).filter((e) => allow.has(e)));
-    const missingFromPool = scope.users.filter((e) => !matched.has(e));
-    if (missingFromPool.length > 0) {
-      const direct = await fetchGoogleUsersByEmail(directory, missingFromPool);
+    const byId = new Map<string, admin_directory_v1.Schema$User>();
+    for (const u of pool) {
+      const id = u.id ?? userEmail(u);
+      if (id) byId.set(id, u);
+    }
+    const presentEmails = new Set([...byId.values()].map((u) => userEmail(u)));
+    const toFetch = scope.users.filter((e) => !presentEmails.has(e));
+    if (toFetch.length > 0) {
+      const direct = await fetchGoogleUsersByEmail(directory, toFetch);
       notFoundEmails.push(...direct.notFound);
-      const byId = new Map<string, admin_directory_v1.Schema$User>();
-      for (const u of pool) {
+      for (const u of direct.users) {
         const id = u.id ?? userEmail(u);
         if (id) byId.set(id, u);
       }
-      for (const u of direct.users) {
-        const id = u.id ?? userEmail(u);
-        if (id && allow.has(userEmail(u))) byId.set(id, u);
-      }
-      pool = [...byId.values()].filter((u) => allow.has(userEmail(u)));
+    }
+    if (hasOu || hasGroup) {
+      // Explicit Sync Users are unioned into the scoped pool (included even outside OU/group filters).
+      pool = [...byId.values()];
     } else {
-      pool = pool.filter((u) => allow.has(userEmail(u)));
+      const allow = new Set(scope.users);
+      pool = [...byId.values()].filter((u) => allow.has(userEmail(u)));
     }
   }
 

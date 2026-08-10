@@ -1112,6 +1112,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### *(this commit)* — 2026-08-10 — Google sync: union explicit Sync Users; import service accounts like it_software@
+
+**Why** — `it_software@lenskart.in` is an active Google user under OU `valyoo.in/IT` but missing from IdP when OU scope excluded that tree; explicit Sync Users previously AND-filtered with OU instead of always including listed emails.
+
+**What changed:**
+
+- **`google-directory-config.ts`** — emails in Sync Users are unioned into the import pool even when outside OU/group scope.
+- **`google-sync.ts`** — on duplicate email during insert, link existing employee instead of failing.
+
 ### `8905308` — 2026-08-10 — Fix mass Google sync failures and stuck group phase
 
 **Why** — Sync runs showed ~2556 FAILED during inbound (dept/role data too long for DB before migration 061) and hung on `groups:` because group member sync called `users.get` per member.

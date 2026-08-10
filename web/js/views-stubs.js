@@ -4094,7 +4094,7 @@ const FIELD_LABELS = {
   syncGroups:         'Sync Groups (Google: group email, blank/* = all Workspace groups up to 200; AD: CN/sAMAccountName/DN, blank/* = all security groups)',
   idpUrl:             'IdP URL (HTTPS, port 443 — e.g. https://idp.lenskart.com)',
   syncGroupMemberships: 'Mirror group membership into IdP Groups (on by default)',
-  syncUsers:          'Sync Users (one per line, user email — optional filter)',
+  syncUsers:          'Sync Users (one email per line — always imported even if outside OU/group scope)',
   provisionOrgUnit:   'Provision OU (outbound new users, e.g. /Employees)',
   includeSubOrgUnits: 'Include sub-OUs',
   tenantId:           'Tenant ID',

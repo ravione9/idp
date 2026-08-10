@@ -307,14 +307,30 @@ async function importOneGoogleUser(
     if (applied.updated) updated++;
     linked++;
   } else {
-    await insertEmployeeFromGoogleAttrs(empId, email, ilgState, attrs);
-    imported++;
-    await writeDirectoryUserAudit({
-      empId,
-      action: 'GOOGLE_SYNC_CREATE',
-      source: 'GOOGLE',
-      newValues: { email, ...attrs },
-    });
+    try {
+      await insertEmployeeFromGoogleAttrs(empId, email, ilgState, attrs);
+      imported++;
+      await writeDirectoryUserAudit({
+        empId,
+        action: 'GOOGLE_SYNC_CREATE',
+        source: 'GOOGLE',
+        newValues: { email, ...attrs },
+      });
+    } catch (insertErr) {
+      const existingByEmail = await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM employees WHERE email_corp = ? LIMIT 1`,
+        [email],
+      );
+      if (existingByEmail) {
+        empId = existingByEmail.emp_id;
+        linked++;
+        const applied = await safeApplyGoogleAttrs(empId, attrs, attrOpts);
+        if (applied.attrError) attrError = applied.attrError;
+        if (applied.updated) updated++;
+      } else {
+        throw insertErr;
+      }
+    }
   }
 
   await upsertGoogleIdentityLink(empId, googleId, linkStatus);
