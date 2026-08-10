@@ -1110,7 +1110,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-10 — Fix AD agent API blocked by internal token middleware
+### `1736975` — 2026-08-10 — Fix AD agent API blocked by internal token middleware
 
 **Why** — On-prem AD connector heartbeats returned `403 Invalid or missing X-Internal-Token` because `/api/internal` was mounted before `/api/internal/ad-connector`, so Express routed agent calls through the wrong middleware.
 
