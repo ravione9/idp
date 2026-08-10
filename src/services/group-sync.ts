@@ -232,6 +232,7 @@ export async function syncGoogleDirectoryGroups(
   directory: admin_directory_v1.Admin,
   scope: GoogleSyncScope,
   cfg?: Record<string, unknown>,
+  opts: { onProgress?: (detail: string) => void | Promise<void> } = {},
 ): Promise<GroupSyncSummary & { autoAll: boolean }> {
   const summary: GroupSyncSummary & { autoAll: boolean } = {
     groupsSynced: 0,
@@ -247,8 +248,13 @@ export async function syncGoogleDirectoryGroups(
   if (!groupKeys.length) return summary;
 
   const syncMembers = scope.syncGroupMemberships !== false;
+  let groupIndex = 0;
 
   for (const groupEmail of groupKeys) {
+    groupIndex++;
+    if (opts.onProgress && (groupIndex === 1 || groupIndex % 10 === 0 || groupIndex === groupKeys.length)) {
+      await opts.onProgress(`${groupIndex} / ${groupKeys.length} groups`);
+    }
     try {
       const gRes = await directory.groups.get({ groupKey: groupEmail });
       const g = gRes.data;
@@ -275,19 +281,8 @@ export async function syncGoogleDirectoryGroups(
         });
         for (const m of mRes.data.members ?? []) {
           if (m.type !== 'USER' || !m.email) continue;
-          // Prefer member id/email first — avoid N+1 users.get when already linked.
-          let empId = await resolveEmpIdByGoogleId(m.id ?? m.email, m.email);
-          if (!empId) {
-            try {
-              const u = await directory.users.get({ userKey: m.email });
-              empId = await resolveEmpIdByGoogleId(
-                u.data.id ?? m.email,
-                u.data.primaryEmail ?? m.email,
-              );
-            } catch {
-              empId = await resolveEmpIdByEmail(m.email);
-            }
-          }
+          const empId = await resolveEmpIdByGoogleId(m.id ?? m.email, m.email)
+            ?? await resolveEmpIdByEmail(m.email);
           if (empId) empIds.push(empId);
         }
         pageToken = mRes.data.nextPageToken ?? undefined;

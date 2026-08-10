@@ -61,11 +61,11 @@ export interface ExtractedAttrs {
   full_name?: string;
 }
 
-/** Max lengths aligned with employees table columns (post-061 migration). */
+/** Max string lengths — conservative so sync succeeds even before migration 061 is applied. */
 export const EMPLOYEE_ATTR_LIMITS: Partial<Record<LocalAttrKey, number>> = {
   employee_number: 64,
-  dept_id: 128,
-  role: 255,
+  dept_id: 50,
+  role: 100,
   cost_center: 80,
   location: 200,
   mobile: 40,
@@ -515,7 +515,6 @@ export async function applyAttrsToEmployee(
       : val;
     const old = current[col];
     if (normAttrValue(old) === normAttrValue(normalized)) continue;
-    // Google directory sync owns HR attrs — overwrite stale IdP values when Google has data.
     if (opts.googleSourceOfTruth && normAttrValue(normalized) === '') continue;
     changes[col] = { old: old ?? null, new: normalized };
     sets.push(`${col} = ?`);
@@ -533,11 +532,43 @@ export async function applyAttrsToEmployee(
     return { updated: false, changes: {} };
   }
 
-  await execute(
-    `UPDATE employees SET ${sets.join(', ')} WHERE emp_id = ?`,
-    [...params, empId],
-  );
-  return { updated: true, changes };
+  try {
+    await execute(
+      `UPDATE employees SET ${sets.join(', ')} WHERE emp_id = ?`,
+      [...params, empId],
+    );
+    return { updated: true, changes };
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    const msg = err instanceof Error ? err.message : String(err);
+    const dropManager = changes.manager_emp_id !== undefined
+      && (code === 'ER_NO_REFERENCED_ROW_2' || /manager|foreign key|too long/i.test(msg));
+    if (!dropManager) throw err;
+
+    logger.warn({ empId, err: msg }, 'Google sync: retrying attr update without manager_emp_id');
+    delete changes.manager_emp_id;
+    const retrySets: string[] = [];
+    const retryParams: unknown[] = [];
+    for (const [col, val] of candidates) {
+      if (col === 'manager_emp_id' || val === undefined || val === null || val === '') continue;
+      if (!(col in changes)) continue;
+      const limit = EMPLOYEE_ATTR_LIMITS[col as LocalAttrKey];
+      const normalized = typeof val === 'string' && limit
+        ? truncateAttr(col as LocalAttrKey, val)
+        : val;
+      retrySets.push(`${col} = ?`);
+      retryParams.push(normalized);
+    }
+    retrySets.push('attrs_synced_at = UTC_TIMESTAMP()', `sync_status = 'SYNCED'`, 'updated_at = UTC_TIMESTAMP()');
+    if (retrySets.length <= 3) {
+      return { updated: false, changes: {} };
+    }
+    await execute(
+      `UPDATE employees SET ${retrySets.join(', ')} WHERE emp_id = ?`,
+      [...retryParams, empId],
+    );
+    return { updated: true, changes };
+  }
 }
 
 export async function writeDirectoryUserAudit(entry: {

@@ -27,6 +27,7 @@ import {
   getGoogleSyncSettings,
   sanitizeExtractedAttrs,
   writeDirectoryUserAudit,
+  type ApplyAttrsResult,
   type DirectoryAttrMapRow,
   type ExtractedAttrs,
   type GoogleSyncSettings,
@@ -147,6 +148,20 @@ function preferEmpId(gUser: admin_directory_v1.Schema$User, attrs: ExtractedAttr
 
 const INBOUND_USER_TIMEOUT_MS = 45_000;
 
+async function safeApplyGoogleAttrs(
+  empId: string,
+  attrs: ExtractedAttrs,
+  attrOpts: { syncSettings: GoogleSyncSettings; resolveManager: boolean; googleSourceOfTruth?: boolean },
+): Promise<ApplyAttrsResult & { attrError?: string }> {
+  try {
+    return await applyAttrsToEmployee(empId, attrs, attrOpts);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ empId, err: msg }, 'Google sync: attr update failed (user still linked)');
+    return { updated: false, changes: {}, attrError: msg };
+  }
+}
+
 async function importOneGoogleUser(
   gUser: admin_directory_v1.Schema$User,
   ctx: {
@@ -169,6 +184,7 @@ async function importOneGoogleUser(
   let updated = 0;
   let skipped = 0;
   let disabled = 0;
+  let attrError: string | undefined;
 
   const email = (gUser.primaryEmail ?? '').trim().toLowerCase();
   const googleId = gUser.id ?? email;
@@ -210,11 +226,13 @@ async function importOneGoogleUser(
                 updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
         [fullName, targetEmpId],
       );
-      await applyAttrsToEmployee(targetEmpId, attrs, attrOpts);
+      await safeApplyGoogleAttrs(targetEmpId, attrs, attrOpts).then((r) => {
+        if (r.attrError) attrError = r.attrError;
+      });
       linked++;
       disabled++;
     }
-    return { imported, linked, updated, skipped: 1, disabled, succeeded: 1, failed: 0 };
+    return { imported, linked, updated, skipped: 1, disabled, succeeded: 1, failed: 0, ...(attrError ? { error: `${email}: ${attrError}` } : {}) };
   }
 
   const linkStatus = 'ACTIVE';
@@ -226,7 +244,8 @@ async function importOneGoogleUser(
       `UPDATE employees SET ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
       [ilgState, existingLink.emp_id],
     );
-    const applied = await applyAttrsToEmployee(existingLink.emp_id, attrs, attrOpts);
+    const applied = await safeApplyGoogleAttrs(existingLink.emp_id, attrs, attrOpts);
+    if (applied.attrError) attrError = applied.attrError;
     if (applied.updated) {
       updated++;
       await writeDirectoryUserAudit({
@@ -239,7 +258,7 @@ async function importOneGoogleUser(
       });
     }
     linked++;
-    return { imported, linked, updated, skipped, disabled, succeeded: 1, failed: 0 };
+    return { imported, linked, updated, skipped, disabled, succeeded: 1, failed: 0, ...(attrError ? { error: `${email}: ${attrError}` } : {}) };
   }
 
   let empId = preferEmpId(gUser, attrs);
@@ -264,7 +283,8 @@ async function importOneGoogleUser(
       `UPDATE employees SET ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
       [ilgState, empId],
     );
-    const applied = await applyAttrsToEmployee(empId, attrs, attrOpts);
+    const applied = await safeApplyGoogleAttrs(empId, attrs, attrOpts);
+    if (applied.attrError) attrError = applied.attrError;
     if (applied.updated) updated++;
     linked++;
   } else if (byEmpNumber) {
@@ -273,7 +293,8 @@ async function importOneGoogleUser(
       `UPDATE employees SET email_corp = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
       [email, ilgState, empId],
     );
-    const applied = await applyAttrsToEmployee(empId, attrs, attrOpts);
+    const applied = await safeApplyGoogleAttrs(empId, attrs, attrOpts);
+    if (applied.attrError) attrError = applied.attrError;
     if (applied.updated) updated++;
     linked++;
   } else if (byEmpId) {
@@ -281,7 +302,8 @@ async function importOneGoogleUser(
       `UPDATE employees SET email_corp = ?, ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
       [email, ilgState, empId],
     );
-    const applied = await applyAttrsToEmployee(empId, attrs, attrOpts);
+    const applied = await safeApplyGoogleAttrs(empId, attrs, attrOpts);
+    if (applied.attrError) attrError = applied.attrError;
     if (applied.updated) updated++;
     linked++;
   } else {
@@ -296,7 +318,10 @@ async function importOneGoogleUser(
   }
 
   await upsertGoogleIdentityLink(empId, googleId, linkStatus);
-  return { imported, linked, updated, skipped, disabled, succeeded: 1, failed: 0 };
+  return {
+    imported, linked, updated, skipped, disabled, succeeded: 1, failed: 0,
+    ...(attrError ? { error: `${email}: ${attrError}` } : {}),
+  };
 }
 
 async function resolveGoogleManagerLinks(
@@ -795,7 +820,9 @@ export async function runGoogleSync(
       let groupSummary = '';
       try {
         await reportProgress('groups', 'Syncing Google groups and memberships');
-        const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope, cfg);
+        const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope, cfg, {
+          onProgress: (detail) => reportProgress('groups', detail),
+        });
         const mode = gs.autoAll ? ' (auto-all)' : '';
         groupSummary =
           ` | Groups: ${gs.groupsSynced} synced, ${gs.membersSynced} members` +
