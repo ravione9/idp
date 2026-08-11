@@ -22,18 +22,24 @@ param(
 $ErrorActionPreference = 'Stop'
 $InstallDir = (Resolve-Path $InstallDir).Path
 
+function Get-CommandPath([string] $Name) {
+  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  return $null
+}
+
 $exe = Join-Path $InstallDir 'lilg-ad-connector.exe'
 $nodeScript = Join-Path $InstallDir 'dist\index.js'
 $config = Join-Path $InstallDir 'config.json'
 
 if (-not (Test-Path $config)) {
-  throw "config.json not found in $InstallDir — copy config.example.json and edit AD + IdP settings."
+  throw "config.json not found in $InstallDir - copy config.example.json and edit AD + IdP settings."
 }
 
 if (Test-Path $exe) {
   $action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory $InstallDir
 } elseif (Test-Path $nodeScript) {
-  $node = (Get-Command node -ErrorAction SilentlyContinue)?.Source
+  $node = Get-CommandPath 'node'
   if (-not $node) { throw 'Node.js not found in PATH. Install Node 22+ or build lilg-ad-connector.exe.' }
   $action = New-ScheduledTaskAction -Execute $node -Argument "`"$nodeScript`"" -WorkingDirectory $InstallDir
 } else {
@@ -51,7 +57,7 @@ $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccou
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'LILG Active Directory connector agent (HTTPS :443 to IdP)'
 
-Write-Host "Registered scheduled task '$TaskName' — starts at boot."
+Write-Host "Registered scheduled task '$TaskName' - starts at boot."
 Write-Host "  Start now:  Start-ScheduledTask -TaskName '$TaskName'"
 Write-Host "  Stop:       Stop-ScheduledTask -TaskName '$TaskName'"
 Write-Host "  Remove:     Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"

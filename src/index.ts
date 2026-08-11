@@ -118,6 +118,9 @@ app.use(
 // ---------------------------------------------------------------------------
 // Body parsing
 // ---------------------------------------------------------------------------
+// AD agent inbound sync posts thousands of users — needs a larger limit than default API routes.
+app.use('/api/internal/ad-connector', express.json({ limit: '32mb' }), internalAdConnectorRouter);
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
@@ -248,8 +251,8 @@ app.use('/api/admin/radius', configRadiusRouter);
 // ---------------------------------------------------------------------------
 // Internal routes (internal token gated — no session cookie required)
 // More specific /api/internal/* mounts MUST come before the catch-all internalRouter.
+// (ad-connector is mounted above with a larger JSON body limit)
 // ---------------------------------------------------------------------------
-app.use('/api/internal/ad-connector', internalAdConnectorRouter);
 app.use('/api/internal/saml', internalSamlRouter);
 app.use('/api/internal/radius', internalRadiusRouter);
 app.use('/api/internal', internalRouter);

@@ -27,8 +27,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $InstallDir = (Resolve-Path $InstallDir).Path
 
+function Get-CommandPath([string] $Name) {
+  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  return $null
+}
+
 if (-not $NssmPath) {
-  $NssmPath = (Get-Command nssm -ErrorAction SilentlyContinue)?.Source
+  $NssmPath = Get-CommandPath 'nssm'
 }
 if (-not $NssmPath -or -not (Test-Path $NssmPath)) {
   throw @"
@@ -56,7 +62,7 @@ if ($existing) {
 if (Test-Path $exe) {
   & $NssmPath install $ServiceName $exe
 } elseif (Test-Path $nodeScript) {
-  $node = (Get-Command node -ErrorAction SilentlyContinue)?.Source
+  $node = Get-CommandPath 'node'
   if (-not $node) { throw 'Node.js not in PATH' }
   & $NssmPath install $ServiceName $node "`"$nodeScript`""
 } else {
@@ -65,7 +71,7 @@ if (Test-Path $exe) {
 
 & $NssmPath set $ServiceName AppDirectory $InstallDir
 & $NssmPath set $ServiceName DisplayName 'LILG Active Directory Connector'
-& $NssmPath set $ServiceName Description 'On-prem AD agent — bidirectional sync with LILG IdP over HTTPS :443'
+& $NssmPath set $ServiceName Description 'On-prem AD agent - bidirectional sync with LILG IdP over HTTPS :443'
 & $NssmPath set $ServiceName Start SERVICE_AUTO_START
 & $NssmPath set $ServiceName AppStdout (Join-Path $InstallDir 'logs\stdout.log')
 & $NssmPath set $ServiceName AppStderr (Join-Path $InstallDir 'logs\stderr.log')

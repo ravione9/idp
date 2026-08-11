@@ -18,7 +18,7 @@ import {
   type MfaMethodDetails,
   type MfaMethodKey,
 } from './mfa-methods.js';
-import { verifyAnyOtpLogin } from './mfa-otp.js';
+import { describeOtpLoginFailure, verifyAnyOtpLogin } from './mfa-otp.js';
 import { deleteWebAuthnCredentials } from './mfa-webauthn.js';
 
 /** Google Authenticator–compatible TOTP defaults. */
@@ -265,11 +265,13 @@ export async function disableMfa(empId: string): Promise<void> {
   logger.info({ empId }, 'MFA disabled (all methods)');
 }
 
+export type MfaVerifyResult = { ok: true } | { ok: false; error: string };
+
 /**
  * Verify MFA using TOTP, backup codes, or enrolled OTP methods.
- * Respects mfa_policy.allowed_methods (disabled methods cannot satisfy a challenge).
+ * Returns a user-facing error when verification fails.
  */
-export async function verifyAnyMfaCode(empId: string, code: string): Promise<boolean> {
+export async function verifyAnyMfaCodeDetailed(empId: string, code: string): Promise<MfaVerifyResult> {
   const allowed = new Set(await getAllowedMfaMethods(empId));
 
   if (allowed.has('totp') || allowed.has('backup_codes')) {
@@ -277,16 +279,32 @@ export async function verifyAnyMfaCode(empId: string, code: string): Promise<boo
       allowTotp: allowed.has('totp'),
       allowBackup: allowed.has('backup_codes'),
     })) {
-      return true;
+      return { ok: true };
     }
   }
 
   if (allowed.has('email_otp') || allowed.has('sms_otp')) {
     const otpMethod = await verifyAnyOtpLogin(empId, code);
-    if (otpMethod && allowed.has(otpMethod)) return true;
+    if (otpMethod && allowed.has(otpMethod)) return { ok: true };
+
+    const otpError = await describeOtpLoginFailure(empId, allowed);
+    if (otpError) return { ok: false, error: otpError };
   }
 
-  return false;
+  if (allowed.has('totp')) {
+    return { ok: false, error: 'Invalid authenticator code — try the next code from your app' };
+  }
+
+  return { ok: false, error: 'Invalid verification code' };
+}
+
+/**
+ * Verify MFA using TOTP, backup codes, or enrolled OTP methods.
+ * Respects mfa_policy.allowed_methods (disabled methods cannot satisfy a challenge).
+ */
+export async function verifyAnyMfaCode(empId: string, code: string): Promise<boolean> {
+  const result = await verifyAnyMfaCodeDetailed(empId, code);
+  return result.ok;
 }
 
 /**

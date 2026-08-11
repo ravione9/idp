@@ -24,7 +24,7 @@ import logger from '../utils/logger.js';
 import { createSession, setSessionCookie } from './session.js';
 import { getSessionCreateTtlHours } from '../services/session-policy.js';
 import { redis } from './session-store.js';
-import { confirmEnrollment, challengeMethodsFromStatus, getMfaStatus, startEnrollment, verifyAnyMfaCode } from './mfa.js';
+import { confirmEnrollment, challengeMethodsFromStatus, getMfaStatus, startEnrollment, verifyAnyMfaCodeDetailed } from './mfa.js';
 import { sendEmailOtp, sendSmsOtp } from './mfa-otp.js';
 import {
   hasValidMfaDeviceTrust,
@@ -561,10 +561,10 @@ export async function localLoginMfaVerifyHandler(req: Request, res: Response): P
     res.status(400).json({ error: 'Enter a 6-digit authenticator code (or 8-character backup code)' });
     return;
   }
-  const ok = await verifyAnyMfaCode(challenge.empId, code);
-  if (!ok) {
+  const verified = await verifyAnyMfaCodeDetailed(challenge.empId, code);
+  if (!verified.ok) {
     await logAttempt(challenge.email, getClientIp(req), false, 'mfa-bad-code');
-    res.status(401).json({ error: 'Invalid or expired verification code — try the next code from your app' });
+    res.status(401).json({ error: verified.error });
     return;
   }
 

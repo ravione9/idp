@@ -16,6 +16,12 @@ param(
 
 $ErrorActionPreference = 'SilentlyContinue'
 
+function Get-CommandPath([string] $Name) {
+  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  return $null
+}
+
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($task) {
   Stop-ScheduledTask -TaskName $TaskName
@@ -25,13 +31,13 @@ if ($task) {
 
 $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($svc) {
-  $nssm = (Get-Command nssm -ErrorAction SilentlyContinue)?.Source
+  $nssm = Get-CommandPath 'nssm'
   if ($nssm) {
     & $nssm stop $ServiceName
     & $nssm remove $ServiceName confirm
     Write-Host "Removed NSSM service '$ServiceName'."
   } else {
-    Write-Warning "Service '$ServiceName' exists but nssm not in PATH — remove manually via services.msc"
+    Write-Warning "Service '$ServiceName' exists but nssm not in PATH - remove manually via services.msc"
   }
 }
 
