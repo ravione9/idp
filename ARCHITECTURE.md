@@ -1122,7 +1122,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`google-directory-config.ts`** — emails in Sync Users are unioned into the import pool even when outside OU/group scope.
 - **`google-sync.ts`** — on duplicate email during insert, link existing employee instead of failing.
 
-### (pending) — 2026-08-11 — AD agent sync: fix HTTP 500 on large inbound payload
+### `d592c2f` — 2026-08-11 — AD agent sync: fix HTTP 500 on large inbound payload
 
 **Why** — Sync failed with `Request failed with status code 500` when the agent posted 1300+ AD users; full LDAP `*` attributes exceeded the IdP `express.json` 1 MB limit.
 
