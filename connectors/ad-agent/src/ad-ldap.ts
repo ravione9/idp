@@ -10,6 +10,14 @@ const UAC_NORMAL = 0x0200;
 const UAC_DISABLE = 0x0002;
 const UAC_DISABLED_ACCOUNT = UAC_NORMAL | UAC_DISABLE;
 
+/** Attributes needed for IdP inbound sync (avoid posting full LDAP `*` — exceeds IdP JSON limit). */
+export const USER_IMPORT_ATTRS = [
+  'dn', 'sAMAccountName', 'mail', 'userPrincipalName', 'displayName', 'cn',
+  'givenName', 'sn', 'employeeID', 'employeeNumber', 'userAccountControl',
+  'department', 'title', 'manager', 'description', 'pager', 'initials', 'info',
+  ...Array.from({ length: 15 }, (_, i) => `extensionAttribute${i + 1}`),
+];
+
 function ldapEscape(value: string): string {
   return value.replace(/[\\*()\x00]/g, (c) => `\\${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
 }
@@ -61,7 +69,7 @@ export class AdLdapClient {
       });
       await this.disconnect();
       const proto = this.ad.useSsl ? 'LDAPS' : this.ad.startTls ? 'LDAP+StartTLS' : 'LDAP';
-      return { ok: true, message: `${proto} bind OK — ${this.url}` };
+      return { ok: true, message: `${proto} bind OK - ${this.url}` };
     } catch (err) {
       await this.disconnect().catch(() => undefined);
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
@@ -97,7 +105,7 @@ export class AdLdapClient {
       bases.unshift(`${ou},${this.ad.baseDn}`);
     }
     for (const base of bases) {
-      const entries = await this.search(base, filter, ['*']);
+      const entries = await this.search(base, filter, USER_IMPORT_ATTRS);
       const users = entries.filter((e) => {
         const sam = getAttr(e, 'sAMAccountName');
         return sam && !sam.endsWith('$');

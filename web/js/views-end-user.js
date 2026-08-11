@@ -451,7 +451,7 @@ export function renderLogin() {
       merr.innerHTML = '';
       try {
         const r = await api.localLoginMfaSendOtp(challengeId, 'email_otp');
-        merr.innerHTML = `<div class="alert alert-info">${r.devCode ? `Dev code: ${esc(r.devCode)}` : 'Code sent to your email.'}</div>`;
+        merr.innerHTML = `<div class="alert alert-info">${r.devCode ? `Dev code: ${esc(r.devCode)}` : 'Code sent to your email — valid for 15 minutes.'}</div>`;
       } catch (err) {
         merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }
@@ -460,7 +460,7 @@ export function renderLogin() {
       merr.innerHTML = '';
       try {
         const r = await api.localLoginMfaSendOtp(challengeId, 'sms_otp');
-        merr.innerHTML = `<div class="alert alert-info">${r.devCode ? `Dev code: ${esc(r.devCode)}` : 'Code sent via SMS.'}</div>`;
+        merr.innerHTML = `<div class="alert alert-info">${r.devCode ? `Dev code: ${esc(r.devCode)}` : 'Code sent via SMS — valid for 15 minutes.'}</div>`;
       } catch (err) {
         merr.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
       }

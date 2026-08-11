@@ -1,6 +1,15 @@
 import type { AgentConfig } from './config.js';
-import { AdLdapClient, getAttr } from './ad-ldap.js';
+import { AdLdapClient, getAttr, USER_IMPORT_ATTRS } from './ad-ldap.js';
 import { IdpClient, type OutboundAction, type OutboundResult } from './idp-client.js';
+
+function slimAdUser(u: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of USER_IMPORT_ATTRS) {
+    const v = getAttr(u, key);
+    if (v) out[key] = v;
+  }
+  return out;
+}
 
 export async function runSyncJob(cfg: AgentConfig, idp: IdpClient, job: Awaited<ReturnType<IdpClient['fetchNextJob']>> & object): Promise<void> {
   const ldap = new AdLdapClient(cfg.ad);
@@ -15,19 +24,7 @@ export async function runSyncJob(cfg: AgentConfig, idp: IdpClient, job: Awaited<
 
     if (job.runInbound) {
       const users = await ldap.listUsers();
-      const normalized = users.map((u) => ({
-        ...u,
-        dn: getAttr(u, 'dn'),
-        sAMAccountName: getAttr(u, 'sAMAccountName'),
-        mail: getAttr(u, 'mail'),
-        userPrincipalName: getAttr(u, 'userPrincipalName'),
-        displayName: getAttr(u, 'displayName'),
-        employeeID: getAttr(u, 'employeeID'),
-        userAccountControl: getAttr(u, 'userAccountControl'),
-        department: getAttr(u, 'department'),
-        title: getAttr(u, 'title'),
-        manager: getAttr(u, 'manager'),
-      }));
+      const normalized = users.map((u) => slimAdUser(u));
       const inboundRes = await idp.postInbound(job.runId, normalized);
       inboundSummary = inboundRes.summary ?? '';
       itemsProcessed += Number(inboundRes.inbound?.processed ?? normalized.length);
