@@ -57,61 +57,54 @@ export class IdpClient {
         'X-Connector-Id': cfg.connectorId,
         'X-Agent-Token': cfg.agentToken,
       },
-      validateStatus: (s) => s >= 200 && s < 500,
+      validateStatus: () => true,
     });
+  }
+
+  private apiError(label: string, res: { status: number; data: unknown }): Error {
+    const detail = typeof res.data === 'object' && res.data !== null
+      ? JSON.stringify(res.data)
+      : String(res.data ?? '');
+    return new Error(`${label} (${res.status}): ${detail.slice(0, 2000)}`);
   }
 
   async heartbeat(adReachable: boolean, adMessage: string, agentVersion: string): Promise<void> {
     const res = await this.http.post('/heartbeat', { adReachable, adMessage, agentVersion });
-    if (res.status >= 400) {
-      throw new Error(`Heartbeat failed (${res.status}): ${JSON.stringify(res.data)}`);
-    }
+    if (res.status >= 400) throw this.apiError('Heartbeat failed', res);
   }
 
   async fetchNextJob(): Promise<AgentJob | null> {
     const res = await this.http.get('/jobs/next');
     if (res.status === 204) return null;
-    if (res.status >= 400) {
-      throw new Error(`Job poll failed (${res.status}): ${JSON.stringify(res.data)}`);
-    }
+    if (res.status >= 400) throw this.apiError('Job poll failed', res);
     return res.data as AgentJob;
   }
 
   async claimJob(runId: string): Promise<void> {
     const res = await this.http.post(`/jobs/${runId}/claim`);
-    if (res.status >= 400) {
-      throw new Error(`Claim failed (${res.status}): ${JSON.stringify(res.data)}`);
-    }
+    if (res.status >= 400) throw this.apiError('Claim failed', res);
   }
 
   async postInbound(runId: string, users: Record<string, unknown>[]): Promise<{ summary?: string; inbound?: Record<string, unknown> }> {
     const res = await this.http.post(`/jobs/${runId}/inbound`, { users });
-    if (res.status >= 400) {
-      throw new Error(`Inbound post failed (${res.status}): ${JSON.stringify(res.data)}`);
-    }
+    if (res.status >= 400) throw this.apiError('Inbound post failed', res);
     return res.data as { summary?: string; inbound?: Record<string, unknown> };
   }
 
   async fetchOutboundPlan(runId: string): Promise<OutboundAction[]> {
     const res = await this.http.get(`/jobs/${runId}/outbound-plan`);
-    if (res.status >= 400) {
-      throw new Error(`Outbound plan failed (${res.status}): ${JSON.stringify(res.data)}`);
-    }
+    if (res.status >= 400) throw this.apiError('Outbound plan failed', res);
     return (res.data as { actions: OutboundAction[] }).actions ?? [];
   }
 
   async postOutboundResults(runId: string, results: OutboundResult[]): Promise<void> {
     const res = await this.http.post(`/jobs/${runId}/outbound`, { results });
-    if (res.status >= 400) {
-      throw new Error(`Outbound results failed (${res.status}): ${JSON.stringify(res.data)}`);
-    }
+    if (res.status >= 400) throw this.apiError('Outbound results failed', res);
   }
 
   async postGroups(runId: string, groups: GroupPayload[]): Promise<{ summary?: string; groupsSynced?: number; membersSynced?: number; errors?: string[] }> {
     const res = await this.http.post(`/jobs/${runId}/groups`, { groups });
-    if (res.status >= 400) {
-      throw new Error(`Groups post failed (${res.status}): ${JSON.stringify(res.data)}`);
-    }
+    if (res.status >= 400) throw this.apiError('Groups post failed', res);
     return res.data as { summary?: string; groupsSynced?: number; membersSynced?: number; errors?: string[] };
   }
 
@@ -120,9 +113,7 @@ export class IdpClient {
     summary: { itemsProcessed: number; itemsSucceeded: number; itemsFailed: number; errorSummary?: string | null; inboundSummary?: string },
   ): Promise<void> {
     const res = await this.http.post(`/jobs/${runId}/complete`, summary);
-    if (res.status >= 400) {
-      throw new Error(`Complete failed (${res.status}): ${JSON.stringify(res.data)}`);
-    }
+    if (res.status >= 400) throw this.apiError('Complete failed', res);
   }
 
   async failJob(runId: string, message: string): Promise<void> {

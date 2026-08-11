@@ -1,6 +1,6 @@
 /**
  * Email and SMS OTP for MFA enrollment and login verification.
- * Codes live in Redis (5 min TTL); at-rest storage is not required.
+ * Codes live in Redis (15 min TTL, starting after delivery succeeds); at-rest storage is not required.
  */
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
@@ -17,8 +17,11 @@ import {
 
 const OTP_PREFIX = 'lilg:mfa-otp:';
 const OTP_SEND_PREFIX = 'lilg:mfa-otp-send:';
-const OTP_TTL_S = 300;
+const OTP_TTL_S = 900;
 const OTP_SEND_COOLDOWN_S = 60;
+
+/** Shown in email/SMS copy and login error hints. */
+export const OTP_TTL_MINUTES = OTP_TTL_S / 60;
 
 type OtpChannel = 'email_otp' | 'sms_otp';
 
@@ -99,8 +102,6 @@ export async function sendEmailOtp(
   if (!emp?.email_corp) throw new Error('No corporate email on file');
 
   const code = generateCode();
-  await storeOtp(empId, 'email_otp', purpose, code);
-  await redis.set(sendCooldownKey(empId, 'email_otp'), '1', 'EX', OTP_SEND_COOLDOWN_S);
 
   const subject = purpose === 'enroll'
     ? 'Lenskart IdP — verify Email OTP enrollment'
@@ -110,7 +111,7 @@ export async function sendEmailOtp(
     '',
     `    ${code}`,
     '',
-    'This code expires in 5 minutes. Do not share it with anyone.',
+    `This code expires in ${OTP_TTL_MINUTES} minutes. Do not share it with anyone.`,
     'If you did not request this, you can ignore this email.',
   ].join('\n');
 
@@ -127,20 +128,21 @@ export async function sendEmailOtp(
         : 'Sign-in Email OTP sent (code not stored).',
     });
   } catch (err) {
-    // Roll back stored OTP so user can retry cleanly
-    await redis.del(otpKey(empId, 'email_otp', purpose)).catch(() => 0);
-    await redis.del(sendCooldownKey(empId, 'email_otp')).catch(() => 0);
-
     const emailReady = delivery.emailTransport === 'api'
       ? Boolean(delivery.emailApi.apiUrl)
       : Boolean(delivery.smtp.host);
     if (emailReady) throw err;
     logger.warn({ empId, err }, 'Email OTP: email delivery not configured');
     if (delivery.otpDevLog || delivery.smsDevLog) {
+      await storeOtp(empId, 'email_otp', purpose, code);
+      await redis.set(sendCooldownKey(empId, 'email_otp'), '1', 'EX', OTP_SEND_COOLDOWN_S);
       return { sent: true, devCode: code };
     }
     throw new Error('Email delivery is not configured — set Email OTP delivery in Admin → MFA Methods');
   }
+
+  await storeOtp(empId, 'email_otp', purpose, code);
+  await redis.set(sendCooldownKey(empId, 'email_otp'), '1', 'EX', OTP_SEND_COOLDOWN_S);
 
   logger.info({ empId, purpose }, 'Email OTP sent');
   if (delivery.otpDevLog) {
@@ -168,11 +170,12 @@ export async function sendSmsOtp(
   if (!phone) throw new Error('No mobile number on file — update your profile or ask HR');
 
   const code = generateCode();
+
+  const body = `Lenskart IdP code: ${code}. Expires in ${OTP_TTL_MINUTES} minutes.`;
+  await dispatchSms(phone, body);
+
   await storeOtp(empId, 'sms_otp', purpose, code);
   await redis.set(sendCooldownKey(empId, 'sms_otp'), '1', 'EX', OTP_SEND_COOLDOWN_S);
-
-  const body = `Lenskart IdP code: ${code}. Expires in 5 minutes.`;
-  await dispatchSms(phone, body);
 
   const result: { sent: boolean; devCode?: string; maskedPhone?: string } = {
     sent: true,
@@ -219,6 +222,29 @@ export async function isOtpMethodEnabled(empId: string, channel: OtpChannel): Pr
  * Accept login OTPs when the channel is allowed by policy.
  * Prior enrollment is not required — first successful use records enrollment.
  */
+export async function describeOtpLoginFailure(
+  empId: string,
+  allowed: ReadonlySet<MfaMethodKey>,
+): Promise<string | null> {
+  if (allowed.has('email_otp')) {
+    const pending = await redis.get(otpKey(empId, 'email_otp', 'login'));
+    if (pending) return 'Incorrect email verification code';
+  }
+  if (allowed.has('sms_otp')) {
+    const pending = await redis.get(otpKey(empId, 'sms_otp', 'login'));
+    if (pending) return 'Incorrect SMS verification code';
+  }
+
+  const otpAllowed = allowed.has('email_otp') || allowed.has('sms_otp');
+  if (!otpAllowed) return null;
+
+  const totpAllowed = allowed.has('totp') || allowed.has('backup_codes');
+  if (totpAllowed) {
+    return `Invalid code. If you used email or SMS OTP, request a new code (valid ${OTP_TTL_MINUTES} minutes). Otherwise use your authenticator app's current code.`;
+  }
+  return `Email/SMS code expired — request a new code (valid ${OTP_TTL_MINUTES} minutes after sending)`;
+}
+
 export async function verifyAnyOtpLogin(empId: string, code: string): Promise<MfaMethodKey | null> {
   if (await isMethodAllowed('email_otp', empId)) {
     if (await verifyOtpCode(empId, 'email_otp', code, 'login')) {

@@ -231,6 +231,7 @@ Supported methods (policy-controlled via `mfa_policy.allowed_methods` + optional
 - **Remember device** — after successful MFA (or enrollment confirm), sets httpOnly cookie `idp_mfa_trust` (HMAC-signed, bound to empId + User-Agent). Configure under **Admin → MFA Methods → Remember MFA on this browser (hours)**. `0` = always prompt. Cleared on self-service MFA disable.
 - Self-service enrollment: `GET/POST /api/me/mfa/*` (TOTP, email, SMS, WebAuthn register).
 - Email/SMS delivery: configure in **Admin → MFA Methods → OTP delivery channels** (`general_settings`). Email supports **SMTP** or **HTTP API** (`POST { to, subject, body, from }`). Optional `.env` fallbacks still work if GUI fields are empty.
+- Email/SMS OTP codes: **15-minute** Redis TTL, starting **after** delivery succeeds (not when the user clicks send). Login verify returns method-specific errors (wrong email code vs expired vs authenticator).
 - Dev without SMTP/SMS: enable **Development mode** in the GUI (or `MFA_OTP_DEV_LOG` / `SMS_DEV_LOG` env).
 - WebAuthn RP: `WEBAUTHN_RP_ID` (defaults to request hostname), `WEBAUTHN_RP_NAME` (defaults to `Lenskart IdP`).
 - Login flow when MFA is **required but not yet enrolled** (unchanged grace-period path via TOTP enrollment at login).
@@ -1107,6 +1108,26 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-11 — AD agent sync: fix HTTP 500 on large inbound payload
+
+**Why** — Sync failed with `Request failed with status code 500` when the agent posted 1300+ AD users; full LDAP `*` attributes exceeded the IdP `express.json` 1 MB limit.
+
+**What changed:**
+
+- **`connectors/ad-agent`** — LDAP import fetches only sync-needed attributes; inbound POST sends slim user objects (no spread of full entry).
+- **`src/index.ts`** — `/api/internal/ad-connector` uses 32 MB JSON limit (mounted before global 1 MB parser).
+- **Agent API client** — error messages include IdP response body for easier diagnosis.
+
+### (pending) — 2026-08-10 — Email OTP: longer TTL + clearer login errors
+
+**Why** — Prod users saw “expired” MFA failures when corporate email delivery was slow; the 5-minute TTL started at send-click and the login error was generic (same as wrong TOTP).
+
+**What changed:**
+
+- **`mfa-otp.ts`** — OTP TTL **15 minutes**; store code in Redis only **after** email/SMS delivery succeeds.
+- **`mfa.ts` / `local-auth.ts`** — `verifyAnyMfaCodeDetailed` returns specific errors (wrong email/SMS code, expired OTP, vs authenticator).
+- **Login MFA UI** — email/SMS send confirmation mentions 15-minute validity.
 
 ### `63de512` — 2026-08-10 — Fix Google portal OAuth invalid_client from mixed credentials
 
