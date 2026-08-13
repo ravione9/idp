@@ -2856,6 +2856,7 @@ function openSamlWizard(app) {
     entityId:     '',
     acsUrl:       '',
     sloUrl:       '',
+    defaultRelayState: '',
     nameidFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
     iconUrl:      '',
   };
@@ -2998,6 +2999,11 @@ function openSamlWizard(app) {
               <label class="form-label">Single Logout URL <span class="muted" style="font-weight:400">(optional)</span></label>
               <input class="form-input" id="w-slo" type="url" value="${esc(d.sloUrl)}" placeholder="https://app.example.com/saml/slo">
             </div>
+            <div class="form-group span2">
+              <label class="form-label">Default redirect URL (RelayState) <span class="muted" style="font-weight:400">(optional)</span></label>
+              <input class="form-input" id="w-relay" type="url" value="${esc(d.defaultRelayState || '')}" placeholder="https://app.example.com/home">
+              <p class="muted" style="font-size:0.72rem;margin-top:0.25rem">Post-login landing page sent as SAML RelayState when users launch from the portal.</p>
+            </div>
             <div class="form-group">
               <label class="form-label">NameID Format</label>
               <select class="form-select" id="w-nid">
@@ -3058,6 +3064,7 @@ function openSamlWizard(app) {
           if (!/^[a-z0-9-]+$/.test(v('#w-slug'))) return 'Slug must use lower-case letters, digits, and hyphens only.';
           try { new URL(v('#w-acs')); } catch { return 'ACS URL must be a valid absolute URL.'; }
           if (v('#w-slo')) { try { new URL(v('#w-slo')); } catch { return 'SLO URL must be a valid absolute URL.'; } }
+          if (v('#w-relay')) { try { new URL(v('#w-relay')); } catch { return 'Redirect URL must be a valid absolute URL.'; } }
           return null;
         },
         collect: (d, body) => {
@@ -3066,6 +3073,7 @@ function openSamlWizard(app) {
           d.entityId     = body.querySelector('#w-eid').value.trim();
           d.acsUrl       = body.querySelector('#w-acs').value.trim();
           d.sloUrl       = body.querySelector('#w-slo').value.trim();
+          d.defaultRelayState = body.querySelector('#w-relay').value.trim();
           d.nameidFormat = body.querySelector('#w-nid').value;
         },
       },
@@ -3080,6 +3088,7 @@ function openSamlWizard(app) {
             <div class="kv"><div class="k">SP Entity ID</div><div class="v truncate" title="${esc(d.entityId)}">${esc(d.entityId)}</div></div>
             <div class="kv"><div class="k">ACS URL</div><div class="v truncate" title="${esc(d.acsUrl)}">${esc(d.acsUrl)}</div></div>
             ${d.sloUrl ? `<div class="kv"><div class="k">SLO URL</div><div class="v truncate" title="${esc(d.sloUrl)}">${esc(d.sloUrl)}</div></div>` : ''}
+            ${d.defaultRelayState ? `<div class="kv"><div class="k">Redirect URL</div><div class="v truncate" title="${esc(d.defaultRelayState)}">${esc(d.defaultRelayState)}</div></div>` : ''}
             <div class="kv"><div class="k">NameID Format</div><div class="v"><code>${esc((d.nameidFormat||'').split(':').pop())}</code></div></div>
           </div>
         `,
@@ -3092,6 +3101,7 @@ function openSamlWizard(app) {
         entityId:     d.entityId,
         acsUrl:       d.acsUrl,
         sloUrl:       d.sloUrl || undefined,
+        defaultRelayState: d.defaultRelayState || undefined,
         nameidFormat: d.nameidFormat,
       });
       bd.querySelector('.wizard-stepper').style.display = 'none';

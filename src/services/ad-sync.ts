@@ -9,7 +9,7 @@
  */
 
 import crypto from 'crypto';
-import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
+import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, readAdObjectGuid, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { parseCsvList } from './google-directory-config.js';
 import type { GroupSyncSummary } from './group-sync.js';
 import { query, queryOne, execute, transaction } from '../db/connection.js';
@@ -89,6 +89,28 @@ function deriveEmpIdFromAd(adUser: Record<string, unknown>): string {
   const sam = getLdapAttr(adUser, 'sAMAccountName') || 'user';
   const hash = crypto.createHash('md5').update(sam).digest('hex').slice(0, 12).toUpperCase();
   return `AD-${hash}`;
+}
+
+function readAdNameParts(
+  adUser: Record<string, unknown>,
+  fullName: string,
+  sam: string,
+): { firstName: string | null; lastName: string | null } {
+  const given = getLdapAttr(adUser, 'givenName').trim();
+  const sn = getLdapAttr(adUser, 'sn').trim();
+  if (given || sn) {
+    return {
+      firstName: given.slice(0, 100) || null,
+      lastName: sn.slice(0, 100) || null,
+    };
+  }
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { firstName: sam.slice(0, 100), lastName: null };
+  if (parts.length === 1) return { firstName: parts[0].slice(0, 100), lastName: null };
+  return {
+    firstName: parts[0].slice(0, 100),
+    lastName: parts.slice(1).join(' ').slice(0, 100),
+  };
 }
 
 /**
@@ -477,6 +499,8 @@ export async function processInboundAdUsers(
       }
 
       const fullName = cleanAdDisplayName(adUser, sam);
+      const { firstName, lastName } = readAdNameParts(adUser, fullName, sam);
+      const adObjectGuid = readAdObjectGuid(adUser);
       const uac = parseInt(getLdapAttr(adUser, 'userAccountControl') || '512', 10);
       const disabled = (uac & 0x0002) !== 0;
       const department = getLdapAttr(adUser, 'department').trim().slice(0, 50) || null;
@@ -497,10 +521,11 @@ export async function processInboundAdUsers(
         if (exists) {
           await execute(
             `UPDATE employees
-                SET full_name = ?, email_corp = ?, dept_id = ?, role = ?,
+                SET full_name = ?, first_name = ?, last_name = ?, email_corp = ?, dept_id = ?, role = ?,
+                    ad_object_guid = COALESCE(?, ad_object_guid),
                     ilg_state = 'SUSPENDED_AUTO', updated_at = UTC_TIMESTAMP()
               WHERE emp_id = ?`,
-            [fullName, email, department, title, empId],
+            [fullName, firstName, lastName, email, department, title, adObjectGuid, empId],
           );
           await upsertAdIdentityLink(empId, sam, 'DISABLED');
           linked++;
@@ -516,18 +541,20 @@ export async function processInboundAdUsers(
       if (exists) {
         await execute(
           `UPDATE employees
-              SET full_name = ?, email_corp = ?, dept_id = ?, role = ?,
+              SET full_name = ?, first_name = ?, last_name = ?, email_corp = ?, dept_id = ?, role = ?,
+                  ad_object_guid = COALESCE(?, ad_object_guid),
                   ilg_state = ?, updated_at = UTC_TIMESTAMP()
             WHERE emp_id = ?`,
-          [fullName, email, department, title, ilgState, empId],
+          [fullName, firstName, lastName, email, department, title, adObjectGuid, ilgState, empId],
         );
         linked++;
       } else {
         await execute(
           `INSERT INTO employees
-             (emp_id, full_name, email_corp, dept_id, role, ilg_state, hrms_status, hire_date, employment_type)
-           VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', UTC_DATE(), 'CORPORATE')`,
-          [empId, fullName, email, department, title, ilgState],
+             (emp_id, full_name, first_name, last_name, email_corp, dept_id, role, ad_object_guid,
+              ilg_state, hrms_status, hire_date, employment_type)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', UTC_DATE(), 'CORPORATE')`,
+          [empId, fullName, firstName, lastName, email, department, title, adObjectGuid, ilgState],
         );
         imported++;
       }

@@ -21,6 +21,7 @@ import {
   type SamlBinding,
 } from '../saml/idp.js';
 import { canReceiveSamlAssertion } from '../saml/entitlements.js';
+import { resolveSamlRelayState } from '../saml/launch-url.js';
 import {
   getEmployeeForSaml,
   getServiceProviderByEntityId,
@@ -577,7 +578,10 @@ router.get('/launch/:slug', async (req: Request, res: Response): Promise<void> =
   }
 
   try {
-    const relayState = (req.query['RelayState'] as string | undefined) ?? '';
+    const relayState = resolveSamlRelayState(
+      sp.default_relay_state,
+      req.query['RelayState'] as string | undefined,
+    );
     const html = await createIdpInitiatedLoginResponse(sp, emp, relayState);
 
     const logParams = {
