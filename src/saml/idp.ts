@@ -188,6 +188,11 @@ function buildUserInfo(emp: EmployeeSamlContext, sp: SamlServiceProviderRow): {
     if (emp.full_name) {
       attributes['displayName'] ??= emp.full_name;
     }
+    // Autodesk (and similar SPs) require firstName/lastName with no spaces in the attribute name.
+    const softFirst = emp.first_name?.trim() || emp.full_name.split(/\s+/)[0]?.trim() || '';
+    const softLast = emp.last_name?.trim() || emp.full_name.split(/\s+/).slice(1).join(' ').trim() || '';
+    if (!attributes['firstName'] && softFirst) attributes['firstName'] = softFirst;
+    if (!attributes['lastName'] && softLast) attributes['lastName'] = softLast;
   }
 
   const nameidField =

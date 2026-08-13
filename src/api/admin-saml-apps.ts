@@ -30,6 +30,7 @@ const registerSpSchema = z.object({
   entityId:        z.string().min(1).max(512),
   acsUrl:          z.string().url(),
   sloUrl:          z.string().url().optional().nullable(),
+  defaultRelayState: z.string().max(512).optional().nullable(),
   nameidFormat:    z.string().min(1).max(120).optional(),
   nameidAttribute: z.string().min(1).max(80).optional().nullable(),
   attributeMap:    attributeMapSchema,
@@ -55,6 +56,7 @@ const updateSpSchema = z.object({
   entityId:        z.string().min(1).max(512).optional(),
   acsUrl:          z.string().url().optional(),
   sloUrl:          z.string().url().optional().nullable(),
+  defaultRelayState: z.string().max(512).optional().nullable(),
   nameidFormat:    z.string().min(1).max(120).optional(),
   nameidAttribute: z.string().min(1).max(80).optional().nullable(),
   attributeMap:    attributeMapSchema,
@@ -107,6 +109,7 @@ function mapAdminRow(row: Record<string, unknown>) {
     entity_id:         row['entity_id'],
     acs_url:           row['acs_url'],
     slo_url:           row['slo_url'] ?? null,
+    default_relay_state: row['default_relay_state'] ?? null,
     nameid_format:     row['nameid_format'],
     nameid_attribute:  row['nameid_attribute'] ?? null,
     attribute_map:     parseJsonObject(row['attribute_map']),
@@ -168,7 +171,8 @@ router.post('/parse-metadata', async (req: Request, res: Response): Promise<void
 // GET / — list all registered SAML applications
 router.get('/', async (_req: Request, res: Response): Promise<void> => {
   const rows = await query<Record<string, unknown>>(
-    `SELECT sp.id, sp.name, sp.slug, sp.entity_id, sp.acs_url, sp.slo_url, sp.nameid_format,
+    `SELECT sp.id, sp.name, sp.slug, sp.entity_id, sp.acs_url, sp.slo_url, sp.default_relay_state,
+            sp.nameid_format,
             sp.nameid_attribute, sp.attribute_map, sp.sign_assertions, sp.sign_response,
             sp.merge_default_attrs, sp.active, sp.sort_order, sp.icon_url, sp.created_at,
             COALESCE(a.requestable, 0) AS app_requestable,
@@ -226,10 +230,10 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   try {
     await execute(
       `INSERT INTO saml_service_providers
-         (id, name, slug, entity_id, acs_url, slo_url, nameid_format,
+         (id, name, slug, entity_id, acs_url, slo_url, default_relay_state, nameid_format,
           attribute_map, sign_assertions, sign_response, nameid_attribute, merge_default_attrs,
           entitlement_rule, icon_url, sort_order, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         id,
         d.name,
@@ -237,6 +241,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
         d.entityId,
         d.acsUrl,
         d.sloUrl ?? null,
+        d.defaultRelayState ?? null,
         d.nameidFormat ?? 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
         attributeMapJson,
         d.signAssertions === false ? 0 : 1,
@@ -322,6 +327,7 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
          entity_id           = COALESCE(?, entity_id),
          acs_url             = COALESCE(?, acs_url),
          slo_url             = COALESCE(?, slo_url),
+         default_relay_state = COALESCE(?, default_relay_state),
          nameid_format       = COALESCE(?, nameid_format),
          nameid_attribute    = COALESCE(?, nameid_attribute),
          attribute_map       = COALESCE(?, attribute_map),
@@ -337,6 +343,7 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
         d.entityId ?? null,
         d.acsUrl   ?? null,
         d.sloUrl   !== undefined ? d.sloUrl : null,
+        d.defaultRelayState !== undefined ? d.defaultRelayState : null,
         d.nameidFormat ?? null,
         d.nameidAttribute !== undefined ? d.nameidAttribute : null,
         attributeMapJson !== undefined ? attributeMapJson : null,

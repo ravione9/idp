@@ -8,6 +8,7 @@ import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
 import { isSamlEnabled } from '../config.js';
 import { canReceiveSamlAssertion } from '../saml/entitlements.js';
+import { samlLaunchPath } from '../saml/launch-url.js';
 import { getActiveServiceProviders, getEmployeeForSaml } from '../saml/sp-registry.js';
 import {
   canUserLaunchApp,
@@ -53,7 +54,7 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
       name:         sp.name,
       slug:         sp.slug,
       iconUrl:      sp.icon_url,
-      launchUrl:    `/saml/launch/${sp.slug}`,
+      launchUrl:    samlLaunchPath(sp.slug, sp.default_relay_state),
       entityId:     sp.entity_id,
       ipRestricted,
     })),

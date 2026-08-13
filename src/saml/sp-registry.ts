@@ -32,6 +32,7 @@ function mapRow(row: Record<string, unknown>): SamlServiceProviderRow {
     entity_id:          row['entity_id'] as string,
     acs_url:            row['acs_url'] as string,
     slo_url:            (row['slo_url'] as string | null) ?? null,
+    default_relay_state: (row['default_relay_state'] as string | null) ?? null,
     nameid_format:      row['nameid_format'] as string,
     attribute_map:      parseJson<Record<string, string>>(row['attribute_map']),
     sign_assertions:    asBool(row['sign_assertions'], true),
@@ -46,7 +47,7 @@ function mapRow(row: Record<string, unknown>): SamlServiceProviderRow {
 }
 
 const SP_SELECT = `
-  SELECT id, name, slug, entity_id, acs_url, slo_url, nameid_format,
+  SELECT id, name, slug, entity_id, acs_url, slo_url, default_relay_state, nameid_format,
          attribute_map, sign_assertions, sign_response, nameid_attribute,
          merge_default_attrs, entitlement_rule, icon_url, sort_order, active
     FROM saml_service_providers`;
@@ -83,7 +84,7 @@ export async function getEmployeeForSaml(empId: string): Promise<EmployeeSamlCon
   return queryOne<EmployeeSamlContext>(
     `SELECT emp_id, employee_number, full_name, first_name, last_name, username,
             email_corp, email_personal, dept_id, role, employment_type, hrms_status, ilg_state,
-            manager_emp_id, mobile, cost_center, location, city, state, country
+            manager_emp_id, mobile, cost_center, location, city, state, country, ad_object_guid
        FROM employees WHERE emp_id = ?`,
     [empId],
   );

@@ -931,6 +931,44 @@ export function getLdapAttr(entry: Record<string, unknown>, name: string): strin
   return val != null ? String(val) : '';
 }
 
+/** Convert AD objectGUID (binary or pre-formatted string) to canonical UUID text. */
+export function formatAdObjectGuid(raw: unknown): string | null {
+  if (raw == null) return null;
+
+  if (typeof raw === 'string') {
+    const s = raw.trim().replace(/^[{\[]|[}\]]$/g, '');
+    if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(s)) {
+      return s.toUpperCase();
+    }
+    return null;
+  }
+
+  const buf = Buffer.isBuffer(raw)
+    ? raw
+    : Array.isArray(raw) && raw[0] != null && Buffer.isBuffer(raw[0])
+      ? raw[0]
+      : null;
+  if (!buf || buf.length !== 16) return null;
+
+  const reordered = Buffer.from([
+    buf[3], buf[2], buf[1], buf[0],
+    buf[5], buf[4],
+    buf[7], buf[6],
+    ...buf.subarray(8, 16),
+  ]);
+  const hex = reordered.toString('hex').toUpperCase();
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Read objectGUID from an LDAP entry (handles binary ldapts values). */
+export function readAdObjectGuid(entry: Record<string, unknown>): string | null {
+  const key = Object.keys(entry).find((k) => k.toLowerCase() === 'objectguid');
+  if (!key) return null;
+  const val = entry[key];
+  const raw = Array.isArray(val) ? val[0] : val;
+  return formatAdObjectGuid(raw);
+}
+
 /** True when a string looks like a usable Lenskart employee id (not a hash placeholder). */
 function isValidAdEmpId(value: string): boolean {
   const v = value.trim();
