@@ -130,6 +130,18 @@ function collectSamlAttrMap(bd, pfx) {
   return map;
 }
 
+function samlRedirectUrlFieldHtml(pfx, value) {
+  return `
+          <div class="form-group span2">
+            <label class="form-label">Default redirect URL (RelayState) <span class="muted" style="font-weight:400">(optional)</span></label>
+            <input class="form-input" id="${pfx}-relay" type="url" value="${esc(value || '')}"
+              placeholder="https://app.example.com/home">
+            <p class="muted" style="font-size:0.78rem;margin-top:0.35rem">
+              Sent as SAML <code>RelayState</code> when users launch from the portal. Use the post-login landing page URL your vendor provides (e.g. Autodesk deep link).
+            </p>
+          </div>`;
+}
+
 function collectSamlSpExtras(bd, pfx) {
   return {
     attributeMap: collectSamlAttrMap(bd, pfx),
@@ -668,6 +680,7 @@ export async function viewIgaApps(content, opts = {}) {
             <label class="form-label">SLO URL <span class="muted" style="font-weight:400">(optional)</span></label>
             <input class="form-input" id="csp-slo" type="url" value="${esc(sp?.slo_url||'')}" placeholder="https://app.example.com/saml/slo">
           </div>
+          ${samlRedirectUrlFieldHtml('csp', sp?.default_relay_state)}
           <div class="form-group">
             <label class="form-label">NameID Format</label>
             <select class="form-select" id="csp-nameid">
@@ -715,6 +728,7 @@ export async function viewIgaApps(content, opts = {}) {
       const entityId = bd.querySelector('#csp-entity').value.trim();
       const acsUrl   = bd.querySelector('#csp-acs').value.trim();
       const sloUrl   = bd.querySelector('#csp-slo').value.trim();
+      const defaultRelayState = bd.querySelector('#csp-relay')?.value.trim() || null;
       const nameidFormat = bd.querySelector('#csp-nameid').value;
       const iconUrl  = bd.querySelector('#csp-icon').value.trim();
       const extras = collectSamlSpExtras(bd, 'csp');
@@ -729,7 +743,7 @@ export async function viewIgaApps(content, opts = {}) {
 
       saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
       const data = { name, entityId, acsUrl, nameidFormat,
-        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined,
+        sloUrl: sloUrl || undefined, defaultRelayState, iconUrl: iconUrl || undefined,
         requireMfa: !!bd.querySelector('#csp-require-mfa')?.checked,
         ...extras };
       if (!isEdit) data.slug = slug;
@@ -1043,6 +1057,7 @@ export async function viewSamlApps(me, content, opts = {}) {
             <label class="form-label">SLO URL <span class="muted" style="font-weight:400">(optional)</span></label>
             <input class="form-input" id="sp-slo" type="url" value="${esc(sp?.slo_url||'')}" placeholder="https://app.example.com/saml/slo">
           </div>
+          ${samlRedirectUrlFieldHtml('sp', sp?.default_relay_state)}
           <div class="form-group">
             <label class="form-label">NameID Format</label>
             <select class="form-select" id="sp-nameid">
@@ -1090,6 +1105,7 @@ export async function viewSamlApps(me, content, opts = {}) {
       const entityId = bd.querySelector('#sp-entity').value.trim();
       const acsUrl   = bd.querySelector('#sp-acs').value.trim();
       const sloUrl   = bd.querySelector('#sp-slo').value.trim();
+      const defaultRelayState = bd.querySelector('#sp-relay')?.value.trim() || null;
       const nameidFormat = bd.querySelector('#sp-nameid').value;
       const iconUrl  = bd.querySelector('#sp-icon').value.trim();
       const extras = collectSamlSpExtras(bd, 'sp');
@@ -1104,7 +1120,7 @@ export async function viewSamlApps(me, content, opts = {}) {
 
       saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
       const data = { name, entityId, acsUrl, nameidFormat,
-        sloUrl: sloUrl || undefined, iconUrl: iconUrl || undefined,
+        sloUrl: sloUrl || undefined, defaultRelayState, iconUrl: iconUrl || undefined,
         requireMfa: !!bd.querySelector('#sp-require-mfa')?.checked,
         ...extras };
       if (!isEdit) data.slug = slug;

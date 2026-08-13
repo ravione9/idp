@@ -9,6 +9,8 @@ export interface SamlServiceProviderRow {
   entity_id:       string;
   acs_url:         string;
   slo_url:         string | null;
+  /** RelayState sent on IdP-initiated launch when the browser does not pass RelayState. */
+  default_relay_state: string | null;
   nameid_format:   string;
   attribute_map:   Record<string, string> | null;
   /** Sign the Assertion (default true). */
@@ -62,6 +64,8 @@ export interface EmployeeSamlContext {
   city:             string | null;
   state:            string | null;
   country:          string | null;
+  /** Active Directory objectGUID (canonical UUID) — required by Autodesk SSO. */
+  ad_object_guid:   string | null;
 }
 
 /** Employee columns that may appear as attribute_map / nameid_attribute values. */
@@ -86,6 +90,7 @@ export const SAML_MAPPABLE_FIELD_OPTIONS: ReadonlyArray<{ field: string; label: 
   { field: 'country',         label: 'Country' },
   { field: 'hrms_status',     label: 'HRMS status' },
   { field: 'ilg_state',       label: 'ILG state' },
+  { field: 'ad_object_guid',  label: 'AD objectGUID' },
 ];
 
 export const SAML_MAPPABLE_FIELD_SET = new Set(SAML_MAPPABLE_FIELD_OPTIONS.map((f) => f.field));
@@ -102,6 +107,7 @@ export const DEFAULT_ATTRIBUTE_MAP: Record<string, string> = {
   displayName: 'full_name',
   firstName:   'first_name',
   lastName:    'last_name',
+  objectGUID:  'ad_object_guid',
   department:  'dept_id',
   title:       'role',
 };

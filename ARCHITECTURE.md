@@ -326,7 +326,9 @@ Every attempt (success or failure) is logged to `auth_attempts` for forensics.
 
 **Signing** (per SP, migration `039`): `sign_assertions` / `sign_response` (default both true). Response signature uses explicit `signatureConfig` (Issuer → Signature). If both toggles are off, Assertion signing is forced. Algorithm: RSA-SHA256 (samlify default).
 
-**Attribute mapping:** Admin UI + API edit `attribute_map` (SAML attribute name → employee field). NameID **value** comes from `nameid_attribute` (default `email_corp`). When `merge_default_attrs` is true (default), `DEFAULT_ATTRIBUTE_MAP` is merged under the SP map. Mappable employee fields are listed at `GET /api/admin/saml-apps/attribute-fields`.
+**Attribute mapping:** Admin UI + API edit `attribute_map` (SAML attribute name → employee field). NameID **value** comes from `nameid_attribute` (default `email_corp`). When `merge_default_attrs` is true (default), `DEFAULT_ATTRIBUTE_MAP` is merged under the SP map — includes `firstName`, `lastName`, `email`, and `objectGUID` (from `employees.ad_object_guid`, populated by AD sync). Mappable employee fields are listed at `GET /api/admin/saml-apps/attribute-fields`.
+
+**Autodesk SSO:** Autodesk requires case-sensitive SAML attributes `firstName`, `lastName`, `email`, and `objectGUID` (plus NameID = email). Ensure AD directory sync has run so `ad_object_guid`, `first_name`, and `last_name` are populated; `merge_default_attrs` on the Autodesk SP must stay enabled (default).
 
 ### 6.2 Service Provider registry
 
@@ -338,6 +340,7 @@ Each SAML application is registered in `saml_service_providers`:
 | `entity_id` | SP's SAML EntityID |
 | `acs_url` | SP's Assertion Consumer Service URL |
 | `slo_url` | (optional) Single Logout URL |
+| `default_relay_state` | (optional) Default RelayState / post-login redirect URL for IdP-initiated launch |
 | `nameid_format` | Default: `urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress` |
 | `nameid_attribute` | Employee field used as NameID value (default `email_corp`) |
 | `attribute_map` | JSON map of SAML attribute → employee field |
@@ -1109,7 +1112,30 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-11 — AD agent sync: fix HTTP 500 on large inbound payload
+### `8656f25` — 2026-08-13 — SAML default redirect URL (RelayState) per application
+
+**Why** — Admins need to configure a post-login landing URL for SAML apps (e.g. Autodesk deep link). OIDC already has redirect URIs; SAML had no equivalent for IdP-initiated launch.
+
+**What changed:**
+
+- **Migration `063_saml_default_relay_state.sql`** — `saml_service_providers.default_relay_state`.
+- **`src/saml/launch-url.ts`** — `resolveSamlRelayState`, `samlLaunchPath`.
+- **`/saml/launch/:slug`** — uses SP default RelayState when the browser omits `?RelayState=`.
+- **`GET /api/apps`** — `launchUrl` includes configured RelayState.
+- **Admin UI** — SAML register/edit modals and integration wizard expose **Default redirect URL (RelayState)**.
+
+### `8656f25` — 2026-08-13 — Autodesk SSO: AD objectGUID + firstName/lastName in SAML assertions
+
+**Why** — Autodesk SSO requires case-sensitive SAML attributes `firstName`, `lastName`, `email`, and `objectGUID`. The IdP sent `email` but not `objectGUID`; AD sync did not populate `first_name`/`last_name` or store AD GUIDs.
+
+**What changed:**
+
+- **Migration `062_ad_object_guid.sql`** — `employees.ad_object_guid` (VARCHAR 36).
+- **`ad-sync.ts` / AD agent** — import `givenName`, `sn`, and `objectGUID` from AD; persist on employee rows.
+- **`src/saml/types.ts`** — `objectGUID` in `DEFAULT_ATTRIBUTE_MAP`; `ad_object_guid` mappable field.
+- **`src/saml/idp.ts`** — soft-fill `firstName`/`lastName` from `full_name` when directory attrs are missing.
+
+### `d592c2f` — 2026-08-11 — AD agent sync: fix HTTP 500 on large inbound payload
 
 **Why** — Sync failed with `Request failed with status code 500` when the agent posted 1300+ AD users; full LDAP `*` attributes exceeded the IdP `express.json` 1 MB limit.
 
@@ -1119,7 +1145,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/index.ts`** — `/api/internal/ad-connector` uses 32 MB JSON limit (mounted before global 1 MB parser).
 - **Agent API client** — error messages include IdP response body for easier diagnosis.
 
-### (pending) — 2026-08-10 — Email OTP: longer TTL + clearer login errors
+### `d592c2f` — 2026-08-10 — Email OTP: longer TTL + clearer login errors
 
 **Why** — Prod users saw “expired” MFA failures when corporate email delivery was slow; the 5-minute TTL started at send-click and the login error was generic (same as wrong TOTP).
 

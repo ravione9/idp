@@ -1,10 +1,15 @@
 import type { AgentConfig } from './config.js';
-import { AdLdapClient, getAttr, USER_IMPORT_ATTRS } from './ad-ldap.js';
+import { AdLdapClient, getAttr, getObjectGuidAttr, USER_IMPORT_ATTRS } from './ad-ldap.js';
 import { IdpClient, type OutboundAction, type OutboundResult } from './idp-client.js';
 
 function slimAdUser(u: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of USER_IMPORT_ATTRS) {
+    if (key.toLowerCase() === 'objectguid') {
+      const guid = getObjectGuidAttr(u);
+      if (guid) out.objectGUID = guid;
+      continue;
+    }
     const v = getAttr(u, key);
     if (v) out[key] = v;
   }

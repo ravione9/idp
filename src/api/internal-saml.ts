@@ -32,6 +32,7 @@ const registerSpSchema = z.object({
   entityId:         z.string().min(1).max(512),
   acsUrl:           z.string().url(),
   sloUrl:           z.string().url().optional(),
+  defaultRelayState: z.string().max(512).optional().nullable(),
   nameidFormat:     z.string().optional(),
   attributeMap:     z.record(z.string()).optional(),
   entitlementRule:  z.object({
@@ -60,9 +61,9 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 
   await execute(
     `INSERT INTO saml_service_providers
-       (id, name, slug, entity_id, acs_url, slo_url, nameid_format,
+       (id, name, slug, entity_id, acs_url, slo_url, default_relay_state, nameid_format,
         attribute_map, entitlement_rule, icon_url, sort_order, active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     [
       id,
       d.name,
@@ -70,6 +71,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       d.entityId,
       d.acsUrl,
       d.sloUrl ?? null,
+      d.defaultRelayState ?? null,
       d.nameidFormat ?? 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
       d.attributeMap ? JSON.stringify(d.attributeMap) : null,
       JSON.stringify(d.entitlementRule ?? { all_active: false }),

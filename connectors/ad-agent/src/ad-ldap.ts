@@ -13,10 +13,14 @@ const UAC_DISABLED_ACCOUNT = UAC_NORMAL | UAC_DISABLE;
 /** Attributes needed for IdP inbound sync (avoid posting full LDAP `*` — exceeds IdP JSON limit). */
 export const USER_IMPORT_ATTRS = [
   'dn', 'sAMAccountName', 'mail', 'userPrincipalName', 'displayName', 'cn',
-  'givenName', 'sn', 'employeeID', 'employeeNumber', 'userAccountControl',
+  'givenName', 'sn', 'objectGUID', 'employeeID', 'employeeNumber', 'userAccountControl',
   'department', 'title', 'manager', 'description', 'pager', 'initials', 'info',
   ...Array.from({ length: 15 }, (_, i) => `extensionAttribute${i + 1}`),
 ];
+
+function domainRootFromBaseDn(baseDn: string): string {
+  return baseDn.split(',').map((p) => p.trim()).filter((p) => /^DC=/i.test(p)).join(',');
+}
 
 function ldapEscape(value: string): string {
   return value.replace(/[\\*()\x00]/g, (c) => `\\${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
@@ -27,6 +31,39 @@ function getAttr(entry: Record<string, unknown>, name: string): string {
   if (v == null) return '';
   if (Array.isArray(v)) return String(v[0] ?? '');
   return String(v);
+}
+
+/** Convert AD objectGUID binary to canonical UUID (matches IdP readAdObjectGuid). */
+function formatObjectGuid(raw: unknown): string {
+  if (raw == null) return '';
+  if (typeof raw === 'string') {
+    const s = raw.trim().replace(/^[{\[]|[}\]]$/g, '');
+    if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(s)) {
+      return s.toUpperCase();
+    }
+    return '';
+  }
+  const buf = Buffer.isBuffer(raw)
+    ? raw
+    : Array.isArray(raw) && raw[0] != null && Buffer.isBuffer(raw[0])
+      ? raw[0]
+      : null;
+  if (!buf || buf.length !== 16) return '';
+  const reordered = Buffer.from([
+    buf[3], buf[2], buf[1], buf[0],
+    buf[5], buf[4],
+    buf[7], buf[6],
+    ...buf.subarray(8, 16),
+  ]);
+  const hex = reordered.toString('hex').toUpperCase();
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export function getObjectGuidAttr(entry: Record<string, unknown>): string {
+  const key = Object.keys(entry).find((k) => k.toLowerCase() === 'objectguid');
+  if (!key) return '';
+  const val = entry[key];
+  return formatObjectGuid(Array.isArray(val) ? val[0] : val);
 }
 
 function domainFromBaseDn(baseDn: string): string {
@@ -99,18 +136,39 @@ export class AdLdapClient {
 
   async listUsers(): Promise<Record<string, unknown>[]> {
     const filter = '(&(objectClass=user)(!(sAMAccountName=*$)))';
-    const bases = [this.ad.baseDn];
+    const bases: string[] = [];
+    const seen = new Set<string>();
+
+    const addBase = (dn: string) => {
+      const key = dn.replace(/\s+/g, '').toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        bases.push(dn);
+      }
+    };
+
+    addBase(this.ad.baseDn);
     if (this.ad.targetOu) {
       const ou = this.ad.targetOu.includes('=') ? this.ad.targetOu : `OU=${this.ad.targetOu}`;
-      bases.unshift(`${ou},${this.ad.baseDn}`);
+      const root = domainRootFromBaseDn(this.ad.baseDn) || this.ad.baseDn;
+      const ouDn = `${ou},${root}`;
+      // Skip when baseDn is already the OU (avoid OU=IT,OU=IT,DC=… which does not exist).
+      if (ouDn.replace(/\s+/g, '').toLowerCase() !== this.ad.baseDn.replace(/\s+/g, '').toLowerCase()) {
+        addBase(ouDn);
+      }
     }
+
     for (const base of bases) {
-      const entries = await this.search(base, filter, USER_IMPORT_ATTRS);
-      const users = entries.filter((e) => {
-        const sam = getAttr(e, 'sAMAccountName');
-        return sam && !sam.endsWith('$');
-      });
-      if (users.length) return users;
+      try {
+        const entries = await this.search(base, filter, USER_IMPORT_ATTRS);
+        const users = entries.filter((e) => {
+          const sam = getAttr(e, 'sAMAccountName');
+          return sam && !sam.endsWith('$');
+        });
+        if (users.length) return users;
+      } catch {
+        // Try next search base (e.g. invalid OU=IT,OU=IT,DC=… combination).
+      }
     }
     return [];
   }
