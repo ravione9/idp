@@ -1116,7 +1116,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `(pending)` — 2026-08-13 — SAML default redirect URL (RelayState) per application
+### `8656f25` — 2026-08-13 — SAML default redirect URL (RelayState) per application
 
 **Why** — Admins need to configure a post-login landing URL for SAML apps (e.g. Autodesk deep link). OIDC already has redirect URIs; SAML had no equivalent for IdP-initiated launch.
 
@@ -1128,7 +1128,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`GET /api/apps`** — `launchUrl` includes configured RelayState.
 - **Admin UI** — SAML register/edit modals and integration wizard expose **Default redirect URL (RelayState)**.
 
-### `(pending)` — 2026-08-13 — Autodesk SSO: AD objectGUID + firstName/lastName in SAML assertions
+### `8656f25` — 2026-08-13 — Autodesk SSO: AD objectGUID + firstName/lastName in SAML assertions
 
 **Why** — Autodesk SSO requires case-sensitive SAML attributes `firstName`, `lastName`, `email`, and `objectGUID`. The IdP sent `email` but not `objectGUID`; AD sync did not populate `first_name`/`last_name` or store AD GUIDs.
 
