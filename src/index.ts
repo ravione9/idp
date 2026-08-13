@@ -3,6 +3,7 @@
  * API Server Entry Point
  */
 
+import './tracing.js';
 import path from 'path';
 import https from 'node:https';
 import express, { Request, Response, NextFunction } from 'express';
@@ -445,6 +446,8 @@ async function main(): Promise<void> {
       logger.info('HTTP server closed');
       await sessionRedis.quit();
       await closePool();
+      const { shutdownTracing } = await import('./tracing.js');
+      await shutdownTracing();
       logger.info('Shutdown complete');
       process.exit(0);
     });

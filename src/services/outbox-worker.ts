@@ -10,6 +10,7 @@
  *   - Graceful shutdown on SIGTERM / SIGINT
  */
 
+import '../tracing.js';
 import { Redis } from 'ioredis';
 import { query, pool } from '../db/connection.js';
 import { config } from '../config.js';
@@ -338,6 +339,8 @@ if (isWorkerMain) {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Outbox worker received shutdown signal');
     await stop();
+    const { shutdownTracing } = await import('../tracing.js');
+    await shutdownTracing();
     process.exit(0);
   };
 
