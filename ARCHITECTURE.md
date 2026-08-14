@@ -416,7 +416,7 @@ Add more apps via **Admin Central → SAML Applications → Register new SAML ap
 - **Advisory lock:** concurrent boot/Job callers serialize; losers wait, then see an up-to-date tracking table and skip.
 - Tracking: `lilg_schema_migrations(name, checksum, applied_at, duration_ms)`.
 - Each file is executed as a single multi-statement batch (the runner opens a connection with `multipleStatements: true`).
-- Compatibility fallback: if MySQL rejects `ADD COLUMN IF NOT EXISTS` with `ER_PARSE_ERROR`, the runner retries that migration statement-by-statement and emulates `IF NOT EXISTS` via `information_schema.COLUMNS` checks before each `ALTER TABLE ... ADD COLUMN`.
+- Compatibility fallback: migrations that contain `ADD COLUMN IF NOT EXISTS` or `CREATE INDEX IF NOT EXISTS` are applied statement-by-statement up front (no failed batch first). The runner emulates `IF NOT EXISTS` via `information_schema` checks before each DDL statement. Other migration files still run as a single batch.
 - Files are applied in lexicographic order; already-applied files are skipped.
 - A checksum mismatch (file was edited after apply) logs a warning but does **not** fail startup.
 - A failed migration aborts startup (`process.exit(1)`) when migrations run on boot; the CLI exits `1` for Job failure.
@@ -1111,6 +1111,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-14 — Harden boot migrations for legacy MySQL (062/063 + preemptive compat)
+
+**Why** — API pods still crash-looped when the running image predated the 062 fix, or when the next migration (`063`) hit the same `IF NOT EXISTS` parse error on production MySQL.
+
+**What changed:**
+
+- **`migrations/062_ad_object_guid.sql`** — idempotent `information_schema` checks; column add without `AFTER last_name` (safer when column order differs).
+- **`migrations/063_saml_default_relay_state.sql`** — same idempotent pattern (replaces `ADD COLUMN IF NOT EXISTS`).
+- **`src/db/migrate.ts`** — migrations containing `IF NOT EXISTS` DDL run through compat mode **up front** (no failed batch attempt first); `CREATE INDEX IF NOT EXISTS` still handled statement-by-statement.
 
 ### (pending) — 2026-08-14 — Fix migration 062 on MySQL without CREATE INDEX IF NOT EXISTS
 

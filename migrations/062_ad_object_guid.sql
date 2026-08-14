@@ -8,7 +8,7 @@ SET @needs_ad_object_guid := (
     AND column_name = 'ad_object_guid'
 );
 SET @sql := IF(@needs_ad_object_guid = 0,
-  'ALTER TABLE employees ADD COLUMN ad_object_guid VARCHAR(36) NULL AFTER last_name',
+  'ALTER TABLE employees ADD COLUMN ad_object_guid VARCHAR(36) NULL',
   'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 

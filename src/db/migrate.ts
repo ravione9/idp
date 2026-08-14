@@ -8,9 +8,9 @@
  * as a single multi-statement batch by default.
  *
  * Compatibility note:
- * If a migration fails with ER_PARSE_ERROR for `ADD COLUMN IF NOT EXISTS` or
- * `CREATE INDEX IF NOT EXISTS` (seen on older MySQL variants), we retry that file
- * statement-by-statement with information_schema pre-checks.
+ * Migrations that use `ADD COLUMN IF NOT EXISTS` or `CREATE INDEX IF NOT EXISTS`
+ * (unsupported on some MySQL builds) are applied statement-by-statement with
+ * information_schema pre-checks. Other files run as a single batch first.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -98,16 +98,20 @@ function stripSqlLineComments(statement: string): string {
     .trim();
 }
 
+function migrationUsesIfNotExistsDdl(sql: string): boolean {
+  return (
+    /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i.test(sql)
+    || /CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS/i.test(sql)
+  );
+}
+
 function isUnsupportedIfNotExistsParseError(err: unknown, sql: string): boolean {
   const code = (err as NodeJS.ErrnoException & { code?: string })?.code ?? '';
   const message = (err as Error)?.message ?? '';
   return (
     code === 'ER_PARSE_ERROR'
     && /IF\s+NOT\s+EXISTS/i.test(message)
-    && (
-      /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i.test(sql)
-      || /CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS/i.test(sql)
-    )
+    && migrationUsesIfNotExistsDdl(sql)
   );
 }
 
@@ -190,20 +194,7 @@ async function applyCreateIndexCompatStatement(conn: mysql.Connection, statement
   return true;
 }
 
-async function applyMigrationSql(conn: mysql.Connection, migration: MigrationFile): Promise<void> {
-  try {
-    await conn.query(migration.sql);
-    return;
-  } catch (err) {
-    if (!isUnsupportedIfNotExistsParseError(err, migration.sql)) {
-      throw err;
-    }
-    logger.warn(
-      { name: migration.name },
-      'Retrying migration with compatibility mode for IF NOT EXISTS DDL',
-    );
-  }
-
+async function applyMigrationStatements(conn: mysql.Connection, migration: MigrationFile): Promise<void> {
   const statements = splitSqlStatements(migration.sql);
   for (const raw of statements) {
     const statement = stripSqlLineComments(raw);
@@ -213,6 +204,30 @@ async function applyMigrationSql(conn: mysql.Connection, migration: MigrationFil
     if (await applyCreateIndexCompatStatement(conn, statement)) continue;
 
     await conn.query(statement);
+  }
+}
+
+async function applyMigrationSql(conn: mysql.Connection, migration: MigrationFile): Promise<void> {
+  if (migrationUsesIfNotExistsDdl(migration.sql)) {
+    logger.info(
+      { name: migration.name },
+      'Applying migration with IF NOT EXISTS compatibility mode',
+    );
+    await applyMigrationStatements(conn, migration);
+    return;
+  }
+
+  try {
+    await conn.query(migration.sql);
+  } catch (err) {
+    if (!isUnsupportedIfNotExistsParseError(err, migration.sql)) {
+      throw err;
+    }
+    logger.warn(
+      { name: migration.name },
+      'Retrying migration with compatibility mode for IF NOT EXISTS DDL',
+    );
+    await applyMigrationStatements(conn, migration);
   }
 }
 
