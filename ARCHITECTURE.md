@@ -1112,6 +1112,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-14 — Fix migration 062 on MySQL without CREATE INDEX IF NOT EXISTS
+
+**Why** — API pods crash-looped on boot: `062_ad_object_guid.sql` used `CREATE INDEX IF NOT EXISTS`, which the production MySQL version rejects (ER_PARSE_ERROR).
+
+**What changed:**
+
+- **`migrations/062_ad_object_guid.sql`** — idempotent `information_schema` checks (same pattern as `014_*`).
+- **`src/db/migrate.ts`** — compatibility retry also handles `CREATE INDEX IF NOT EXISTS` on older MySQL.
+
 ### `8656f25` — 2026-08-13 — SAML default redirect URL (RelayState) per application
 
 **Why** — Admins need to configure a post-login landing URL for SAML apps (e.g. Autodesk deep link). OIDC already has redirect URIs; SAML had no equivalent for IdP-initiated launch.

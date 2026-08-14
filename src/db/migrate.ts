@@ -8,9 +8,9 @@
  * as a single multi-statement batch by default.
  *
  * Compatibility note:
- * If a migration fails with ER_PARSE_ERROR for `ADD COLUMN IF NOT EXISTS`
- * (seen on older MySQL variants), we retry that file statement-by-statement
- * with an information_schema pre-check for each ADD COLUMN clause.
+ * If a migration fails with ER_PARSE_ERROR for `ADD COLUMN IF NOT EXISTS` or
+ * `CREATE INDEX IF NOT EXISTS` (seen on older MySQL variants), we retry that file
+ * statement-by-statement with information_schema pre-checks.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -98,13 +98,16 @@ function stripSqlLineComments(statement: string): string {
     .trim();
 }
 
-function isAddColumnIfNotExistsParseError(err: unknown, sql: string): boolean {
+function isUnsupportedIfNotExistsParseError(err: unknown, sql: string): boolean {
   const code = (err as NodeJS.ErrnoException & { code?: string })?.code ?? '';
   const message = (err as Error)?.message ?? '';
   return (
     code === 'ER_PARSE_ERROR'
-    && /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i.test(sql)
     && /IF\s+NOT\s+EXISTS/i.test(message)
+    && (
+      /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i.test(sql)
+      || /CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS/i.test(sql)
+    )
   );
 }
 
@@ -156,17 +159,48 @@ async function applyAddColumnCompatStatement(conn: mysql.Connection, statement: 
   return true;
 }
 
+async function applyCreateIndexCompatStatement(conn: mysql.Connection, statement: string): Promise<boolean> {
+  const normalized = stripSqlLineComments(statement);
+  if (!normalized) return true;
+
+  const m = normalized.match(
+    /^CREATE\s+(UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+`?([A-Za-z0-9_]+)`?\s+ON\s+`?([A-Za-z0-9_]+)`?\s*\(([\s\S]+)\)$/i,
+  );
+  if (!m?.[2] || !m[3] || !m[4]) return false;
+
+  const unique = Boolean(m[1]);
+  const indexName = m[2].trim();
+  const tableName = m[3].trim();
+  const columns = m[4].trim();
+
+  const [rows] = await conn.query<mysql.RowDataPacket[]>(
+    `SELECT COUNT(*) AS c
+       FROM information_schema.statistics
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?
+        AND INDEX_NAME = ?`,
+    [tableName, indexName],
+  );
+  if (Number(rows[0]?.['c'] ?? 0) > 0) return true;
+
+  const kind = unique ? 'UNIQUE INDEX' : 'INDEX';
+  await conn.query(
+    `CREATE ${kind} ${quoteIdent(indexName)} ON ${quoteIdent(tableName)} (${columns})`,
+  );
+  return true;
+}
+
 async function applyMigrationSql(conn: mysql.Connection, migration: MigrationFile): Promise<void> {
   try {
     await conn.query(migration.sql);
     return;
   } catch (err) {
-    if (!isAddColumnIfNotExistsParseError(err, migration.sql)) {
+    if (!isUnsupportedIfNotExistsParseError(err, migration.sql)) {
       throw err;
     }
     logger.warn(
       { name: migration.name },
-      'Retrying migration with compatibility mode for ADD COLUMN IF NOT EXISTS',
+      'Retrying migration with compatibility mode for IF NOT EXISTS DDL',
     );
   }
 
@@ -175,10 +209,10 @@ async function applyMigrationSql(conn: mysql.Connection, migration: MigrationFil
     const statement = stripSqlLineComments(raw);
     if (!statement) continue;
 
-    const handled = await applyAddColumnCompatStatement(conn, statement);
-    if (!handled) {
-      await conn.query(statement);
-    }
+    if (await applyAddColumnCompatStatement(conn, statement)) continue;
+    if (await applyCreateIndexCompatStatement(conn, statement)) continue;
+
+    await conn.query(statement);
   }
 }
 
