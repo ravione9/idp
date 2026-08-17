@@ -417,6 +417,7 @@ Add more apps via **Admin Central → SAML Applications → Register new SAML ap
 - Tracking: `lilg_schema_migrations(name, checksum, applied_at, duration_ms)`.
 - Each file is executed as a single multi-statement batch (the runner opens a connection with `multipleStatements: true`).
 - Compatibility fallback: migrations that contain `ADD COLUMN IF NOT EXISTS` or `CREATE INDEX IF NOT EXISTS` are applied statement-by-statement up front (no failed batch first). The runner emulates `IF NOT EXISTS` via `information_schema` checks before each DDL statement. Other migration files still run as a single batch.
+- Checksum mismatch: if a migration file changes after apply but uses `information_schema` idempotent DDL, the runner **re-applies** it and updates the tracking row (safe no-op when schema is already correct).
 - Files are applied in lexicographic order; already-applied files are skipped.
 - A checksum mismatch (file was edited after apply) logs a warning but does **not** fail startup.
 - A failed migration aborts startup (`process.exit(1)`) when migrations run on boot; the CLI exits `1` for Job failure.
@@ -1111,6 +1112,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-17 — Repair missing saml_service_providers.default_relay_state column
+
+**Why** — K8s API pods started but `/api/apps` crashed: code expects `default_relay_state` but migration 063 never created the column (skipped checksum row, or image/code mismatch).
+
+**What changed:**
+
+- **`migrations/064_saml_default_relay_state_repair.sql`** — idempotent add of `default_relay_state` when missing.
+- **`src/db/migrate.ts`** — on checksum mismatch, re-apply migrations that use `information_schema` idempotent DDL instead of skipping.
 
 ### (pending) — 2026-08-14 — Harden boot migrations for legacy MySQL (062/063 + preemptive compat)
 

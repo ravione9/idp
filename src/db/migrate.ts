@@ -105,6 +105,10 @@ function migrationUsesIfNotExistsDdl(sql: string): boolean {
   );
 }
 
+function isIdempotentMigration(sql: string): boolean {
+  return /information_schema\.(?:columns|statistics|COLUMNS|STATISTICS)/i.test(sql);
+}
+
 function isUnsupportedIfNotExistsParseError(err: unknown, sql: string): boolean {
   const code = (err as NodeJS.ErrnoException & { code?: string })?.code ?? '';
   const message = (err as Error)?.message ?? '';
@@ -347,43 +351,61 @@ export async function runMigrations(): Promise<void> {
 
     let appliedCount = 0;
     let skippedCount = 0;
+    let repairedCount = 0;
     for (const m of migrations) {
       const existingChecksum = applied.get(m.name);
       if (existingChecksum !== undefined) {
-        skippedCount++;
-        if (existingChecksum !== m.checksum) {
-          logger.warn({ name: m.name }, 'Migration file changed after apply (checksum mismatch); skipping');
-        } else {
+        if (existingChecksum === m.checksum) {
+          skippedCount++;
           logger.debug({ name: m.name }, 'Migration already applied — skipping');
+          continue;
         }
-        continue;
+        if (!isIdempotentMigration(m.sql)) {
+          skippedCount++;
+          logger.warn({ name: m.name }, 'Migration file changed after apply (checksum mismatch); skipping');
+          continue;
+        }
+        logger.warn(
+          { name: m.name },
+          'Migration file changed after apply — re-applying idempotent migration',
+        );
       }
 
       const start = Date.now();
-      logger.info({ name: m.name }, 'Applying migration');
+      logger.info({ name: m.name }, existingChecksum === undefined ? 'Applying migration' : 'Re-applying migration');
       try {
         await applyMigrationSql(conn, m);
         const duration = Date.now() - start;
-        await conn.query(
-          `INSERT INTO ${MIGRATIONS_TABLE} (name, checksum, duration_ms) VALUES (?, ?, ?)`,
-          [m.name, m.checksum, duration],
-        );
+        if (existingChecksum === undefined) {
+          await conn.query(
+            `INSERT INTO ${MIGRATIONS_TABLE} (name, checksum, duration_ms) VALUES (?, ?, ?)`,
+            [m.name, m.checksum, duration],
+          );
+          appliedCount++;
+        } else {
+          await conn.query(
+            `UPDATE ${MIGRATIONS_TABLE}
+                SET checksum = ?, duration_ms = ?, applied_at = CURRENT_TIMESTAMP
+              WHERE name = ?`,
+            [m.checksum, duration, m.name],
+          );
+          repairedCount++;
+        }
         logger.info({ name: m.name, durationMs: duration }, 'Migration applied');
-        appliedCount++;
       } catch (err) {
         logger.error({ name: m.name, err }, 'Migration failed — aborting startup');
         throw err;
       }
     }
 
-    if (appliedCount === 0) {
+    if (appliedCount === 0 && repairedCount === 0) {
       logger.info(
         { total: migrations.length, skipped: skippedCount },
         'Schema is up to date — all migrations already applied',
       );
     } else {
       logger.info(
-        { applied: appliedCount, skipped: skippedCount, total: migrations.length },
+        { applied: appliedCount, repaired: repairedCount, skipped: skippedCount, total: migrations.length },
         'Migrations applied (already-applied files were skipped)',
       );
     }
