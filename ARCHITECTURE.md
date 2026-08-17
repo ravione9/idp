@@ -411,7 +411,7 @@ Add more apps via **Admin Central → SAML Applications → Register new SAML ap
 
 - Folder: `migrations/NNN_name.sql`
 - Runner: `src/db/migrate.ts` (`runMigrations()`).
-- **Boot (default):** `src/index.ts` calls `maybeRunBootMigrations()` before listening — applies **pending** migrations only. Files already recorded in `lilg_schema_migrations` are **skipped**.
+- **Boot (default):** `src/index.ts` calls `maybeRunBootMigrations()` before listening — applies **pending** migrations only. Files already recorded in `lilg_schema_migrations` are **skipped**. Then **`repairSchemaDrift()`** runs always (even when `SKIP_MIGRATIONS_ON_BOOT=true`) to heal known column drift.
 - **K8s / Multiverse:** default `SKIP_MIGRATIONS_ON_BOOT=false` so API pods migrate on boot. Safe with multiple replicas via MySQL `GET_LOCK('lilg_migrations', 120)`. Optional Helm Job (`charts/lilg` `migrations.job: true`) can own schema exclusively when set; then pods get `SKIP_MIGRATIONS_ON_BOOT=true` and the Job runs `node dist/db/migrate-cli.js`.
 - **Advisory lock:** concurrent boot/Job callers serialize; losers wait, then see an up-to-date tracking table and skip.
 - Tracking: `lilg_schema_migrations(name, checksum, applied_at, duration_ms)`.
@@ -1113,6 +1113,21 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-17 — Boot-time schema repair for migration tracking drift
+
+**Why** — `default_relay_state` still missing at runtime when migration 063 was recorded without DDL, or when `SKIP_MIGRATIONS_ON_BOOT=true` skips the migrate runner entirely.
+
+**What changed:**
+
+- **`src/db/schema-repair.ts`** — after migrations (always, including skip mode), idempotently adds `saml_service_providers.default_relay_state` when absent.
+- **`src/db/migrate-boot.ts`** — calls `repairSchemaDrift()` on every API boot.
+
+### (pending) — 2026-08-17 — Heal schema drift for idempotent migrations on boot
+
+**Why** — `default_relay_state` still missing at runtime: migration 063 was recorded in `lilg_schema_migrations` but the column was never created; the runner skipped 063 on checksum match.
+
+**What changed:** **`src/db/migrate.ts`** — already-applied idempotent (`information_schema`) migrations are re-run on every boot (safe no-op when schema is correct).
 
 ### (pending) — 2026-08-17 — Fix Docker build: Alpine python3 apk pin
 
