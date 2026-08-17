@@ -1113,6 +1113,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-17 — Fix Docker build: Alpine python3 apk pin
+
+**Why** — GitLab `build-prod` failed: Alpine 3.22 moved `python3` to `3.12.14-r0`; Dockerfile still pinned `3.12.13-r0`.
+
+**What changed:** **`Dockerfile`** — bump builder-stage `python3` apk pin to `3.12.14-r0`.
+
 ### (pending) — 2026-08-17 — Repair missing saml_service_providers.default_relay_state column
 
 **Why** — K8s API pods started but `/api/apps` crashed: code expects `default_relay_state` but migration 063 never created the column (skipped checksum row, or image/code mismatch).

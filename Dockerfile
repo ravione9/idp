@@ -13,7 +13,7 @@ WORKDIR /app
 # Pin apk package versions (Checkmarx / supply-chain).
 COPY package*.json ./
 RUN apk add --no-cache \
-      python3=3.12.13-r0 \
+      python3=3.12.14-r0 \
       make=4.4.1-r3 \
       g++=14.2.0-r6 \
     && npm ci
