@@ -5,13 +5,15 @@
  * when an external Job owns schema exclusively.
  */
 import { runMigrations } from './migrate.js';
+import { repairSchemaDrift } from './schema-repair.js';
 import logger from '../utils/logger.js';
 
 export async function maybeRunBootMigrations(skipMigrationsOnBoot: boolean): Promise<void> {
   if (skipMigrationsOnBoot) {
     logger.info('SKIP_MIGRATIONS_ON_BOOT=true — migrations handled externally (K8s Job)');
-    return;
+  } else {
+    logger.info('Running database migrations on boot (skipping already-applied)');
+    await runMigrations();
   }
-  logger.info('Running database migrations on boot (skipping already-applied)');
-  await runMigrations();
+  await repairSchemaDrift();
 }
