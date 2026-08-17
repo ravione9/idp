@@ -418,6 +418,7 @@ Add more apps via **Admin Central → SAML Applications → Register new SAML ap
 - Each file is executed as a single multi-statement batch (the runner opens a connection with `multipleStatements: true`).
 - Compatibility fallback: migrations that contain `ADD COLUMN IF NOT EXISTS` or `CREATE INDEX IF NOT EXISTS` are applied statement-by-statement up front (no failed batch first). The runner emulates `IF NOT EXISTS` via `information_schema` checks before each DDL statement. Other migration files still run as a single batch.
 - Checksum mismatch: if a migration file changes after apply but uses `information_schema` idempotent DDL, the runner **re-applies** it and updates the tracking row (safe no-op when schema is already correct).
+- Schema drift heal: on every boot, already-applied idempotent migrations are **re-run** (no-op when DDL is present; adds missing columns/indexes when a tracking row exists without matching schema).
 - Files are applied in lexicographic order; already-applied files are skipped.
 - A checksum mismatch (file was edited after apply) logs a warning but does **not** fail startup.
 - A failed migration aborts startup (`process.exit(1)`) when migrations run on boot; the CLI exits `1` for Job failure.

@@ -356,6 +356,15 @@ export async function runMigrations(): Promise<void> {
       const existingChecksum = applied.get(m.name);
       if (existingChecksum !== undefined) {
         if (existingChecksum === m.checksum) {
+          if (isIdempotentMigration(m.sql)) {
+            logger.info({ name: m.name }, 'Verifying idempotent migration (schema drift heal)');
+            try {
+              await applyMigrationSql(conn, m);
+            } catch (err) {
+              logger.error({ name: m.name, err }, 'Migration drift heal failed — aborting startup');
+              throw err;
+            }
+          }
           skippedCount++;
           logger.debug({ name: m.name }, 'Migration already applied — skipping');
           continue;
