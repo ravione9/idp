@@ -114,3 +114,61 @@ export function describeAdSyncScope(scope: AdSyncScope, userCount: number): stri
   if (scope.users.length) parts.push(`${scope.users.length} named user(s)`);
   return `Sync scope: ${parts.join(', ')} — ${userCount} user(s) matched`;
 }
+
+/** LDAP filter for inbound person accounts (excludes computers and built-in system users). */
+export function inboundAdUserLdapFilter(): string {
+  return [
+    '(&(objectCategory=person)(objectClass=user)',
+    '(!(sAMAccountName=*$))',
+    '(!(sAMAccountName=krbtgt))',
+    '(!(sAMAccountName=Guest))',
+    '(!(isCriticalSystemObject=TRUE))',
+    ')',
+  ].join('');
+}
+
+const BUILTIN_SAM_BLOCKLIST = new Set([
+  'krbtgt', 'guest', 'administrator', 'defaultaccount',
+  'wdagutilityaccount', 'healthmailbox',
+]);
+
+/** Drop built-in / service-style rows that slip through the LDAP filter. */
+export function isImportableAdDirectoryUser(user: Record<string, unknown>): boolean {
+  const sam = ldapAttr(user, 'sAMAccountName').trim().toLowerCase();
+  if (!sam || sam.endsWith('$')) return false;
+  if (BUILTIN_SAM_BLOCKLIST.has(sam)) return false;
+  if (sam.startsWith('sm_')) return false;
+
+  const critical = ldapAttr(user, 'isCriticalSystemObject').toUpperCase();
+  if (critical === 'TRUE') return false;
+
+  const mail = (ldapAttr(user, 'mail') || ldapAttr(user, 'userPrincipalName')).trim();
+  const empId = ldapAttr(user, 'employeeID').trim();
+  if (!mail && !empId) return false;
+
+  return true;
+}
+
+/** Outbound provision: skip auto-create for Google-only employees or when OU scope is inbound-only. */
+export function employeeEligibleForAdProvision(
+  emailCorp: string,
+  scope: AdSyncScope,
+  hasGoogleLink: boolean,
+): boolean {
+  const email = emailCorp.trim().toLowerCase();
+  if (!email) return false;
+
+  if (scope.users.length > 0) {
+    return scope.users.includes(email);
+  }
+
+  if (scope.orgUnits.length > 0) {
+    // OU scope is inbound-only — never create AD accounts for the whole IdP catalog.
+    return false;
+  }
+
+  // Full-directory inbound scope: still skip employees that only exist via Google sync.
+  if (hasGoogleLink) return false;
+
+  return true;
+}

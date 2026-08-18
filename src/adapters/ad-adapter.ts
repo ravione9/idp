@@ -6,6 +6,8 @@ import type { AdSyncScope } from '../services/ad-directory-config.js';
 import {
   dedupeAdDirectoryUsers,
   filterAdUsersByScope,
+  inboundAdUserLdapFilter,
+  isImportableAdDirectoryUser,
   resolveAdSearchBases,
 } from '../services/ad-directory-config.js';
 
@@ -189,6 +191,40 @@ export class ADAdapter extends BaseAdapter {
   // ---------------------------------------------------------------------------
   // Search helper with auto-reconnect
   // ---------------------------------------------------------------------------
+  private async searchAtPaged(
+    baseDn: string,
+    filter: string,
+    attributes: string[],
+    scope: 'sub' | 'one' = 'sub',
+  ): Promise<ADUser[]> {
+    await this.ensureConnected();
+    const entries: ADUser[] = [];
+    const pageSize = 900;
+
+    const runPaged = async () => {
+      entries.length = 0;
+      for await (const result of this.client.searchPaginated(baseDn, {
+        scope,
+        filter,
+        attributes,
+        paged: { pageSize },
+      })) {
+        entries.push(...(result.searchEntries as unknown as ADUser[]));
+      }
+    };
+
+    try {
+      await runPaged();
+      return entries;
+    } catch (err) {
+      this.connected = false;
+      this.client = this.createClient();
+      await this.connect();
+      await runPaged();
+      return entries;
+    }
+  }
+
   private async searchAt(
     baseDn: string,
     filter: string,
@@ -228,7 +264,7 @@ export class ADAdapter extends BaseAdapter {
     return this.safe(async () => {
       const syncScope = scope ?? { orgUnits: [], users: [], includeSubOrgUnits: true };
       const attrs = ['*'];
-      const filter = '(&(objectClass=user)(!(sAMAccountName=*$)))';
+      const filter = inboundAdUserLdapFilter();
       const ldapScope = syncScope.includeSubOrgUnits ? 'sub' : 'one';
       const bases = resolveAdSearchBases(syncScope, this.dir);
 
@@ -238,17 +274,14 @@ export class ADAdapter extends BaseAdapter {
 
       const merged: ADUser[] = [];
       for (const base of bases) {
-        const batch = await this.searchAt(base, filter, attrs, ldapScope);
+        const batch = await this.searchAtPaged(base, filter, attrs, ldapScope);
         logger.info({ base, rawCount: batch.length, ldapScope }, 'AD listDirectoryUsers: LDAP search');
         merged.push(...batch);
       }
 
       const deduped = dedupeAdDirectoryUsers(merged);
       const users = filterAdUsersByScope(
-        deduped.filter((e) => {
-          const sam = getLdapAttr(e, 'sAMAccountName');
-          return sam.length > 0 && !sam.endsWith('$');
-        }),
+        deduped.filter(isImportableAdDirectoryUser),
         syncScope,
       );
 

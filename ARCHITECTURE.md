@@ -1114,6 +1114,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### `b916236` — 2026-08-18 — AD sync: LDAP pagination and outbound provision guard
+
+**Why** — Inbound sync returned at most 1000 AD users (server `MaxPageSize`); bidirectional runs marked PARTIAL because outbound tried to provision AD accounts for Google-only IdP employees (~2700 failures).
+
+**What changed:**
+
+- **`src/adapters/ad-adapter.ts`**, **`connectors/ad-agent/src/ad-ldap.ts`** — paged LDAP search (900/page); filter built-in/system accounts (`krbtgt`, Guest, critical system objects).
+- **`src/services/ad-directory-config.ts`** — `inboundAdUserLdapFilter`, `isImportableAdDirectoryUser`, `employeeEligibleForAdProvision`.
+- **`src/services/ad-sync.ts`**, **on-prem agent** — skip auto-provision for Google-only employees (still link existing AD accounts); clearer inbound/outbound run summary; agent `allowCreate` flag on outbound plan.
+
 ### (pending) — 2026-08-18 — AD multi-OU sync and all-user directory import
 
 **Why** — AD connectors only searched a single base (often the provision OU first), so operators could not sync multiple OUs or the full domain from the Directory Sync UI.

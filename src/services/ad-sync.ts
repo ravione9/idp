@@ -11,7 +11,7 @@
 import crypto from 'crypto';
 import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, readAdObjectGuid, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { parseCsvList } from './google-directory-config.js';
-import { resolveAdSyncScope } from './ad-directory-config.js';
+import { resolveAdSyncScope, employeeEligibleForAdProvision } from './ad-directory-config.js';
 import type { GroupSyncSummary } from './group-sync.js';
 import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
@@ -381,6 +381,8 @@ export interface AdOutboundAction {
   suggestedSam?: string | undefined;
   provisionOuRdn?: string | undefined;
   upnDomain?: string | undefined;
+  /** When false, only link an existing AD account — do not create a new one. */
+  allowCreate?: boolean | undefined;
 }
 
 export interface AdOutboundResult {
@@ -837,6 +839,9 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const errors: string[] = [];
   let inboundSummary = '';
   let outboundProcessed = 0;
+  let outboundSkipped = 0;
+  let outboundFailed = 0;
+  const syncScope = resolveAdSyncScope(cfg);
 
   try {
     await adapter.connect();
@@ -869,6 +874,14 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     }
 
     if (runOutbound) {
+    const googleLinked = new Set(
+      (await query<{ emp_id: string }>(
+        `SELECT emp_id FROM identity_links
+          WHERE \`system\` = 'GOOGLE' AND status NOT IN ('DELETED')`,
+        [],
+      )).map((r) => r.emp_id),
+    );
+
     // Fetch all employees
     const employees = await query<EmployeeRow>(
       `SELECT emp_id, full_name, email_corp, dept_id, role, ilg_state
@@ -896,7 +909,11 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
             WHERE emp_id = ? AND \`system\` = 'AD' AND status NOT IN ('DELETED')`,
           [emp.emp_id],
         );
-        if (!link) return true;
+        if (link) continue;
+        if (!employeeEligibleForAdProvision(emp.email_corp, syncScope, googleLinked.has(emp.emp_id))) {
+          continue;
+        }
+        return true;
       }
       return false;
     })();
@@ -961,6 +978,13 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
             await upsertAdIdentityLink(emp.emp_id, existingSam, 'ACTIVE');
             logger.info({ empId: emp.emp_id, existingSam }, 'AD sync: existing AD user reconciled and linked');
             itemsSucceeded++;
+          } else if (!employeeEligibleForAdProvision(emp.email_corp, syncScope, googleLinked.has(emp.emp_id))) {
+            outboundSkipped++;
+            itemsSucceeded++;
+            logger.debug(
+              { empId: emp.emp_id, email: emp.email_corp },
+              'AD sync: skipped outbound provision (Google-only or out of sync scope)',
+            );
           } else {
             // No AD account found — provision a new one
             const sAMAccountName = generateSamAccountName(emp.full_name);
@@ -1018,6 +1042,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
         }
       } catch (err) {
         itemsFailed++;
+        outboundFailed++;
         const msg = `${emp.emp_id}: ${err instanceof Error ? err.message : String(err)}`;
         errors.push(msg);
         logger.error({ empId: emp.emp_id, err }, 'AD sync: per-employee error (non-fatal)');
@@ -1040,9 +1065,14 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   }
 
   const finalStatus = itemsFailed > 0 ? 'PARTIAL' : 'SUCCESS';
+  const outboundSummary = runOutbound && outboundProcessed > 0
+    ? `Outbound: ${outboundProcessed} employees checked` +
+      (outboundSkipped ? `, ${outboundSkipped} skipped (no AD provision needed)` : '') +
+      (outboundFailed ? `, ${outboundFailed} failed` : '')
+    : '';
   const summaryParts = [
     inboundSummary,
-    runOutbound && outboundProcessed > 0 ? `Outbound: ${outboundProcessed} IdP employees reconciled` : '',
+    outboundSummary,
   ].filter(Boolean);
   const errorSummary = errors.length > 0
     ? [...summaryParts, errors.slice(0, 8).join('; ')].filter(Boolean).join(' | ')
@@ -1079,6 +1109,15 @@ export async function buildAdOutboundPlanForAgent(
     || (cfg['customerDomain'] as string | undefined)?.trim()
     || undefined;
 
+  const syncScope = resolveAdSyncScope(cfg);
+  const googleLinked = new Set(
+    (await query<{ emp_id: string }>(
+      `SELECT emp_id FROM identity_links
+        WHERE \`system\` = 'GOOGLE' AND status NOT IN ('DELETED')`,
+      [],
+    )).map((r) => r.emp_id),
+  );
+
   const employees = await query<EmployeeRow>(
     `SELECT emp_id, full_name, email_corp, dept_id, role, ilg_state
        FROM employees
@@ -1103,6 +1142,11 @@ export async function buildAdOutboundPlanForAgent(
       || emp.ilg_state === 'DEPROVISIONED';
 
     if (isActive && !link) {
+      const allowCreate = employeeEligibleForAdProvision(
+        emp.email_corp,
+        syncScope,
+        googleLinked.has(emp.emp_id),
+      );
       plan.push({
         action: 'PROVISION',
         empId: emp.emp_id,
@@ -1112,6 +1156,7 @@ export async function buildAdOutboundPlanForAgent(
         role: emp.role,
         suggestedSam: generateSamAccountName(emp.full_name),
         provisionOuRdn: dirConfig.provisionOuRdn,
+        allowCreate,
         ...(upnDomain ? { upnDomain } : {}),
       });
     } else if (isInactive && link && link.status === 'ACTIVE') {

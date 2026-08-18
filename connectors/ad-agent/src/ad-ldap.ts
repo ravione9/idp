@@ -106,6 +106,38 @@ function resolveSearchBases(
   return { bases: [baseDn], includeSubOrgUnits: true };
 }
 
+function inboundAdUserLdapFilter(): string {
+  return [
+    '(&(objectCategory=person)(objectClass=user)',
+    '(!(sAMAccountName=*$))',
+    '(!(sAMAccountName=krbtgt))',
+    '(!(sAMAccountName=Guest))',
+    '(!(isCriticalSystemObject=TRUE))',
+    ')',
+  ].join('');
+}
+
+const BUILTIN_SAM_BLOCKLIST = new Set([
+  'krbtgt', 'guest', 'administrator', 'defaultaccount',
+  'wdagutilityaccount', 'healthmailbox',
+]);
+
+function isImportableAdDirectoryUser(user: Record<string, unknown>): boolean {
+  const sam = getAttr(user, 'sAMAccountName').trim().toLowerCase();
+  if (!sam || sam.endsWith('$')) return false;
+  if (BUILTIN_SAM_BLOCKLIST.has(sam)) return false;
+  if (sam.startsWith('sm_')) return false;
+
+  const critical = getAttr(user, 'isCriticalSystemObject').toUpperCase();
+  if (critical === 'TRUE') return false;
+
+  const mail = (getAttr(user, 'mail') || getAttr(user, 'userPrincipalName')).trim();
+  const empId = getAttr(user, 'employeeID').trim();
+  if (!mail && !empId) return false;
+
+  return true;
+}
+
 function filterUsersByAllowlist(
   users: Record<string, unknown>[],
   syncUsers?: string,
@@ -186,6 +218,25 @@ export class AdLdapClient {
     this.client = this.createClient();
   }
 
+  private async searchPaged(
+    base: string,
+    filter: string,
+    attributes: string[],
+    scope: 'sub' | 'one',
+  ): Promise<Record<string, unknown>[]> {
+    await this.connect();
+    const entries: Record<string, unknown>[] = [];
+    for await (const result of this.client.searchPaginated(base, {
+      scope,
+      filter,
+      attributes,
+      paged: { pageSize: 900 },
+    })) {
+      entries.push(...(result.searchEntries as Record<string, unknown>[]));
+    }
+    return entries;
+  }
+
   private async search(base: string, filter: string, attributes: string[]): Promise<Record<string, unknown>[]> {
     await this.connect();
     const result = await this.client.search(base, { scope: 'sub', filter, attributes, sizeLimit: 5000 });
@@ -197,30 +248,21 @@ export class AdLdapClient {
     syncUsers?: string;
     includeSubOrgUnits?: boolean;
   }): Promise<Record<string, unknown>[]> {
-    const filter = '(&(objectClass=user)(!(sAMAccountName=*$)))';
+    const filter = inboundAdUserLdapFilter();
     const { bases } = resolveSearchBases(this.ad.baseDn, options?.syncOrgUnits);
     const ldapScope = options?.includeSubOrgUnits === false ? 'one' : 'sub';
     const merged: Record<string, unknown>[] = [];
 
     for (const base of bases) {
       try {
-        await this.connect();
-        const result = await this.client.search(base, {
-          scope: ldapScope,
-          filter,
-          attributes: USER_IMPORT_ATTRS,
-          sizeLimit: 5000,
-        });
-        merged.push(...(result.searchEntries as Record<string, unknown>[]));
+        const batch = await this.searchPaged(base, filter, USER_IMPORT_ATTRS, ldapScope);
+        merged.push(...batch);
       } catch {
         // try remaining bases
       }
     }
 
-    const users = dedupeUsers(merged).filter((e) => {
-      const sam = getAttr(e, 'sAMAccountName');
-      return sam && !sam.endsWith('$');
-    });
+    const users = dedupeUsers(merged).filter(isImportableAdDirectoryUser);
     return filterUsersByAllowlist(users, options?.syncUsers);
   }
 

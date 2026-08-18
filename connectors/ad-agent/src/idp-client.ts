@@ -31,6 +31,7 @@ export interface OutboundAction {
   suggestedSam?: string;
   provisionOuRdn?: string;
   upnDomain?: string;
+  allowCreate?: boolean;
 }
 
 export interface OutboundResult {

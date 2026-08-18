@@ -130,6 +130,10 @@ async function executeOutboundAction(
       return { empId: action.empId, action: 'LINK', success: true, externalId: sam };
     }
 
+    if (action.allowCreate === false) {
+      return { empId: action.empId, action: 'NOOP', success: true };
+    }
+
     const sam = await ldap.createUser({
       empId: action.empId,
       fullName: action.fullName,
