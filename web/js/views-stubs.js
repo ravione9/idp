@@ -4069,13 +4069,13 @@ function collectConnectorSchedule(bd) {
 
 const CONNECTOR_TYPES = {
   AD:               { label: 'Active Directory', icon: '🏢', badge: 'badge-info',    desc: 'Microsoft Active Directory / LDAP (IdP connects directly)',
-    fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl','syncGroups'],
+    fields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl','syncOrgUnits','syncUsers','includeSubOrgUnits','syncGroups'],
     connectionFields: ['host','port','bindDn','bindPassword','baseDn','targetOu','upnDomain','useSsl'],
-    scopeFields: ['syncGroups'] },
+    scopeFields: ['syncOrgUnits','syncUsers','includeSubOrgUnits','syncGroups'] },
   AD_AGENT:         { label: 'Active Directory (Agent)', icon: '🖥️', badge: 'badge-info', desc: 'On-prem Windows agent — bidirectional sync over HTTPS :443; AD credentials stay on the agent',
-    fields: ['idpUrl','baseDn','targetOu','upnDomain','syncGroups'],
+    fields: ['idpUrl','baseDn','targetOu','upnDomain','syncOrgUnits','syncUsers','includeSubOrgUnits','syncGroups'],
     connectionFields: ['idpUrl'],
-    scopeFields: ['baseDn','targetOu','upnDomain','syncGroups'],
+    scopeFields: ['baseDn','targetOu','upnDomain','syncOrgUnits','syncUsers','includeSubOrgUnits','syncGroups'],
     agentNote: true },
   LDAP:             { label: 'LDAP',             icon: '📂', badge: 'badge-info',    desc: 'Generic LDAP v3 directory server',             fields: ['host','port','bindDn','bindPassword','baseDn','useSsl'] },
   GOOGLE_WORKSPACE: GOOGLE_WS_META,
@@ -4092,15 +4092,15 @@ const FIELD_LABELS = {
   port:               'Port',
   bindDn:             'Bind DN',
   bindPassword:       'Bind Password',
-  baseDn:             'Base DN (domain root, e.g. DC=Lenskart,DC=in)',
-  targetOu:           'New User OU (e.g. OU=IT — optional if Base DN is already an OU)',
+  baseDn:             'Base DN (domain root for all-user sync, e.g. DC=Lenskart,DC=in)',
+  targetOu:           'New User OU (outbound only — where new accounts are created, e.g. OU=IT)',
   upnDomain:          'UPN Suffix (e.g. lenskart.com — optional)',
   useSsl:             'Protocol',
   customerDomain:     'Workspace domains',
   serviceAccountEmail:'Service Account Email',
   serviceAccountKey:  'Service Account JSON Key',
   adminEmail:         'Admin Email (Workspace super admin — required for domain-wide delegation)',
-  syncOrgUnits:       'Sync OUs (one per line, e.g. /Sales — blank = all OUs)',
+  syncOrgUnits:       'Sync OUs (one per line — blank = all users under Base DN)',
   syncGroups:         'Sync Groups (Google: group email, blank/* = all Workspace groups up to 200; AD: CN/sAMAccountName/DN, blank/* = all security groups)',
   idpUrl:             'IdP URL (HTTPS, port 443 — e.g. https://idp.lenskart.com)',
   syncGroupMemberships: 'Mirror group membership into IdP Groups (on by default)',
@@ -4505,6 +4505,13 @@ function initSourcesTab(panel) {
           <textarea class="form-textarea" id="cfg-${f}" rows="3" placeholder="/Sales&#10;/Engineering">${val}</textarea>
         </div>`;
       }
+      if (f === 'syncOrgUnits' && (connectorType === 'AD' || isAdAgent)) {
+        return `<div class="form-group" style="grid-column:1/-1">
+          <label class="form-label">${esc(label)}</label>
+          <textarea class="form-textarea" id="cfg-${f}" rows="4" placeholder="OU=IT&#10;OU=Sales,DC=lenskart,DC=in&#10;OU=HR">${val}</textarea>
+          <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">LDAP OU path or name, one per line. Leave blank to sync <strong>all users</strong> under Base DN (recommended: Base DN = domain root). New User OU is only for outbound provisioning.</p>
+        </div>`;
+      }
       if (f === 'syncGroups' && (isGoogle || connectorType === 'AD' || isAdAgent)) {
         const ph = isGoogle
           ? 'sales-team@company.com&#10;it-admins@company.com'
@@ -4534,6 +4541,13 @@ function initSourcesTab(panel) {
           <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">When set, only these users are imported (looked up by primary email). Outbound provision is limited to this list unless the employee already has a Google link. Click <strong>Save Changes</strong> before syncing.</p>
         </div>`;
       }
+      if (f === 'syncUsers' && (connectorType === 'AD' || isAdAgent)) {
+        return `<div class="form-group" style="grid-column:1/-1">
+          <label class="form-label">${esc(label)}</label>
+          <textarea class="form-textarea" id="cfg-${f}" rows="2" placeholder="user@lenskart.com">${val}</textarea>
+          <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">Optional: import only these corporate emails (must match mail or UPN in AD). Combine with Sync OUs to narrow scope.</p>
+        </div>`;
+      }
       if (f === 'includeSubOrgUnits' && isGoogle) {
         const checked = defaults[f] !== false && defaults[f] !== 'false';
         return `<div class="form-group" style="grid-column:1/-1">
@@ -4541,6 +4555,16 @@ function initSourcesTab(panel) {
             <input type="checkbox" id="cfg-${f}" ${checked ? 'checked' : ''}>
             ${esc(label)}
             <span class="muted" style="font-size:0.75rem">— when OUs are set, also sync users in child OUs</span>
+          </label>
+        </div>`;
+      }
+      if (f === 'includeSubOrgUnits' && (connectorType === 'AD' || isAdAgent)) {
+        const checked = defaults[f] !== false && defaults[f] !== 'false';
+        return `<div class="form-group" style="grid-column:1/-1">
+          <label class="form-label" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+            <input type="checkbox" id="cfg-${f}" ${checked ? 'checked' : ''}>
+            ${esc(label)}
+            <span class="muted" style="font-size:0.75rem">— search entire subtree under each Sync OU (uncheck = direct members of that OU only)</span>
           </label>
         </div>`;
       }
@@ -4637,7 +4661,7 @@ function initSourcesTab(panel) {
         <div id="cfg-pane-scope" class="cfg-pane ds-cfg-pane" style="display:none">
           <p class="ds-cfg-pane-intro">${isGoogle
             ? 'Choose which OUs and users to import. Leave blank to sync the entire directory. <strong>Sync Groups</strong> mirrors Workspace groups into Identity → Groups.'
-            : 'List AD groups to mirror into Identity → Groups. User sync must run first so members can be linked.'}</p>
+            : 'Choose which OUs and users to import from AD. Leave <strong>Sync OUs</strong> blank to sync all users under Base DN. <strong>New User OU</strong> (Connection tab) is for outbound provisioning only. <strong>Sync Groups</strong> mirrors AD groups into Identity → Groups.'}</p>
           <div class="ds-form-grid">${isGoogle ? googleScopeFields : adScopeFields}</div>
         </div>` : `
         <div class="ds-form-grid ds-form-grid--2col">${configFields}</div>`;
