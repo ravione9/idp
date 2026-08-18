@@ -39,6 +39,7 @@ import {
 } from '../auth/mfa-methods.js';
 import { PORTAL_ACCESSIBLE_STATES } from '../fsm/states.js';
 import { enforcePasswordPolicy } from '../services/password-policy.js';
+import { suspendUser, deprovisionUser } from '../services/user-lifecycle.js';
 import { appendAuditLog } from '../utils/audit-log.js';
 import { writeDirectoryUserAudit } from '../services/google-attr-map.js';
 import crypto from 'crypto';
@@ -302,12 +303,11 @@ router.post('/bulk-action', asyncHandler(async (req: Request, res: Response) => 
   for (const empId of empIds) {
     try {
       if (action === 'enable') {
-        await execute(`UPDATE employees SET ilg_state = 'ACTIVE', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`, [empId]);
+        await execute(`UPDATE employees SET ilg_state = 'ACTIVE', ilg_state_since = UTC_TIMESTAMP(), updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`, [empId]);
       } else if (action === 'disable') {
-        await execute(`UPDATE employees SET ilg_state = 'SUSPENDED_HR', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`, [empId]);
+        await suspendUser(empId, 'Bulk disable from Universal Directory', adminId);
       } else if (action === 'delete') {
-        await execute(`UPDATE employees SET ilg_state = 'DEPROVISIONED', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`, [empId]);
-        await execute(`UPDATE local_accounts SET active = 0 WHERE emp_id = ?`, [empId]);
+        await deprovisionUser(empId, 'Bulk delete from Universal Directory', adminId);
       } else if (action === 'reset_password') {
         const pwd = password || `Tmp!${uuidv4().replace(/-/g, '').slice(0, 10)}`;
         const policyErr = await enforcePasswordPolicy(pwd);

@@ -83,6 +83,7 @@ import { startAttendanceIgaScheduler } from './services/attendance-iga/scheduler
 import { startAccessRequestExpiryScheduler } from './services/access-request-expiry.js';
 import { startConnectorHealthScheduler } from './services/connector-health.js';
 import { startConnectorSyncScheduler } from './services/connector-sync-scheduler.js';
+import { startDeprovisionScheduler } from './services/deprovision-scheduler.js';
 import { reclaimStaleConnectorRuns } from './services/connector-run-lifecycle.js';
 import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
@@ -387,6 +388,7 @@ async function main(): Promise<void> {
     logger.error({ err }, 'Boot: failed to reclaim stale connector sync runs');
   }
   startConnectorSyncScheduler();
+  startDeprovisionScheduler();
   startRadiusUdpServer();
 
   const server = app.listen(config.app.port, () => {
