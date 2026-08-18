@@ -1114,7 +1114,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `b916236` — 2026-08-18 — AD sync: LDAP pagination and outbound provision guard
+### `4a69902` — 2026-08-18 — AD sync: LDAP pagination and outbound provision guard
 
 **Why** — Inbound sync returned at most 1000 AD users (server `MaxPageSize`); bidirectional runs marked PARTIAL because outbound tried to provision AD accounts for Google-only IdP employees (~2700 failures).
 
