@@ -110,6 +110,9 @@ router.get('/jobs/next', asyncHandler(async (req: Request, res: Response) => {
     dirConfig: job.dirConfig,
     upnDomain: job.upnDomain,
     syncGroups: job.syncGroups,
+    syncOrgUnits: job.syncOrgUnits,
+    syncUsers: job.syncUsers,
+    includeSubOrgUnits: job.includeSubOrgUnits,
   });
 }));
 

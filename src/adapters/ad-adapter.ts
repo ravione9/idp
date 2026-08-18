@@ -2,6 +2,12 @@ import { Client, Attribute, Change } from 'ldapts';
 import { Redis } from 'ioredis';
 import { BaseAdapter, AdapterResult, UserInfo, Binding } from './base-adapter.js';
 import logger from '../utils/logger.js';
+import type { AdSyncScope } from '../services/ad-directory-config.js';
+import {
+  dedupeAdDirectoryUsers,
+  filterAdUsersByScope,
+  resolveAdSearchBases,
+} from '../services/ad-directory-config.js';
 
 // ---------------------------------------------------------------------------
 // AD userAccountControl flags
@@ -183,11 +189,16 @@ export class ADAdapter extends BaseAdapter {
   // ---------------------------------------------------------------------------
   // Search helper with auto-reconnect
   // ---------------------------------------------------------------------------
-  private async searchAt(baseDn: string, filter: string, attributes: string[]): Promise<ADUser[]> {
+  private async searchAt(
+    baseDn: string,
+    filter: string,
+    attributes: string[],
+    scope: 'sub' | 'one' = 'sub',
+  ): Promise<ADUser[]> {
     await this.ensureConnected();
     const run = () =>
       this.client.search(baseDn, {
-        scope:      'sub',
+        scope,
         filter,
         attributes,
         sizeLimit:  2000,
@@ -212,39 +223,39 @@ export class ADAdapter extends BaseAdapter {
   // BaseAdapter implementation
   // ---------------------------------------------------------------------------
 
-  /** List person accounts under the LDAP search base (inbound directory import). */
-  async listDirectoryUsers(): Promise<AdapterResult<ADUser[]>> {
+  /** List person accounts under the configured sync scope (inbound directory import). */
+  async listDirectoryUsers(scope?: AdSyncScope): Promise<AdapterResult<ADUser[]>> {
     return this.safe(async () => {
-      // '*' returns every non-operational user attribute, so a deployment can
-      // store employee ID in any custom field (extensionAttribute5, pager,
-      // description, lenskartEmpId, etc.) without us having to enumerate.
+      const syncScope = scope ?? { orgUnits: [], users: [], includeSubOrgUnits: true };
       const attrs = ['*'];
-      // Simple filter — objectCategory form often returns 0 rows on some AD forests
       const filter = '(&(objectClass=user)(!(sAMAccountName=*$)))';
+      const ldapScope = syncScope.includeSubOrgUnits ? 'sub' : 'one';
+      const bases = resolveAdSearchBases(syncScope, this.dir);
 
-      const bases: string[] = [];
-      for (const b of [this.dir.provisionOuDn, this.dir.searchBaseDn, this.dir.domainRoot]) {
-        if (b && !bases.includes(b)) bases.push(b);
+      if (bases.length === 0) {
+        throw new Error('No LDAP search base configured — set Base DN or Sync OUs in connector config');
       }
 
-      let rawEntries: ADUser[] = [];
-      let usedBase = '';
+      const merged: ADUser[] = [];
       for (const base of bases) {
-        const batch = await this.searchAt(base, filter, attrs);
-        logger.info({ base, rawCount: batch.length }, 'AD listDirectoryUsers: LDAP search');
-        if (batch.length > 0) {
-          rawEntries = batch;
-          usedBase = base;
-          break;
-        }
+        const batch = await this.searchAt(base, filter, attrs, ldapScope);
+        logger.info({ base, rawCount: batch.length, ldapScope }, 'AD listDirectoryUsers: LDAP search');
+        merged.push(...batch);
       }
 
-      const users = rawEntries.filter((e) => {
-        const sam = getLdapAttr(e, 'sAMAccountName');
-        return sam.length > 0 && !sam.endsWith('$');
-      });
+      const deduped = dedupeAdDirectoryUsers(merged);
+      const users = filterAdUsersByScope(
+        deduped.filter((e) => {
+          const sam = getLdapAttr(e, 'sAMAccountName');
+          return sam.length > 0 && !sam.endsWith('$');
+        }),
+        syncScope,
+      );
 
-      logger.info({ usedBase, rawCount: rawEntries.length, userCount: users.length }, 'AD listDirectoryUsers: filtered');
+      logger.info(
+        { bases, rawCount: merged.length, userCount: users.length },
+        'AD listDirectoryUsers: filtered',
+      );
       return users;
     });
   }

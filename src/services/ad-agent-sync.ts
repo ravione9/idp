@@ -36,6 +36,9 @@ export interface AgentJob {
   dirConfig: AdDirectoryConfig;
   upnDomain?: string | undefined;
   syncGroups?: string | undefined;
+  syncOrgUnits?: string | undefined;
+  syncUsers?: string | undefined;
+  includeSubOrgUnits?: boolean | undefined;
 }
 
 interface ConnectorRow {
@@ -176,6 +179,9 @@ export async function getPendingAgentJob(connectorId: string): Promise<AgentJob 
     dirConfig,
     upnDomain,
     syncGroups: String(cfg['syncGroups'] ?? ''),
+    syncOrgUnits: String(cfg['syncOrgUnits'] ?? ''),
+    syncUsers: String(cfg['syncUsers'] ?? ''),
+    includeSubOrgUnits: cfg['includeSubOrgUnits'] !== false && cfg['includeSubOrgUnits'] !== 'false',
   };
 }
 

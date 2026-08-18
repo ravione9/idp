@@ -11,6 +11,7 @@
 import crypto from 'crypto';
 import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, readAdObjectGuid, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { parseCsvList } from './google-directory-config.js';
+import { resolveAdSyncScope } from './ad-directory-config.js';
 import type { GroupSyncSummary } from './group-sync.js';
 import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
@@ -394,6 +395,7 @@ export interface AdOutboundResult {
 async function importAdDirectoryUsers(
   adapter: ADAdapter,
   dirConfig: AdDirectoryConfig,
+  cfg: Record<string, unknown>,
   errors: string[],
 ): Promise<{
   found: number;
@@ -407,7 +409,8 @@ async function importAdDirectoryUsers(
   migrated: number;
   diag: string;
 }> {
-  const listResult = await adapter.listDirectoryUsers();
+  const syncScope = resolveAdSyncScope(cfg);
+  const listResult = await adapter.listDirectoryUsers(syncScope);
   if (!listResult.success) {
     throw new Error(listResult.error ?? 'Failed to list AD users');
   }
@@ -839,7 +842,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     await adapter.connect();
 
     if (runInbound) {
-      const inbound = await importAdDirectoryUsers(adapter, dirConfig, errors);
+      const inbound = await importAdDirectoryUsers(adapter, dirConfig, cfg, errors);
       itemsProcessed += inbound.processed;
       itemsSucceeded += inbound.succeeded;
       itemsFailed += inbound.failed;
