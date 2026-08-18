@@ -1114,7 +1114,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-18 — Directory disable propagation and 24h auto-deprovision
+### `2e7309d` — 2026-08-18 — Directory disable propagation and 24h auto-deprovision
 
 **Why** — Disabling a user in AD/Google or the Universal Directory did not reliably block portal access immediately; suspended users stayed visible in the application indefinitely.
 
