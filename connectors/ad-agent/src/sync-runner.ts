@@ -28,7 +28,11 @@ export async function runSyncJob(cfg: AgentConfig, idp: IdpClient, job: Awaited<
     await idp.claimJob(job.runId);
 
     if (job.runInbound) {
-      const users = await ldap.listUsers();
+      const users = await ldap.listUsers({
+        syncOrgUnits: job.syncOrgUnits,
+        syncUsers: job.syncUsers,
+        includeSubOrgUnits: job.includeSubOrgUnits,
+      });
       const normalized = users.map((u) => slimAdUser(u));
       const inboundRes = await idp.postInbound(job.runId, normalized);
       inboundSummary = inboundRes.summary ?? '';

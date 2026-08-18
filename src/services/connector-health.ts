@@ -275,6 +275,35 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
       warnings.push('Protocol is plain LDAP — user provisioning requires LDAPS or LDAP+StartTLS');
     }
 
+    if (baseDn) {
+      try {
+        const { resolveAdSyncScope, describeAdSyncScope } = await import('./ad-directory-config.js');
+        const { ADAdapter: AdAdapterCtor } = await import('../adapters/ad-adapter.js');
+        const { redis: sessionRedis } = await import('../auth/session-store.js');
+        const scope = resolveAdSyncScope(cfg);
+        const adapter = new AdAdapterCtor(
+          sessionRedis,
+          url,
+          bindDn!,
+          bindPass!,
+          baseDn,
+          undefined,
+          startTls,
+          targetOuRaw,
+        );
+        await adapter.connect();
+        const listed = await adapter.listDirectoryUsers(scope);
+        await adapter.disconnect();
+        if (listed.success) {
+          infos.push(describeAdSyncScope(scope, listed.data.length));
+        } else if (listed.error) {
+          warnings.push(`User scope preview failed: ${listed.error}`);
+        }
+      } catch (err) {
+        warnings.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+
     await client.unbind();
     const detail = [...infos, ...warnings].join('; ');
     const msg = detail

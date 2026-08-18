@@ -72,6 +72,64 @@ function domainFromBaseDn(baseDn: string): string {
     .join('.');
 }
 
+function normalizeOuDn(raw: string, domainRoot: string): string {
+  const v = raw.trim();
+  if (!v) return '';
+  if (/DC=/i.test(v)) return v.replace(/\s+/g, '');
+  let ouPath = v;
+  if (!/^OU=/i.test(ouPath)) {
+    ouPath = ouPath.split(',').map((part) => {
+      const t = part.trim();
+      return /^OU=/i.test(t) ? t : `OU=${t}`;
+    }).filter(Boolean).join(',');
+  }
+  return domainRoot ? `${ouPath},${domainRoot}` : ouPath;
+}
+
+function parseScopeList(raw?: string): string[] {
+  if (!raw?.trim()) return [];
+  return raw.split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+function resolveSearchBases(
+  baseDn: string,
+  syncOrgUnits?: string,
+): { bases: string[]; includeSubOrgUnits: boolean } {
+  const domainRoot = domainRootFromBaseDn(baseDn) || baseDn;
+  const orgUnits = parseScopeList(syncOrgUnits);
+  if (orgUnits.length > 0) {
+    const bases = [...new Set(orgUnits.map((ou) => normalizeOuDn(ou, domainRoot).toLowerCase()))]
+      .map((key) => orgUnits.map((ou) => normalizeOuDn(ou, domainRoot)).find((b) => b.toLowerCase() === key)!)
+      .filter(Boolean);
+    return { bases, includeSubOrgUnits: true };
+  }
+  return { bases: [baseDn], includeSubOrgUnits: true };
+}
+
+function filterUsersByAllowlist(
+  users: Record<string, unknown>[],
+  syncUsers?: string,
+): Record<string, unknown>[] {
+  const allow = parseScopeList(syncUsers).map((u) => u.toLowerCase());
+  if (!allow.length) return users;
+  return users.filter((u) => {
+    const mail = (getAttr(u, 'mail') || getAttr(u, 'userPrincipalName')).trim().toLowerCase();
+    return mail && allow.includes(mail);
+  });
+}
+
+function dedupeUsers(users: Record<string, unknown>[]): Record<string, unknown>[] {
+  const byKey = new Map<string, Record<string, unknown>>();
+  for (const u of users) {
+    const guid = getObjectGuidAttr(u);
+    const dn = getAttr(u, 'dn').toLowerCase();
+    const sam = getAttr(u, 'sAMAccountName').toLowerCase();
+    const key = guid || dn || sam;
+    if (key && !byKey.has(key)) byKey.set(key, u);
+  }
+  return [...byKey.values()];
+}
+
 function encodeAdPassword(password: string): Buffer {
   return Buffer.from(`"${password}"`, 'utf16le');
 }
@@ -134,43 +192,36 @@ export class AdLdapClient {
     return result.searchEntries as Record<string, unknown>[];
   }
 
-  async listUsers(): Promise<Record<string, unknown>[]> {
+  async listUsers(options?: {
+    syncOrgUnits?: string;
+    syncUsers?: string;
+    includeSubOrgUnits?: boolean;
+  }): Promise<Record<string, unknown>[]> {
     const filter = '(&(objectClass=user)(!(sAMAccountName=*$)))';
-    const bases: string[] = [];
-    const seen = new Set<string>();
-
-    const addBase = (dn: string) => {
-      const key = dn.replace(/\s+/g, '').toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        bases.push(dn);
-      }
-    };
-
-    addBase(this.ad.baseDn);
-    if (this.ad.targetOu) {
-      const ou = this.ad.targetOu.includes('=') ? this.ad.targetOu : `OU=${this.ad.targetOu}`;
-      const root = domainRootFromBaseDn(this.ad.baseDn) || this.ad.baseDn;
-      const ouDn = `${ou},${root}`;
-      // Skip when baseDn is already the OU (avoid OU=IT,OU=IT,DC=… which does not exist).
-      if (ouDn.replace(/\s+/g, '').toLowerCase() !== this.ad.baseDn.replace(/\s+/g, '').toLowerCase()) {
-        addBase(ouDn);
-      }
-    }
+    const { bases } = resolveSearchBases(this.ad.baseDn, options?.syncOrgUnits);
+    const ldapScope = options?.includeSubOrgUnits === false ? 'one' : 'sub';
+    const merged: Record<string, unknown>[] = [];
 
     for (const base of bases) {
       try {
-        const entries = await this.search(base, filter, USER_IMPORT_ATTRS);
-        const users = entries.filter((e) => {
-          const sam = getAttr(e, 'sAMAccountName');
-          return sam && !sam.endsWith('$');
+        await this.connect();
+        const result = await this.client.search(base, {
+          scope: ldapScope,
+          filter,
+          attributes: USER_IMPORT_ATTRS,
+          sizeLimit: 5000,
         });
-        if (users.length) return users;
+        merged.push(...(result.searchEntries as Record<string, unknown>[]));
       } catch {
-        // Try next search base (e.g. invalid OU=IT,OU=IT,DC=… combination).
+        // try remaining bases
       }
     }
-    return [];
+
+    const users = dedupeUsers(merged).filter((e) => {
+      const sam = getAttr(e, 'sAMAccountName');
+      return sam && !sam.endsWith('$');
+    });
+    return filterUsersByAllowlist(users, options?.syncUsers);
   }
 
   async findByEmployeeId(empId: string): Promise<Record<string, unknown> | null> {

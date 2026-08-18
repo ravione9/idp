@@ -1040,7 +1040,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Birthright entitlement engine** — `src/services/birthright.ts` evaluates `birthright_rule` JSON (dept / employment type / role / group / exclude) and assigns/revokes on workflow JOINER/LEAVER + admin Dry Run / Run Now; optional connector kick for outbound AD/Google provision
 - ✅ **Connector dispatcher** — `src/services/connector-dispatcher.ts` routes `POST /api/iga/connectors/:id/sync` to the right sync service (AD or Google)
 - ✅ **Entitlement harvest** — `src/services/entitlement-harvest.ts` + fulfill (`entitlement-fulfillment.ts`): AD/Google groups → `entitlements` catalog; grant/request pushes group membership on target
-- ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); inbound import **skips disabled AD accounts** (does not create new portal users); existing linked users disabled in AD are marked `SUSPENDED_AUTO` and hidden from the Universal Directory; tracks runs in `connector_runs`
+- ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); inbound import **skips disabled AD accounts** (does not create new portal users); existing linked users disabled in AD are marked `SUSPENDED_AUTO` and hidden from the Universal Directory; tracks runs in `connector_runs`; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncUsers`, `includeSubOrgUnits`, `syncGroups`) — blank **Sync OUs** imports all users under **Base DN**; **New User OU** is outbound-only; multiple OUs are merged and deduplicated by objectGUID/DN
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import **skips suspended Google accounts** (same rules as AD); outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank OU/user scope syncs the full directory; non-empty filters combine with AND logic; blank/`*` **Sync Groups** auto-mirrors up to 200 Workspace groups into `groups` / `group_members` (requires `admin.directory.group.readonly` domain-wide delegation)
 - ✅ **Connector sync scheduler** — `src/services/connector-sync-scheduler.ts` ticks every 60s (Redis `withSchedLock('connector-sync', …)`); reads each connector's `sync_schedule` (`every:15m`, `every:1h`, custom interval, or 5-field cron) and triggers `POST`-equivalent sync when due for `CONNECTED`/`ACTIVE` connectors; Directory Sync UI exposes presets + custom interval/cron
 - ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; AD writeback auto-retries StartTLS/LDAPS when the connector uses plain LDAP; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
@@ -1113,6 +1113,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-18 — AD multi-OU sync and all-user directory import
+
+**Why** — AD connectors only searched a single base (often the provision OU first), so operators could not sync multiple OUs or the full domain from the Directory Sync UI.
+
+**What changed:**
+
+- **`src/services/ad-directory-config.ts`** — `syncOrgUnits`, `syncUsers`, `includeSubOrgUnits` scope resolver (mirrors Google).
+- **`src/adapters/ad-adapter.ts`** — inbound LDAP searches all scoped OUs, merges + dedupes; provision OU no longer used as implicit import base.
+- **`src/services/ad-sync.ts`**, **`connector-health.ts`**, **on-prem agent** — scope-aware user listing; Test Connection reports matched user count.
+- **`web/js/views-stubs.js`** — AD / AD Agent **Sync scope** tab: Sync OUs, Sync Users, Include sub-OUs, Sync Groups.
 
 ### (pending) — 2026-08-17 — Boot-time schema repair for migration tracking drift
 

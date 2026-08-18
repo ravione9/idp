@@ -15,6 +15,9 @@ export interface AgentJob {
   };
   upnDomain?: string;
   syncGroups?: string;
+  syncOrgUnits?: string;
+  syncUsers?: string;
+  includeSubOrgUnits?: boolean;
 }
 
 export interface OutboundAction {
