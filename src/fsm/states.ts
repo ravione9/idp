@@ -69,6 +69,7 @@ export const VALID_TRANSITIONS: Record<ILGState, ILGState[]> = {
     ILGState.REACTIVATED,
     ILGState.SUSPENDED_HR,
     ILGState.ESCALATED_HRBP,
+    ILGState.DEPROVISIONED,
   ],
   [ILGState.PENDING_MGR]: [
     ILGState.REACTIVATED,

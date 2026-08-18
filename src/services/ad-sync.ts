@@ -18,6 +18,8 @@ import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
 import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
+import { applyDirectorySourceDisabled, applyDirectorySourceEnabled, preserveIlgStateOnDirectoryImport } from './user-lifecycle.js';
+import { ILGState } from '../fsm/states.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // ---------------------------------------------------------------------------
@@ -528,11 +530,12 @@ export async function processInboundAdUsers(
             `UPDATE employees
                 SET full_name = ?, first_name = ?, last_name = ?, email_corp = ?, dept_id = ?, role = ?,
                     ad_object_guid = COALESCE(?, ad_object_guid),
-                    ilg_state = 'SUSPENDED_AUTO', updated_at = UTC_TIMESTAMP()
+                    sync_status = 'DISABLED', updated_at = UTC_TIMESTAMP()
               WHERE emp_id = ?`,
             [fullName, firstName, lastName, email, department, title, adObjectGuid, empId],
           );
           await upsertAdIdentityLink(empId, sam, 'DISABLED');
+          await applyDirectorySourceDisabled(empId, 'AD', 'ad_account_disabled');
           linked++;
         }
         skipped++;
@@ -540,8 +543,21 @@ export async function processInboundAdUsers(
         continue;
       }
 
+      const existingState = exists
+        ? (await queryOne<{ ilg_state: string }>(
+          `SELECT ilg_state FROM employees WHERE emp_id = ?`,
+          [empId],
+        ))?.ilg_state
+        : undefined;
+
+      if (existingState === ILGState.SUSPENDED_AUTO) {
+        await applyDirectorySourceEnabled(empId, 'AD');
+      }
+
       const linkStatus = 'ACTIVE';
-      const ilgState = 'ACTIVE';
+      const ilgState = existingState
+        ? preserveIlgStateOnDirectoryImport(existingState)
+        : ILGState.ACTIVE;
 
       if (exists) {
         await execute(

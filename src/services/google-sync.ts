@@ -11,6 +11,8 @@ import type { admin_directory_v1 } from 'googleapis';
 import { google } from 'googleapis';
 import { query, queryOne, execute } from '../db/connection.js';
 import logger from '../utils/logger.js';
+import { applyDirectorySourceDisabled, applyDirectorySourceEnabled, preserveIlgStateOnDirectoryImport } from './user-lifecycle.js';
+import { ILGState } from '../fsm/states.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   buildGoogleJwtAuth,
@@ -276,11 +278,11 @@ async function importGoogleDirectoryUsers(
         if (targetEmpId) {
           await upsertGoogleIdentityLink(targetEmpId, googleId, 'DISABLED');
           await execute(
-            `UPDATE employees SET full_name = ?, ilg_state = 'SUSPENDED_AUTO', sync_status = 'DISABLED',
-                    updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+            `UPDATE employees SET full_name = ?, sync_status = 'DISABLED', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
             [fullName, targetEmpId],
           );
           await applyAttrsToEmployee(targetEmpId, attrs, { syncSettings });
+          await applyDirectorySourceDisabled(targetEmpId, 'GOOGLE', 'google_account_suspended');
           linked++;
           disabled++;
           recordGoogleInboundUser(userResults, email, fullName, attrs, targetEmpId, 'disabled');
@@ -290,11 +292,21 @@ async function importGoogleDirectoryUsers(
         continue;
       }
 
-      const linkStatus = 'ACTIVE';
-      const ilgState = 'ACTIVE';
+      if (existingLink?.emp_id) {
+        const currentState = (await queryOne<{ ilg_state: string }>(
+          `SELECT ilg_state FROM employees WHERE emp_id = ?`,
+          [existingLink.emp_id],
+        ))?.ilg_state;
 
-      if (existingLink) {
-        await upsertGoogleIdentityLink(existingLink.emp_id, googleId, linkStatus);
+        if (currentState === ILGState.SUSPENDED_AUTO) {
+          await applyDirectorySourceEnabled(existingLink.emp_id, 'GOOGLE');
+        }
+
+        const ilgState = currentState
+          ? preserveIlgStateOnDirectoryImport(currentState)
+          : ILGState.ACTIVE;
+
+        await upsertGoogleIdentityLink(existingLink.emp_id, googleId, 'ACTIVE');
         await execute(
           `UPDATE employees SET ilg_state = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
           [ilgState, existingLink.emp_id],
@@ -323,6 +335,8 @@ async function importGoogleDirectoryUsers(
         );
         continue;
       }
+
+      const ilgState = ILGState.ACTIVE;
 
       let empId = preferEmpId(gUser, attrs);
       let userAction = 'linked';
@@ -431,10 +445,11 @@ async function importGoogleDirectoryUsers(
           [row.emp_id, row.external_id],
         );
         await execute(
-          `UPDATE employees SET ilg_state = 'SUSPENDED_AUTO', sync_status = 'DISABLED',
-                  updated_at = UTC_TIMESTAMP() WHERE emp_id = ? AND ilg_state = 'ACTIVE'`,
+          `UPDATE employees SET sync_status = 'DISABLED', updated_at = UTC_TIMESTAMP()
+             WHERE emp_id = ?`,
           [row.emp_id],
         );
+        await applyDirectorySourceDisabled(row.emp_id, 'GOOGLE', 'missing_from_google_directory');
         disabled++;
         await writeDirectoryUserAudit({
           empId: row.emp_id,

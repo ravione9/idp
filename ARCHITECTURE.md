@@ -1114,6 +1114,21 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-18 — Directory disable propagation and 24h auto-deprovision
+
+**Why** — Disabling a user in AD/Google or the Universal Directory did not reliably block portal access immediately; suspended users stayed visible in the application indefinitely.
+
+**What changed:**
+
+- **`src/services/user-lifecycle.ts`** — `applyDirectorySourceDisabled` / `applyDirectorySourceEnabled` (FSM + session revoke); `deprovisionUser`; bulk suspend uses FSM (`ilg_state_since` tracked).
+- **`src/services/deprovision-scheduler.ts`** — every 5 min, deprovisions `SUSPENDED_AUTO` / `SUSPENDED_HR` / `DEPARTED` users after 24h (`DEPROVISION_AFTER_HOURS` env, default 24).
+- **`src/services/ad-sync.ts`**, **`google-sync.ts`** — inbound disable calls lifecycle helper; inbound enable no longer overwrites admin suspend.
+- **`src/fsm/states.ts`** — allow `SUSPENDED_AUTO → DEPROVISIONED`.
+- **`src/api/admin-users.ts`** — bulk disable/delete use lifecycle service (sessions revoked, outbox enqueued).
+- **`src/index.ts`** — starts deprovision scheduler on boot.
+
+**Ops:** Set AD/Google connector sync schedule to `every:15m` so directory disables propagate within ~15 minutes.
+
 ### `4a69902` — 2026-08-18 — AD sync: LDAP pagination and outbound provision guard
 
 **Why** — Inbound sync returned at most 1000 AD users (server `MaxPageSize`); bidirectional runs marked PARTIAL because outbound tried to provision AD accounts for Google-only IdP employees (~2700 failures).
