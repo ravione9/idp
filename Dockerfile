@@ -7,6 +7,9 @@
 # ---- Stage 1: builder -------------------------------------------------------
 FROM node:22.17.1-alpine3.22 AS builder
 
+ARG GIT_COMMIT=dev
+ENV GIT_COMMIT=$GIT_COMMIT
+
 WORKDIR /app
 
 # Install dependencies first (layer cache friendly)
@@ -30,6 +33,9 @@ RUN npm prune --production
 
 # ---- Stage 2: runner --------------------------------------------------------
 FROM node:22.17.1-alpine3.22 AS runner
+
+ARG GIT_COMMIT=dev
+ENV GIT_COMMIT=$GIT_COMMIT
 
 # Security hardening — pin apk versions
 RUN apk add --no-cache \

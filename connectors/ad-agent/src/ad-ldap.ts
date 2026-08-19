@@ -15,6 +15,7 @@ export const USER_IMPORT_ATTRS = [
   'dn', 'sAMAccountName', 'mail', 'userPrincipalName', 'displayName', 'cn',
   'givenName', 'sn', 'objectGUID', 'employeeID', 'employeeNumber', 'userAccountControl',
   'department', 'title', 'manager', 'description', 'pager', 'initials', 'info',
+  'isCriticalSystemObject',
   ...Array.from({ length: 15 }, (_, i) => `extensionAttribute${i + 1}`),
 ];
 
