@@ -396,7 +396,7 @@ async function importGoogleDirectoryUsers(
         });
       }
 
-      await upsertGoogleIdentityLink(empId, googleId, linkStatus);
+      await upsertGoogleIdentityLink(empId, googleId, 'ACTIVE');
       succeeded++;
       recordGoogleInboundUser(userResults, email, fullName, attrs, empId, userAction);
     } catch (err) {
