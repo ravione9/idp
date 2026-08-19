@@ -200,7 +200,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     `SELECT
        COUNT(DISTINCT CASE WHEN EXISTS (
          SELECT 1 FROM identity_links il2
-          WHERE il2.emp_id = e.emp_id AND il2.\`system\` = 'AD' AND il2.status = 'ACTIVE'
+          WHERE il2.emp_id = e.emp_id AND il2.\`system\` = 'AD' AND il2.status != 'DELETED'
        ) THEN e.emp_id END) AS with_ad,
        COUNT(DISTINCT CASE WHEN EXISTS (
          SELECT 1 FROM identity_links il2

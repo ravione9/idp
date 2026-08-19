@@ -114,3 +114,108 @@ export function describeAdSyncScope(scope: AdSyncScope, userCount: number): stri
   if (scope.users.length) parts.push(`${scope.users.length} named user(s)`);
   return `Sync scope: ${parts.join(', ')} — ${userCount} user(s) matched`;
 }
+
+export function domainFromAdRoot(domainRoot: string): string {
+  return domainRoot
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => /^DC=/i.test(p))
+    .map((p) => p.slice(3))
+    .join('.')
+    .toLowerCase();
+}
+
+export function resolveAdDefaultEmailDomain(
+  cfg: Record<string, unknown>,
+  dir: AdDirectoryConfig,
+): string {
+  return (cfg['upnDomain'] as string | undefined)?.trim()
+    || (cfg['customerDomain'] as string | undefined)?.trim()
+    || domainFromAdRoot(dir.domainRoot)
+    || 'lenskart.in';
+}
+
+/** Best corporate email for an AD LDAP entry (mail → UPN → sAM@defaultDomain). */
+export function resolveAdCorporateEmail(
+  user: Record<string, unknown>,
+  defaultDomain?: string,
+): string {
+  const mail = ldapAttr(user, 'mail').trim().toLowerCase();
+  if (mail.includes('@')) return mail;
+
+  const upn = ldapAttr(user, 'userPrincipalName').trim().toLowerCase();
+  if (upn.includes('@')) return upn;
+
+  const sam = ldapAttr(user, 'sAMAccountName').trim().toLowerCase();
+  const domain = (defaultDomain ?? '').trim().toLowerCase().replace(/^@+/, '');
+  if (sam && domain) return `${sam}@${domain}`;
+
+  return '';
+}
+
+/** True when AD account is enabled (userAccountControl bit 0x0002 clear). */
+export function isAdAccountEnabled(user: Record<string, unknown>): boolean {
+  const uac = parseInt(ldapAttr(user, 'userAccountControl') || '512', 10);
+  return (uac & 0x0002) === 0;
+}
+
+/** LDAP filter for inbound person accounts (excludes computers and built-in system users). */
+export function inboundAdUserLdapFilter(): string {
+  return [
+    '(&(objectCategory=person)(objectClass=user)',
+    '(!(sAMAccountName=*$))',
+    '(!(sAMAccountName=krbtgt))',
+    '(!(sAMAccountName=Guest))',
+    '(!(isCriticalSystemObject=TRUE))',
+    ')',
+  ].join('');
+}
+
+const BUILTIN_SAM_BLOCKLIST = new Set([
+  'krbtgt', 'guest', 'administrator', 'defaultaccount',
+  'wdagutilityaccount', 'healthmailbox',
+]);
+
+/** Drop built-in / service-style rows that slip through the LDAP filter. */
+export function isImportableAdDirectoryUser(
+  user: Record<string, unknown>,
+  defaultDomain?: string,
+): boolean {
+  const sam = ldapAttr(user, 'sAMAccountName').trim().toLowerCase();
+  if (!sam || sam.endsWith('$')) return false;
+  if (BUILTIN_SAM_BLOCKLIST.has(sam)) return false;
+  if (sam.startsWith('sm_')) return false;
+
+  const critical = ldapAttr(user, 'isCriticalSystemObject').toUpperCase();
+  if (critical === 'TRUE') return false;
+
+  const email = resolveAdCorporateEmail(user, defaultDomain);
+  const empId = ldapAttr(user, 'employeeID').trim() || ldapAttr(user, 'employeeNumber').trim();
+  if (!email && !empId) return false;
+
+  return true;
+}
+
+/** Outbound provision: skip auto-create for Google-only employees or when OU scope is inbound-only. */
+export function employeeEligibleForAdProvision(
+  emailCorp: string,
+  scope: AdSyncScope,
+  hasGoogleLink: boolean,
+): boolean {
+  const email = emailCorp.trim().toLowerCase();
+  if (!email) return false;
+
+  if (scope.users.length > 0) {
+    return scope.users.includes(email);
+  }
+
+  if (scope.orgUnits.length > 0) {
+    // OU scope is inbound-only — never create AD accounts for the whole IdP catalog.
+    return false;
+  }
+
+  // Full-directory inbound scope: still skip employees that only exist via Google sync.
+  if (hasGoogleLink) return false;
+
+  return true;
+}

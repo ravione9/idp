@@ -207,7 +207,7 @@ export async function processAgentInbound(
   const dirConfig = resolveDirConfig(cfg);
   const errors: string[] = [];
 
-  const inbound = await processInboundAdUsers(users, dirConfig, errors, { adapter: null });
+  const inbound = await processInboundAdUsers(users, dirConfig, errors, { adapter: null, cfg });
 
   if (inbound.found === 0) {
     errors.push(
