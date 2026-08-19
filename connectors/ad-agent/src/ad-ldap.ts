@@ -133,7 +133,7 @@ function resolveCorporateEmail(user: Record<string, unknown>, defaultDomain: str
   return '';
 }
 
-function isImportableAdDirectoryUser(user: Record<string, unknown>, defaultDomain: string): boolean {
+function isImportableAdDirectoryUser(user: Record<string, unknown>, _defaultDomain?: string): boolean {
   const sam = getAttr(user, 'sAMAccountName').trim().toLowerCase();
   if (!sam || sam.endsWith('$')) return false;
   if (BUILTIN_SAM_BLOCKLIST.has(sam)) return false;
@@ -141,10 +141,6 @@ function isImportableAdDirectoryUser(user: Record<string, unknown>, defaultDomai
 
   const critical = getAttr(user, 'isCriticalSystemObject').toUpperCase();
   if (critical === 'TRUE') return false;
-
-  const email = resolveCorporateEmail(user, defaultDomain);
-  const empId = getAttr(user, 'employeeID').trim() || getAttr(user, 'employeeNumber').trim();
-  if (!email && !empId) return false;
 
   return true;
 }
