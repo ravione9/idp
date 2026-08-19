@@ -874,7 +874,9 @@ export class ADAdapter extends BaseAdapter {
         ? resolveOuRdn(params.targetOu.trim(), this.dir.domainRoot)
         : this.dir.provisionOuRdn;
       const dn = `CN=${cn},${ou},${this.dir.domainRoot}`;
-      const upnDomain = params.upnDomain?.trim() || domainFromBaseDn(this.dir.domainRoot);
+      const upnDomain = params.upnDomain?.trim()
+        || (params.emailCorp.includes('@') ? params.emailCorp.split('@')[1]!.trim().toLowerCase() : '')
+        || domainFromBaseDn(this.dir.domainRoot);
       const userPrincipalName = `${sam}@${upnDomain}`.toLowerCase();
 
       const existing = await this.findUser(sam, ['dn']);

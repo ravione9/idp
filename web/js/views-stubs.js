@@ -4094,7 +4094,7 @@ const FIELD_LABELS = {
   bindPassword:       'Bind Password',
   baseDn:             'Base DN (domain root for all-user sync, e.g. DC=Lenskart,DC=in)',
   targetOu:           'New User OU (outbound only — where new accounts are created, e.g. OU=IT)',
-  upnDomain:          'UPN Suffix (e.g. lenskart.com — optional)',
+  upnDomain:          'UPN suffixes (one per line — e.g. lenskart.in, lenskart.com, fos.lenskart.in)',
   useSsl:             'Protocol',
   customerDomain:     'Workspace domains',
   serviceAccountEmail:'Service Account Email',
@@ -4490,6 +4490,13 @@ function initSourcesTab(panel) {
           <label class="form-label">${esc(label)} <span style="color:var(--danger)">*</span></label>
           <textarea class="form-textarea" id="cfg-${f}" rows="3" placeholder="lenskart.com&#10;lenskart.in&#10;dealskart.in">${val}</textarea>
           <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">All Google Workspace domains on this tenant (one per line). Sync imports users from every domain; the same list is used for portal Google sign-in.</p>
+        </div>`;
+      }
+      if (f === 'upnDomain' && (connectorType === 'AD' || isAdAgent)) {
+        return `<div class="form-group" style="grid-column:1/-1">
+          <label class="form-label">${esc(label)}</label>
+          <textarea class="form-textarea" id="cfg-${f}" rows="4" placeholder="lenskart.in&#10;lenskart.com&#10;fos.lenskart.in&#10;dealskart.in">${val}</textarea>
+          <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">All UPN suffixes registered on this AD forest (one per line). Inbound sync accepts any listed suffix on <code>userPrincipalName</code>; outbound provisioning picks the suffix matching the employee email domain.</p>
         </div>`;
       }
       if (f === 'adminEmail' && isGoogle) {

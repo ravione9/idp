@@ -72,6 +72,31 @@ function domainFromBaseDn(baseDn: string): string {
     .join('.');
 }
 
+function normalizeDomain(raw: string): string {
+  return raw.trim().toLowerCase().replace(/^@+/, '');
+}
+
+/** One domain per line, comma, or semicolon (matches IdP connector config). */
+function parseUpnDomains(raw: string | undefined, baseDn: string): string[] {
+  const text = String(raw ?? '').trim();
+  const fromCfg = text
+    ? [...new Set(text.split(/[\n,;]+/).map(normalizeDomain).filter(Boolean))]
+    : [];
+  if (fromCfg.length) return fromCfg;
+  const fromRoot = domainFromBaseDn(baseDn).toLowerCase();
+  return fromRoot ? [fromRoot] : [];
+}
+
+function resolveUpnSuffixForProvision(emailCorp: string, domains: string[], baseDn: string): string {
+  const email = emailCorp.trim().toLowerCase();
+  const at = email.lastIndexOf('@');
+  if (at > 0) {
+    const suffix = normalizeDomain(email.slice(at + 1));
+    if (!domains.length || domains.includes(suffix)) return suffix;
+  }
+  return domains[0] ?? domainFromBaseDn(baseDn);
+}
+
 function normalizeOuDn(raw: string, domainRoot: string): string {
   const v = raw.trim();
   if (!v) return '';
@@ -122,14 +147,17 @@ const BUILTIN_SAM_BLOCKLIST = new Set([
   'wdagutilityaccount', 'healthmailbox',
 ]);
 
-function resolveCorporateEmail(user: Record<string, unknown>, defaultDomain: string): string {
+function resolveCorporateEmail(user: Record<string, unknown>, defaultDomains: string | string[]): string {
   const mail = getAttr(user, 'mail').trim().toLowerCase();
   if (mail.includes('@')) return mail;
   const upn = getAttr(user, 'userPrincipalName').trim().toLowerCase();
   if (upn.includes('@')) return upn;
   const sam = getAttr(user, 'sAMAccountName').trim().toLowerCase();
-  const domain = defaultDomain.trim().toLowerCase().replace(/^@+/, '');
-  if (sam && domain) return `${sam}@${domain}`;
+  const domains = Array.isArray(defaultDomains) ? defaultDomains : [defaultDomains];
+  for (const raw of domains) {
+    const domain = normalizeDomain(raw);
+    if (sam && domain) return `${sam}@${domain}`;
+  }
   return '';
 }
 
@@ -256,7 +284,7 @@ export class AdLdapClient {
     includeSubOrgUnits?: boolean;
   }): Promise<Record<string, unknown>[]> {
     const filter = inboundAdUserLdapFilter();
-    const defaultDomain = this.ad.upnDomain?.trim() || domainFromBaseDn(this.ad.baseDn);
+    const upnDomains = parseUpnDomains(this.ad.upnDomain, this.ad.baseDn);
     const { bases } = resolveSearchBases(this.ad.baseDn, options?.syncOrgUnits);
     const ldapScope = options?.includeSubOrgUnits === false ? 'one' : 'sub';
     const merged: Record<string, unknown>[] = [];
@@ -270,7 +298,7 @@ export class AdLdapClient {
       }
     }
 
-    const users = dedupeUsers(merged).filter((u) => isImportableAdDirectoryUser(u, defaultDomain));
+    const users = dedupeUsers(merged).filter((u) => isImportableAdDirectoryUser(u, upnDomains[0]));
     return filterUsersByAllowlist(users, options?.syncUsers);
   }
 
@@ -312,7 +340,9 @@ export class AdLdapClient {
     const ouRdn = params.targetOuRdn?.trim()
       || (this.ad.targetOu?.includes('=') ? this.ad.targetOu : `OU=${this.ad.targetOu ?? 'Users'}`);
     const dn = `CN=${sam},${ouRdn},${this.ad.baseDn}`;
-    const upnDomain = params.upnDomain?.trim() || this.ad.upnDomain || domainFromBaseDn(this.ad.baseDn);
+    const configuredDomains = parseUpnDomains(this.ad.upnDomain, this.ad.baseDn);
+    const upnDomain = params.upnDomain?.trim()
+      || resolveUpnSuffixForProvision(params.emailCorp, configuredDomains, this.ad.baseDn);
     const tempPassword = crypto.randomBytes(12).toString('base64url').slice(0, 16) + 'Aa1!';
 
     const entry: Record<string, string | string[]> = {
