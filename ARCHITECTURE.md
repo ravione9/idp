@@ -1042,7 +1042,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Birthright entitlement engine** — `src/services/birthright.ts` evaluates `birthright_rule` JSON (dept / employment type / role / group / exclude) and assigns/revokes on workflow JOINER/LEAVER + admin Dry Run / Run Now; optional connector kick for outbound AD/Google provision
 - ✅ **Connector dispatcher** — `src/services/connector-dispatcher.ts` routes `POST /api/iga/connectors/:id/sync` to the right sync service (AD or Google)
 - ✅ **Entitlement harvest** — `src/services/entitlement-harvest.ts` + fulfill (`entitlement-fulfillment.ts`): AD/Google groups → `entitlements` catalog; grant/request pushes group membership on target
-- ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); inbound import **skips disabled AD accounts** (does not create new portal users); existing linked users disabled in AD are marked `SUSPENDED_AUTO` and hidden from the Universal Directory; tracks runs in `connector_runs`; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncUsers`, `includeSubOrgUnits`, `syncGroups`) — blank **Sync OUs** imports all users under **Base DN**; **New User OU** is outbound-only; multiple OUs are merged and deduplicated by objectGUID/DN
+- ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); inbound import **skips disabled AD accounts** (does not create new portal users); existing linked users disabled in AD are marked `SUSPENDED_AUTO` and hidden from the Universal Directory; tracks runs in `connector_runs`; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncUsers`, `includeSubOrgUnits`, `syncGroups`) — blank **Sync OUs** imports all users under **Base DN**; **New User OU** is outbound-only; multiple OUs are merged and deduplicated by objectGUID/DN; **UPN suffixes** (`upnDomain`, one per line) cover multi-domain forests — inbound uses AD `userPrincipalName` as-is; outbound provisioning picks the suffix matching `email_corp`
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import **skips suspended Google accounts** (same rules as AD); outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank OU/user scope syncs the full directory; non-empty filters combine with AND logic; blank/`*` **Sync Groups** auto-mirrors up to 200 Workspace groups into `groups` / `group_members` (requires `admin.directory.group.readonly` domain-wide delegation)
 - ✅ **Connector sync scheduler** — `src/services/connector-sync-scheduler.ts` ticks every 60s (Redis `withSchedLock('connector-sync', …)`); reads each connector's `sync_schedule` (`every:15m`, `every:1h`, custom interval, or 5-field cron) and triggers `POST`-equivalent sync when due for `CONNECTED`/`ACTIVE` connectors; Directory Sync UI exposes presets + custom interval/cron
 - ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; AD writeback auto-retries StartTLS/LDAPS when the connector uses plain LDAP; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
@@ -1115,6 +1115,47 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-19 — AD multi-UPN suffixes and optional employeeID import
+
+**Why** — Lenskart AD uses many UPN suffixes (`lenskart.com`, `lenskart.in`, `fos.lenskart.in`, `dealskart.in`, …); inbound sync dropped users without `employeeID` and only matched a single default domain.
+
+**What changed:**
+
+- **`src/services/ad-directory-config.ts`** — `parseAdUpnDomains`, `resolveUpnSuffixForProvision`; `resolveAdCorporateEmail` accepts UPN from AD as-is and multiple fallback domains.
+- **`src/services/ad-sync.ts`**, **`src/adapters/ad-adapter.ts`**, **on-prem agent** — outbound provision uses per-employee email domain; connector UI **UPN suffixes** textarea (one per line).
+- Inbound import no longer requires `employeeID` — links via sAMAccountName + `AD-<hash>` emp_id when needed.
+
+### (pending) — 2026-08-19 — AD inbound: broader email matching and With AD stats
+
+**Why** — Many AD users lack a populated `mail` attribute; Universal Directory under-counted AD links (ACTIVE-only stats).
+
+**What changed:** `resolveAdCorporateEmail` (mail → UPN → sAM@domain); import filter accepts `employeeNumber`; **With AD** stat includes disabled AD links; agent uses same rules.
+
+### `2e7309d` — 2026-08-18 — Directory disable propagation and 24h auto-deprovision
+
+**Why** — Disabling a user in AD/Google or the Universal Directory did not reliably block portal access immediately; suspended users stayed visible in the application indefinitely.
+
+**What changed:**
+
+- **`src/services/user-lifecycle.ts`** — `applyDirectorySourceDisabled` / `applyDirectorySourceEnabled` (FSM + session revoke); `deprovisionUser`; bulk suspend uses FSM (`ilg_state_since` tracked).
+- **`src/services/deprovision-scheduler.ts`** — every 5 min, deprovisions `SUSPENDED_AUTO` / `SUSPENDED_HR` / `DEPARTED` users after 24h (`DEPROVISION_AFTER_HOURS` env, default 24).
+- **`src/services/ad-sync.ts`**, **`google-sync.ts`** — inbound disable calls lifecycle helper; inbound enable no longer overwrites admin suspend.
+- **`src/fsm/states.ts`** — allow `SUSPENDED_AUTO → DEPROVISIONED`.
+- **`src/api/admin-users.ts`** — bulk disable/delete use lifecycle service (sessions revoked, outbox enqueued).
+- **`src/index.ts`** — starts deprovision scheduler on boot.
+
+**Ops:** Set AD/Google connector sync schedule to `every:15m` so directory disables propagate within ~15 minutes.
+
+### `4a69902` — 2026-08-18 — AD sync: LDAP pagination and outbound provision guard
+
+**Why** — Inbound sync returned at most 1000 AD users (server `MaxPageSize`); bidirectional runs marked PARTIAL because outbound tried to provision AD accounts for Google-only IdP employees (~2700 failures).
+
+**What changed:**
+
+- **`src/adapters/ad-adapter.ts`**, **`connectors/ad-agent/src/ad-ldap.ts`** — paged LDAP search (900/page); filter built-in/system accounts (`krbtgt`, Guest, critical system objects).
+- **`src/services/ad-directory-config.ts`** — `inboundAdUserLdapFilter`, `isImportableAdDirectoryUser`, `employeeEligibleForAdProvision`.
+- **`src/services/ad-sync.ts`**, **on-prem agent** — skip auto-provision for Google-only employees (still link existing AD accounts); clearer inbound/outbound run summary; agent `allowCreate` flag on outbound plan.
 
 ### (pending) — 2026-08-18 — AD multi-OU sync and all-user directory import
 
