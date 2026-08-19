@@ -152,8 +152,6 @@ export function resolveAdCorporateEmail(
 
   return '';
 }
-
-/** True when AD account is enabled (userAccountControl bit 0x0002 clear). */
 export function isAdAccountEnabled(user: Record<string, unknown>): boolean {
   const uac = parseInt(ldapAttr(user, 'userAccountControl') || '512', 10);
   return (uac & 0x0002) === 0;
@@ -176,10 +174,11 @@ const BUILTIN_SAM_BLOCKLIST = new Set([
   'wdagutilityaccount', 'healthmailbox',
 ]);
 
-/** Drop built-in / service-style rows that slip through the LDAP filter. */
+/** Drop built-in / service-style rows that slip through the LDAP filter.
+ *  employeeID is optional — sAMAccountName is sufficient for import (IdP assigns AD- hash emp_id). */
 export function isImportableAdDirectoryUser(
   user: Record<string, unknown>,
-  defaultDomain?: string,
+  _defaultDomain?: string,
 ): boolean {
   const sam = ldapAttr(user, 'sAMAccountName').trim().toLowerCase();
   if (!sam || sam.endsWith('$')) return false;
@@ -188,10 +187,6 @@ export function isImportableAdDirectoryUser(
 
   const critical = ldapAttr(user, 'isCriticalSystemObject').toUpperCase();
   if (critical === 'TRUE') return false;
-
-  const email = resolveAdCorporateEmail(user, defaultDomain);
-  const empId = ldapAttr(user, 'employeeID').trim() || ldapAttr(user, 'employeeNumber').trim();
-  if (!email && !empId) return false;
 
   return true;
 }
