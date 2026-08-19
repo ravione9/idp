@@ -19,6 +19,15 @@ const UAC_NORMAL_ACCOUNT  = 0x0200; // 512  — enabled
 const UAC_ACCOUNTDISABLE  = 0x0002; // 2
 const UAC_DISABLED_ACCOUNT = UAC_NORMAL_ACCOUNT | UAC_ACCOUNTDISABLE; // 514
 
+/** LDAP attributes for inbound user import — explicit list keeps paging reliable (avoid `*`). */
+export const AD_USER_IMPORT_ATTRS = [
+  'dn', 'sAMAccountName', 'mail', 'userPrincipalName', 'displayName', 'cn',
+  'givenName', 'sn', 'objectGUID', 'employeeID', 'employeeNumber', 'userAccountControl',
+  'department', 'title', 'manager', 'description', 'pager', 'initials', 'info',
+  'isCriticalSystemObject',
+  ...Array.from({ length: 15 }, (_, i) => `extensionAttribute${i + 1}`),
+];
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -274,7 +283,7 @@ export class ADAdapter extends BaseAdapter {
   async listDirectoryUsers(scope?: AdSyncScope): Promise<AdapterResult<ADUser[]>> {
     return this.safe(async () => {
       const syncScope = scope ?? { orgUnits: [], users: [], includeSubOrgUnits: true };
-      const attrs = ['*'];
+      const attrs = AD_USER_IMPORT_ATTRS;
       const filter = inboundAdUserLdapFilter();
       const ldapScope = syncScope.includeSubOrgUnits ? 'sub' : 'one';
       const bases = resolveAdSearchBases(syncScope, this.dir);
@@ -1129,10 +1138,8 @@ export function resolveAdDirectoryConfig(baseDn: string, targetOuRaw?: string): 
     provisionOuRdn = ouPrefix;
     inferredProvisionOu = true;
   } else {
-    throw new Error(
-      'New User OU is not set. Enter where new accounts should be created (e.g. OU=IT). ' +
-      'Base DN should be the domain root (DC=Lenskart,DC=in), not the OU itself.',
-    );
+    provisionOuRdn = 'OU=Users';
+    inferredProvisionOu = true;
   }
 
   return {
