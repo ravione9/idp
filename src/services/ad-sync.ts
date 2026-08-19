@@ -11,7 +11,7 @@
 import crypto from 'crypto';
 import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, readAdObjectGuid, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { parseCsvList } from './google-directory-config.js';
-import { resolveAdSyncScope, employeeEligibleForAdProvision, resolveAdCorporateEmail, resolveAdDefaultEmailDomain } from './ad-directory-config.js';
+import { resolveAdSyncScope, employeeEligibleForAdProvision, resolveAdCorporateEmail, resolveAdDefaultEmailDomain, parseAdUpnDomains, resolveUpnSuffixForProvision } from './ad-directory-config.js';
 import type { GroupSyncSummary } from './group-sync.js';
 import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
@@ -250,12 +250,12 @@ async function upsertAdIdentityLink(empId: string, sam: string, linkStatus: stri
 async function repairOrphanAdLinks(
   adUsers: Record<string, unknown>[],
   errors: string[],
-  defaultEmailDomain: string,
+  upnDomains: string[],
 ): Promise<number> {
   let repaired = 0;
   for (const adUser of adUsers) {
     const sam = getLdapAttr(adUser, 'sAMAccountName').trim();
-    const email = resolveAdCorporateEmail(adUser, defaultEmailDomain);
+    const email = resolveAdCorporateEmail(adUser, upnDomains);
     if (!sam) continue;
 
     const emp = await queryOne<{ emp_id: string }>(
@@ -452,8 +452,10 @@ export async function processInboundAdUsers(
   diag: string;
 }> {
   const adapter = options?.adapter ?? null;
-  const defaultEmailDomain = options?.defaultEmailDomain
-    ?? (options?.cfg ? resolveAdDefaultEmailDomain(options.cfg, dirConfig) : resolveAdDefaultEmailDomain({}, dirConfig));
+  const upnDomains = options?.cfg
+    ? parseAdUpnDomains(options.cfg, dirConfig)
+    : parseAdUpnDomains({}, dirConfig);
+  const defaultEmailDomain = options?.defaultEmailDomain ?? upnDomains[0] ?? resolveAdDefaultEmailDomain({}, dirConfig);
   let imported = 0;
   let linked = 0;
   let skipped = 0;
@@ -494,7 +496,7 @@ export async function processInboundAdUsers(
   const dnToEmail = new Map<string, string>();
   for (const adUser of adUsers) {
     const dn = getLdapAttr(adUser, 'dn');
-    const mail = resolveAdCorporateEmail(adUser, defaultEmailDomain);
+    const mail = resolveAdCorporateEmail(adUser, upnDomains);
     if (dn && mail) dnToEmail.set(dn.toLowerCase(), mail);
   }
 
@@ -513,7 +515,7 @@ export async function processInboundAdUsers(
         continue;
       }
 
-      const email = resolveAdCorporateEmail(adUser, defaultEmailDomain)
+      const email = resolveAdCorporateEmail(adUser, upnDomains)
         || (sam && defaultEmailDomain ? `${sam}@${defaultEmailDomain.replace(/^@+/, '')}` : '');
       if (!email && !sam) {
         skipped++;
@@ -647,7 +649,7 @@ export async function processInboundAdUsers(
     logger.info({ managersLinked }, 'AD sync inbound: manager links resolved');
   }
 
-  const repaired = await repairOrphanAdLinks(adUsers as Record<string, unknown>[], errors, defaultEmailDomain);
+  const repaired = await repairOrphanAdLinks(adUsers as Record<string, unknown>[], errors, upnDomains);
   if (repaired > 0) {
     logger.info({ repaired }, 'AD sync inbound: repaired orphan identity links');
   }
@@ -833,9 +835,6 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     logger.info({ connectorId, direction }, 'AD sync: OUTBOUND-only — skipping AD directory import');
   }
 
-  const upnDomain  = (cfg['upnDomain']    as string | undefined)?.trim()
-                  || (cfg['customerDomain'] as string | undefined)?.trim()
-                  || undefined;
   const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
   const baseDn     = (cfg['baseDn']       as string | undefined) || config.ad.baseDn;
   let dirConfig: ReturnType<typeof resolveAdDirectoryConfig>;
@@ -849,6 +848,8 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     );
     throw err;
   }
+
+  const upnDomains = parseAdUpnDomains(cfg, dirConfig);
 
   const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
   const useSsl     = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
@@ -1023,6 +1024,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
             const sAMAccountName = generateSamAccountName(emp.full_name);
             const tempPass = generateTempPassword();
 
+            const provisionUpn = resolveUpnSuffixForProvision(emp.email_corp, upnDomains);
             const result = await adapter.createUser({
               empId:        emp.emp_id,
               fullName:     emp.full_name,
@@ -1031,7 +1033,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
               department:   emp.dept_id ?? '',
               title:        emp.role ?? '',
               targetOu: dirConfig.provisionOuRdn,
-              ...(upnDomain ? { upnDomain } : {}),
+              upnDomain: provisionUpn,
               tempPassword: tempPass,
             });
 
@@ -1138,9 +1140,7 @@ export async function buildAdOutboundPlanForAgent(
   dirConfig: AdDirectoryConfig,
   cfg: Record<string, unknown>,
 ): Promise<AdOutboundAction[]> {
-  const upnDomain = (cfg['upnDomain'] as string | undefined)?.trim()
-    || (cfg['customerDomain'] as string | undefined)?.trim()
-    || undefined;
+  const upnDomains = parseAdUpnDomains(cfg, dirConfig);
 
   const syncScope = resolveAdSyncScope(cfg);
   const googleLinked = new Set(
@@ -1190,7 +1190,7 @@ export async function buildAdOutboundPlanForAgent(
         suggestedSam: generateSamAccountName(emp.full_name),
         provisionOuRdn: dirConfig.provisionOuRdn,
         allowCreate,
-        ...(upnDomain ? { upnDomain } : {}),
+        upnDomain: resolveUpnSuffixForProvision(emp.email_corp, upnDomains),
       });
     } else if (isInactive && link && link.status === 'ACTIVE') {
       plan.push({

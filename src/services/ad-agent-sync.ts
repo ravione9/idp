@@ -165,8 +165,7 @@ export async function getPendingAgentJob(connectorId: string): Promise<AgentJob 
 
   const { runInbound, runOutbound } = resolveDirection(conn);
   const dirConfig = resolveDirConfig(cfg);
-  const upnDomain = (cfg['upnDomain'] as string | undefined)?.trim()
-    || (cfg['customerDomain'] as string | undefined)?.trim()
+  const upnDomain = String(cfg['upnDomains'] ?? cfg['upnDomain'] ?? cfg['customerDomain'] ?? '').trim()
     || undefined;
 
   return {

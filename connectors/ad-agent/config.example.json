@@ -13,7 +13,7 @@
     "bindPassword": "change-me",
     "baseDn": "DC=corp,DC=example,DC=com",
     "targetOu": "OU=Employees",
-    "upnDomain": "corp.example.com",
+    "upnDomain": "lenskart.in\nlenskart.com\nfos.lenskart.in\ndealskart.in",
     "disabledOu": "OU=Disabled,"
   }
 }

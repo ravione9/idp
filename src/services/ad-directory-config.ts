@@ -4,6 +4,7 @@
  */
 
 import type { AdDirectoryConfig } from '../adapters/ad-adapter.js';
+import { normalizeGoogleDomain, parseGoogleHostedDomains } from '../auth/google-domains.js';
 import { parseCsvList } from './google-directory-config.js';
 
 export interface AdSyncScope {
@@ -99,7 +100,7 @@ export function filterAdUsersByScope<T extends Record<string, unknown>>(
   if (scope.users.length === 0) return users;
   const allow = new Set(scope.users);
   return users.filter((u) => {
-    const mail = (ldapAttr(u, 'mail') || ldapAttr(u, 'userPrincipalName')).trim().toLowerCase();
+    const mail = resolveAdCorporateEmail(u).trim().toLowerCase();
     return mail && allow.has(mail);
   });
 }
@@ -129,16 +130,34 @@ export function resolveAdDefaultEmailDomain(
   cfg: Record<string, unknown>,
   dir: AdDirectoryConfig,
 ): string {
-  return (cfg['upnDomain'] as string | undefined)?.trim()
-    || (cfg['customerDomain'] as string | undefined)?.trim()
-    || domainFromAdRoot(dir.domainRoot)
-    || 'lenskart.in';
+  return parseAdUpnDomains(cfg, dir)[0] ?? 'lenskart.in';
 }
 
-/** Best corporate email for an AD LDAP entry (mail → UPN → sAM@defaultDomain). */
+/** All UPN suffixes for this connector (multi-line upnDomain / upnDomains). */
+export function parseAdUpnDomains(cfg: Record<string, unknown>, dir: AdDirectoryConfig): string[] {
+  const fromCfg = parseGoogleHostedDomains(
+    cfg['upnDomains'] ?? cfg['upnDomain'] ?? cfg['customerDomains'] ?? cfg['customerDomain'] ?? '',
+  );
+  if (fromCfg.length) return fromCfg;
+  const fromRoot = domainFromAdRoot(dir.domainRoot);
+  return fromRoot ? [fromRoot] : ['lenskart.in'];
+}
+
+/** UPN suffix for outbound AD provision — matches employee email domain when listed. */
+export function resolveUpnSuffixForProvision(emailCorp: string, domains: string[]): string {
+  const email = emailCorp.trim().toLowerCase();
+  const at = email.lastIndexOf('@');
+  if (at > 0) {
+    const suffix = normalizeGoogleDomain(email.slice(at + 1));
+    if (!domains.length || domains.includes(suffix)) return suffix;
+  }
+  return domains[0] ?? 'lenskart.in';
+}
+
+/** Best corporate email for an AD LDAP entry (mail → UPN as-is → sAM@firstConfiguredDomain). */
 export function resolveAdCorporateEmail(
   user: Record<string, unknown>,
-  defaultDomain?: string,
+  defaultDomains?: string | string[],
 ): string {
   const mail = ldapAttr(user, 'mail').trim().toLowerCase();
   if (mail.includes('@')) return mail;
@@ -147,11 +166,20 @@ export function resolveAdCorporateEmail(
   if (upn.includes('@')) return upn;
 
   const sam = ldapAttr(user, 'sAMAccountName').trim().toLowerCase();
-  const domain = (defaultDomain ?? '').trim().toLowerCase().replace(/^@+/, '');
-  if (sam && domain) return `${sam}@${domain}`;
+  const domains = Array.isArray(defaultDomains)
+    ? defaultDomains
+    : defaultDomains
+      ? [defaultDomains]
+      : [];
+  for (const raw of domains) {
+    const domain = raw.trim().toLowerCase().replace(/^@+/, '');
+    if (sam && domain) return `${sam}@${domain}`;
+  }
 
   return '';
 }
+
+/** True when AD account is enabled (userAccountControl bit 0x0002 clear). */
 export function isAdAccountEnabled(user: Record<string, unknown>): boolean {
   const uac = parseInt(ldapAttr(user, 'userAccountControl') || '512', 10);
   return (uac & 0x0002) === 0;
