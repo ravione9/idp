@@ -122,7 +122,18 @@ const BUILTIN_SAM_BLOCKLIST = new Set([
   'wdagutilityaccount', 'healthmailbox',
 ]);
 
-function isImportableAdDirectoryUser(user: Record<string, unknown>): boolean {
+function resolveCorporateEmail(user: Record<string, unknown>, defaultDomain: string): string {
+  const mail = getAttr(user, 'mail').trim().toLowerCase();
+  if (mail.includes('@')) return mail;
+  const upn = getAttr(user, 'userPrincipalName').trim().toLowerCase();
+  if (upn.includes('@')) return upn;
+  const sam = getAttr(user, 'sAMAccountName').trim().toLowerCase();
+  const domain = defaultDomain.trim().toLowerCase().replace(/^@+/, '');
+  if (sam && domain) return `${sam}@${domain}`;
+  return '';
+}
+
+function isImportableAdDirectoryUser(user: Record<string, unknown>, defaultDomain: string): boolean {
   const sam = getAttr(user, 'sAMAccountName').trim().toLowerCase();
   if (!sam || sam.endsWith('$')) return false;
   if (BUILTIN_SAM_BLOCKLIST.has(sam)) return false;
@@ -131,9 +142,9 @@ function isImportableAdDirectoryUser(user: Record<string, unknown>): boolean {
   const critical = getAttr(user, 'isCriticalSystemObject').toUpperCase();
   if (critical === 'TRUE') return false;
 
-  const mail = (getAttr(user, 'mail') || getAttr(user, 'userPrincipalName')).trim();
-  const empId = getAttr(user, 'employeeID').trim();
-  if (!mail && !empId) return false;
+  const email = resolveCorporateEmail(user, defaultDomain);
+  const empId = getAttr(user, 'employeeID').trim() || getAttr(user, 'employeeNumber').trim();
+  if (!email && !empId) return false;
 
   return true;
 }
@@ -249,6 +260,7 @@ export class AdLdapClient {
     includeSubOrgUnits?: boolean;
   }): Promise<Record<string, unknown>[]> {
     const filter = inboundAdUserLdapFilter();
+    const defaultDomain = this.ad.upnDomain?.trim() || domainFromBaseDn(this.ad.baseDn);
     const { bases } = resolveSearchBases(this.ad.baseDn, options?.syncOrgUnits);
     const ldapScope = options?.includeSubOrgUnits === false ? 'one' : 'sub';
     const merged: Record<string, unknown>[] = [];
@@ -262,7 +274,7 @@ export class AdLdapClient {
       }
     }
 
-    const users = dedupeUsers(merged).filter(isImportableAdDirectoryUser);
+    const users = dedupeUsers(merged).filter((u) => isImportableAdDirectoryUser(u, defaultDomain));
     return filterUsersByAllowlist(users, options?.syncUsers);
   }
 

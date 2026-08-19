@@ -115,6 +115,50 @@ export function describeAdSyncScope(scope: AdSyncScope, userCount: number): stri
   return `Sync scope: ${parts.join(', ')} — ${userCount} user(s) matched`;
 }
 
+export function domainFromAdRoot(domainRoot: string): string {
+  return domainRoot
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => /^DC=/i.test(p))
+    .map((p) => p.slice(3))
+    .join('.')
+    .toLowerCase();
+}
+
+export function resolveAdDefaultEmailDomain(
+  cfg: Record<string, unknown>,
+  dir: AdDirectoryConfig,
+): string {
+  return (cfg['upnDomain'] as string | undefined)?.trim()
+    || (cfg['customerDomain'] as string | undefined)?.trim()
+    || domainFromAdRoot(dir.domainRoot)
+    || 'lenskart.in';
+}
+
+/** Best corporate email for an AD LDAP entry (mail → UPN → sAM@defaultDomain). */
+export function resolveAdCorporateEmail(
+  user: Record<string, unknown>,
+  defaultDomain?: string,
+): string {
+  const mail = ldapAttr(user, 'mail').trim().toLowerCase();
+  if (mail.includes('@')) return mail;
+
+  const upn = ldapAttr(user, 'userPrincipalName').trim().toLowerCase();
+  if (upn.includes('@')) return upn;
+
+  const sam = ldapAttr(user, 'sAMAccountName').trim().toLowerCase();
+  const domain = (defaultDomain ?? '').trim().toLowerCase().replace(/^@+/, '');
+  if (sam && domain) return `${sam}@${domain}`;
+
+  return '';
+}
+
+/** True when AD account is enabled (userAccountControl bit 0x0002 clear). */
+export function isAdAccountEnabled(user: Record<string, unknown>): boolean {
+  const uac = parseInt(ldapAttr(user, 'userAccountControl') || '512', 10);
+  return (uac & 0x0002) === 0;
+}
+
 /** LDAP filter for inbound person accounts (excludes computers and built-in system users). */
 export function inboundAdUserLdapFilter(): string {
   return [
@@ -133,7 +177,10 @@ const BUILTIN_SAM_BLOCKLIST = new Set([
 ]);
 
 /** Drop built-in / service-style rows that slip through the LDAP filter. */
-export function isImportableAdDirectoryUser(user: Record<string, unknown>): boolean {
+export function isImportableAdDirectoryUser(
+  user: Record<string, unknown>,
+  defaultDomain?: string,
+): boolean {
   const sam = ldapAttr(user, 'sAMAccountName').trim().toLowerCase();
   if (!sam || sam.endsWith('$')) return false;
   if (BUILTIN_SAM_BLOCKLIST.has(sam)) return false;
@@ -142,9 +189,9 @@ export function isImportableAdDirectoryUser(user: Record<string, unknown>): bool
   const critical = ldapAttr(user, 'isCriticalSystemObject').toUpperCase();
   if (critical === 'TRUE') return false;
 
-  const mail = (ldapAttr(user, 'mail') || ldapAttr(user, 'userPrincipalName')).trim();
-  const empId = ldapAttr(user, 'employeeID').trim();
-  if (!mail && !empId) return false;
+  const email = resolveAdCorporateEmail(user, defaultDomain);
+  const empId = ldapAttr(user, 'employeeID').trim() || ldapAttr(user, 'employeeNumber').trim();
+  if (!email && !empId) return false;
 
   return true;
 }

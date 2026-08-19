@@ -1114,6 +1114,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-19 — AD inbound: broader email matching and With AD stats
+
+**Why** — Many AD users lack a populated `mail` attribute; Universal Directory under-counted AD links (ACTIVE-only stats).
+
+**What changed:** `resolveAdCorporateEmail` (mail → UPN → sAM@domain); import filter accepts `employeeNumber`; **With AD** stat includes disabled AD links; agent uses same rules.
+
 ### `2e7309d` — 2026-08-18 — Directory disable propagation and 24h auto-deprovision
 
 **Why** — Disabling a user in AD/Google or the Universal Directory did not reliably block portal access immediately; suspended users stayed visible in the application indefinitely.

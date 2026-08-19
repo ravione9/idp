@@ -11,7 +11,7 @@
 import crypto from 'crypto';
 import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, readAdObjectGuid, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { parseCsvList } from './google-directory-config.js';
-import { resolveAdSyncScope, employeeEligibleForAdProvision } from './ad-directory-config.js';
+import { resolveAdSyncScope, employeeEligibleForAdProvision, resolveAdCorporateEmail, resolveAdDefaultEmailDomain } from './ad-directory-config.js';
 import type { GroupSyncSummary } from './group-sync.js';
 import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
@@ -419,7 +419,7 @@ async function importAdDirectoryUsers(
     throw new Error(listResult.error ?? 'Failed to list AD users');
   }
 
-  return processInboundAdUsers(listResult.data, dirConfig, errors, { adapter });
+  return processInboundAdUsers(listResult.data, dirConfig, errors, { adapter, cfg });
 }
 
 /** Apply inbound AD user objects (from direct LDAP or on-prem agent). */
@@ -427,7 +427,7 @@ export async function processInboundAdUsers(
   adUsers: Record<string, unknown>[],
   dirConfig: AdDirectoryConfig,
   errors: string[],
-  options?: { adapter?: ADAdapter | null },
+  options?: { adapter?: ADAdapter | null; cfg?: Record<string, unknown>; defaultEmailDomain?: string },
 ): Promise<{
   found: number;
   imported: number;
@@ -441,6 +441,8 @@ export async function processInboundAdUsers(
   diag: string;
 }> {
   const adapter = options?.adapter ?? null;
+  const defaultEmailDomain = options?.defaultEmailDomain
+    ?? (options?.cfg ? resolveAdDefaultEmailDomain(options.cfg, dirConfig) : resolveAdDefaultEmailDomain({}, dirConfig));
   let imported = 0;
   let linked = 0;
   let skipped = 0;
@@ -481,7 +483,7 @@ export async function processInboundAdUsers(
   const dnToEmail = new Map<string, string>();
   for (const adUser of adUsers) {
     const dn = getLdapAttr(adUser, 'dn');
-    const mail = (getLdapAttr(adUser, 'mail') || getLdapAttr(adUser, 'userPrincipalName')).trim().toLowerCase();
+    const mail = resolveAdCorporateEmail(adUser, defaultEmailDomain);
     if (dn && mail) dnToEmail.set(dn.toLowerCase(), mail);
   }
 
@@ -500,9 +502,9 @@ export async function processInboundAdUsers(
         continue;
       }
 
-      const email = (getLdapAttr(adUser, 'mail') || getLdapAttr(adUser, 'userPrincipalName')).trim().toLowerCase();
+      const email = resolveAdCorporateEmail(adUser, defaultEmailDomain);
       if (!email) {
-        throw new Error('missing mail and userPrincipalName');
+        throw new Error('missing mail, userPrincipalName, and default email domain');
       }
 
       const fullName = cleanAdDisplayName(adUser, sam);
