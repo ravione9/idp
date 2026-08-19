@@ -265,6 +265,7 @@ export class AdLdapClient {
       scope,
       filter,
       attributes,
+      sizeLimit: 0,
       paged: { pageSize: 900 },
     })) {
       entries.push(...(result.searchEntries as Record<string, unknown>[]));

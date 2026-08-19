@@ -204,13 +204,23 @@ export class ADAdapter extends BaseAdapter {
 
     const runPaged = async () => {
       entries.length = 0;
+      let pages = 0;
       for await (const result of this.client.searchPaginated(baseDn, {
         scope,
         filter,
         attributes,
+        sizeLimit: 0,
         paged: { pageSize },
       })) {
+        pages++;
         entries.push(...(result.searchEntries as unknown as ADUser[]));
+      }
+      logger.info({ baseDn, pages, total: entries.length, pageSize }, 'AD searchAtPaged: complete');
+      if (entries.length === 1000) {
+        logger.warn(
+          { baseDn, total: entries.length },
+          'AD searchAtPaged: exactly 1000 results — verify LDAP paging is active (deploy latest API image)',
+        );
       }
     };
 
