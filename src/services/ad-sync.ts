@@ -11,7 +11,7 @@
 import crypto from 'crypto';
 import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, readAdObjectGuid, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { parseCsvList } from './google-directory-config.js';
-import { resolveAdSyncScope, employeeEligibleForAdProvision } from './ad-directory-config.js';
+import { resolveAdSyncScope, employeeEligibleForAdProvision, resolveAdCorporateEmail, resolveAdDefaultEmailDomain } from './ad-directory-config.js';
 import type { GroupSyncSummary } from './group-sync.js';
 import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
@@ -158,9 +158,10 @@ async function migrateEmpId(oldId: string, newId: string): Promise<void> {
 
 /**
  * Resolve the IdP emp_id for an AD user. Order of preference:
- *   1. AD's employeeID — the canonical AD identifier
- *   2. corporate email — for accounts that pre-date employeeID being set
- *   3. derived AD-<hash> — last resort when AD has neither
+ *   1. AD employeeID (when set and not conflicting)
+ *   2. corporate email match
+ *   3. existing AD identity link (sAMAccountName)
+ *   4. derived AD-<hash> from sAMAccountName (no employeeID required)
  *
  * When an existing row matched by email has a placeholder emp_id (AD-XXXX)
  * and AD now reports a real employeeID, the row is migrated to the AD value.
@@ -219,6 +220,15 @@ async function resolveEmpIdForAdUser(
     }
   }
 
+  if (sam) {
+    const bySamLink = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM identity_links
+        WHERE \`system\` = 'AD' AND external_id = ? AND status != 'DELETED'`,
+      [sam],
+    );
+    if (bySamLink) return bySamLink.emp_id;
+  }
+
   return adEmpId || deriveEmpIdFromAd(adUser);
 }
 
@@ -240,16 +250,17 @@ async function upsertAdIdentityLink(empId: string, sam: string, linkStatus: stri
 async function repairOrphanAdLinks(
   adUsers: Record<string, unknown>[],
   errors: string[],
+  defaultEmailDomain: string,
 ): Promise<number> {
   let repaired = 0;
   for (const adUser of adUsers) {
     const sam = getLdapAttr(adUser, 'sAMAccountName').trim();
-    const email = (getLdapAttr(adUser, 'mail') || getLdapAttr(adUser, 'userPrincipalName')).trim().toLowerCase();
-    if (!sam || !email) continue;
+    const email = resolveAdCorporateEmail(adUser, defaultEmailDomain);
+    if (!sam) continue;
 
     const emp = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM employees WHERE email_corp = ? OR emp_id = ?`,
-      [email, deriveEmpIdFromAd(adUser)],
+      `SELECT emp_id FROM employees WHERE ${email ? 'email_corp = ? OR ' : ''}emp_id = ?`,
+      email ? [email, deriveEmpIdFromAd(adUser)] : [deriveEmpIdFromAd(adUser)],
     );
     if (!emp) continue;
 
@@ -419,7 +430,7 @@ async function importAdDirectoryUsers(
     throw new Error(listResult.error ?? 'Failed to list AD users');
   }
 
-  return processInboundAdUsers(listResult.data, dirConfig, errors, { adapter });
+  return processInboundAdUsers(listResult.data, dirConfig, errors, { adapter, cfg });
 }
 
 /** Apply inbound AD user objects (from direct LDAP or on-prem agent). */
@@ -427,7 +438,7 @@ export async function processInboundAdUsers(
   adUsers: Record<string, unknown>[],
   dirConfig: AdDirectoryConfig,
   errors: string[],
-  options?: { adapter?: ADAdapter | null },
+  options?: { adapter?: ADAdapter | null; cfg?: Record<string, unknown>; defaultEmailDomain?: string },
 ): Promise<{
   found: number;
   imported: number;
@@ -441,6 +452,8 @@ export async function processInboundAdUsers(
   diag: string;
 }> {
   const adapter = options?.adapter ?? null;
+  const defaultEmailDomain = options?.defaultEmailDomain
+    ?? (options?.cfg ? resolveAdDefaultEmailDomain(options.cfg, dirConfig) : resolveAdDefaultEmailDomain({}, dirConfig));
   let imported = 0;
   let linked = 0;
   let skipped = 0;
@@ -481,7 +494,7 @@ export async function processInboundAdUsers(
   const dnToEmail = new Map<string, string>();
   for (const adUser of adUsers) {
     const dn = getLdapAttr(adUser, 'dn');
-    const mail = (getLdapAttr(adUser, 'mail') || getLdapAttr(adUser, 'userPrincipalName')).trim().toLowerCase();
+    const mail = resolveAdCorporateEmail(adUser, defaultEmailDomain);
     if (dn && mail) dnToEmail.set(dn.toLowerCase(), mail);
   }
 
@@ -500,10 +513,14 @@ export async function processInboundAdUsers(
         continue;
       }
 
-      const email = (getLdapAttr(adUser, 'mail') || getLdapAttr(adUser, 'userPrincipalName')).trim().toLowerCase();
-      if (!email) {
-        throw new Error('missing mail and userPrincipalName');
+      const email = resolveAdCorporateEmail(adUser, defaultEmailDomain)
+        || (sam && defaultEmailDomain ? `${sam}@${defaultEmailDomain.replace(/^@+/, '')}` : '');
+      if (!email && !sam) {
+        skipped++;
+        succeeded++;
+        continue;
       }
+      const emailCorp = email || `${sam}@ad-sync.local`;
 
       const fullName = cleanAdDisplayName(adUser, sam);
       const { firstName, lastName } = readAdNameParts(adUser, fullName, sam);
@@ -513,7 +530,7 @@ export async function processInboundAdUsers(
       const department = getLdapAttr(adUser, 'department').trim().slice(0, 50) || null;
       const title      = getLdapAttr(adUser, 'title').trim().slice(0, 100) || null;
 
-      const empId = await resolveEmpIdForAdUser(adUser, email, errors);
+      const empId = await resolveEmpIdForAdUser(adUser, emailCorp, errors);
       if (!empId) {
         skipped++;
         succeeded++;
@@ -532,7 +549,7 @@ export async function processInboundAdUsers(
                     ad_object_guid = COALESCE(?, ad_object_guid),
                     sync_status = 'DISABLED', updated_at = UTC_TIMESTAMP()
               WHERE emp_id = ?`,
-            [fullName, firstName, lastName, email, department, title, adObjectGuid, empId],
+            [fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, empId],
           );
           await upsertAdIdentityLink(empId, sam, 'DISABLED');
           await applyDirectorySourceDisabled(empId, 'AD', 'ad_account_disabled');
@@ -566,7 +583,7 @@ export async function processInboundAdUsers(
                   ad_object_guid = COALESCE(?, ad_object_guid),
                   ilg_state = ?, updated_at = UTC_TIMESTAMP()
             WHERE emp_id = ?`,
-          [fullName, firstName, lastName, email, department, title, adObjectGuid, ilgState, empId],
+          [fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, ilgState, empId],
         );
         linked++;
       } else {
@@ -575,7 +592,7 @@ export async function processInboundAdUsers(
              (emp_id, full_name, first_name, last_name, email_corp, dept_id, role, ad_object_guid,
               ilg_state, hrms_status, hire_date, employment_type)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', UTC_DATE(), 'CORPORATE')`,
-          [empId, fullName, firstName, lastName, email, department, title, adObjectGuid, ilgState],
+          [empId, fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, ilgState],
         );
         imported++;
       }
@@ -630,7 +647,7 @@ export async function processInboundAdUsers(
     logger.info({ managersLinked }, 'AD sync inbound: manager links resolved');
   }
 
-  const repaired = await repairOrphanAdLinks(adUsers as Record<string, unknown>[], errors);
+  const repaired = await repairOrphanAdLinks(adUsers as Record<string, unknown>[], errors, defaultEmailDomain);
   if (repaired > 0) {
     logger.info({ repaired }, 'AD sync inbound: repaired orphan identity links');
   }

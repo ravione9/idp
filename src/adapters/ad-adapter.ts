@@ -5,6 +5,7 @@ import logger from '../utils/logger.js';
 import type { AdSyncScope } from '../services/ad-directory-config.js';
 import {
   dedupeAdDirectoryUsers,
+  domainFromAdRoot,
   filterAdUsersByScope,
   inboundAdUserLdapFilter,
   isImportableAdDirectoryUser,
@@ -280,8 +281,9 @@ export class ADAdapter extends BaseAdapter {
       }
 
       const deduped = dedupeAdDirectoryUsers(merged);
+      const defaultDomain = domainFromAdRoot(this.dir.domainRoot);
       const users = filterAdUsersByScope(
-        deduped.filter(isImportableAdDirectoryUser),
+        deduped.filter((u) => isImportableAdDirectoryUser(u, defaultDomain)),
         syncScope,
       );
 
