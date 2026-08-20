@@ -174,38 +174,20 @@ async function resolveEmpIdForAdUser(
 ): Promise<string | null> {
   const sam = getLdapAttr(adUser, 'sAMAccountName').trim();
   const adEmpId = readAdEmployeeId(adUser);
+  const emailNorm = email.trim().toLowerCase();
 
-  if (adEmpId) {
-    const byAdId = await queryOne<{ emp_id: string; email_corp: string }>(
-      `SELECT emp_id, email_corp FROM employees WHERE emp_id = ?`,
-      [adEmpId],
-    );
-    if (byAdId) {
-      if (
-        email &&
-        byAdId.email_corp &&
-        byAdId.email_corp.toLowerCase() !== email.toLowerCase()
-      ) {
-        errors.push(
-          `${sam || adEmpId}: emp_id ${adEmpId} already used by ${byAdId.email_corp} — skipping to avoid collision`,
-        );
-        return null;
-      }
-      return adEmpId;
-    }
-  }
-
-  if (email) {
+  // Prefer UPN/mail match — AD is source of truth when corporate email was updated in directory.
+  if (emailNorm) {
     const byEmail = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM employees WHERE email_corp = ?`,
-      [email],
+      `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
+      [emailNorm],
     );
     if (byEmail) {
       if (adEmpId && byEmail.emp_id.startsWith('AD-') && byEmail.emp_id !== adEmpId) {
         try {
           await migrateEmpId(byEmail.emp_id, adEmpId);
           logger.info(
-            { from: byEmail.emp_id, to: adEmpId, email },
+            { from: byEmail.emp_id, to: adEmpId, email: emailNorm },
             'AD sync: migrated placeholder emp_id to AD employeeID',
           );
           return adEmpId;
@@ -220,6 +202,27 @@ async function resolveEmpIdForAdUser(
     }
   }
 
+  if (adEmpId) {
+    const byAdId = await queryOne<{ emp_id: string; email_corp: string }>(
+      `SELECT emp_id, email_corp FROM employees WHERE emp_id = ?`,
+      [adEmpId],
+    );
+    if (byAdId) {
+      if (
+        emailNorm
+        && byAdId.email_corp
+        && byAdId.email_corp.trim().toLowerCase() !== emailNorm
+      ) {
+        logger.info(
+          { empId: adEmpId, oldEmail: byAdId.email_corp, newEmail: emailNorm },
+          'AD sync: refreshing email_corp from AD UPN/mail',
+        );
+      }
+      return adEmpId;
+    }
+    return adEmpId;
+  }
+
   if (sam) {
     const bySamLink = await queryOne<{ emp_id: string }>(
       `SELECT emp_id FROM identity_links
@@ -229,7 +232,7 @@ async function resolveEmpIdForAdUser(
     if (bySamLink) return bySamLink.emp_id;
   }
 
-  return adEmpId || deriveEmpIdFromAd(adUser);
+  return deriveEmpIdFromAd(adUser);
 }
 
 /** Insert or revive an AD identity link (handles soft-deleted rows on uk_system_external). */
@@ -482,8 +485,13 @@ export async function processInboundAdUsers(
   // The same content is surfaced in the run's error_summary so it's visible
   // in the connector UI without having to grep server logs.
   let diag = '';
-  if (adUsers.length > 0) {
-    const sample = adUsers[0] as Record<string, unknown>;
+  const diagSample = adUsers.find((u) => {
+    const upn = getLdapAttr(u, 'userPrincipalName');
+    const mail = getLdapAttr(u, 'mail');
+    return upn.includes('@') || mail.includes('@');
+  }) ?? adUsers[0];
+  if (diagSample) {
+    const sample = diagSample as Record<string, unknown>;
     const populated: Record<string, string> = {};
     for (const k of Object.keys(sample)) {
       const v = getLdapAttr(sample, k);
@@ -494,13 +502,18 @@ export async function processInboundAdUsers(
       'AD sync inbound: first user — all populated attrs (diagnostic)',
     );
     diag =
-      `Diag (first user ${getLdapAttr(sample, 'sAMAccountName') || '?'}): ` +
+      `Diag (sample ${getLdapAttr(sample, 'sAMAccountName') || '?'}): ` +
       Object.entries(populated)
         .map(([k, v]) => `${k}=${v}`)
         .join(' | ');
   }
 
-  // First pass: build a DN -> email map so the second-pass manager lookup
+  const buildTag = process.env['GIT_COMMIT'] ?? process.env['IMAGE_TAG'] ?? '';
+  if (buildTag) {
+    diag = diag ? `${diag} || api=${buildTag}` : `api=${buildTag}`;
+  }
+
+  // First pass: build a DN -> email map
   // can resolve `manager` (a DN) without an extra LDAP round-trip per user.
   const dnToEmail = new Map<string, string>();
   for (const adUser of adUsers) {
@@ -764,10 +777,35 @@ export async function backfillAdIdentityLinkIfMissing(
     await adapter.resetCircuitBreaker();
     await adapter.connect();
 
-    const entryResult = await adapter.getDirectoryEntryByEmail(emailCorp);
-    if (!entryResult.success) return { empId, changed: false };
+    let entry: Record<string, unknown> | null = null;
 
-    const entry = entryResult.data as Record<string, unknown>;
+    const byEmail = await adapter.getDirectoryEntryByEmail(emailCorp);
+    if (byEmail.success) {
+      entry = byEmail.data as Record<string, unknown>;
+    }
+
+    if (!entry && empId && !empId.startsWith('AD-')) {
+      const byEmpId = await adapter.getUser(empId);
+      if (byEmpId.success && byEmpId.data?.sAMAccountName) {
+        const bySam = await adapter.getUserBySam(String(byEmpId.data.sAMAccountName));
+        if (bySam.success) entry = bySam.data as Record<string, unknown>;
+      }
+    }
+
+    if (!entry) {
+      const existingLink = await queryOne<{ external_id: string }>(
+        `SELECT external_id FROM identity_links
+          WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'`,
+        [empId],
+      );
+      if (existingLink?.external_id) {
+        const bySam = await adapter.getUserBySam(existingLink.external_id);
+        if (bySam.success) entry = bySam.data as Record<string, unknown>;
+      }
+    }
+
+    if (!entry) return { empId, changed: false };
+
     const adEmpId = readAdEmployeeId(entry);
     const sam = getLdapAttr(entry, 'sAMAccountName');
     if (!sam) return { empId, changed: false };
@@ -796,9 +834,14 @@ export async function backfillAdIdentityLinkIfMissing(
     }
 
     const cleanName = cleanAdDisplayName(entry, sam);
+    const adEmail = resolveAdCorporateEmail(entry);
     await execute(
-      `UPDATE employees SET full_name = ?, updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
-      [cleanName, targetEmpId],
+      `UPDATE employees
+          SET full_name = ?,
+              email_corp = CASE WHEN ? != '' THEN ? ELSE email_corp END,
+              updated_at = UTC_TIMESTAMP()
+        WHERE emp_id = ?`,
+      [cleanName, adEmail, adEmail, targetEmpId],
     );
 
     return { empId: targetEmpId, changed };
