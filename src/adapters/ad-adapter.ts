@@ -368,6 +368,17 @@ export class ADAdapter extends BaseAdapter {
     }, (err) => err instanceof ADNotFoundError);
   }
 
+  /** Full LDAP entry by sAMAccountName — used when IdP email_corp is stale vs AD UPN. */
+  async getUserBySam(samAccountName: string): Promise<AdapterResult<ADUser>> {
+    return this.safe(async () => {
+      const entries = await this.findUser(samAccountName, AD_USER_IMPORT_ATTRS);
+      if (entries.length === 0) {
+        throw new ADNotFoundError(`AD user not found for sAMAccountName=${samAccountName}`);
+      }
+      return entries[0];
+    }, (err) => err instanceof ADNotFoundError);
+  }
+
   private buildUserInfo(externalId: string, entry: ADUser): UserInfo {
     const uac = parseInt(entry.userAccountControl as string ?? '512', 10);
     const disabled = (uac & UAC_ACCOUNTDISABLE) !== 0;

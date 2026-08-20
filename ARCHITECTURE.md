@@ -1114,6 +1114,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-20 — AD sync: match by UPN first when email updated in AD
+
+**Why** — Users with valid `userPrincipalName` in AD were skipped when `employeeID` matched an IdP row but `email_corp` differed (email updated in AD but not synced).
+
+**What changed:** `resolveEmpIdForAdUser` prefers UPN/mail match before employeeID; refreshes `email_corp` from AD instead of skipping; profile backfill resolves AD user by employeeID or existing sAM link; sync diagnostic shows sample user with UPN + API build tag.
+
 ### (pending) — 2026-08-19 — AD multi-UPN suffixes and optional employeeID import
 
 **Why** — Lenskart AD uses many UPN suffixes (`lenskart.com`, `lenskart.in`, `fos.lenskart.in`, `dealskart.in`, …); inbound sync dropped users without `employeeID` and only matched a single default domain.
