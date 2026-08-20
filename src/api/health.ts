@@ -22,7 +22,11 @@ function requireDiagToken(req: Request, res: Response, next: NextFunction): void
 // GET /healthz — liveness (always 200 if process is up)
 // ---------------------------------------------------------------------------
 router.get('/healthz', (_req: Request, res: Response): void => {
-  res.status(200).json({ status: 'ok', ts: new Date().toISOString() });
+  res.status(200).json({
+    status: 'ok',
+    ts: new Date().toISOString(),
+    build: process.env['GIT_COMMIT'] ?? process.env['IMAGE_TAG'] ?? 'dev',
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@
 import crypto from 'crypto';
 import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, readAdObjectGuid, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { parseCsvList } from './google-directory-config.js';
-import { resolveAdSyncScope, employeeEligibleForAdProvision, resolveAdCorporateEmail, resolveAdDefaultEmailDomain, parseAdUpnDomains, resolveUpnSuffixForProvision } from './ad-directory-config.js';
+import { resolveAdSyncScope, employeeEligibleForAdProvision, resolveAdCorporateEmail, resolveAdDefaultEmailDomain, parseAdUpnDomains, resolveUpnSuffixForProvision, isImportableAdDirectoryUser } from './ad-directory-config.js';
 import type { GroupSyncSummary } from './group-sync.js';
 import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
@@ -456,6 +456,15 @@ export async function processInboundAdUsers(
     ? parseAdUpnDomains(options.cfg, dirConfig)
     : parseAdUpnDomains({}, dirConfig);
   const defaultEmailDomain = options?.defaultEmailDomain ?? upnDomains[0] ?? resolveAdDefaultEmailDomain({}, dirConfig);
+  const rawCount = adUsers.length;
+  adUsers = adUsers.filter((u) => isImportableAdDirectoryUser(u));
+  if (adUsers.length < rawCount) {
+    logger.info(
+      { rawCount, importable: adUsers.length, dropped: rawCount - adUsers.length },
+      'AD sync inbound: filtered built-in / service LDAP rows',
+    );
+  }
+
   let imported = 0;
   let linked = 0;
   let skipped = 0;
@@ -898,6 +907,10 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
         errors.push(
           `Inbound: 0 users returned from AD under ${dirConfig.searchBaseDn}. ` +
           `Set Base DN to domain root (DC=Lenskart,DC=in) or the OU containing users (OU=IT,DC=Lenskart,DC=in).`,
+        );
+      } else if (inbound.found === 1000) {
+        errors.push(
+          'Inbound: exactly 1000 AD users — likely hitting pre-pagination API build. Redeploy latest idp-api image and re-run sync.',
         );
       }
 
