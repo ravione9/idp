@@ -77,6 +77,12 @@ export function resolveAdSearchBases(scope: AdSyncScope, dir: AdDirectoryConfig)
   return fallback ? [fallback] : [];
 }
 
+/** LDAP search depth: blank Sync OUs always uses subtree (all nested OUs under Base DN). */
+export function resolveAdLdapScope(scope: AdSyncScope): 'sub' | 'one' {
+  if (scope.orgUnits.length === 0) return 'sub';
+  return scope.includeSubOrgUnits ? 'sub' : 'one';
+}
+
 export function dedupeAdDirectoryUsers<T extends Record<string, unknown>>(users: T[]): T[] {
   const byKey = new Map<string, T>();
   for (const user of users) {

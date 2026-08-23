@@ -4516,7 +4516,7 @@ function initSourcesTab(panel) {
         return `<div class="form-group" style="grid-column:1/-1">
           <label class="form-label">${esc(label)}</label>
           <textarea class="form-textarea" id="cfg-${f}" rows="4" placeholder="OU=IT&#10;OU=Sales,DC=lenskart,DC=in&#10;OU=HR">${val}</textarea>
-          <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">LDAP OU path or name, one per line. Leave blank to sync <strong>all users</strong> under Base DN (recommended: Base DN = domain root). New User OU is only for outbound provisioning.</p>
+          <p class="muted" style="font-size:0.75rem;margin-top:0.35rem">LDAP OU path or name, one per line. Leave blank to sync <strong>all users in every nested OU</strong> under Base DN (recommended: Base DN = <code>DC=lenskart,DC=in</code>). New User OU is only for outbound provisioning.</p>
         </div>`;
       }
       if (f === 'syncGroups' && (isGoogle || connectorType === 'AD' || isAdAgent)) {
@@ -4571,7 +4571,7 @@ function initSourcesTab(panel) {
           <label class="form-label" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
             <input type="checkbox" id="cfg-${f}" ${checked ? 'checked' : ''}>
             ${esc(label)}
-            <span class="muted" style="font-size:0.75rem">— search entire subtree under each Sync OU (uncheck = direct members of that OU only)</span>
+            <span class="muted" style="font-size:0.75rem">— only applies when Sync OUs are listed; blank Sync OUs always imports the full subtree under Base DN</span>
           </label>
         </div>`;
       }

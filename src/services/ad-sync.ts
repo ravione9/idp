@@ -11,7 +11,7 @@
 import crypto from 'crypto';
 import { ADAdapter, resolveAdDirectoryConfig, getLdapAttr, readAdEmployeeId, cleanAdDisplayName, readAdObjectGuid, type AdDirectoryConfig } from '../adapters/ad-adapter.js';
 import { parseCsvList } from './google-directory-config.js';
-import { resolveAdSyncScope, employeeEligibleForAdProvision, resolveAdCorporateEmail, resolveAdDefaultEmailDomain, parseAdUpnDomains, resolveUpnSuffixForProvision, isImportableAdDirectoryUser } from './ad-directory-config.js';
+import { resolveAdSyncScope, employeeEligibleForAdProvision, resolveAdCorporateEmail, resolveAdDefaultEmailDomain, parseAdUpnDomains, resolveUpnSuffixForProvision, isImportableAdDirectoryUser, resolveAdSearchBases, resolveAdLdapScope } from './ad-directory-config.js';
 import type { GroupSyncSummary } from './group-sync.js';
 import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
@@ -937,8 +937,11 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
       itemsProcessed += inbound.processed;
       itemsSucceeded += inbound.succeeded;
       itemsFailed += inbound.failed;
+      const searchBases = resolveAdSearchBases(syncScope, dirConfig);
+      const ldapScope = resolveAdLdapScope(syncScope);
       inboundSummary =
-        `Inbound: ${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked` +
+        `Inbound (${ldapScope}-tree, ${searchBases.length} base(s): ${searchBases.slice(0, 2).join('; ')}${searchBases.length > 2 ? '…' : ''}): ` +
+        `${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked` +
         (inbound.repaired ? `, ${inbound.repaired} links repaired` : '') +
         (inbound.migrated ? `, ${inbound.migrated} emp_ids corrected` : '') +
         `, ${inbound.skipped} skipped` +
