@@ -10,6 +10,7 @@ import {
   inboundAdUserLdapFilter,
   isImportableAdDirectoryUser,
   resolveAdSearchBases,
+  resolveAdLdapScope,
 } from '../services/ad-directory-config.js';
 
 // ---------------------------------------------------------------------------
@@ -285,7 +286,7 @@ export class ADAdapter extends BaseAdapter {
       const syncScope = scope ?? { orgUnits: [], users: [], includeSubOrgUnits: true };
       const attrs = AD_USER_IMPORT_ATTRS;
       const filter = inboundAdUserLdapFilter();
-      const ldapScope = syncScope.includeSubOrgUnits ? 'sub' : 'one';
+      const ldapScope = resolveAdLdapScope(syncScope);
       const bases = resolveAdSearchBases(syncScope, this.dir);
 
       if (bases.length === 0) {

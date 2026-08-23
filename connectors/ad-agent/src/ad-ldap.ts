@@ -120,16 +120,23 @@ function parseScopeList(raw?: string): string[] {
 function resolveSearchBases(
   baseDn: string,
   syncOrgUnits?: string,
-): { bases: string[]; includeSubOrgUnits: boolean } {
+): { bases: string[] } {
   const domainRoot = domainRootFromBaseDn(baseDn) || baseDn;
   const orgUnits = parseScopeList(syncOrgUnits);
   if (orgUnits.length > 0) {
     const bases = [...new Set(orgUnits.map((ou) => normalizeOuDn(ou, domainRoot).toLowerCase()))]
       .map((key) => orgUnits.map((ou) => normalizeOuDn(ou, domainRoot)).find((b) => b.toLowerCase() === key)!)
       .filter(Boolean);
-    return { bases, includeSubOrgUnits: true };
+    return { bases };
   }
-  return { bases: [baseDn], includeSubOrgUnits: true };
+  // Full-domain import: search from configured Base DN (domain root recommended).
+  return { bases: [baseDn.trim() || domainRoot] };
+}
+
+function resolveAgentLdapScope(syncOrgUnits?: string, includeSubOrgUnits?: boolean): 'sub' | 'one' {
+  const orgUnits = parseScopeList(syncOrgUnits);
+  if (orgUnits.length === 0) return 'sub';
+  return includeSubOrgUnits === false ? 'one' : 'sub';
 }
 
 function inboundAdUserLdapFilter(): string {
@@ -288,7 +295,7 @@ export class AdLdapClient {
     const filter = inboundAdUserLdapFilter();
     const upnDomains = parseUpnDomains(this.ad.upnDomain, this.ad.baseDn);
     const { bases } = resolveSearchBases(this.ad.baseDn, options?.syncOrgUnits);
-    const ldapScope = options?.includeSubOrgUnits === false ? 'one' : 'sub';
+    const ldapScope = resolveAgentLdapScope(options?.syncOrgUnits, options?.includeSubOrgUnits);
     const merged: Record<string, unknown>[] = [];
 
     for (const base of bases) {
