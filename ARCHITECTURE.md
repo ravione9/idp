@@ -1114,6 +1114,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-23 — AD sync: always search nested OUs when Sync OUs blank
+
+**Why** — With **Include sub-OUs** unchecked (or LDAP scope `one`), sync only read immediate children of Base DN — users in deeper OU trees were skipped.
+
+**What changed:** `resolveAdLdapScope()` forces subtree (`sub`) search when Sync OUs is blank; sync run summary shows LDAP bases and scope; agent matches same rules.
+
 ### (pending) — 2026-08-23 — Portal disable propagates to AD via connector config
 
 **Why** — Disabling a user in the Universal Directory left the AD account enabled; outbox worker only used env-based LDAP credentials (not Directory Sync connector config), and AD disable failed when the Disabled OU was missing.
