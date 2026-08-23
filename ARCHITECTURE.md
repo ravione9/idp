@@ -1114,6 +1114,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-23 — Portal disable propagates to AD via connector config
+
+**Why** — Disabling a user in the Universal Directory left the AD account enabled; outbox worker only used env-based LDAP credentials (not Directory Sync connector config), and AD disable failed when the Disabled OU was missing.
+
+**What changed:**
+
+- **`src/services/connector-adapters.ts`** — load AD adapter from active connector `config_json`; immediate portal→AD disable/enable on suspend/unsuspend.
+- **`src/services/outbox-worker.ts`** — resolve AD/LDAP adapter from connector DB when env vars unset; update `identity_links` after DISABLE/ENABLE.
+- **`src/adapters/ad-adapter.ts`** — UAC disable succeeds even if Disabled OU move fails.
+
 ### (pending) — 2026-08-20 — AD sync: match by UPN first when email updated in AD
 
 **Why** — Users with valid `userPrincipalName` in AD were skipped when `employeeID` matched an IdP row but `email_corp` differed (email updated in AD but not synced).

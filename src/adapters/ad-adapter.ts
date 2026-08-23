@@ -435,13 +435,22 @@ export class ADAdapter extends BaseAdapter {
       });
       await this.client.modify(currentDn, [uacChange]);
 
-      // 2. Move to Disabled OU if not already there
-      if (!currentDn.toUpperCase().includes(this.disabledOu.toUpperCase())) {
-        const cn      = currentDn.split(',')[0];          // e.g. CN=John Doe
-        const newRdn  = cn;
-        const newSup  = `${this.disabledOu}${this.dir.domainRoot}`;
-        await this.client.modifyDN(currentDn, `${newRdn},${newSup}`);
-        logger.info({ externalId, newDn: `${newRdn},${newSup}` }, 'AD user moved to Disabled OU');
+      // Move to Disabled OU when configured — best-effort (missing OU must not block disable).
+      if (
+        this.disabledOu.trim()
+        && !currentDn.toUpperCase().includes(this.disabledOu.toUpperCase())
+      ) {
+        try {
+          const cn = currentDn.split(',')[0];
+          const newSup = `${this.disabledOu}${this.dir.domainRoot}`;
+          await this.client.modifyDN(currentDn, `${cn},${newSup}`);
+          logger.info({ externalId, newDn: `${cn},${newSup}` }, 'AD user moved to Disabled OU');
+        } catch (moveErr) {
+          logger.warn(
+            { externalId, disabledOu: this.disabledOu, err: moveErr },
+            'AD disable: account disabled (UAC) but OU move failed',
+          );
+        }
       }
 
       logger.info({ externalId }, 'AD user disabled');
