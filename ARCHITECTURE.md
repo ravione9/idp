@@ -1116,6 +1116,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-23 — Docker build: bump Alpine python3 apk pin
+
+**Why** — Alpine 3.22 moved `python3` to `3.12.14-r0`; pinned `3.12.13-r0` caused `apk add` to fail in CI (`breaks: world[python3=3.12.13-r0]`).
+
+**What changed:** **`Dockerfile`** builder stage — `python3=3.12.14-r0`.
+
 ### (pending) — 2026-08-23 — AD sync: always search nested OUs when Sync OUs blank
 
 **Why** — With **Include sub-OUs** unchecked (or LDAP scope `one`), sync only read immediate children of Base DN — users in deeper OU trees were skipped.
