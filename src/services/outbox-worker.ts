@@ -19,6 +19,7 @@ import { ZohoAdapter }    from '../adapters/zoho-adapter.js';
 import { ADAdapter }      from '../adapters/ad-adapter.js';
 import { BaseAdapter } from '../adapters/base-adapter.js';
 import type { AdapterResult } from '../adapters/base-adapter.js';
+import { resolveDirectoryAdapter } from './connector-adapters.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,9 +127,9 @@ async function releaseSemaphore(system: string): Promise<void> {
 // Dispatch a single outbox row to the correct adapter
 // ---------------------------------------------------------------------------
 async function dispatch(row: OutboxRow): Promise<void> {
-  const adapter = adapterRegistry[row.system];
+  const adapter = await resolveDirectoryAdapter(row.system, adapterRegistry);
   if (!adapter) {
-    throw new Error(`No adapter registered for system: ${row.system}`);
+    throw new Error(`No adapter for system: ${row.system} (check connector config or env credentials)`);
   }
 
   const externalId = (row.payload['externalId'] as string | undefined) ?? '';
@@ -223,6 +224,19 @@ async function drainBatch(): Promise<void> {
 
     try {
       await dispatch(row);
+
+      if (row.op === 'DISABLE' || row.op === 'ENABLE') {
+        const linkStatus = row.op === 'DISABLE' ? 'DISABLED' : 'ACTIVE';
+        const externalId = (row.payload['externalId'] as string | undefined) ?? '';
+        if (externalId) {
+          await query(
+            `UPDATE identity_links
+                SET status = ?, last_synced_at = UTC_TIMESTAMP()
+              WHERE emp_id = ? AND \`system\` = ? AND external_id = ?`,
+            [linkStatus, row.emp_id, row.system, externalId],
+          );
+        }
+      }
 
       await query(
         `UPDATE adapter_outbox

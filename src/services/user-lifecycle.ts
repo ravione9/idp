@@ -14,6 +14,7 @@ import { redis } from '../auth/session-store.js';
 import { appendAuditLog } from '../utils/audit-log.js';
 import { ILGState } from '../fsm/states.js';
 import { emitPlatformEvent } from './event-dispatcher.js';
+import { propagatePortalDisableToAd, propagatePortalEnableToAd } from './connector-adapters.js';
 import logger from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -88,6 +89,10 @@ export async function suspendUser(empId: string, reason: string, initiatedBy: st
     );
   }
 
+  await propagatePortalDisableToAd(empId).catch((err) =>
+    logger.warn({ empId, err }, 'suspendUser: immediate AD disable failed'),
+  );
+
   // Record lifecycle event
   await query(
     `INSERT INTO lifecycle_events (emp_id, event_type, old_state, new_state, reason, initiated_by)
@@ -150,6 +155,10 @@ export async function unsuspendUser(empId: string, reason: string, initiatedBy: 
     );
   }
 
+  await propagatePortalEnableToAd(empId).catch((err) =>
+    logger.warn({ empId, err }, 'unsuspendUser: immediate AD enable failed'),
+  );
+
   // Record lifecycle event
   await query(
     `INSERT INTO lifecycle_events (emp_id, event_type, old_state, new_state, reason, initiated_by)
@@ -199,6 +208,10 @@ export async function terminateUser(empId: string, reason: string, initiatedBy: 
 
   // Revoke all sessions
   await revokeAllSessions(empId);
+
+  await propagatePortalDisableToAd(empId).catch((err) =>
+    logger.warn({ empId, err }, 'terminateUser: immediate AD disable failed'),
+  );
 
   // Enqueue DISABLE + REVOKE_TOKENS + REVOKE_BINDINGS for all active identity links
   const links = await getIdentityLinksForEmp(empId);
