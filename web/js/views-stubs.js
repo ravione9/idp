@@ -5503,9 +5503,9 @@ function initUsersTab(panel, me = null) {
     statsEl.hidden = false;
     statsEl.innerHTML = [
       statCard('users', 'Directory users', listTotal, 'Matching current filters', 'primary'),
-      statCard('server', 'With AD', listStats.withAd, listStats.adAccounts
-        ? `${listStats.adAccounts} AD accounts in forest`
-        : 'Employees linked to Active Directory', 'info'),
+      statCard('server', 'AD accounts', listStats.adAccounts || listStats.withAd, listStats.adAccounts
+        ? `${listStats.withAd} employee rows in directory`
+        : 'Linked to Active Directory', 'info'),
       statCard('app', 'With Google', listStats.withGoogle, 'Linked to Google Workspace', 'success'),
       statCard('user', 'Local only', listStats.localOnly, 'No external directory link', 'teal'),
     ].join('');
