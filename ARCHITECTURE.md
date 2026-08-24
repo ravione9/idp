@@ -1116,6 +1116,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### 29e1dc7 — 2026-08-24 — AD sync: keep one row per sAMAccountName across re-sync
+
+**Why** — After split repair, email-first emp_id resolution re-merged ~5.5k AD accounts onto ~12.5k shared employee rows on the next sync (18056 AD links vs 12500 "With AD").
+
+**What changed:** **`src/services/ad-sync.ts`** — resolve existing AD link by sAMAccountName before email match; skip email merge when another AD account already owns that row. **`web/js/views-stubs.js`** — primary stat shows AD account count (18056), subtitle shows employee row count.
+
 ### (pending) — 2026-08-24 — AD sync: one directory row per AD account
 
 **Why** — Sync reported 18k AD accounts "linked" but Universal Directory showed ~12k "With AD" because many AD users shared one `emp_id` (duplicate/junk `employeeID` values like Finance, Lkst244).

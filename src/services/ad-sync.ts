@@ -258,13 +258,10 @@ function isTrustedPrimaryEmpId(adEmpId: string): boolean {
 
 /**
  * Resolve the IdP emp_id for an AD user. Order of preference:
- *   1. corporate email match (same person as an existing row)
- *   2. existing AD identity link for this sAMAccountName
+ *   1. existing AD identity link for this sAMAccountName (stable across re-sync)
+ *   2. corporate email match when it would not collapse another AD account
  *   3. AD employeeID when trusted (LSP#####) and not owned by another sAMAccountName
  *   4. AD-<hash> from sAMAccountName — one directory row per AD account
- *
- * Shared or junk employeeID values (Finance, Lkst244, …) no longer collapse thousands
- * of AD accounts onto one employees row.
  */
 async function resolveEmpIdForAdUser(
   adUser: Record<string, unknown>,
@@ -275,12 +272,31 @@ async function resolveEmpIdForAdUser(
   const adEmpId = readAdEmployeeId(adUser);
   const emailNorm = email.trim().toLowerCase();
 
-  if (emailNorm) {
+  if (sam) {
+    const bySamLink = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM identity_links
+        WHERE \`system\` = 'AD' AND external_id = ? AND status != 'DELETED'`,
+      [sam],
+    );
+    if (bySamLink) return bySamLink.emp_id;
+  }
+
+  if (emailNorm && !emailNorm.endsWith('@ad-sync.local')) {
     const byEmail = await queryOne<{ emp_id: string }>(
       `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
       [emailNorm],
     );
     if (byEmail) {
+      if (sam) {
+        const adLinkOnRow = await queryOne<{ external_id: string }>(
+          `SELECT external_id FROM identity_links
+            WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'`,
+          [byEmail.emp_id],
+        );
+        if (adLinkOnRow && adLinkOnRow.external_id.toLowerCase() !== sam.toLowerCase()) {
+          return deriveEmpIdHashFromSam(adUser);
+        }
+      }
       if (adEmpId && byEmail.emp_id.startsWith('AD-') && byEmail.emp_id !== adEmpId && isTrustedPrimaryEmpId(adEmpId)) {
         try {
           const outcome = await tryMigrateEmpId(byEmail.emp_id, adEmpId, emailNorm);
@@ -301,15 +317,6 @@ async function resolveEmpIdForAdUser(
       }
       return byEmail.emp_id;
     }
-  }
-
-  if (sam) {
-    const bySamLink = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM identity_links
-        WHERE \`system\` = 'AD' AND external_id = ? AND status != 'DELETED'`,
-      [sam],
-    );
-    if (bySamLink) return bySamLink.emp_id;
   }
 
   if (adEmpId && isTrustedPrimaryEmpId(adEmpId)) {
