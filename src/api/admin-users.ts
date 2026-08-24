@@ -217,6 +217,11 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     params,
   ).catch(() => null);
 
+  const adAccountTotal = await queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM identity_links WHERE \`system\` = 'AD' AND status != 'DELETED'`,
+    [],
+  ).catch(() => null);
+
   res.json({
     data: rows,
     total: total?.n ?? 0,
@@ -224,6 +229,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     offset,
     stats: {
       withAd: Number(sourceStats?.with_ad ?? 0),
+      adAccounts: Number(adAccountTotal?.n ?? 0),
       withGoogle: Number(sourceStats?.with_google ?? 0),
       localOnly: Number(sourceStats?.local_only ?? 0),
     },

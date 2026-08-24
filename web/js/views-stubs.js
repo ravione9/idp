@@ -5452,7 +5452,7 @@ function initUsersTab(panel, me = null) {
   const PAGE_SIZE = 100;
   let listOffset = 0;
   let listTotal = 0;
-  let listStats = { withAd: 0, withGoogle: 0, localOnly: 0 };
+  let listStats = { withAd: 0, adAccounts: 0, withGoogle: 0, localOnly: 0 };
 
   function toast(msg, type = 'success') {
     const el = panel.querySelector('#ud-toast');
@@ -5485,6 +5485,7 @@ function initUsersTab(panel, me = null) {
       listTotal = Array.isArray(r) ? allUsers.length : Number(r?.total ?? allUsers.length);
       listStats = {
         withAd: Number(r?.stats?.withAd ?? 0),
+        adAccounts: Number(r?.stats?.adAccounts ?? 0),
         withGoogle: Number(r?.stats?.withGoogle ?? 0),
         localOnly: Number(r?.stats?.localOnly ?? 0),
       };
@@ -5502,7 +5503,9 @@ function initUsersTab(panel, me = null) {
     statsEl.hidden = false;
     statsEl.innerHTML = [
       statCard('users', 'Directory users', listTotal, 'Matching current filters', 'primary'),
-      statCard('server', 'With AD', listStats.withAd, 'Linked to Active Directory', 'info'),
+      statCard('server', 'With AD', listStats.withAd, listStats.adAccounts
+        ? `${listStats.adAccounts} AD accounts in forest`
+        : 'Employees linked to Active Directory', 'info'),
       statCard('app', 'With Google', listStats.withGoogle, 'Linked to Google Workspace', 'success'),
       statCard('user', 'Local only', listStats.localOnly, 'No external directory link', 'teal'),
     ].join('');
