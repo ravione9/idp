@@ -18,6 +18,7 @@ import {
   buildGoogleJwtAuth,
   employeeEligibleForGoogleOutbound,
   listScopedGoogleUsers,
+  normalizeConnectorDirection,
   resolveGoogleSyncScope,
   type GoogleSyncScope,
 } from './google-directory-config.js';
@@ -546,8 +547,8 @@ export async function backfillGoogleIdentityLinkIfMissing(
   );
   if (hasLink) return { changed: false };
 
-  const conn = await queryOne<{ config_json: string | Record<string, unknown> }>(
-    `SELECT config_json FROM connectors
+  const conn = await queryOne<{ config_json: string | Record<string, unknown>; direction: string }>(
+    `SELECT config_json, direction FROM connectors
       WHERE connector_type IN ('GOOGLE', 'GOOGLE_WORKSPACE')
         AND status IN ('CONNECTED', 'ACTIVE')
       ORDER BY updated_at DESC LIMIT 1`,
@@ -561,7 +562,7 @@ export async function backfillGoogleIdentityLinkIfMissing(
       : (conn.config_json ?? {});
 
   try {
-    const auth = buildGoogleJwtAuth(cfg);
+    const auth = buildGoogleJwtAuth(cfg, normalizeConnectorDirection(conn.direction));
     const directory = google.admin({ version: 'directory_v1', auth });
     const existing = await directory.users.get({ userKey: email });
     const googleId = existing.data.id ?? email;
@@ -647,7 +648,7 @@ export async function runGoogleSync(
   const runInbound  = direction === 'INBOUND' || direction === 'BIDIRECTIONAL';
   const runOutbound = direction === 'OUTBOUND' || direction === 'BIDIRECTIONAL';
 
-  const auth = buildGoogleJwtAuth(cfg);
+  const auth = buildGoogleJwtAuth(cfg, normalizeConnectorDirection(direction));
   const directory = google.admin({ version: 'directory_v1', auth });
 
     if (runInbound) {

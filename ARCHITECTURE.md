@@ -1114,6 +1114,30 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-24 — AD LDAP: fix port 389 / StartTLS connectivity
+
+**Why** — Test Connection and sync failed on port 389 when StartTLS was selected but port stayed 636, or when plain LDAP was configured but DC requires StartTLS/LDAPS.
+
+**What changed:** **`src/services/ad-ldap-connect.ts`** — normalize protocol/port; retry configured → StartTLS :389 → LDAPS :636. **`src/services/connector-health.ts`**, **`src/services/ad-sync.ts`**, **`src/api/iga.ts`**, **`web/js/views-stubs.js`** — use fallbacks and align port with protocol on save/load.
+
+### (pending) — 2026-08-24 — Google INBOUND: use readonly Directory API scopes
+
+**Why** — INBOUND Google connectors failed Test Connection with `unauthorized_client` when Admin Console only delegated `admin.directory.user.readonly`; the IdP always requested the full write scope.
+
+**What changed:** **`src/services/google-directory-config.ts`** — `googleJwtScopes()` returns `user.readonly` for INBOUND; sync/test/harvest pass connector direction. **`web/js/views-stubs.js`** — delegation hint updates for INBOUND vs outbound/bidirectional.
+
+### 2fbed2d — 2026-08-24 — Fix connector direction not saving on edit
+
+**Why** — Universal Directory connector edit sent `direction: INBOUND` in PUT body but `PUT /api/iga/connectors/:id` never updated the `direction` column, so sync stayed BIDIRECTIONAL.
+
+**What changed:** **`src/api/iga.ts`** — persist `direction` (and validate via `connectorUpdateSchema`) on connector update.
+
+### 75cf9fc — 2026-08-24 — AD sync: merge duplicate rows when email matches
+
+**Why** — Split repair created AD-* placeholder rows (`sam@ad-sync.local`) alongside existing Google/HR rows (`sam@lenskart.in`), showing two directory profiles for one mailbox.
+
+**What changed:** **`src/services/ad-sync.ts`** — email match merges onto existing row; redirect AD-* sam links to canonical sam@domain row; post-sync cleanup absorbs placeholder duplicates via `absorbPlaceholderEmployee`.
+
 ### 29e1dc7 — 2026-08-24 — AD sync: keep one row per sAMAccountName across re-sync
 
 **Why** — After split repair, email-first emp_id resolution re-merged ~5.5k AD accounts onto ~12.5k shared employee rows on the next sync (18056 AD links vs 12500 "With AD").

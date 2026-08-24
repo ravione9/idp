@@ -17,7 +17,11 @@ import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
+import {
+  connectAdAdapterWithFallback,
+  createAdAdapterFromConfig as buildAdAdapterFromConfig,
+  describeAdLdapMode,
+} from './ad-ldap-connect.js';
 import { applyDirectorySourceDisabled, applyDirectorySourceEnabled, preserveIlgStateOnDirectoryImport } from './user-lifecycle.js';
 import { ILGState } from '../fsm/states.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -256,30 +260,54 @@ function isTrustedPrimaryEmpId(adEmpId: string): boolean {
   return /^LSP\d{4,8}$/i.test(adEmpId.trim());
 }
 
+function isAdHashEmpId(empId: string): boolean {
+  return /^AD-[A-F0-9]{12}$/i.test(empId.trim());
+}
+
+/** Find an existing directory row for sam@configured-domain (Google/HR import or prior sync). */
+async function findCanonicalEmpIdBySamEmail(
+  sam: string,
+  upnDomains: string[],
+  defaultEmailDomain: string,
+): Promise<string | null> {
+  const normalizedSam = sam.trim().toLowerCase();
+  if (!normalizedSam) return null;
+
+  const domains = new Set<string>();
+  for (const d of [...upnDomains, defaultEmailDomain]) {
+    const domain = d.replace(/^@+/, '').trim().toLowerCase();
+    if (domain) domains.add(domain);
+  }
+
+  for (const domain of domains) {
+    const email = `${normalizedSam}@${domain}`;
+    const row = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
+      [email],
+    );
+    if (row) return row.emp_id;
+  }
+  return null;
+}
+
 /**
  * Resolve the IdP emp_id for an AD user. Order of preference:
- *   1. existing AD identity link for this sAMAccountName (stable across re-sync)
- *   2. corporate email match when it would not collapse another AD account
- *   3. AD employeeID when trusted (LSP#####) and not owned by another sAMAccountName
- *   4. AD-<hash> from sAMAccountName — one directory row per AD account
+ *   1. corporate email match — same mailbox, update sources on existing row
+ *   2. existing AD link for this sAMAccountName (redirect AD-* placeholders to canonical row)
+ *   3. sam@configured-domain row from Google/HR import
+ *   4. AD employeeID when trusted (LSP#####) and not owned by another sAMAccountName
+ *   5. AD-<hash> from sAMAccountName — only when no canonical row exists
  */
 async function resolveEmpIdForAdUser(
   adUser: Record<string, unknown>,
   email: string,
   errors: string[],
+  upnDomains: string[],
+  defaultEmailDomain: string,
 ): Promise<string | null> {
   const sam = getLdapAttr(adUser, 'sAMAccountName').trim();
   const adEmpId = readAdEmployeeId(adUser);
   const emailNorm = email.trim().toLowerCase();
-
-  if (sam) {
-    const bySamLink = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM identity_links
-        WHERE \`system\` = 'AD' AND external_id = ? AND status != 'DELETED'`,
-      [sam],
-    );
-    if (bySamLink) return bySamLink.emp_id;
-  }
 
   if (emailNorm && !emailNorm.endsWith('@ad-sync.local')) {
     const byEmail = await queryOne<{ emp_id: string }>(
@@ -287,16 +315,6 @@ async function resolveEmpIdForAdUser(
       [emailNorm],
     );
     if (byEmail) {
-      if (sam) {
-        const adLinkOnRow = await queryOne<{ external_id: string }>(
-          `SELECT external_id FROM identity_links
-            WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'`,
-          [byEmail.emp_id],
-        );
-        if (adLinkOnRow && adLinkOnRow.external_id.toLowerCase() !== sam.toLowerCase()) {
-          return deriveEmpIdHashFromSam(adUser);
-        }
-      }
       if (adEmpId && byEmail.emp_id.startsWith('AD-') && byEmail.emp_id !== adEmpId && isTrustedPrimaryEmpId(adEmpId)) {
         try {
           const outcome = await tryMigrateEmpId(byEmail.emp_id, adEmpId, emailNorm);
@@ -317,6 +335,24 @@ async function resolveEmpIdForAdUser(
       }
       return byEmail.emp_id;
     }
+  }
+
+  if (sam) {
+    const bySamLink = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM identity_links
+        WHERE \`system\` = 'AD' AND external_id = ? AND status != 'DELETED'`,
+      [sam],
+    );
+    if (bySamLink) {
+      const canonical = await findCanonicalEmpIdBySamEmail(sam, upnDomains, defaultEmailDomain);
+      if (canonical && canonical !== bySamLink.emp_id && isAdHashEmpId(bySamLink.emp_id)) {
+        return canonical;
+      }
+      return bySamLink.emp_id;
+    }
+
+    const canonical = await findCanonicalEmpIdBySamEmail(sam, upnDomains, defaultEmailDomain);
+    if (canonical) return canonical;
   }
 
   if (adEmpId && isTrustedPrimaryEmpId(adEmpId)) {
@@ -456,6 +492,20 @@ async function splitSharedAdEmpIdRows(
       const linkStatus = disabled ? 'DISABLED' : link.status;
 
       try {
+        const canonical = await findCanonicalEmpIdBySamEmail(sam, upnDomains, defaultEmailDomain);
+        if (canonical && canonical !== row.emp_id) {
+          await execute(
+            `UPDATE identity_links SET emp_id = ?, status = ?, last_synced_at = UTC_TIMESTAMP() WHERE id = ?`,
+            [canonical, linkStatus, link.id],
+          );
+          split++;
+          logger.info(
+            { from: row.emp_id, to: canonical, sam },
+            'AD sync: merged split AD account onto canonical email row',
+          );
+          continue;
+        }
+
         const emailTaken = await queryOne<{ emp_id: string }>(
           `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ? AND emp_id != ?`,
           [emailCorp.trim().toLowerCase(), newEmpId],
@@ -493,6 +543,45 @@ async function splitSharedAdEmpIdRows(
     }
   }
   return split;
+}
+
+/** Fold AD-* placeholder rows (sam@ad-sync.local) into the real sam@domain row. */
+async function cleanupAdPlaceholderDuplicates(
+  upnDomains: string[],
+  defaultEmailDomain: string,
+  errors: string[],
+): Promise<number> {
+  const orphans = await query<{ emp_id: string; email_corp: string }>(
+    `SELECT emp_id, email_corp FROM employees
+      WHERE emp_id LIKE 'AD-%' AND LOWER(TRIM(email_corp)) LIKE '%@ad-sync.local'`,
+    [],
+  );
+  let merged = 0;
+  for (const orphan of orphans) {
+    const sam = orphan.email_corp.split('@')[0]?.trim();
+    if (!sam) continue;
+
+    const adLink = await queryOne<{ external_id: string }>(
+      `SELECT external_id FROM identity_links
+        WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'`,
+      [orphan.emp_id],
+    );
+    if (adLink && adLink.external_id.toLowerCase() !== sam.toLowerCase()) continue;
+
+    const canonical = await findCanonicalEmpIdBySamEmail(sam, upnDomains, defaultEmailDomain);
+    if (!canonical || canonical === orphan.emp_id) continue;
+
+    try {
+      await absorbPlaceholderEmployee(orphan.emp_id, canonical);
+      merged++;
+      logger.info({ from: orphan.emp_id, to: canonical, sam }, 'AD sync: merged AD placeholder row into canonical email row');
+    } catch (err) {
+      errors.push(
+        `${orphan.emp_id} -> ${canonical}: placeholder merge failed — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  return merged;
 }
 
 /** Migrate AD-XXXX placeholder emp_ids to real AD employee IDs (inbound batch). */
@@ -782,7 +871,7 @@ export async function processInboundAdUsers(
       const department = getLdapAttr(adUser, 'department').trim().slice(0, 50) || null;
       const title      = getLdapAttr(adUser, 'title').trim().slice(0, 100) || null;
 
-      const empId = await resolveEmpIdForAdUser(adUser, emailCorp, errors);
+      const empId = await resolveEmpIdForAdUser(adUser, emailCorp, errors, upnDomains, defaultEmailDomain);
       if (!empId) {
         skipped++;
         succeeded++;
@@ -969,6 +1058,11 @@ export async function processInboundAdUsers(
     logger.info({ split }, 'AD sync inbound: split AD accounts sharing one emp_id');
   }
 
+  const placeholderMerged = await cleanupAdPlaceholderDuplicates(upnDomains, defaultEmailDomain, errors);
+  if (placeholderMerged > 0) {
+    logger.info({ placeholderMerged }, 'AD sync inbound: merged AD placeholder rows into canonical email rows');
+  }
+
   const repaired = await repairOrphanAdLinks(adUsers as Record<string, unknown>[], errors, upnDomains);
   if (repaired > 0) {
     logger.info({ repaired }, 'AD sync inbound: repaired orphan identity links');
@@ -1010,7 +1104,7 @@ export async function processInboundAdUsers(
     processed,
     succeeded,
     failed,
-    repaired: repaired + dbRepaired,
+    repaired: repaired + dbRepaired + placeholderMerged,
     migrated: migrated + dbMigrated,
     diag,
   };
@@ -1033,26 +1127,7 @@ function loadConnectorConfig(connectorId: string): Promise<Record<string, unknow
 }
 
 function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
-  const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
-  const useSsl     = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls   = parseConnectorBoolean(cfg['startTls'], false);
-  const port       = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const bindDn     = (cfg['bindDn']       as string | undefined) || config.ad.bindDn;
-  const bindPass   = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
-  const baseDn     = (cfg['baseDn']       as string | undefined) || config.ad.baseDn;
-  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-  const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-
-  return new ADAdapter(
-    redis,
-    adUrl,
-    bindDn,
-    bindPass,
-    baseDn,
-    undefined,
-    startTls,
-    targetOuRaw,
-  );
+  return buildAdAdapterFromConfig(redis, cfg);
 }
 
 /** Backfill AD identity link and correct placeholder emp_id when viewing a profile. */
@@ -1214,20 +1289,32 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const upnDomains = parseAdUpnDomains(cfg, dirConfig);
 
   const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
-  const useSsl     = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls   = parseConnectorBoolean(cfg['startTls'], false);
-  const port       = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
   logger.info(
-    { connectorId, adUrl, bindDn: cfg['bindDn'], baseDn: dirConfig.searchBaseDn, provisionOu: dirConfig.provisionOuDn, direction, startTls },
+    { connectorId, host, bindDn: cfg['bindDn'], baseDn: dirConfig.searchBaseDn, provisionOu: dirConfig.provisionOuDn, direction },
     'AD sync: connecting',
   );
 
-  const adapter = createAdAdapterFromConfig(cfg);
+  let adapter: ADAdapter;
+  const connectErrors: string[] = [];
 
-  // Clear any OPEN circuit from a prior failed run so this sync gets a fresh attempt
-  await adapter.resetCircuitBreaker();
+  try {
+    const connected = await connectAdAdapterWithFallback(redis, cfg);
+    adapter = connected.adapter;
+    connectErrors.push(...connected.errors);
+    const { url, protocol } = describeAdLdapMode(connected.mode, cfg);
+    logger.info(
+      { connectorId, url, protocol, mode: connected.mode.label, priorAttempts: connectErrors.length },
+      'AD sync: LDAP connected',
+    );
+  } catch (err) {
+    const runErr = err instanceof Error ? err.message : String(err);
+    await execute(
+      `UPDATE connector_runs SET status = 'FAILED', ended_at = UTC_TIMESTAMP(), error_summary = ? WHERE id = ?`,
+      [runErr.slice(0, 8000), runId],
+    );
+    throw err;
+  }
 
   let itemsProcessed = 0;
   let itemsSucceeded = 0;
@@ -1240,8 +1327,6 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const syncScope = resolveAdSyncScope(cfg);
 
   try {
-    await adapter.connect();
-
     if (runInbound) {
       const inbound = await importAdDirectoryUsers(adapter, dirConfig, cfg, errors);
       itemsProcessed += inbound.processed;
@@ -1297,7 +1382,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
       [],
     );
 
-    if (!useSsl && !startTls) {
+    if (!adapter.connectionIsSecure()) {
       const needsProvision = employees.some((e) =>
         e.ilg_state === 'ACTIVE' || e.ilg_state === 'REACTIVATED',
       );

@@ -85,7 +85,7 @@ async function writebackToGoogle(
   newPassword: string,
   cfg: Record<string, unknown>,
 ): Promise<void> {
-  const auth = buildGoogleJwtAuth(cfg);
+  const auth = buildGoogleJwtAuth(cfg, 'BIDIRECTIONAL');
   const directory = google.admin({ version: 'directory_v1', auth });
   await directory.users.update({
     userKey: externalId,

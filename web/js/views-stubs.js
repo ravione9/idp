@@ -3960,6 +3960,14 @@ function normalizeConnectorType(t) {
   return t === 'GOOGLE' ? 'GOOGLE_WORKSPACE' : t;
 }
 
+function googleDelegationHint(direction) {
+  const d = (direction || 'BIDIRECTIONAL').toUpperCase();
+  if (d === 'INBOUND') {
+    return 'In Google Admin → Security → API controls, authorize the service account Client ID with scopes admin.directory.user.readonly and admin.directory.group.readonly (INBOUND uses readonly user scope).';
+  }
+  return 'In Google Admin → Security → API controls, authorize the service account Client ID with scopes admin.directory.user and admin.directory.group.readonly.';
+}
+
 function parseConnectorScheduleUi(raw) {
   const s = (raw || '').trim();
   if (!s || s.toLowerCase() === 'manual') return { mode: 'every:15m' };
@@ -4653,7 +4661,7 @@ function initSourcesTab(panel) {
             <div class="ds-callout__icon connector-cell-icon connector-cell-icon--google">${svgIcon('app')}</div>
             <div class="ds-callout__body">
               <h3 class="ds-callout__title">Domain-wide delegation</h3>
-              <p class="ds-callout__text">In Google Admin → Security → API controls, authorize the service account Client ID with scopes <code>admin.directory.user</code> and <code>admin.directory.group.readonly</code>.</p>
+              <p class="ds-callout__text" id="cfg-google-scope-hint">${esc(googleDelegationHint(defaults.direction || 'BIDIRECTIONAL'))}</p>
             </div>
           </div>` : ''}
           ${isAd ? `<div class="ds-callout ds-callout--compact ds-callout--ad">
@@ -4716,6 +4724,14 @@ function initSourcesTab(panel) {
     </div>`);
 
     bindConnectorScheduleFields(bd);
+
+    const directionSel = bd.querySelector('#cfg-direction');
+    const googleScopeHint = bd.querySelector('#cfg-google-scope-hint');
+    if (directionSel && googleScopeHint) {
+      directionSel.addEventListener('change', () => {
+        googleScopeHint.textContent = googleDelegationHint(directionSel.value);
+      });
+    }
 
     if (!isEdit) bd.querySelector('#cfg-back').addEventListener('click', () => { bd.remove(); openAddWizard(); });
     bd.querySelector('#cfg-cancel').addEventListener('click', () => bd.remove());
@@ -4837,6 +4853,11 @@ function initSourcesTab(panel) {
       else if (f === 'useSsl') {
         configJson['useSsl']   = el2.value === 'ldaps';
         configJson['startTls'] = el2.value === 'starttls';
+        const portEl = bd.querySelector('#cfg-port');
+        if (portEl) {
+          if (el2.value === 'ldaps') portEl.value = '636';
+          else if (el2.value === 'starttls' || el2.value === 'ldap') portEl.value = '389';
+        }
       } else {
         const val = el2.value.trim();
         if (val !== '') configJson[f] = val;
@@ -4865,6 +4886,13 @@ function initSourcesTab(panel) {
         sync_schedule: c.sync_schedule,
         ...(c.config || {}),
       };
+      if (normalizeConnectorType(c.connector_type) === 'AD' || normalizeConnectorType(c.connector_type) === 'LDAP') {
+        const startTls = defaults.startTls === true || defaults.startTls === 'true' || defaults.startTls === 1;
+        const useSsl = defaults.useSsl === true || defaults.useSsl === 'true' || defaults.useSsl === 1;
+        if (useSsl) defaults.port = defaults.port || '636';
+        else if (startTls) defaults.port = '389';
+        else if (!defaults.port) defaults.port = '389';
+      }
       if (normalizeConnectorType(c.connector_type) === 'GOOGLE_WORKSPACE') {
         try {
           const oidc = await api.getGoogleOidcSettings();
