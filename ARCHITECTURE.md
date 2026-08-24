@@ -1116,6 +1116,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### 455a8d1 — 2026-08-24 — Fix connector direction not saving on edit
+
+**Why** — Universal Directory connector edit sent `direction: INBOUND` in PUT body but `PUT /api/iga/connectors/:id` never updated the `direction` column, so sync stayed BIDIRECTIONAL.
+
+**What changed:** **`src/api/iga.ts`** — persist `direction` (and validate via `connectorUpdateSchema`) on connector update.
+
 ### 75cf9fc — 2026-08-24 — AD sync: merge duplicate rows when email matches
 
 **Why** — Split repair created AD-* placeholder rows (`sam@ad-sync.local`) alongside existing Google/HR rows (`sam@lenskart.in`), showing two directory profiles for one mailbox.
