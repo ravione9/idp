@@ -486,26 +486,38 @@ router.get(
   }),
 );
 
+const connectorUpdateSchema = z.object({
+  name:          z.string().min(1).max(150).optional(),
+  direction:     z.enum(['INBOUND', 'OUTBOUND', 'BIDIRECTIONAL']).optional(),
+  syncMode:      z.enum(['FULL', 'INCREMENTAL', 'RECONCILE']).optional(),
+  syncSchedule:  z.string().max(100).optional().refine(
+    (v) => v == null || v === '' || isValidSyncSchedule(v),
+    { message: 'Invalid sync schedule — use every:15m, every:1h, or a 5-field cron expression' },
+  ),
+  configJson:    z.record(z.unknown()).optional(),
+  status:        z.string().max(50).optional(),
+});
+
 // PUT /connectors/:id — update connector
 router.put(
   '/connectors/:id',
   requireRole('ADMIN', 'SUPER_ADMIN'),
   requirePortalModule('connections'),
   asyncHandler(async (req: Request, res: Response) => {
-    const { name, syncMode, syncSchedule, configJson, status } = req.body as {
-      name?: string;
-      syncMode?: string;
-      syncSchedule?: string;
-      configJson?: Record<string, unknown>;
-      status?: string;
-    };
+    const parsed = connectorUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return;
+    }
+    const { name, direction, syncMode, syncSchedule, configJson, status } = parsed.data;
 
-    // Merge config_json: load existing, patch non-redacted fields
+    const existing = await queryOne<{ config_json: string }>(
+      `SELECT config_json FROM connectors WHERE id = ?`, [req.params['id']],
+    );
+    if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
+
+    let mergedJson: string | null = null;
     if (configJson) {
-      const existing = await queryOne<{ config_json: string }>(
-        `SELECT config_json FROM connectors WHERE id = ?`, [req.params['id']],
-      );
-      if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
       const rawCfg = existing.config_json;
       const existingCfg: Record<string, unknown> =
         typeof rawCfg === 'string'
@@ -525,30 +537,29 @@ router.put(
         }
         merged[k] = v;
       }
-      await execute(
-        `UPDATE connectors SET
-           name          = COALESCE(?, name),
-           sync_mode     = COALESCE(?, sync_mode),
-           sync_schedule = COALESCE(?, sync_schedule),
-           status        = COALESCE(?, status),
-           config_json   = ?,
-           updated_at    = UTC_TIMESTAMP()
-         WHERE id = ?`,
-        [name ?? null, syncMode ?? null, syncSchedule ?? null, status ?? null,
-         JSON.stringify(merged), req.params['id']],
-      );
-    } else {
-      await execute(
-        `UPDATE connectors SET
-           name          = COALESCE(?, name),
-           sync_mode     = COALESCE(?, sync_mode),
-           sync_schedule = COALESCE(?, sync_schedule),
-           status        = COALESCE(?, status),
-           updated_at    = UTC_TIMESTAMP()
-         WHERE id = ?`,
-        [name ?? null, syncMode ?? null, syncSchedule ?? null, status ?? null, req.params['id']],
-      );
+      mergedJson = JSON.stringify(merged);
     }
+
+    await execute(
+      `UPDATE connectors SET
+         name          = COALESCE(?, name),
+         direction     = COALESCE(?, direction),
+         sync_mode     = COALESCE(?, sync_mode),
+         sync_schedule = COALESCE(?, sync_schedule),
+         status        = COALESCE(?, status),
+         config_json   = COALESCE(?, config_json),
+         updated_at    = UTC_TIMESTAMP()
+       WHERE id = ?`,
+      [
+        name ?? null,
+        direction ?? null,
+        syncMode ?? null,
+        syncSchedule ?? null,
+        status ?? null,
+        mergedJson,
+        req.params['id'],
+      ],
+    );
     res.json({ success: true });
   }),
 );
