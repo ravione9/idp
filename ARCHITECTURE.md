@@ -1114,6 +1114,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-24 — AD sync: one directory row per AD account
+
+**Why** — Sync reported 18k AD accounts "linked" but Universal Directory showed ~12k "With AD" because many AD users shared one `emp_id` (duplicate/junk `employeeID` values like Finance, Lkst244).
+
+**What changed:**
+
+- **`src/services/ad-sync.ts`** — resolve emp_id per sAMAccountName (`AD-<hash>`); split repair for emp_ids with multiple AD links; sync summary shows AD account vs directory counts.
+- **`src/api/admin-users.ts`**, **`web/js/views-stubs.js`** — stats include `adAccounts` (total AD identity links).
+
 ### (pending) — 2026-08-24 — AD inbound: import disabled accounts and dedupe employeeID
 
 **Why** — ~5k AD users were counted as "skipped" because disabled accounts were never inserted into `employees`; shared/bad `employeeID` values (e.g. `Finance`) caused multiple AD users to collide on one IdP row.

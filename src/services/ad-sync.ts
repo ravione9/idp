@@ -86,12 +86,6 @@ function generateTempPassword(): string {
   return pw;
 }
 
-function deriveEmpIdFromAd(adUser: Record<string, unknown>): string {
-  const fromAd = readAdEmployeeId(adUser);
-  if (fromAd) return fromAd;
-  return deriveEmpIdHashFromSam(adUser);
-}
-
 function deriveEmpIdHashFromSam(adUser: Record<string, unknown>): string {
   const sam = getLdapAttr(adUser, 'sAMAccountName') || 'user';
   const hash = crypto.createHash('md5').update(sam).digest('hex').slice(0, 12).toUpperCase();
@@ -258,16 +252,19 @@ async function tryMigrateEmpId(
   return 'skipped';
 }
 
+function isTrustedPrimaryEmpId(adEmpId: string): boolean {
+  return /^LSP\d{4,8}$/i.test(adEmpId.trim());
+}
+
 /**
  * Resolve the IdP emp_id for an AD user. Order of preference:
- *   1. AD employeeID (when set and not conflicting)
- *   2. corporate email match
- *   3. existing AD identity link (sAMAccountName)
- *   4. derived AD-<hash> from sAMAccountName (no employeeID required)
+ *   1. corporate email match (same person as an existing row)
+ *   2. existing AD identity link for this sAMAccountName
+ *   3. AD employeeID when trusted (LSP#####) and not owned by another sAMAccountName
+ *   4. AD-<hash> from sAMAccountName — one directory row per AD account
  *
- * When an existing row matched by email has a placeholder emp_id (AD-XXXX)
- * and AD now reports a real employeeID, the row is migrated to the AD value.
- * Duplicate AD employeeID values shared across accounts fall back to AD-<hash>.
+ * Shared or junk employeeID values (Finance, Lkst244, …) no longer collapse thousands
+ * of AD accounts onto one employees row.
  */
 async function resolveEmpIdForAdUser(
   adUser: Record<string, unknown>,
@@ -278,14 +275,13 @@ async function resolveEmpIdForAdUser(
   const adEmpId = readAdEmployeeId(adUser);
   const emailNorm = email.trim().toLowerCase();
 
-  // Prefer UPN/mail match — AD is source of truth when corporate email was updated in directory.
   if (emailNorm) {
     const byEmail = await queryOne<{ emp_id: string }>(
       `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
       [emailNorm],
     );
     if (byEmail) {
-      if (adEmpId && byEmail.emp_id.startsWith('AD-') && byEmail.emp_id !== adEmpId) {
+      if (adEmpId && byEmail.emp_id.startsWith('AD-') && byEmail.emp_id !== adEmpId && isTrustedPrimaryEmpId(adEmpId)) {
         try {
           const outcome = await tryMigrateEmpId(byEmail.emp_id, adEmpId, emailNorm);
           if (outcome === 'migrated' || outcome === 'merged') {
@@ -307,7 +303,16 @@ async function resolveEmpIdForAdUser(
     }
   }
 
-  if (adEmpId) {
+  if (sam) {
+    const bySamLink = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM identity_links
+        WHERE \`system\` = 'AD' AND external_id = ? AND status != 'DELETED'`,
+      [sam],
+    );
+    if (bySamLink) return bySamLink.emp_id;
+  }
+
+  if (adEmpId && isTrustedPrimaryEmpId(adEmpId)) {
     const byAdId = await queryOne<{ emp_id: string; email_corp: string }>(
       `SELECT emp_id, email_corp FROM employees WHERE emp_id = ?`,
       [adEmpId],
@@ -321,37 +326,24 @@ async function resolveEmpIdForAdUser(
         )
         : null;
       if (existingLink && existingLink.external_id.toLowerCase() !== sam.toLowerCase()) {
-        logger.warn(
-          { adEmpId, sam, existingSam: existingLink.external_id },
-          'AD sync: duplicate AD employeeID on another account — using AD hash emp_id',
-        );
         return deriveEmpIdHashFromSam(adUser);
-      }
-      if (
-        emailNorm
-        && byAdId.email_corp
-        && byAdId.email_corp.trim().toLowerCase() !== emailNorm
-      ) {
-        logger.info(
-          { empId: adEmpId, oldEmail: byAdId.email_corp, newEmail: emailNorm },
-          'AD sync: refreshing email_corp from AD UPN/mail',
-        );
       }
       return adEmpId;
     }
     return adEmpId;
   }
 
-  if (sam) {
-    const bySamLink = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM identity_links
-        WHERE \`system\` = 'AD' AND external_id = ? AND status != 'DELETED'`,
-      [sam],
+  if (adEmpId) {
+    const byAdId = await queryOne<{ emp_id: string }>(
+      `SELECT emp_id FROM employees WHERE emp_id = ?`,
+      [adEmpId],
     );
-    if (bySamLink) return bySamLink.emp_id;
+    if (byAdId) {
+      return deriveEmpIdHashFromSam(adUser);
+    }
   }
 
-  return deriveEmpIdFromAd(adUser);
+  return deriveEmpIdHashFromSam(adUser);
 }
 
 /** Insert or revive an AD identity link (handles soft-deleted rows on uk_system_external). */
@@ -382,7 +374,7 @@ async function repairOrphanAdLinks(
 
     const emp = await queryOne<{ emp_id: string }>(
       `SELECT emp_id FROM employees WHERE ${email ? 'email_corp = ? OR ' : ''}emp_id = ?`,
-      email ? [email, deriveEmpIdFromAd(adUser)] : [deriveEmpIdFromAd(adUser)],
+      email ? [email, deriveEmpIdHashFromSam(adUser)] : [deriveEmpIdHashFromSam(adUser)],
     );
     if (!emp) continue;
 
@@ -405,6 +397,95 @@ async function repairOrphanAdLinks(
     }
   }
   return repaired;
+}
+
+/** Give each AD sAMAccountName its own employees row when multiple links share one emp_id. */
+async function splitSharedAdEmpIdRows(
+  adUsersBySam: Map<string, Record<string, unknown>>,
+  upnDomains: string[],
+  defaultEmailDomain: string,
+  errors: string[],
+): Promise<number> {
+  const shared = await query<{ emp_id: string; link_count: number }>(
+    `SELECT emp_id, COUNT(*) AS link_count FROM identity_links
+      WHERE \`system\` = 'AD' AND status != 'DELETED'
+      GROUP BY emp_id HAVING link_count > 1`,
+    [],
+  );
+  let split = 0;
+  for (const row of shared) {
+    const links = await query<{ id: number; external_id: string; status: string }>(
+      `SELECT id, external_id, status FROM identity_links
+        WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'
+        ORDER BY id ASC`,
+      [row.emp_id],
+    );
+    for (let i = 1; i < links.length; i++) {
+      const link = links[i];
+      const sam = link.external_id.trim();
+      const adUser = adUsersBySam.get(sam.toLowerCase());
+      if (!adUser) continue;
+
+      const newEmpId = deriveEmpIdHashFromSam(adUser);
+      const already = await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM identity_links
+          WHERE \`system\` = 'AD' AND external_id = ? AND status != 'DELETED'`,
+        [sam],
+      );
+      if (already && already.emp_id === newEmpId) continue;
+
+      const email = resolveAdCorporateEmail(adUser, upnDomains)
+        || (sam && defaultEmailDomain ? `${sam}@${defaultEmailDomain.replace(/^@+/, '')}` : '')
+        || `${sam}@ad-sync.local`;
+      const emailCorp = email.includes('@') ? email : `${sam}@ad-sync.local`;
+      const fullName = cleanAdDisplayName(adUser, sam);
+      const { firstName, lastName } = readAdNameParts(adUser, fullName, sam);
+      const adObjectGuid = readAdObjectGuid(adUser);
+      const uac = parseInt(getLdapAttr(adUser, 'userAccountControl') || '512', 10);
+      const disabled = (uac & 0x0002) !== 0;
+      const department = getLdapAttr(adUser, 'department').trim().slice(0, 50) || null;
+      const title = getLdapAttr(adUser, 'title').trim().slice(0, 100) || null;
+      const ilgState = disabled ? ILGState.SUSPENDED_AUTO : ILGState.ACTIVE;
+      const linkStatus = disabled ? 'DISABLED' : link.status;
+
+      try {
+        const emailTaken = await queryOne<{ emp_id: string }>(
+          `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ? AND emp_id != ?`,
+          [emailCorp.trim().toLowerCase(), newEmpId],
+        );
+        const insertEmail = emailTaken ? `${sam}@ad-sync.local` : emailCorp;
+
+        await execute(
+          `INSERT INTO employees
+             (emp_id, full_name, first_name, last_name, email_corp, dept_id, role, ad_object_guid,
+              ilg_state, hrms_status, hire_date, employment_type, sync_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', UTC_DATE(), 'CORPORATE', ?)
+           ON DUPLICATE KEY UPDATE
+             full_name = VALUES(full_name),
+             first_name = VALUES(first_name),
+             last_name = VALUES(last_name),
+             email_corp = VALUES(email_corp),
+             dept_id = VALUES(dept_id),
+             role = VALUES(role),
+             ad_object_guid = COALESCE(VALUES(ad_object_guid), ad_object_guid),
+             updated_at = UTC_TIMESTAMP()`,
+          [
+            newEmpId, fullName, firstName, lastName, insertEmail, department, title, adObjectGuid,
+            ilgState, disabled ? 'DISABLED' : null,
+          ],
+        );
+        await execute(
+          `UPDATE identity_links SET emp_id = ?, status = ?, last_synced_at = UTC_TIMESTAMP() WHERE id = ?`,
+          [newEmpId, linkStatus, link.id],
+        );
+        split++;
+        logger.info({ from: row.emp_id, to: newEmpId, sam }, 'AD sync: split shared emp_id to dedicated AD account row');
+      } catch (err) {
+        errors.push(`${sam}: split shared emp_id failed — ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+  return split;
 }
 
 /** Migrate AD-XXXX placeholder emp_ids to real AD employee IDs (inbound batch). */
@@ -547,6 +628,8 @@ async function importAdDirectoryUsers(
   linked: number;
   skipped: number;
   disabledImported: number;
+  split: number;
+  adAccounts: number;
   processed: number;
   succeeded: number;
   failed: number;
@@ -575,6 +658,8 @@ export async function processInboundAdUsers(
   linked: number;
   skipped: number;
   disabledImported: number;
+  split: number;
+  adAccounts: number;
   processed: number;
   succeeded: number;
   failed: number;
@@ -600,6 +685,7 @@ export async function processInboundAdUsers(
   let linked = 0;
   let skipped = 0;
   let disabledImported = 0;
+  let split = 0;
   let processed = 0;
   let succeeded = 0;
   let failed = 0;
@@ -653,6 +739,11 @@ export async function processInboundAdUsers(
 
   // Track (adUser -> resolved empId) so the second pass can write manager_emp_id.
   const empIdByDn = new Map<string, string>();
+  const adUsersBySam = new Map<string, Record<string, unknown>>();
+  for (const u of adUsers) {
+    const s = getLdapAttr(u, 'sAMAccountName').trim().toLowerCase();
+    if (s) adUsersBySam.set(s, u as Record<string, unknown>);
+  }
 
   for (const adUser of adUsers) {
     processed++;
@@ -866,6 +957,11 @@ export async function processInboundAdUsers(
     logger.info({ managersLinked }, 'AD sync inbound: manager links resolved');
   }
 
+  split = await splitSharedAdEmpIdRows(adUsersBySam, upnDomains, defaultEmailDomain, errors);
+  if (split > 0) {
+    logger.info({ split }, 'AD sync inbound: split AD accounts sharing one emp_id');
+  }
+
   const repaired = await repairOrphanAdLinks(adUsers as Record<string, unknown>[], errors, upnDomains);
   if (repaired > 0) {
     logger.info({ repaired }, 'AD sync inbound: repaired orphan identity links');
@@ -889,12 +985,21 @@ export async function processInboundAdUsers(
     logger.info({ migrated }, 'AD sync inbound: migrated placeholder emp_ids');
   }
 
+  const adAccounts = Number(
+    (await queryOne<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM identity_links WHERE \`system\` = 'AD' AND status != 'DELETED'`,
+      [],
+    ))?.n ?? 0,
+  );
+
   return {
     found: adUsers.length,
     imported,
     linked,
     skipped,
     disabledImported,
+    split,
+    adAccounts,
     processed,
     succeeded,
     failed,
@@ -1139,8 +1244,11 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
       const ldapScope = resolveAdLdapScope(syncScope);
       inboundSummary =
         `Inbound (${ldapScope}-tree, ${searchBases.length} base(s): ${searchBases.slice(0, 2).join('; ')}${searchBases.length > 2 ? '…' : ''}): ` +
-        `${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked` +
+        `${inbound.found} AD accounts, ${inbound.adAccounts} linked in directory` +
+        (inbound.imported ? `, ${inbound.imported} imported` : '') +
+        (inbound.linked ? `, ${inbound.linked} updated` : '') +
         (inbound.disabledImported ? ` (${inbound.disabledImported} disabled)` : '') +
+        (inbound.split ? `, ${inbound.split} split to own row` : '') +
         (inbound.repaired ? `, ${inbound.repaired} links repaired` : '') +
         (inbound.migrated ? `, ${inbound.migrated} emp_ids corrected` : '') +
         (inbound.skipped ? `, ${inbound.skipped} skipped (no sAMAccountName)` : '') +
