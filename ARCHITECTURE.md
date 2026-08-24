@@ -1116,6 +1116,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-24 — AD LDAP: fix port 389 / StartTLS connectivity
+
+**Why** — Test Connection and sync failed on port 389 when StartTLS was selected but port stayed 636, or when plain LDAP was configured but DC requires StartTLS/LDAPS.
+
+**What changed:** **`src/services/ad-ldap-connect.ts`** — normalize protocol/port; retry configured → StartTLS :389 → LDAPS :636. **`src/services/connector-health.ts`**, **`src/services/ad-sync.ts`**, **`src/api/iga.ts`**, **`web/js/views-stubs.js`** — use fallbacks and align port with protocol on save/load.
+
 ### (pending) — 2026-08-24 — Google INBOUND: use readonly Directory API scopes
 
 **Why** — INBOUND Google connectors failed Test Connection with `unauthorized_client` when Admin Console only delegated `admin.directory.user.readonly`; the IdP always requested the full write scope.

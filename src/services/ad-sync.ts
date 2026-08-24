@@ -17,7 +17,11 @@ import { query, queryOne, execute, transaction } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
+import {
+  connectAdAdapterWithFallback,
+  createAdAdapterFromConfig as buildAdAdapterFromConfig,
+  describeAdLdapMode,
+} from './ad-ldap-connect.js';
 import { applyDirectorySourceDisabled, applyDirectorySourceEnabled, preserveIlgStateOnDirectoryImport } from './user-lifecycle.js';
 import { ILGState } from '../fsm/states.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -1123,26 +1127,7 @@ function loadConnectorConfig(connectorId: string): Promise<Record<string, unknow
 }
 
 function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
-  const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
-  const useSsl     = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls   = parseConnectorBoolean(cfg['startTls'], false);
-  const port       = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const bindDn     = (cfg['bindDn']       as string | undefined) || config.ad.bindDn;
-  const bindPass   = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
-  const baseDn     = (cfg['baseDn']       as string | undefined) || config.ad.baseDn;
-  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-  const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-
-  return new ADAdapter(
-    redis,
-    adUrl,
-    bindDn,
-    bindPass,
-    baseDn,
-    undefined,
-    startTls,
-    targetOuRaw,
-  );
+  return buildAdAdapterFromConfig(redis, cfg);
 }
 
 /** Backfill AD identity link and correct placeholder emp_id when viewing a profile. */
@@ -1304,20 +1289,32 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const upnDomains = parseAdUpnDomains(cfg, dirConfig);
 
   const host       = (cfg['host'] as string | undefined)?.trim()     || new URL(config.ad.url).hostname;
-  const useSsl     = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls   = parseConnectorBoolean(cfg['startTls'], false);
-  const port       = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const adUrl      = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
   logger.info(
-    { connectorId, adUrl, bindDn: cfg['bindDn'], baseDn: dirConfig.searchBaseDn, provisionOu: dirConfig.provisionOuDn, direction, startTls },
+    { connectorId, host, bindDn: cfg['bindDn'], baseDn: dirConfig.searchBaseDn, provisionOu: dirConfig.provisionOuDn, direction },
     'AD sync: connecting',
   );
 
-  const adapter = createAdAdapterFromConfig(cfg);
+  let adapter: ADAdapter;
+  const connectErrors: string[] = [];
 
-  // Clear any OPEN circuit from a prior failed run so this sync gets a fresh attempt
-  await adapter.resetCircuitBreaker();
+  try {
+    const connected = await connectAdAdapterWithFallback(redis, cfg);
+    adapter = connected.adapter;
+    connectErrors.push(...connected.errors);
+    const { url, protocol } = describeAdLdapMode(connected.mode, cfg);
+    logger.info(
+      { connectorId, url, protocol, mode: connected.mode.label, priorAttempts: connectErrors.length },
+      'AD sync: LDAP connected',
+    );
+  } catch (err) {
+    const runErr = err instanceof Error ? err.message : String(err);
+    await execute(
+      `UPDATE connector_runs SET status = 'FAILED', ended_at = UTC_TIMESTAMP(), error_summary = ? WHERE id = ?`,
+      [runErr.slice(0, 8000), runId],
+    );
+    throw err;
+  }
 
   let itemsProcessed = 0;
   let itemsSucceeded = 0;
@@ -1330,8 +1327,6 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   const syncScope = resolveAdSyncScope(cfg);
 
   try {
-    await adapter.connect();
-
     if (runInbound) {
       const inbound = await importAdDirectoryUsers(adapter, dirConfig, cfg, errors);
       itemsProcessed += inbound.processed;
@@ -1387,7 +1382,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
       [],
     );
 
-    if (!useSsl && !startTls) {
+    if (!adapter.connectionIsSecure()) {
       const needsProvision = employees.some((e) =>
         e.ilg_state === 'ACTIVE' || e.ilg_state === 'REACTIVATED',
       );

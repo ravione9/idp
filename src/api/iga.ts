@@ -23,6 +23,7 @@ import { forceReclaimConnectorRuns } from '../services/connector-run-lifecycle.j
 import { runConnectorConnectivityTest } from '../services/connector-health.js';
 import { harvestConnectorEntitlements } from '../services/entitlement-harvest.js';
 import { fulfillEntitlementOnTarget } from '../services/entitlement-fulfillment.js';
+import { normalizeAdConnectorConfig } from '../services/ad-ldap-connect.js';
 import { submitAccessRequest, processDecision, repairAccessRequestFulfillment } from '../services/access-request-workflow.js';
 import { isValidSyncSchedule } from '../utils/sync-schedule.js';
 import { jsonSafeRow, jsonSafeString } from '../utils/json-safe.js';
@@ -267,6 +268,9 @@ router.post(
     if (parsed.data.connectorType.toUpperCase() === 'AD_AGENT') {
       agentTokenPlain = generateAgentToken();
       cfg['agentTokenHash'] = hashAgentToken(agentTokenPlain);
+    }
+    if (cfg['host']) {
+      Object.assign(cfg, normalizeAdConnectorConfig(cfg));
     }
 
     try {
@@ -536,6 +540,9 @@ router.put(
           continue;
         }
         merged[k] = v;
+      }
+      if (merged['host']) {
+        Object.assign(merged, normalizeAdConnectorConfig(merged));
       }
       mergedJson = JSON.stringify(merged);
     }
