@@ -12,6 +12,7 @@ import { config } from '../config.js';
 import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import {
   buildGoogleJwtAuth,
+  normalizeConnectorDirection,
   resolveGoogleSyncScope,
   parseCsvList,
   isGoogleGroupSyncAll,
@@ -465,8 +466,9 @@ export async function syncAllDirectoryGroups(): Promise<GroupSyncSummary> {
     id: string;
     connector_type: string;
     config_json: string | Record<string, unknown>;
+    direction: string;
   }>(
-    `SELECT id, connector_type, config_json FROM connectors
+    `SELECT id, connector_type, config_json, direction FROM connectors
       WHERE status IN ('CONNECTED', 'ACTIVE')`,
     [],
   );
@@ -482,7 +484,7 @@ export async function syncAllDirectoryGroups(): Promise<GroupSyncSummary> {
     if (conn.connector_type === 'GOOGLE' || conn.connector_type === 'GOOGLE_WORKSPACE') {
       const scope = resolveGoogleSyncScope(cfg);
       try {
-        const auth = buildGoogleJwtAuth(cfg);
+        const auth = buildGoogleJwtAuth(cfg, normalizeConnectorDirection(conn.direction));
         const directory = google.admin({ version: 'directory_v1', auth });
         const part = await syncGoogleDirectoryGroups(conn.id, directory, scope, cfg);
         total.groupsSynced += part.groupsSynced;
