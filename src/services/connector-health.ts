@@ -12,7 +12,13 @@ import { google } from 'googleapis';
 import { execute, query, queryOne } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { withSchedLock } from '../utils/sched-lock.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
+import { parseConnectorPort } from '../utils/connector-config.js';
+import {
+  connectAdAdapterWithFallback,
+  describeAdLdapMode,
+  listAdLdapConnectionAttempts,
+  normalizeAdConnectorTls,
+} from './ad-ldap-connect.js';
 import {
   buildGoogleJwtAuth,
   formatGoogleAuthError,
@@ -195,9 +201,6 @@ async function testAdAgent(connectorId: string, cfg: Record<string, unknown>): P
 
 async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorTestResult, 'connectorStatus'>> {
   const host = (cfg['host'] as string | undefined)?.trim();
-  const useSsl = parseConnectorBoolean(cfg['useSsl'], false);
-  const startTls = parseConnectorBoolean(cfg['startTls'], false);
-  const port = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
   const bindDn = (cfg['bindDn'] as string | undefined)?.trim();
   const bindPass = cfg['bindPassword'] as string | undefined;
 
@@ -222,80 +225,53 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
     };
   }
 
-  const url = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-  const protocol = useSsl ? 'LDAPS' : startTls ? 'LDAP+StartTLS' : 'LDAP';
-  const { Client: LdapClient } = await import('ldapts');
-  const tlsOpts = { rejectUnauthorized: false };
-  const client = new LdapClient({ url, connectTimeout: 5000, tlsOptions: tlsOpts });
+  const { redis: sessionRedis } = await import('../auth/session-store.js');
+  const baseDn = (cfg['baseDn'] as string | undefined)?.trim();
+  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
+  const warnings: string[] = [];
+  const infos: string[] = [];
+  let suggestions: string[] = [];
 
   try {
-    if (startTls) await client.startTLS(tlsOpts);
-    await client.bind(bindDn!, bindPass!);
+    const { adapter, mode, errors: attemptErrors } = await connectAdAdapterWithFallback(sessionRedis, cfg);
+    const { url, protocol } = describeAdLdapMode(mode, cfg);
+    const normalized = normalizeAdConnectorTls(cfg);
 
-    const baseDn = (cfg['baseDn'] as string | undefined)?.trim();
-    const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-    const { resolveAdDirectoryConfig } = await import('../adapters/ad-adapter.js');
-    const warnings: string[] = [];
-    const infos: string[] = [];
-    let suggestions: string[] = [];
+    if (mode.label !== 'configured') {
+      infos.push(
+        `Connected using ${protocol} (${mode.label} fallback)` +
+        (attemptErrors.length ? ` — prior attempt(s): ${attemptErrors.join('; ')}` : ''),
+      );
+    } else if (
+      normalized.startTls && normalized.port === 389
+      && parseConnectorPort(cfg['port'], 389) === 636
+    ) {
+      infos.push('Port corrected from 636 to 389 for LDAP+StartTLS.');
+    }
 
     if (baseDn) {
       try {
+        const { resolveAdDirectoryConfig } = await import('../adapters/ad-adapter.js');
         const dir = resolveAdDirectoryConfig(baseDn, targetOuRaw);
         if (dir.inferredProvisionOu) {
           infos.push(
             `New User OU inferred as ${dir.provisionOuRdn} from Base DN. Recommended: Base DN = ${dir.domainRoot}, New User OU = ${dir.provisionOuRdn}`,
           );
         }
-        try {
-          await client.search(dir.provisionOuDn, {
-            scope: 'base',
-            filter: '(objectClass=organizationalUnit)',
-            attributes: ['dn'],
-          });
-        } catch {
-          try {
-            const ouResult = await client.search(dir.searchBaseDn, {
-              scope: 'sub',
-              filter: '(objectClass=organizationalUnit)',
-              attributes: ['dn'],
-              sizeLimit: 12,
-            });
-            suggestions = (ouResult.searchEntries as Array<{ dn?: string }>)
-              .map((e) => e.dn ?? '')
-              .filter(Boolean);
-          } catch { /* ignore */ }
-          const hint = suggestions.length ? ` Existing OUs: ${suggestions.slice(0, 6).join('; ')}` : '';
-          warnings.push(`Target OU not found: ${dir.provisionOuDn} — create it in AD or update connector settings.${hint}`);
-        }
       } catch (err) {
         warnings.push(err instanceof Error ? err.message : String(err));
       }
     }
 
-    if (!useSsl && !startTls) {
+    if (!normalized.useSsl && !normalized.startTls && mode.label === 'ldap') {
       warnings.push('Protocol is plain LDAP — user provisioning requires LDAPS or LDAP+StartTLS');
     }
 
     if (baseDn) {
       try {
         const { resolveAdSyncScope, describeAdSyncScope } = await import('./ad-directory-config.js');
-        const { ADAdapter: AdAdapterCtor } = await import('../adapters/ad-adapter.js');
-        const { redis: sessionRedis } = await import('../auth/session-store.js');
         const scope = resolveAdSyncScope(cfg);
-        const adapter = new AdAdapterCtor(
-          sessionRedis,
-          url,
-          bindDn!,
-          bindPass!,
-          baseDn,
-          undefined,
-          startTls,
-          targetOuRaw,
-        );
-        await adapter.connect();
         const listed = await adapter.listDirectoryUsers(scope);
-        await adapter.disconnect();
         if (listed.success) {
           infos.push(describeAdSyncScope(scope, listed.data.length));
         } else if (listed.error) {
@@ -306,10 +282,10 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
       }
     }
 
-    await client.unbind();
+    await adapter.disconnect();
     const detail = [...infos, ...warnings].join('; ');
     const msg = detail
-      ? `${protocol} bind succeeded${warnings.length ? ', but' : ''}: ${detail}`
+      ? `${protocol} bind succeeded (${url})${warnings.length ? ', but' : ''}: ${detail}`
       : `${protocol} bind succeeded — connected to ${url} as ${bindDn}`;
 
     return {
@@ -321,21 +297,24 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
       ...(suggestions.length ? { ouSuggestions: suggestions } : {}),
     };
   } catch (ldapErr) {
+    const attempts = listAdLdapConnectionAttempts(cfg);
     const raw = ldapErr instanceof Error ? ldapErr.message : String(ldapErr);
     const code = (ldapErr as Record<string, unknown>)['code'];
     let friendly: string;
     if (typeof code === 'number' && code === 49) {
       friendly = `Invalid credentials (LDAP error 49) — check bindDn and bindPassword. DN used: ${bindDn}`;
-    } else if (typeof code === 'number' && code === 8) {
-      friendly = 'Strong authentication required (LDAP error 8) — switch Protocol to LDAP+StartTLS or LDAPS.';
+    } else if ((typeof code === 'number' && code === 8) || /Strong(er)? authentication required/i.test(raw)) {
+      friendly = 'Strong authentication required (LDAP error 8) — use LDAP+StartTLS on port 389 or LDAPS on port 636.';
     } else if (typeof code === 'number' && code === 32) {
       friendly = `No Such Object (LDAP error 32) — bindDn not found. DN used: ${bindDn}`;
     } else if (raw.includes('ECONNREFUSED')) {
-      friendly = `Connection refused — ${url} is not reachable.`;
+      friendly = `Connection refused — IdP cannot reach ${host} on port 389/636. Open firewall from IdP to the domain controller, or use the on-prem AD Agent connector.`;
     } else if (raw.includes('ETIMEDOUT') || raw.includes('connectTimeout')) {
-      friendly = `Connection timed out reaching ${url}.`;
+      friendly = `Connection timed out reaching ${host} on port 389/636 — check network/firewall routes from IdP to AD.`;
     } else if (raw.includes('ENOTFOUND') || raw.includes('getaddrinfo')) {
       friendly = `DNS resolution failed for host "${host}".`;
+    } else if (attempts.length > 1) {
+      friendly = raw;
     } else {
       friendly = `LDAP error (${typeof code !== 'undefined' ? `code ${code}` : 'unknown'}): ${raw}`;
     }

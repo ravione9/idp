@@ -4853,6 +4853,11 @@ function initSourcesTab(panel) {
       else if (f === 'useSsl') {
         configJson['useSsl']   = el2.value === 'ldaps';
         configJson['startTls'] = el2.value === 'starttls';
+        const portEl = bd.querySelector('#cfg-port');
+        if (portEl) {
+          if (el2.value === 'ldaps') portEl.value = '636';
+          else if (el2.value === 'starttls' || el2.value === 'ldap') portEl.value = '389';
+        }
       } else {
         const val = el2.value.trim();
         if (val !== '') configJson[f] = val;
@@ -4881,6 +4886,13 @@ function initSourcesTab(panel) {
         sync_schedule: c.sync_schedule,
         ...(c.config || {}),
       };
+      if (normalizeConnectorType(c.connector_type) === 'AD' || normalizeConnectorType(c.connector_type) === 'LDAP') {
+        const startTls = defaults.startTls === true || defaults.startTls === 'true' || defaults.startTls === 1;
+        const useSsl = defaults.useSsl === true || defaults.useSsl === 'true' || defaults.useSsl === 1;
+        if (useSsl) defaults.port = defaults.port || '636';
+        else if (startTls) defaults.port = '389';
+        else if (!defaults.port) defaults.port = '389';
+      }
       if (normalizeConnectorType(c.connector_type) === 'GOOGLE_WORKSPACE') {
         try {
           const oidc = await api.getGoogleOidcSettings();
