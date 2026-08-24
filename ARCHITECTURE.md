@@ -1116,6 +1116,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-24 — AD sync: skip emp_id migration on primary-key collision
+
+**Why** — Inbound repair tried to rename `AD-XXXX` placeholder rows to AD `employeeID` values (`Finance`, `Lkst244`, …) that already belonged to another employee, causing duplicate-key errors and PARTIAL sync runs.
+
+**What changed:** **`src/services/ad-sync.ts`** — `tryMigrateEmpId` skips when the target emp_id is taken by a different email; merges duplicate placeholder rows when email matches; only logs unexpected errors.
+
 ### (pending) — 2026-08-23 — Docker build: bump Alpine python3 apk pin
 
 **Why** — Alpine 3.22 moved `python3` to `3.12.14-r0`; pinned `3.12.13-r0` caused `apk add` to fail in CI (`breaks: world[python3=3.12.13-r0]`).
