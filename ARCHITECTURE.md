@@ -1116,6 +1116,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-24 — Google INBOUND: use readonly Directory API scopes
+
+**Why** — INBOUND Google connectors failed Test Connection with `unauthorized_client` when Admin Console only delegated `admin.directory.user.readonly`; the IdP always requested the full write scope.
+
+**What changed:** **`src/services/google-directory-config.ts`** — `googleJwtScopes()` returns `user.readonly` for INBOUND; sync/test/harvest pass connector direction. **`web/js/views-stubs.js`** — delegation hint updates for INBOUND vs outbound/bidirectional.
+
 ### 455a8d1 — 2026-08-24 — Fix connector direction not saving on edit
 
 **Why** — Universal Directory connector edit sent `direction: INBOUND` in PUT body but `PUT /api/iga/connectors/:id` never updated the `direction` column, so sync stayed BIDIRECTIONAL.

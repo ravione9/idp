@@ -17,7 +17,9 @@ import {
   employeeEligibleForGoogleOutbound,
   listScopedGoogleUsers,
   lookupGoogleDirectoryIdentity,
+  normalizeConnectorDirection,
   resolveGoogleSyncScope,
+  type ConnectorSyncDirection,
   type GoogleSyncScope,
 } from './google-directory-config.js';
 import { syncGoogleDirectoryGroups } from './group-sync.js';
@@ -710,8 +712,8 @@ export async function backfillGoogleIdentityLinkIfMissing(
   );
   if (hasLink) return { changed: false };
 
-  const conn = await queryOne<{ config_json: string | Record<string, unknown> }>(
-    `SELECT config_json FROM connectors
+  const conn = await queryOne<{ config_json: string | Record<string, unknown>; direction: string }>(
+    `SELECT config_json, direction FROM connectors
       WHERE connector_type IN ('GOOGLE', 'GOOGLE_WORKSPACE')
         AND status IN ('CONNECTED', 'ACTIVE')
       ORDER BY updated_at DESC LIMIT 1`,
@@ -725,7 +727,7 @@ export async function backfillGoogleIdentityLinkIfMissing(
       : (conn.config_json ?? {});
 
   try {
-    const auth = buildGoogleJwtAuth(cfg);
+    const auth = buildGoogleJwtAuth(cfg, normalizeConnectorDirection(conn.direction));
     const directory = google.admin({ version: 'directory_v1', auth });
     const existing = await directory.users.get({ userKey: email });
     const googleId = existing.data.id ?? email;
@@ -806,10 +808,11 @@ export async function runGoogleSync(
 
   const scope = resolveGoogleSyncScope(cfg);
   direction = (connRow.direction ?? 'BIDIRECTIONAL').toUpperCase();
+  const syncDirection = normalizeConnectorDirection(direction);
   const runInbound  = direction === 'INBOUND' || direction === 'BIDIRECTIONAL';
   const runOutbound = direction === 'OUTBOUND' || direction === 'BIDIRECTIONAL';
 
-  const auth = buildGoogleJwtAuth(cfg);
+  const auth = buildGoogleJwtAuth(cfg, syncDirection);
   const directory = google.admin({ version: 'directory_v1', auth });
 
     if (runInbound) {
@@ -1058,15 +1061,19 @@ export interface GoogleUserSyncDiagnostic {
   };
 }
 
-async function loadGoogleConnectorConfig(connectorId: string): Promise<Record<string, unknown>> {
-  const connRow = await queryOne<{ config_json: string | Record<string, unknown> }>(
-    `SELECT config_json FROM connectors WHERE id = ?`,
+async function loadGoogleConnectorContext(connectorId: string): Promise<{
+  cfg: Record<string, unknown>;
+  direction: ConnectorSyncDirection;
+}> {
+  const connRow = await queryOne<{ config_json: string | Record<string, unknown>; direction: string }>(
+    `SELECT config_json, direction FROM connectors WHERE id = ?`,
     [connectorId],
   );
   if (!connRow) throw new Error(`Connector not found: ${connectorId}`);
-  return typeof connRow.config_json === 'string'
+  const cfg = typeof connRow.config_json === 'string'
     ? JSON.parse(connRow.config_json || '{}') as Record<string, unknown>
     : (connRow.config_json ?? {});
+  return { cfg, direction: normalizeConnectorDirection(connRow.direction) };
 }
 
 /** Diagnose and optionally import a single Google user by email or alias (bypasses sync scope). */
@@ -1077,8 +1084,8 @@ export async function syncGoogleUserByEmail(
 ): Promise<GoogleUserSyncDiagnostic> {
   const lookupEmail = email.trim().toLowerCase();
   const importUser = opts.importUser !== false;
-  const cfg = await loadGoogleConnectorConfig(connectorId);
-  const auth = buildGoogleJwtAuth(cfg);
+  const { cfg, direction } = await loadGoogleConnectorContext(connectorId);
+  const auth = buildGoogleJwtAuth(cfg, direction);
   const directory = google.admin({ version: 'directory_v1', auth });
 
   const local = await queryOne<{

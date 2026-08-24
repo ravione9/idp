@@ -14,7 +14,7 @@ import { ADAdapter } from '../adapters/ad-adapter.js';
 import { redis } from '../auth/session-store.js';
 import { config } from '../config.js';
 import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
-import { buildGoogleJwtAuth, resolveGoogleSyncScope, isGoogleGroupSyncAll } from './google-directory-config.js';
+import { buildGoogleJwtAuth, normalizeConnectorDirection, resolveGoogleSyncScope, isGoogleGroupSyncAll } from './google-directory-config.js';
 import { isConnectorSyncEligible } from './connector-health.js';
 import logger from '../utils/logger.js';
 
@@ -34,6 +34,7 @@ interface ConnectorRow {
   slug: string;
   connector_type: string;
   status: string;
+  direction: string;
   config_json: string | Record<string, unknown>;
 }
 
@@ -157,14 +158,18 @@ async function harvestAd(_connectorId: string, cfg: Record<string, unknown>): Pr
   return { items, errors };
 }
 
-async function harvestGoogle(_connectorId: string, cfg: Record<string, unknown>): Promise<{
+async function harvestGoogle(
+  _connectorId: string,
+  cfg: Record<string, unknown>,
+  direction: ReturnType<typeof normalizeConnectorDirection>,
+): Promise<{
   items: HarvestedEnt[];
   errors: string[];
 }> {
   const errors: string[] = [];
   const items: HarvestedEnt[] = [];
   try {
-    const auth = buildGoogleJwtAuth(cfg);
+    const auth = buildGoogleJwtAuth(cfg, direction);
     const directory = google.admin({ version: 'directory_v1', auth });
     const scope = resolveGoogleSyncScope(cfg);
 
@@ -225,7 +230,7 @@ export async function harvestConnectorEntitlements(
   triggeredBy: string,
 ): Promise<HarvestResult> {
   const connector = await queryOne<ConnectorRow>(
-    `SELECT id, name, slug, connector_type, status, config_json FROM connectors WHERE id = ?`,
+    `SELECT id, name, slug, connector_type, status, direction, config_json FROM connectors WHERE id = ?`,
     [connectorId],
   );
   if (!connector) throw new Error('Connector not found');
@@ -257,7 +262,7 @@ export async function harvestConnectorEntitlements(
       || type === 'GOOGLE_WORKSPACE'
       || connector.slug === 'google-workspace'
     ) {
-      pack = await harvestGoogle(connectorId, cfg);
+      pack = await harvestGoogle(connectorId, cfg, normalizeConnectorDirection(connector.direction));
     } else {
       throw new Error(
         `Entitlement harvest not supported for connector type: ${connector.connector_type}. `

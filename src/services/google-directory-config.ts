@@ -14,8 +14,27 @@ import {
 
 export const GOOGLE_DIRECTORY_USER_SCOPE =
   'https://www.googleapis.com/auth/admin.directory.user';
+export const GOOGLE_DIRECTORY_USER_READONLY_SCOPE =
+  'https://www.googleapis.com/auth/admin.directory.user.readonly';
 export const GOOGLE_DIRECTORY_GROUP_SCOPE =
   'https://www.googleapis.com/auth/admin.directory.group.readonly';
+
+export type ConnectorSyncDirection = 'INBOUND' | 'OUTBOUND' | 'BIDIRECTIONAL';
+
+export function normalizeConnectorDirection(raw: unknown): ConnectorSyncDirection {
+  const d = String(raw ?? 'BIDIRECTIONAL').toUpperCase();
+  if (d === 'INBOUND' || d === 'OUTBOUND') return d;
+  return 'BIDIRECTIONAL';
+}
+
+/** Scopes to request at token time — must match Admin Console domain-wide delegation exactly. */
+export function googleJwtScopes(direction: ConnectorSyncDirection = 'BIDIRECTIONAL'): string[] {
+  const userScope = direction === 'INBOUND'
+    ? GOOGLE_DIRECTORY_USER_READONLY_SCOPE
+    : GOOGLE_DIRECTORY_USER_SCOPE;
+  // Group read is always required — inbound mirrors memberships even when Sync Groups is blank.
+  return [userScope, GOOGLE_DIRECTORY_GROUP_SCOPE];
+}
 
 export interface GoogleSyncScope {
   /** Primary domain label (first in list). */
@@ -50,12 +69,6 @@ export function isGoogleGroupSyncAll(cfg: Record<string, unknown>): boolean {
   return raw.length === 1 && (raw[0] === '*' || raw[0].toUpperCase() === 'ALL');
 }
 
-/** Scopes to request at token time — must match Admin Console domain-wide delegation exactly. */
-export function googleJwtScopes(_cfg?: Record<string, unknown>): string[] {
-  // Always include group.readonly: blank Sync Groups auto-mirrors Workspace groups (like AD).
-  return [GOOGLE_DIRECTORY_USER_SCOPE, GOOGLE_DIRECTORY_GROUP_SCOPE];
-}
-
 export function resolveGoogleImpersonationEmail(
   cfg: Record<string, unknown>,
   key: Record<string, string>,
@@ -74,7 +87,11 @@ export function resolveGoogleImpersonationEmail(
   return admin;
 }
 
-export function formatGoogleAuthError(err: unknown, cfg: Record<string, unknown>): string {
+export function formatGoogleAuthError(
+  err: unknown,
+  cfg: Record<string, unknown>,
+  direction: ConnectorSyncDirection = 'BIDIRECTIONAL',
+): string {
   const raw = err instanceof Error ? err.message : String(err);
   if (!raw.includes('unauthorized_client')) {
     return raw;
@@ -90,8 +107,11 @@ export function formatGoogleAuthError(err: unknown, cfg: Record<string, unknown>
     // ignore parse errors in error formatter
   }
 
-  const scopeCsv = googleJwtScopes(cfg).join(',');
+  const scopeCsv = googleJwtScopes(direction).join(',');
   const admin = String(cfg['adminEmail'] ?? '').trim() || '(not set)';
+  const scopeHint = direction === 'INBOUND'
+    ? 'INBOUND sync uses readonly scopes — delegate user.readonly + group.readonly (not the full user write scope).'
+    : 'Both scopes above must be in the delegation list (user + group.readonly) — group sync runs even when Sync Groups is blank.';
 
   return [
     'Google rejected the service-account token (unauthorized_client).',
@@ -101,7 +121,7 @@ export function formatGoogleAuthError(err: unknown, cfg: Record<string, unknown>
     `   Client ID: ${clientId || '(copy client_id from the JSON key)'}`,
     `   OAuth scopes: ${scopeCsv}`,
     `3) Admin Email must be a Workspace super admin (you set: ${admin}) — not the service account email.`,
-    `4) Both scopes above must be in the delegation list (user + group.readonly) — group sync runs even when Sync Groups is blank.`,
+    `4) ${scopeHint}`,
   ].join(' ');
 }
 
@@ -146,7 +166,10 @@ export function resolveGoogleSyncScope(cfg: Record<string, unknown>): GoogleSync
   };
 }
 
-export function buildGoogleJwtAuth(cfg: Record<string, unknown>): JWT {
+export function buildGoogleJwtAuth(
+  cfg: Record<string, unknown>,
+  direction: ConnectorSyncDirection = 'BIDIRECTIONAL',
+): JWT {
   const saKeyRaw = String(cfg['serviceAccountKey'] ?? config.google.saKeyJson ?? '').trim();
   const key = parseGoogleServiceAccountKey(saKeyRaw);
   const impersonate = resolveGoogleImpersonationEmail(cfg, key);
@@ -154,7 +177,7 @@ export function buildGoogleJwtAuth(cfg: Record<string, unknown>): JWT {
   return new google.auth.JWT({
     email:   key['client_email'],
     key:     key['private_key'],
-    scopes:  googleJwtScopes(cfg),
+    scopes:  googleJwtScopes(direction),
     subject: impersonate,
   });
 }

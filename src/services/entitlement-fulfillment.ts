@@ -151,7 +151,7 @@ async function fulfillGoogle(
     return { status: 'SKIPPED', detail: 'No Google email for employee' };
   }
   try {
-    const auth = buildGoogleJwtAuth(cfg);
+    const auth = buildGoogleJwtAuth(cfg, 'BIDIRECTIONAL');
     const directory = google.admin({ version: 'directory_v1', auth });
     if (action === 'GRANT') {
       try {

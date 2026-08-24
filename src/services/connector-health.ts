@@ -17,6 +17,7 @@ import {
   buildGoogleJwtAuth,
   formatGoogleAuthError,
   listScopedGoogleUsers,
+  normalizeConnectorDirection,
   resolveGoogleSyncScope,
 } from './google-directory-config.js';
 import {
@@ -66,8 +67,8 @@ export async function markConnectorHealth(
 }
 
 export async function runConnectorConnectivityTest(connectorId: string): Promise<ConnectorTestResult> {
-  const row = await queryOne<{ connector_type: string; config_json: string | Record<string, unknown>; status: string }>(
-    `SELECT connector_type, config_json, status FROM connectors WHERE id = ?`,
+  const row = await queryOne<{ connector_type: string; config_json: string | Record<string, unknown>; status: string; direction: string }>(
+    `SELECT connector_type, config_json, status, direction FROM connectors WHERE id = ?`,
     [connectorId],
   );
   if (!row) {
@@ -119,7 +120,8 @@ export async function runConnectorConnectivityTest(connectorId: string): Promise
     }
 
     if (type === 'GOOGLE' || type === 'GOOGLE_WORKSPACE') {
-      const result = await testGoogle(cfg);
+      const direction = normalizeConnectorDirection(row.direction);
+      const result = await testGoogle(cfg, direction);
       if (result.success) {
         await markConnectorHealth(connectorId, true, result.message);
         return { ...result, connectorStatus: 'CONNECTED' };
@@ -347,7 +349,10 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
   }
 }
 
-async function testGoogle(cfg: Record<string, unknown>): Promise<Omit<ConnectorTestResult, 'connectorStatus'>> {
+async function testGoogle(
+  cfg: Record<string, unknown>,
+  direction: ReturnType<typeof normalizeConnectorDirection>,
+): Promise<Omit<ConnectorTestResult, 'connectorStatus'>> {
   const domains = parseGoogleHostedDomains(cfg['customerDomains'] ?? cfg['customerDomain']);
   const missing: string[] = [];
   if (!domains.length) missing.push('customerDomain');
@@ -363,7 +368,7 @@ async function testGoogle(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
   }
 
   try {
-    const auth = buildGoogleJwtAuth(cfg);
+    const auth = buildGoogleJwtAuth(cfg, direction);
     const directory = google.admin({ version: 'directory_v1', auth });
     await directory.users.list({ customer: 'my_customer', maxResults: 1 });
 
@@ -389,7 +394,7 @@ async function testGoogle(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
       success: false,
       statusCode: 422,
       code: 'GOOGLE_AUTH_FAILED',
-      message: formatGoogleAuthError(googleErr, cfg),
+      message: formatGoogleAuthError(googleErr, cfg, direction),
       detail: googleErr instanceof Error ? googleErr.message : String(googleErr),
     };
   }
