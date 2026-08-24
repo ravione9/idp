@@ -1116,6 +1116,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-24 — AD inbound: import disabled accounts and dedupe employeeID
+
+**Why** — ~5k AD users were counted as "skipped" because disabled accounts were never inserted into `employees`; shared/bad `employeeID` values (e.g. `Finance`) caused multiple AD users to collide on one IdP row.
+
+**What changed:** **`src/services/ad-sync.ts`** — import new disabled AD users as `SUSPENDED_AUTO` with DISABLED identity link; duplicate `employeeID` across different sAMAccountNames uses `AD-<hash>` emp_id; recover duplicate `email_corp` on insert by linking existing row.
+
 ### (pending) — 2026-08-24 — AD sync: skip emp_id migration on primary-key collision
 
 **Why** — Inbound repair tried to rename `AD-XXXX` placeholder rows to AD `employeeID` values (`Finance`, `Lkst244`, …) that already belonged to another employee, causing duplicate-key errors and PARTIAL sync runs.

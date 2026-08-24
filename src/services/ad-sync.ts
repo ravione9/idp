@@ -89,9 +89,19 @@ function generateTempPassword(): string {
 function deriveEmpIdFromAd(adUser: Record<string, unknown>): string {
   const fromAd = readAdEmployeeId(adUser);
   if (fromAd) return fromAd;
+  return deriveEmpIdHashFromSam(adUser);
+}
+
+function deriveEmpIdHashFromSam(adUser: Record<string, unknown>): string {
   const sam = getLdapAttr(adUser, 'sAMAccountName') || 'user';
   const hash = crypto.createHash('md5').update(sam).digest('hex').slice(0, 12).toUpperCase();
   return `AD-${hash}`;
+}
+
+function isDuplicateKeyError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: string }).code;
+  return code === 'ER_DUP_ENTRY' || /duplicate entry/i.test(err.message);
 }
 
 function readAdNameParts(
@@ -257,7 +267,7 @@ async function tryMigrateEmpId(
  *
  * When an existing row matched by email has a placeholder emp_id (AD-XXXX)
  * and AD now reports a real employeeID, the row is migrated to the AD value.
- * Returns null if a conflict would clobber another employee.
+ * Duplicate AD employeeID values shared across accounts fall back to AD-<hash>.
  */
 async function resolveEmpIdForAdUser(
   adUser: Record<string, unknown>,
@@ -303,6 +313,20 @@ async function resolveEmpIdForAdUser(
       [adEmpId],
     );
     if (byAdId) {
+      const existingLink = sam
+        ? await queryOne<{ external_id: string }>(
+          `SELECT external_id FROM identity_links
+            WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'`,
+          [adEmpId],
+        )
+        : null;
+      if (existingLink && existingLink.external_id.toLowerCase() !== sam.toLowerCase()) {
+        logger.warn(
+          { adEmpId, sam, existingSam: existingLink.external_id },
+          'AD sync: duplicate AD employeeID on another account — using AD hash emp_id',
+        );
+        return deriveEmpIdHashFromSam(adUser);
+      }
       if (
         emailNorm
         && byAdId.email_corp
@@ -522,6 +546,7 @@ async function importAdDirectoryUsers(
   imported: number;
   linked: number;
   skipped: number;
+  disabledImported: number;
   processed: number;
   succeeded: number;
   failed: number;
@@ -549,6 +574,7 @@ export async function processInboundAdUsers(
   imported: number;
   linked: number;
   skipped: number;
+  disabledImported: number;
   processed: number;
   succeeded: number;
   failed: number;
@@ -573,6 +599,7 @@ export async function processInboundAdUsers(
   let imported = 0;
   let linked = 0;
   let skipped = 0;
+  let disabledImported = 0;
   let processed = 0;
   let succeeded = 0;
   let failed = 0;
@@ -647,6 +674,7 @@ export async function processInboundAdUsers(
         continue;
       }
       const emailCorp = email || `${sam}@ad-sync.local`;
+      const emailNorm = emailCorp.trim().toLowerCase();
 
       const fullName = cleanAdDisplayName(adUser, sam);
       const { firstName, lastName } = readAdNameParts(adUser, fullName, sam);
@@ -662,12 +690,14 @@ export async function processInboundAdUsers(
         succeeded++;
         continue;
       }
-      const exists = await queryOne<{ emp_id: string }>(
+      let targetEmpId = empId;
+      let exists = await queryOne<{ emp_id: string }>(
         `SELECT emp_id FROM employees WHERE emp_id = ?`,
-        [empId],
+        [targetEmpId],
       );
 
       if (disabled) {
+        const disabledState = ILGState.SUSPENDED_AUTO;
         if (exists) {
           await execute(
             `UPDATE employees
@@ -675,13 +705,51 @@ export async function processInboundAdUsers(
                     ad_object_guid = COALESCE(?, ad_object_guid),
                     sync_status = 'DISABLED', updated_at = UTC_TIMESTAMP()
               WHERE emp_id = ?`,
-            [fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, empId],
+            [fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, targetEmpId],
           );
-          await upsertAdIdentityLink(empId, sam, 'DISABLED');
-          await applyDirectorySourceDisabled(empId, 'AD', 'ad_account_disabled');
+          await upsertAdIdentityLink(targetEmpId, sam, 'DISABLED');
+          await applyDirectorySourceDisabled(targetEmpId, 'AD', 'ad_account_disabled');
           linked++;
+        } else {
+          try {
+            await execute(
+              `INSERT INTO employees
+                 (emp_id, full_name, first_name, last_name, email_corp, dept_id, role, ad_object_guid,
+                  ilg_state, hrms_status, hire_date, employment_type, sync_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', UTC_DATE(), 'CORPORATE', 'DISABLED')`,
+              [targetEmpId, fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, disabledState],
+            );
+            await upsertAdIdentityLink(targetEmpId, sam, 'DISABLED');
+            disabledImported++;
+            imported++;
+          } catch (err) {
+            if (isDuplicateKeyError(err) && emailNorm) {
+              const byEmail = await queryOne<{ emp_id: string }>(
+                `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
+                [emailNorm],
+              );
+              if (byEmail) {
+                targetEmpId = byEmail.emp_id;
+                exists = byEmail;
+                await execute(
+                  `UPDATE employees
+                      SET full_name = ?, first_name = ?, last_name = ?, dept_id = ?, role = ?,
+                          ad_object_guid = COALESCE(?, ad_object_guid),
+                          sync_status = 'DISABLED', updated_at = UTC_TIMESTAMP()
+                    WHERE emp_id = ?`,
+                  [fullName, firstName, lastName, department, title, adObjectGuid, targetEmpId],
+                );
+                await upsertAdIdentityLink(targetEmpId, sam, 'DISABLED');
+                await applyDirectorySourceDisabled(targetEmpId, 'AD', 'ad_account_disabled');
+                linked++;
+              } else {
+                throw err;
+              }
+            } else {
+              throw err;
+            }
+          }
         }
-        skipped++;
         succeeded++;
         continue;
       }
@@ -689,12 +757,12 @@ export async function processInboundAdUsers(
       const existingState = exists
         ? (await queryOne<{ ilg_state: string }>(
           `SELECT ilg_state FROM employees WHERE emp_id = ?`,
-          [empId],
+          [targetEmpId],
         ))?.ilg_state
         : undefined;
 
       if (existingState === ILGState.SUSPENDED_AUTO) {
-        await applyDirectorySourceEnabled(empId, 'AD');
+        await applyDirectorySourceEnabled(targetEmpId, 'AD');
       }
 
       const linkStatus = 'ACTIVE';
@@ -709,23 +777,48 @@ export async function processInboundAdUsers(
                   ad_object_guid = COALESCE(?, ad_object_guid),
                   ilg_state = ?, updated_at = UTC_TIMESTAMP()
             WHERE emp_id = ?`,
-          [fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, ilgState, empId],
+          [fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, ilgState, targetEmpId],
         );
         linked++;
       } else {
-        await execute(
-          `INSERT INTO employees
-             (emp_id, full_name, first_name, last_name, email_corp, dept_id, role, ad_object_guid,
-              ilg_state, hrms_status, hire_date, employment_type)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', UTC_DATE(), 'CORPORATE')`,
-          [empId, fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, ilgState],
-        );
-        imported++;
+        try {
+          await execute(
+            `INSERT INTO employees
+               (emp_id, full_name, first_name, last_name, email_corp, dept_id, role, ad_object_guid,
+                ilg_state, hrms_status, hire_date, employment_type)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', UTC_DATE(), 'CORPORATE')`,
+            [targetEmpId, fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, ilgState],
+          );
+          imported++;
+        } catch (err) {
+          if (isDuplicateKeyError(err) && emailNorm) {
+            const byEmail = await queryOne<{ emp_id: string }>(
+              `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
+              [emailNorm],
+            );
+            if (byEmail) {
+              targetEmpId = byEmail.emp_id;
+              await execute(
+                `UPDATE employees
+                    SET full_name = ?, first_name = ?, last_name = ?, dept_id = ?, role = ?,
+                        ad_object_guid = COALESCE(?, ad_object_guid),
+                        ilg_state = ?, updated_at = UTC_TIMESTAMP()
+                  WHERE emp_id = ?`,
+                [fullName, firstName, lastName, department, title, adObjectGuid, ilgState, targetEmpId],
+              );
+              linked++;
+            } else {
+              throw err;
+            }
+          } else {
+            throw err;
+          }
+        }
       }
 
       // Always attach link to the resolved employee (moves link if it was on wrong emp_id)
-      await upsertAdIdentityLink(empId, sam, linkStatus);
-      if (dn) empIdByDn.set(dn.toLowerCase(), empId);
+      await upsertAdIdentityLink(targetEmpId, sam, linkStatus);
+      if (dn) empIdByDn.set(dn.toLowerCase(), targetEmpId);
       succeeded++;
     } catch (err) {
       failed++;
@@ -801,6 +894,7 @@ export async function processInboundAdUsers(
     imported,
     linked,
     skipped,
+    disabledImported,
     processed,
     succeeded,
     failed,
@@ -1046,9 +1140,10 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
       inboundSummary =
         `Inbound (${ldapScope}-tree, ${searchBases.length} base(s): ${searchBases.slice(0, 2).join('; ')}${searchBases.length > 2 ? '…' : ''}): ` +
         `${inbound.found} AD users found, ${inbound.imported} imported, ${inbound.linked} linked` +
+        (inbound.disabledImported ? ` (${inbound.disabledImported} disabled)` : '') +
         (inbound.repaired ? `, ${inbound.repaired} links repaired` : '') +
         (inbound.migrated ? `, ${inbound.migrated} emp_ids corrected` : '') +
-        `, ${inbound.skipped} skipped` +
+        (inbound.skipped ? `, ${inbound.skipped} skipped (no sAMAccountName)` : '') +
         (inbound.diag ? ` || ${inbound.diag}` : '') +
         (runOutbound ? ` | Outbound: see employee reconcile below` : '');
       logger.info({ connectorId, runId, ...inbound }, 'AD sync inbound complete');
