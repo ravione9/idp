@@ -1114,6 +1114,24 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-24 — AD inbound: import disabled accounts and dedupe employeeID
+
+**Why** — ~5k AD users were counted as "skipped" because disabled accounts were never inserted into `employees`; shared/bad `employeeID` values (e.g. `Finance`) caused multiple AD users to collide on one IdP row.
+
+**What changed:** **`src/services/ad-sync.ts`** — import new disabled AD users as `SUSPENDED_AUTO` with DISABLED identity link; duplicate `employeeID` across different sAMAccountNames uses `AD-<hash>` emp_id; recover duplicate `email_corp` on insert by linking existing row.
+
+### (pending) — 2026-08-24 — AD sync: skip emp_id migration on primary-key collision
+
+**Why** — Inbound repair tried to rename `AD-XXXX` placeholder rows to AD `employeeID` values (`Finance`, `Lkst244`, …) that already belonged to another employee, causing duplicate-key errors and PARTIAL sync runs.
+
+**What changed:** **`src/services/ad-sync.ts`** — `tryMigrateEmpId` skips when the target emp_id is taken by a different email; merges duplicate placeholder rows when email matches; only logs unexpected errors.
+
+### (pending) — 2026-08-23 — Docker build: bump Alpine python3 apk pin
+
+**Why** — Alpine 3.22 moved `python3` to `3.12.14-r0`; pinned `3.12.13-r0` caused `apk add` to fail in CI (`breaks: world[python3=3.12.13-r0]`).
+
+**What changed:** **`Dockerfile`** builder stage — `python3=3.12.14-r0`.
+
 ### (pending) — 2026-08-23 — AD sync: always search nested OUs when Sync OUs blank
 
 **Why** — With **Include sub-OUs** unchecked (or LDAP scope `one`), sync only read immediate children of Base DN — users in deeper OU trees were skipped.
