@@ -1114,6 +1114,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### 75cf9fc — 2026-08-24 — AD sync: merge duplicate rows when email matches
+
+**Why** — Split repair created AD-* placeholder rows (`sam@ad-sync.local`) alongside existing Google/HR rows (`sam@lenskart.in`), showing two directory profiles for one mailbox.
+
+**What changed:** **`src/services/ad-sync.ts`** — email match merges onto existing row; redirect AD-* sam links to canonical sam@domain row; post-sync cleanup absorbs placeholder duplicates via `absorbPlaceholderEmployee`.
+
 ### 29e1dc7 — 2026-08-24 — AD sync: keep one row per sAMAccountName across re-sync
 
 **Why** — After split repair, email-first emp_id resolution re-merged ~5.5k AD accounts onto ~12.5k shared employee rows on the next sync (18056 AD links vs 12500 "With AD").
