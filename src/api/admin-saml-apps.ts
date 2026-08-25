@@ -451,6 +451,78 @@ router.post('/:id/enable-request-access', async (req: Request, res: Response): P
   }
 });
 
+const updateScimConfigSchema = z.object({
+  baseUrl:          z.string().url(),
+  bearerToken:      z.string().min(1).max(4096).optional(),
+  deprovisionMode:  z.enum(['DEACTIVATE', 'DELETE']).optional(),
+  provisionPath:    z.string().min(1).max(120).optional(),
+});
+
+// PUT /:id/scim-config — save or update SCIM provisioning for an existing SAML app (e.g. Slack)
+router.put('/:id/scim-config', async (req: Request, res: Response): Promise<void> => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing application id' });
+    return;
+  }
+
+  const parsed = updateScimConfigSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const sp = await queryOne<{ slug: string }>(
+    'SELECT slug FROM saml_service_providers WHERE id = ? LIMIT 1',
+    [id],
+  );
+  if (!sp) {
+    res.status(404).json({ error: 'Application not found' });
+    return;
+  }
+
+  const existing = await queryOne<{ config: unknown }>(
+    `SELECT c.config FROM app_protocol_configs c
+      INNER JOIN applications a ON a.id = c.app_id
+     WHERE a.slug = ? AND c.protocol = 'SCIM' AND c.active = 1
+     LIMIT 1`,
+    [sp.slug],
+  );
+
+  let bearerToken = parsed.data.bearerToken?.trim();
+  if (!bearerToken && existing?.config) {
+    const cfg = typeof existing.config === 'string'
+      ? JSON.parse(existing.config) as Record<string, unknown>
+      : existing.config as Record<string, unknown>;
+    bearerToken = String(cfg['bearerToken'] ?? '').trim();
+  }
+  if (!bearerToken) {
+    res.status(400).json({ error: 'bearerToken is required when SCIM is not yet configured' });
+    return;
+  }
+
+  try {
+    const scimInput: {
+      baseUrl: string;
+      bearerToken: string;
+      deprovisionMode?: 'DEACTIVATE' | 'DELETE';
+      provisionPath?: string;
+    } = {
+      baseUrl: parsed.data.baseUrl,
+      bearerToken,
+    };
+    if (parsed.data.deprovisionMode) scimInput.deprovisionMode = parsed.data.deprovisionMode;
+    if (parsed.data.provisionPath) scimInput.provisionPath = parsed.data.provisionPath;
+
+    await configureAppScimProvisioning(sp.slug, scimInput);
+    logger.info({ id, slug: sp.slug }, 'SCIM config updated for SAML app');
+    res.json({ success: true, slug: sp.slug, provisioning: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to save SCIM config';
+    res.status(400).json({ error: msg });
+  }
+});
+
 // PUT /:id/activate — re-activate application
 router.put('/:id/activate', async (req: Request, res: Response): Promise<void> => {
   const id = req.params['id'];

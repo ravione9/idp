@@ -1116,6 +1116,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-08-25 — Fix Slack SCIM deprovisioning (email lookup + lifecycle sweep)
+
+**Why** — Slack stores `userName` as a workspace handle (not email); deprovision searched `userName eq email` and never found users, so Slack members stayed active after directory disable.
+
+**What changed:**
+
+- **`app-scim-provision.ts`** — lookup by Slack `email eq` filter first, then `userName`; Slack deprovision uses SCIM `DELETE /Users/{id}` (deactivates in Slack); lifecycle sweep deprovisions all SCIM-enabled apps on directory disable/suspend.
+- **`PUT /api/admin/saml-apps/:id/scim-config`** — update SCIM token/base URL on existing SAML apps without re-creating.
+- Pre-built Slack wizard default base URL → `https://api.slack.com/scim/v2`.
+
 ### (pending) — 2026-08-25 — AD sync: fix ECONNRESET false failures after successful inbound import
 
 **Why** — Incremental AD sync imported ~18k users successfully but connector runs showed **FAILED** with `read ECONNRESET` because the DC dropped the idle LDAP session during group sync or unbind.

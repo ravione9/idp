@@ -2261,7 +2261,7 @@ const SSO_CATALOG = [
   // ── Collaboration ──────────────────────────────────────────────────────────
   _app('slack', 'Slack', 'slack.com', 'Collaboration', _S,
     'Slack Enterprise Grid SAML SSO with SCIM user provisioning and deactivation.',
-    undefined, undefined, { scim: true, scimDefaults: { baseUrl: 'https://api.slack.com/scim/v1' } }),
+    undefined, undefined, { scim: true, scimDefaults: { baseUrl: 'https://api.slack.com/scim/v2' } }),
   _app('teams',          'Microsoft Teams',        'microsoft.com',       'Collaboration',   _S, 'Configure via Microsoft Entra ID app gallery. ACS URL provided after SP setup.'),
   _app('zoom',           'Zoom',                   'zoom.us',             'Collaboration',   _S, 'Zoom supports SAML 2.0 SSO. Configure in Zoom Admin → Advanced → Single Sign-On.'),
   _app('webex',          'Cisco Webex',            'webex.com',           'Collaboration',   _S, 'Webex supports SAML 2.0. Configure in Control Hub → Settings → SSO.'),
@@ -2854,7 +2854,7 @@ function openSamlWizard(app) {
   const idpEntId = idpMeta;
   const tips     = vendorTips(app.id, app);
   const withScim = app.scim === true;
-  const scimDefaults = app.scimDefaults || { baseUrl: 'https://api.slack.com/scim/v1' };
+  const scimDefaults = app.scimDefaults || { baseUrl: 'https://api.slack.com/scim/v2' };
 
   const initial = {
     name:         app.name,
@@ -2865,7 +2865,7 @@ function openSamlWizard(app) {
     defaultRelayState: '',
     nameidFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
     iconUrl:      '',
-    scimBaseUrl:  scimDefaults.baseUrl || 'https://api.slack.com/scim/v1',
+    scimBaseUrl:  scimDefaults.baseUrl || 'https://api.slack.com/scim/v2',
     scimBearerToken: '',
     scimDeprovisionMode: 'DEACTIVATE',
   };
@@ -3096,12 +3096,12 @@ function openSamlWizard(app) {
           <ol class="wiz-tip-list" style="margin-top:0.5rem">
             <li>Slack admin → <strong>Settings → Manage members → Provisioning</strong></li>
             <li>Enable SCIM and copy the <strong>SCIM API token</strong></li>
-            <li>Base URL is always <code>https://api.slack.com/scim/v1</code></li>
+            <li>Base URL is <code>https://api.slack.com/scim/v2</code> (v1 also works)</li>
           </ol>
         </div>
         <div class="form-group span2">
           <label class="form-label">SCIM Base URL <span style="color:var(--danger)">*</span></label>
-          <input class="form-input" id="w-scim-url" type="url" value="${esc(d.scimBaseUrl)}" placeholder="https://api.slack.com/scim/v1">
+          <input class="form-input" id="w-scim-url" type="url" value="${esc(d.scimBaseUrl)}" placeholder="https://api.slack.com/scim/v2">
         </div>
         <div class="form-group span2">
           <label class="form-label">SCIM Bearer Token <span style="color:var(--danger)">*</span></label>
