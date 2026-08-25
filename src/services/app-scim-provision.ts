@@ -8,6 +8,7 @@ import axios, { AxiosError } from 'axios';
 import { queryOne } from '../db/connection.js';
 import { logAppProvision } from './app-provision-log.js';
 import { samlLaunchPath } from '../saml/launch-url.js';
+import { openSecret } from '../utils/secret-box.js';
 import logger from '../utils/logger.js';
 
 interface ScimConfig {
@@ -48,12 +49,19 @@ function parseScimConfig(raw: unknown): ScimConfig | null {
   const bearerToken = String(cfg['bearerToken'] ?? cfg['apiKey'] ?? cfg['token'] ?? '').trim();
   if (!baseUrl || !bearerToken) return null;
 
+  let tokenPlain = bearerToken;
+  try {
+    tokenPlain = openSecret(bearerToken);
+  } catch {
+    /* keep raw token */
+  }
+
   const deprovisionRaw = String(cfg['deprovisionMode'] ?? 'DEACTIVATE').toUpperCase();
   const deprovisionMode = deprovisionRaw === 'DELETE' ? 'DELETE' : 'DEACTIVATE';
 
   return {
     baseUrl,
-    bearerToken,
+    bearerToken: tokenPlain,
     provisionPath: String(cfg['provisionPath'] ?? '/Users').trim() || '/Users',
     deprovisionMode,
   };

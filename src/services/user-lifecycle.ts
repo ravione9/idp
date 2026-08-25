@@ -16,6 +16,7 @@ import { EmployeeStateMachine } from '../fsm/employee-state-machine.js';
 import { ILGState, TransitionActor, TransitionOrigin, isPortalAccessible, isValidTransition } from '../fsm/states.js';
 import { emitPlatformEvent } from './event-dispatcher.js';
 import { propagatePortalDisableToAd, propagatePortalEnableToAd } from './connector-adapters.js';
+import { revokeAllUserAppAccess } from './app-access-policy.js';
 import logger from '../utils/logger.js';
 
 const fsm = new EmployeeStateMachine();
@@ -97,6 +98,13 @@ export async function suspendUser(empId: string, reason: string, initiatedBy: st
   }
 
   await revokeAllSessions(empId);
+
+  await revokeAllUserAppAccess({
+    empId,
+    revokedBy: initiatedBy,
+    source: 'USER_SUSPEND',
+    reason,
+  }).catch((err) => logger.warn({ empId, err }, 'suspendUser: app access revoke failed'));
 
   await propagatePortalDisableToAd(empId).catch((err) =>
     logger.warn({ empId, err }, 'suspendUser: immediate AD disable failed'),
@@ -216,6 +224,13 @@ export async function terminateUser(empId: string, reason: string, initiatedBy: 
   // Revoke all sessions
   await revokeAllSessions(empId);
 
+  await revokeAllUserAppAccess({
+    empId,
+    revokedBy: initiatedBy,
+    source: 'USER_TERMINATE',
+    reason,
+  }).catch((err) => logger.warn({ empId, err }, 'terminateUser: app access revoke failed'));
+
   await propagatePortalDisableToAd(empId).catch((err) =>
     logger.warn({ empId, err }, 'terminateUser: immediate AD disable failed'),
   );
@@ -282,7 +297,15 @@ export async function applyDirectorySourceDisabled(
   }
 
   await revokeAllSessions(empId);
-  logger.info({ empId, source, ilg_state: emp.ilg_state }, 'Directory source disabled — portal access revoked');
+
+  await revokeAllUserAppAccess({
+    empId,
+    revokedBy: 'directory-sync',
+    source: 'DIRECTORY_DISABLE',
+    reason: `${source}:${reason}`,
+  }).catch((err) => logger.warn({ empId, source, err }, 'Directory disable: app access revoke failed'));
+
+  logger.info({ empId, source, ilg_state: emp.ilg_state }, 'Directory source disabled — portal and app access revoked');
 }
 
 /** Re-enable portal access when directory source reports user active again (does not override admin suspend). */
@@ -377,6 +400,14 @@ export async function deprovisionUser(empId: string, reason: string, initiatedBy
   });
 
   await revokeAllSessions(empId);
+
+  await revokeAllUserAppAccess({
+    empId,
+    revokedBy: initiatedBy,
+    source: 'USER_DEPROVISION',
+    reason,
+  }).catch((err) => logger.warn({ empId, err }, 'deprovisionUser: app access revoke failed'));
+
   await execute('UPDATE local_accounts SET active = 0 WHERE emp_id = ?', [empId]);
 
   await query(

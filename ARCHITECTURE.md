@@ -606,7 +606,7 @@ To add a new migration:
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD (**SUPER_ADMIN** session; includes `/status`) |
 | `GET` | `/auth/local/bootstrap-status` | Public boolean `{ bootstrapEnabled }` only (no admin count) |
 | `POST` | `/auth/local/bootstrap` | First SUPER_ADMIN via `LOCAL_BOOTSTRAP_TOKEN` (rate-limited) |
-| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; list includes `request_access` JIT flag) |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; `POST` accepts optional `provisioning` + `scimConfig` for outbound SCIM; list includes `request_access` JIT flag) |
 | `POST` | `/api/admin/saml-apps/:id/enable-request-access` | Enable IGA JIT for one SAML SP (mirror + default workflow + `requestable`) |
 | `POST` | `/api/admin/saml-apps/enable-request-access-all` | Enable IGA JIT for every active SAML SP |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/api/admin/app-discovery[/:id]` | App Discovery inventory (`discovered_apps`) |
@@ -1115,6 +1115,29 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-25 — Pre-built Slack connector: SAML SSO + SCIM provisioning
+
+**Why** — Slack Enterprise Grid uses SAML for SSO and SCIM for user lifecycle; the pre-built integration catalog should register both in one wizard.
+
+**What changed:**
+
+- **`web/js/views-stubs.js`** — Slack catalog entry is **SAML + SCIM** (was OIDC). Five-step wizard: Overview → IdP → SP (ACS from Slack admin) → SCIM (`https://api.slack.com/scim/v1` + bearer token) → Activate. Catalog card shows **SCIM** badge.
+- **`POST /api/admin/saml-apps`** — optional `provisioning: true` and `scimConfig` (`baseUrl`, `bearerToken`, `deprovisionMode`) upsert `app_protocol_configs` protocol `SCIM` and set `applications.provisioning = 1`.
+- **`src/services/app-protocol-config.ts`** — shared upsert for SAML mirror + SCIM config; bearer token sealed via `secret-box`.
+
+### (pending) — 2026-08-25 — Directory disable revokes SAML application access
+
+**Why** — Disabling a user in Universal Directory / AD / Google must deactivate them in SAML apps (e.g. Slack), not only block new SSO assertions.
+
+**What changed:**
+
+- **`revokeAllUserAppAccess()`** in **`app-access-policy.ts`** — revokes all active USER app assignments and logs deprovision (SAML ACS / SCIM) per app.
+- **`user-lifecycle.ts`** — directory disable, suspend, terminate, and deprovision call app access revoke.
+- **`employee-state-machine.ts`** — FSM transitions to `SUSPENDED_*`, `DEPARTED`, `DEPROVISIONED` also revoke app assignments.
+- **`attendance-iga/actions.ts`** — `REMOVE_ALL_APPS` uses the shared revoke helper.
+
+**Note:** SAML-only apps (Slack) cannot be deactivated inside Slack via API — IdP revokes assignment, blocks SSO, and logs deprovision with SP ACS URL. Re-enable in directory does **not** auto-restore app assignments.
 
 ### (pending) — 2026-08-25 — Audit: application user provisioning / deprovisioning log
 
