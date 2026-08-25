@@ -9,6 +9,7 @@ import {
 import { enqueueOutboxOps, getIdentityLinksForEmp } from '../utils/outbox.js';
 import { appendAuditLog } from '../utils/audit-log.js';
 import { emitPlatformEvent } from '../services/event-dispatcher.js';
+import { revokeAllUserAppAccess } from '../services/app-access-policy.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../utils/logger.js';
 
@@ -212,6 +213,22 @@ export class EmployeeStateMachine {
           initiatedBy: actorId,
           context: { fromState: committedFromState, toState, reasonCode, origin },
         });
+      }
+
+      if (
+        toState === ILGState.SUSPENDED_AUTO
+        || toState === ILGState.SUSPENDED_HR
+        || toState === ILGState.DEPARTED
+        || toState === ILGState.DEPROVISIONED
+      ) {
+        void revokeAllUserAppAccess({
+          empId,
+          revokedBy: actorId,
+          source: `FSM:${toState}`,
+          reason: reasonCode,
+        }).catch((err) =>
+          log.warn({ err }, 'FSM transition: application access revoke failed'),
+        );
       }
     }
   }

@@ -2244,7 +2244,7 @@ export async function viewLoginCustomization(content) {
 
 // ─── 8. OIDC Apps ─────────────────────────────────────────────────────────────
 // ─── Pre-built SSO Integration Catalog (350+) ────────────────────────────────
-function _app(id, name, _domain, cat, proto, hint, scopes, grants) {
+function _app(id, name, _domain, cat, proto, hint, scopes, grants, extras) {
   // icon intentionally null — no external CDN in airgapped deployments.
   // The catalogIcon() renderer generates a coloured letter-avatar instead.
   return {
@@ -2253,12 +2253,15 @@ function _app(id, name, _domain, cat, proto, hint, scopes, grants) {
     hint: hint || `${name} supports ${proto} for enterprise SSO.`,
     scopes: scopes || ['openid','email','profile'],
     grants: grants || ['authorization_code'],
+    ...(extras || {}),
   };
 }
 const _S = 'SAML', _O = 'OIDC';
 const SSO_CATALOG = [
   // ── Collaboration ──────────────────────────────────────────────────────────
-  _app('slack',          'Slack',                  'slack.com',           'Collaboration',   _O, 'Use Slack OIDC integration for workspace SSO via OAuth 2.0.'),
+  _app('slack', 'Slack', 'slack.com', 'Collaboration', _S,
+    'Slack Enterprise Grid SAML SSO with SCIM user provisioning and deactivation.',
+    undefined, undefined, { scim: true, scimDefaults: { baseUrl: 'https://api.slack.com/scim/v1' } }),
   _app('teams',          'Microsoft Teams',        'microsoft.com',       'Collaboration',   _S, 'Configure via Microsoft Entra ID app gallery. ACS URL provided after SP setup.'),
   _app('zoom',           'Zoom',                   'zoom.us',             'Collaboration',   _S, 'Zoom supports SAML 2.0 SSO. Configure in Zoom Admin → Advanced → Single Sign-On.'),
   _app('webex',          'Cisco Webex',            'webex.com',           'Collaboration',   _S, 'Webex supports SAML 2.0. Configure in Control Hub → Settings → SSO.'),
@@ -2638,12 +2641,13 @@ const VENDOR_TIPS = {
     ],
   },
   slack: {
-    docsUrl: 'https://slack.com/help/articles/360039304351-Use-OpenID-Connect-with-Slack',
+    docsUrl: 'https://api.slack.com/scim',
     setupSteps: [
       'Open <strong>Slack workspace admin → Settings &amp; permissions → Authentication</strong>.',
-      'Choose <strong>OpenID Connect</strong> as the SSO method.',
-      'Paste the IdP discovery / authorization / token endpoints from this wizard.',
-      'Save, then return here to enter Slack\'s callback URL.',
+      'Enable <strong>SAML SSO</strong> and paste the IdP Entity ID, SSO URL, and X.509 certificate from step 2.',
+      'Copy Slack\'s <strong>SP Entity ID</strong> and <strong>ACS URL</strong> into step 3 of this wizard.',
+      'In <strong>Settings → Manage members → Provisioning</strong>, enable SCIM and generate an API token for step 4.',
+      'Assign users via birthright or app access — SCIM creates/deactivates Slack members automatically.',
     ],
   },
   zoom: {
@@ -2842,13 +2846,15 @@ function runWizard({ title, subtitle, vendor, steps, initialData, onFinish }) {
   return { bd, getData: () => data, close: () => bd.remove() };
 }
 
-// SAML integration wizard — 4 steps: Overview, IdP details, SP configuration, Activate
+// SAML integration wizard — Overview, IdP, SP, optional SCIM, Activate
 function openSamlWizard(app) {
   const origin   = window.location.origin;
   const idpMeta  = `${origin}/saml/metadata`;
   const idpSso   = `${origin}/saml/sso`;
   const idpEntId = idpMeta;
   const tips     = vendorTips(app.id, app);
+  const withScim = app.scim === true;
+  const scimDefaults = app.scimDefaults || { baseUrl: 'https://api.slack.com/scim/v1' };
 
   const initial = {
     name:         app.name,
@@ -2859,14 +2865,12 @@ function openSamlWizard(app) {
     defaultRelayState: '',
     nameidFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
     iconUrl:      '',
+    scimBaseUrl:  scimDefaults.baseUrl || 'https://api.slack.com/scim/v1',
+    scimBearerToken: '',
+    scimDeprovisionMode: 'DEACTIVATE',
   };
 
-  runWizard({
-    title:    `Add ${app.name}`,
-    subtitle: `${app.cat || 'Pre-built integration'} · SAML 2.0`,
-    vendor:   app,
-    initialData: initial,
-    steps: [
+  const steps = [
       {
         id: 'overview', label: 'Overview',
         render: () => `
@@ -2875,6 +2879,7 @@ function openSamlWizard(app) {
             <ol class="wiz-tip-list">
               <li>Copy the <strong>IdP details</strong> from step 2 into ${esc(app.name)}'s SSO settings.</li>
               <li>Paste the <strong>Service Provider details</strong> that ${esc(app.name)} gives you back into step 3.</li>
+              ${withScim ? '<li>Add the <strong>SCIM API token</strong> from Slack admin in step 4 for automatic user provisioning.</li>' : ''}
               <li>Test the integration and activate it.</li>
             </ol>
           </div>
@@ -3077,11 +3082,64 @@ function openSamlWizard(app) {
           d.nameidFormat = body.querySelector('#w-nid').value;
         },
       },
-      {
+  ];
+
+  if (withScim) {
+    steps.push({
+      id: 'scim', label: 'SCIM',
+      render: (d) => `
+        <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
+          Paste the SCIM API token from <strong>${esc(app.name)}</strong> admin. Users are provisioned and deactivated via SCIM when app access is granted or revoked.
+        </p>
+        <div class="info-box" style="margin-bottom:1rem">
+          <strong>Slack SCIM setup</strong>
+          <ol class="wiz-tip-list" style="margin-top:0.5rem">
+            <li>Slack admin → <strong>Settings → Manage members → Provisioning</strong></li>
+            <li>Enable SCIM and copy the <strong>SCIM API token</strong></li>
+            <li>Base URL is always <code>https://api.slack.com/scim/v1</code></li>
+          </ol>
+        </div>
+        <div class="form-group span2">
+          <label class="form-label">SCIM Base URL <span style="color:var(--danger)">*</span></label>
+          <input class="form-input" id="w-scim-url" type="url" value="${esc(d.scimBaseUrl)}" placeholder="https://api.slack.com/scim/v1">
+        </div>
+        <div class="form-group span2">
+          <label class="form-label">SCIM Bearer Token <span style="color:var(--danger)">*</span></label>
+          <input class="form-input" id="w-scim-token" type="password" value="${esc(d.scimBearerToken)}" placeholder="xoxp-… or SCIM token from Slack admin" autocomplete="off">
+          <p class="muted" style="font-size:0.72rem;margin-top:0.25rem">Stored encrypted. Used for POST/PATCH to Slack SCIM when users are assigned or removed.</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Deprovision action</label>
+          <select class="form-select" id="w-scim-deprov">
+            <option value="DEACTIVATE">Deactivate user (recommended)</option>
+            <option value="DELETE">Delete user</option>
+          </select>
+        </div>
+      `,
+      bind: (body, d) => {
+        body.querySelector('#w-scim-deprov').value = d.scimDeprovisionMode || 'DEACTIVATE';
+      },
+      validate: (_d, body) => {
+        const baseUrl = body.querySelector('#w-scim-url').value.trim();
+        const token = body.querySelector('#w-scim-token').value.trim();
+        if (!baseUrl) return 'SCIM base URL is required.';
+        if (!token) return 'SCIM bearer token is required.';
+        try { new URL(baseUrl); } catch { return 'SCIM base URL must be a valid absolute URL.'; }
+        return null;
+      },
+      collect: (d, body) => {
+        d.scimBaseUrl = body.querySelector('#w-scim-url').value.trim().replace(/\/+$/, '');
+        d.scimBearerToken = body.querySelector('#w-scim-token').value.trim();
+        d.scimDeprovisionMode = body.querySelector('#w-scim-deprov').value;
+      },
+    });
+  }
+
+  steps.push({
         id: 'review', label: 'Activate',
         finishLabel: '✓ Activate Integration',
         render: (d) => `
-          <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">Review the values below — they will be saved as a SAML application.</p>
+          <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">Review the values below — they will be saved as a SAML application${withScim ? ' with SCIM provisioning' : ''}.</p>
           <div class="card">
             <div class="kv"><div class="k">Name</div><div class="v">${esc(d.name)}</div></div>
             <div class="kv"><div class="k">Slug</div><div class="v"><code>${esc(d.slug)}</code></div></div>
@@ -3090,12 +3148,19 @@ function openSamlWizard(app) {
             ${d.sloUrl ? `<div class="kv"><div class="k">SLO URL</div><div class="v truncate" title="${esc(d.sloUrl)}">${esc(d.sloUrl)}</div></div>` : ''}
             ${d.defaultRelayState ? `<div class="kv"><div class="k">Redirect URL</div><div class="v truncate" title="${esc(d.defaultRelayState)}">${esc(d.defaultRelayState)}</div></div>` : ''}
             <div class="kv"><div class="k">NameID Format</div><div class="v"><code>${esc((d.nameidFormat||'').split(':').pop())}</code></div></div>
+            ${withScim ? `<div class="kv"><div class="k">SCIM</div><div class="v"><code>${esc(d.scimBaseUrl)}</code> · ${esc(d.scimDeprovisionMode === 'DELETE' ? 'Delete on revoke' : 'Deactivate on revoke')}</div></div>` : ''}
           </div>
         `,
-      },
-    ],
+  });
+
+  runWizard({
+    title:    `Add ${app.name}`,
+    subtitle: `${app.cat || 'Pre-built integration'} · SAML 2.0${withScim ? ' + SCIM' : ''}`,
+    vendor:   app,
+    initialData: initial,
+    steps,
     onFinish: async (d, bd) => {
-      await api.createSamlApp({
+      const payload = {
         name:         d.name,
         slug:         d.slug,
         entityId:     d.entityId,
@@ -3103,13 +3168,22 @@ function openSamlWizard(app) {
         sloUrl:       d.sloUrl || undefined,
         defaultRelayState: d.defaultRelayState || undefined,
         nameidFormat: d.nameidFormat,
-      });
+      };
+      if (withScim) {
+        payload.provisioning = true;
+        payload.scimConfig = {
+          baseUrl: d.scimBaseUrl,
+          bearerToken: d.scimBearerToken,
+          deprovisionMode: d.scimDeprovisionMode || 'DEACTIVATE',
+        };
+      }
+      await api.createSamlApp(payload);
       bd.querySelector('.wizard-stepper').style.display = 'none';
       bd.querySelector('#wiz-body').innerHTML = `
         <div class="wizard-success">
           <div class="check-circle">${svgIcon('check')}</div>
           <h3>${esc(d.name)} is connected</h3>
-          <p class="muted">Users with access can now launch ${esc(d.name)} via SSO.</p>
+          <p class="muted">Users with access can launch ${esc(d.name)} via SAML SSO${withScim ? ' and are provisioned via SCIM' : ''}.</p>
           <a href="/saml/launch/${esc(d.slug)}" target="_blank" class="btn btn-primary">Test SSO Launch →</a>
         </div>
       `;
@@ -3118,7 +3192,6 @@ function openSamlWizard(app) {
       const cancel = bd.querySelector('#wiz-cancel');
       cancel.textContent = 'Done';
       cancel.classList.replace('btn-secondary', 'btn-primary');
-      // Reload the Applications tab if visible so the new app appears
       cancel.addEventListener('click', () => {
         if (window.LILG_NAV) window.LILG_NAV('applications', { tab: 'saml' });
       }, { once: true });
@@ -3607,6 +3680,7 @@ export async function viewPrebuiltApps(content, opts = {}) {
           <div>
             <div style="font-weight:600;font-size:0.875rem;line-height:1.2">${esc(app.name)}</div>
             <span class="badge ${app.protocol==='OIDC'?'badge-info':'badge-warning'}" style="font-size:0.62rem">${esc(app.protocol === 'OIDC' ? 'OIDC / OAuth' : app.protocol)}</span>
+            ${app.scim ? '<span class="badge badge-success" style="font-size:0.62rem;margin-left:0.2rem">SCIM</span>' : ''}
           </div>
         </div>
         <div class="muted" style="font-size:0.72rem;margin-bottom:0.65rem;line-height:1.45;min-height:2.5em">${esc((app.hint||'').slice(0,80))}${(app.hint||'').length>80?'…':''}</div>

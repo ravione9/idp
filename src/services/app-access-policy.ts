@@ -725,9 +725,69 @@ export async function updateAppAccess(
   });
 }
 
+export async function revokeAllUserAppAccess(params: {
+  empId: string;
+  revokedBy: string;
+  source?: string;
+  reason?: string;
+  /** When set, only revoke assignments for apps with an active SAML SP (e.g. Slack). */
+  samlOnly?: boolean;
+}): Promise<{ revoked: number; appIds: string[] }> {
+  const where: string[] = [
+    'aaa.active = 1',
+    "aaa.assignment_type = 'USER'",
+    'aaa.target_id = ?',
+  ];
+  const queryParams: unknown[] = [params.empId];
+
+  if (params.samlOnly) {
+    where.push(
+      `EXISTS (
+         SELECT 1 FROM applications a
+         INNER JOIN saml_service_providers sp ON sp.slug = a.slug AND sp.active = 1
+         WHERE a.id = aaa.app_id
+       )`,
+    );
+  }
+
+  const rows = await query<{ id: string; app_id: string; app_slug: string | null }>(
+    `SELECT aaa.id, aaa.app_id, a.slug AS app_slug
+       FROM app_access_assignments aaa
+       LEFT JOIN applications a ON a.id = aaa.app_id
+      WHERE ${where.join(' AND ')}`,
+    queryParams,
+  );
+
+  const appIds: string[] = [];
+  for (const row of rows) {
+    const revokeOpts: { source?: string; reason?: string } = {
+      source: params.source ?? 'LIFECYCLE',
+    };
+    if (params.reason) revokeOpts.reason = params.reason;
+    await revokeAppAccess(row.id, params.revokedBy, revokeOpts);
+    appIds.push(row.app_id);
+  }
+
+  if (rows.length > 0) {
+    logger.info(
+      {
+        empId: params.empId,
+        revoked: rows.length,
+        samlOnly: params.samlOnly ?? false,
+        source: params.source,
+        apps: rows.map((r) => r.app_slug || r.app_id),
+      },
+      'Revoked application access assignments for disabled user',
+    );
+  }
+
+  return { revoked: rows.length, appIds };
+}
+
 export async function revokeAppAccess(
   assignmentId: string,
   revokedBy: string,
+  opts?: { source?: string; reason?: string },
 ): Promise<void> {
   const row = await queryOne<{
     app_id: string;
@@ -756,6 +816,8 @@ export async function revokeAppAccess(
       assignmentId,
       assignmentType: row.assignment_type,
       groupId: row.assignment_type === 'GROUP' ? row.target_id : undefined,
+      ...(opts?.source ? { source: opts.source } : {}),
+      ...(opts?.reason ? { reason: opts.reason } : {}),
     },
   });
 
@@ -764,8 +826,8 @@ export async function revokeAppAccess(
       appId: row.app_id,
       empId: row.target_id,
       actorEmpId: revokedBy,
-      source: 'ADMIN',
-    }).catch((err) => logger.warn({ err, appId: row.app_id, empId: row.target_id }, 'App SCIM deprovision failed'));
+      source: opts?.source ?? 'ADMIN',
+    }).catch((err) => logger.warn({ err, appId: row.app_id, empId: row.target_id }, 'App deprovision failed'));
   }
 }
 

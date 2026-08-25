@@ -17,6 +17,7 @@ import {
   SAML_MAPPABLE_FIELD_SET,
 } from '../saml/types.js';
 import { enableSamlAppRequestAccess, ensureSamlAppMirrored, enableRequestAccessForAllSamlApps } from '../services/app-access-policy.js';
+import { configureAppScimProvisioning, syncSamlProtocolConfigFromSp } from '../services/app-protocol-config.js';
 
 const router = Router();
 
@@ -41,6 +42,14 @@ const registerSpSchema = z.object({
   sortOrder:       z.number().int().optional(),
   /** Critical app — require fresh MFA at SSO launch (when MFA policy critical_app_mfa is on). */
   requireMfa:      z.boolean().optional(),
+  /** Enable outbound SCIM provisioning (sets applications.provisioning = 1). */
+  provisioning:    z.boolean().optional(),
+  scimConfig:      z.object({
+    baseUrl:          z.string().url(),
+    bearerToken:      z.string().min(1).max(4096),
+    deprovisionMode:  z.enum(['DEACTIVATE', 'DELETE']).optional(),
+    provisionPath:    z.string().min(1).max(120).optional(),
+  }).optional(),
   entitlementRule: z.object({
     all_active:       z.boolean().optional(),
     roles:            z.array(z.string()).optional(),
@@ -271,7 +280,28 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       logger.warn({ err, slug: d.slug }, 'Failed to enable Request Access for new SAML SP'),
     );
 
-    logger.info({ id, slug: d.slug }, 'SAML SP registered via Admin Central');
+    await syncSamlProtocolConfigFromSp(d.slug).catch((err) =>
+      logger.warn({ err, slug: d.slug }, 'Failed to sync SAML protocol config for new SP'),
+    );
+
+    if (d.provisioning && d.scimConfig) {
+      const scimInput: {
+        baseUrl: string;
+        bearerToken: string;
+        deprovisionMode?: 'DEACTIVATE' | 'DELETE';
+        provisionPath?: string;
+      } = {
+        baseUrl: d.scimConfig.baseUrl,
+        bearerToken: d.scimConfig.bearerToken,
+      };
+      if (d.scimConfig.deprovisionMode) scimInput.deprovisionMode = d.scimConfig.deprovisionMode;
+      if (d.scimConfig.provisionPath) scimInput.provisionPath = d.scimConfig.provisionPath;
+      await configureAppScimProvisioning(d.slug, scimInput).catch((err) =>
+        logger.warn({ err, slug: d.slug }, 'Failed to save SCIM config for new SAML SP'),
+      );
+    }
+
+    logger.info({ id, slug: d.slug, provisioning: !!d.provisioning }, 'SAML SP registered via Admin Central');
     res.status(201).json({ id, slug: d.slug });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Registration failed';
