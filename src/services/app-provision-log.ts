@@ -83,9 +83,20 @@ export async function logSamlAssertionProvision(params: {
   );
   if (!row?.acs_url) return;
 
+  let appId = row.app_id;
+  if (!appId) {
+    const { ensureSamlAppMirrored } = await import('./app-access-policy.js');
+    await ensureSamlAppMirrored(row.slug).catch(() => undefined);
+    const appRow = await queryOne<{ id: string }>(
+      'SELECT id FROM applications WHERE slug = ? LIMIT 1',
+      [row.slug],
+    );
+    appId = appRow?.id ?? null;
+  }
+
   const httpMethod = params.binding === 'REDIRECT' ? 'GET' : 'POST';
   await logAppProvision({
-    appId: row.app_id,
+    appId,
     empId: params.empId,
     action: 'PROVISION',
     source: 'SAML_ASSERTION',

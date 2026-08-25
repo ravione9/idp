@@ -606,7 +606,7 @@ To add a new migration:
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD (**SUPER_ADMIN** session; includes `/status`) |
 | `GET` | `/auth/local/bootstrap-status` | Public boolean `{ bootstrapEnabled }` only (no admin count) |
 | `POST` | `/auth/local/bootstrap` | First SUPER_ADMIN via `LOCAL_BOOTSTRAP_TOKEN` (rate-limited) |
-| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; `POST` accepts optional `provisioning` + `scimConfig` for outbound SCIM; list includes `request_access` JIT flag) |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; `POST` accepts optional `provisioning` + `scimConfig` for outbound SCIM; list includes `request_access` JIT flag and `scim_configured`; `PUT /:id/scim-config` updates SCIM token on existing apps) |
 | `POST` | `/api/admin/saml-apps/:id/enable-request-access` | Enable IGA JIT for one SAML SP (mirror + default workflow + `requestable`) |
 | `POST` | `/api/admin/saml-apps/enable-request-access-all` | Enable IGA JIT for every active SAML SP |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/api/admin/app-discovery[/:id]` | App Discovery inventory (`discovered_apps`) |
@@ -1046,7 +1046,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import **skips suspended Google accounts** (same rules as AD); outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank OU/user scope syncs the full directory; non-empty filters combine with AND logic; blank/`*` **Sync Groups** auto-mirrors up to 200 Workspace groups into `groups` / `group_members` (requires `admin.directory.group.readonly` domain-wide delegation)
 - ✅ **Connector sync scheduler** — `src/services/connector-sync-scheduler.ts` ticks every 60s (Redis `withSchedLock('connector-sync', …)`); reads each connector's `sync_schedule` (`every:15m`, `every:1h`, custom interval, or 5-field cron) and triggers `POST`-equivalent sync when due for `CONNECTED`/`ACTIVE` connectors; Directory Sync UI exposes presets + custom interval/cron
 - ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; AD writeback auto-retries StartTLS/LDAPS when the connector uses plain LDAP; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
-- ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate` — admin suspend sets `SUSPENDED_HR` (hidden from directory, login blocked); revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`
+- ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate|deprovision-applications` — admin suspend sets `SUSPENDED_HR` (hidden from directory, login blocked); revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`; `deprovision-applications` retries SCIM deactivate for suspended users
 - ✅ **Access review campaign generator** — `POST /api/iga/access-reviews` + `POST /api/iga/access-reviews/:id/items/:itemId/decision` in `src/services/access-review.ts` (scopes: ALL_USERS, APP_SPECIFIC, HIGH_RISK; auto-closes campaign when all items reviewed; REVOKE triggers user_entitlement revocation)
 - ✅ **SoD evaluator** — `src/services/sod-evaluator.ts` runs on every entitlement grant; populates `sod_violations`; full-scan available
 - ✅ **Notification dispatcher** — `src/services/notification.ts` dispatches EMAIL (nodemailer), SLACK (webhook), TEAMS, IN_APP; called by access-request, lifecycle, and review workflows
@@ -1116,15 +1116,21 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-25 — Fix Slack SCIM deprovisioning (email lookup + lifecycle sweep)
+### (pending) — 2026-08-25 — Fix Slack SCIM deprovisioning (email lookup + manual retry + SCIM on edit)
 
-**Why** — Slack stores `userName` as a workspace handle (not email); deprovision searched `userName eq email` and never found users, so Slack members stayed active after directory disable.
+**Why** — Slack stores `userName` as a workspace handle (not email); deprovision searched `userName eq email` and never found users. Existing Slack SAML apps had no SCIM token, so no DEPROVISION audit rows appeared and members stayed active in Slack after directory suspend.
 
 **What changed:**
 
-- **`app-scim-provision.ts`** — lookup by Slack `email eq` filter first, then `userName`; Slack deprovision uses SCIM `DELETE /Users/{id}` (deactivates in Slack); lifecycle sweep deprovisions all SCIM-enabled apps on directory disable/suspend.
+- **`app-scim-provision.ts`** — lookup by Slack `email eq` filter first, then `userName`; Slack deprovision uses SCIM `DELETE /Users/{id}`; lifecycle sweep runs on all apps with active SCIM config (not only `provisioning = 1`); writes **SKIPPED** DEPROVISION rows for SAML apps missing SCIM so admins see why Slack was not touched.
+- **`POST /api/admin/users/:empId/deprovision-applications`** — manual retry for already-suspended users (e.g. after adding SCIM token).
 - **`PUT /api/admin/saml-apps/:id/scim-config`** — update SCIM token/base URL on existing SAML apps without re-creating.
+- **`web/js/views-admin.js`** — SAML **Edit** modal includes SCIM base URL + bearer token fields; list includes `scim_configured`.
+- **`web/js/views-stubs.js`** — user profile drawer **Deprovision from apps** button for suspended/departed users.
+- **`app-provision-log.ts`** — ensures `applications` mirror exists before SAML assertion rows (fixes empty Application column).
 - Pre-built Slack wizard default base URL → `https://api.slack.com/scim/v2`.
+
+**Ops:** Applications → SAML → Edit Slack → paste SCIM token → Universal Directory → user profile → **Deprovision from apps** → verify DEPROVISION row with `DELETE https://api.slack.com/scim/v2/Users/…` in Audit → App provisioning log.
 
 ### (pending) — 2026-08-25 — AD sync: fix ECONNRESET false failures after successful inbound import
 

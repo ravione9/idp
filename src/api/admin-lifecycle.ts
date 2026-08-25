@@ -11,12 +11,13 @@ import { Router, Request, Response } from 'express';
 import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
-import { query } from '../db/connection.js';
+import { query, queryOne } from '../db/connection.js';
 import {
   suspendUser,
   unsuspendUser,
   terminateUser,
 } from '../services/user-lifecycle.js';
+import { runApplicationDeprovisionForUser } from '../services/app-scim-provision.js';
 
 const router = Router();
 
@@ -93,6 +94,35 @@ router.post(
       }
       throw err;
     }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// POST /:empId/deprovision-applications — retry SCIM deprovision (e.g. after SCIM token added)
+// ---------------------------------------------------------------------------
+router.post(
+  '/:empId/deprovision-applications',
+  asyncHandler(async (req: Request, res: Response) => {
+    const { empId } = req.params as { empId: string };
+    const initiatedBy = req.user!.empId;
+
+    const emp = await queryOne<{ emp_id: string }>(
+      'SELECT emp_id FROM employees WHERE emp_id = ?',
+      [empId],
+    );
+    if (!emp) {
+      res.status(404).json({ error: 'Employee not found' });
+      return;
+    }
+
+    const result = await runApplicationDeprovisionForUser({
+      empId,
+      actorEmpId: initiatedBy,
+      source: 'ADMIN',
+      logSkippedSaml: true,
+    });
+
+    res.json({ success: true, ...result });
   }),
 );
 
