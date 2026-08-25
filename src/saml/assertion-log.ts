@@ -4,6 +4,7 @@
 import zlib from 'node:zlib';
 import { query } from '../db/connection.js';
 import logger from '../utils/logger.js';
+import { logSamlAssertionProvision } from '../services/app-provision-log.js';
 
 export type SamlAssertionBinding = 'REDIRECT' | 'POST' | 'IDP_INITIATED';
 
@@ -25,6 +26,9 @@ export async function logSamlAssertion(params: {
         params.relayState ?? null,
         params.requestId ?? null,
       ],
+    );
+    void logSamlAssertionProvision(params).catch((err) =>
+      logger.warn({ err, spId: params.spId }, 'Failed to log SAML assertion provision'),
     );
   } catch (err) {
     logger.warn({ err, spId: params.spId, empId: params.empId }, 'Failed to log SAML assertion');

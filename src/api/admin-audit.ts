@@ -478,4 +478,107 @@ router.get('/summary', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
+// ---------------------------------------------------------------------------
+// GET /app-provisioning — application user provision / deprovision log
+// ---------------------------------------------------------------------------
+router.get('/app-provisioning', asyncHandler(async (req: Request, res: Response) => {
+  const limit = parseLimit(req.query['limit']);
+  const offset = parseOffset(req.query['offset']);
+  const q = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
+  const app = typeof req.query['app'] === 'string' ? req.query['app'].trim() : '';
+  const action = typeof req.query['action'] === 'string' ? req.query['action'].trim().toUpperCase() : '';
+  const status = typeof req.query['status'] === 'string' ? req.query['status'].trim().toUpperCase() : '';
+  const from = parseDateBound(req.query['from'], false);
+  const to = parseDateBound(req.query['to'], true);
+  const exportCsv = String(req.query['export'] || '') === 'csv';
+
+  const where: string[] = ['1=1'];
+  const params: unknown[] = [];
+
+  if (from) { where.push('l.created_at >= ?'); params.push(from); }
+  if (to) { where.push('l.created_at <= ?'); params.push(to); }
+  if (action === 'PROVISION' || action === 'DEPROVISION') {
+    where.push('l.action = ?');
+    params.push(action);
+  }
+  if (status === 'SUCCESS' || status === 'FAILED' || status === 'SKIPPED') {
+    where.push('l.status = ?');
+    params.push(status);
+  }
+  if (app) {
+    where.push('(a.name LIKE ? OR a.slug LIKE ?)');
+    params.push(`%${app}%`, `%${app}%`);
+  }
+  if (q) {
+    where.push(
+      '(e.full_name LIKE ? OR e.email_corp LIKE ? OR l.emp_id LIKE ? OR l.endpoint LIKE ? OR l.detail LIKE ?)',
+    );
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+  }
+
+  const whereSql = where.join(' AND ');
+
+  const totalRow = await queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n
+       FROM app_provision_log l
+       LEFT JOIN applications a ON a.id = l.app_id
+       LEFT JOIN employees e ON e.emp_id = l.emp_id
+      WHERE ${whereSql}`,
+    params,
+  ).catch(() => ({ n: 0 }));
+
+  const fetchLimit = exportCsv ? MAX_EXPORT : limit;
+  const fetchOffset = exportCsv ? 0 : offset;
+
+  const rows = await query<Record<string, unknown>>(
+    `SELECT l.id, l.created_at, l.action, l.source, l.http_method, l.endpoint,
+            l.status, l.status_code, l.detail, l.request_body, l.response_body,
+            l.emp_id, l.actor_emp_id, l.request_id,
+            a.name AS app_name, a.slug AS app_slug,
+            e.full_name AS emp_name, e.email_corp AS emp_email,
+            act.full_name AS actor_name
+       FROM app_provision_log l
+       LEFT JOIN applications a ON a.id = l.app_id
+       LEFT JOIN employees e ON e.emp_id = l.emp_id
+       LEFT JOIN employees act ON act.emp_id = l.actor_emp_id
+      WHERE ${whereSql}
+      ORDER BY l.created_at DESC
+      LIMIT ? OFFSET ?`,
+    [...params, fetchLimit, fetchOffset],
+  ).catch(() => []);
+
+  if (exportCsv) {
+    sendCsv(
+      res,
+      `app-provisioning-${new Date().toISOString().slice(0, 10)}.csv`,
+      [
+        'Time', 'Action', 'Status', 'Application', 'Slug', 'User', 'Email', 'Emp ID',
+        'HTTP Method', 'Endpoint', 'Status Code', 'Source', 'Actor', 'Detail',
+        'Request Body', 'Response Body', 'Request ID',
+      ],
+      rows.map((r) => [
+        r['created_at'], r['action'], r['status'], r['app_name'], r['app_slug'],
+        r['emp_name'], r['emp_email'], r['emp_id'],
+        r['http_method'], r['endpoint'], r['status_code'], r['source'], r['actor_name'] || r['actor_emp_id'],
+        r['detail'],
+        typeof r['request_body'] === 'string' ? r['request_body'] : JSON.stringify(r['request_body'] ?? ''),
+        typeof r['response_body'] === 'string' ? r['response_body'] : JSON.stringify(r['response_body'] ?? ''),
+        r['request_id'],
+      ]),
+    );
+    return;
+  }
+
+  res.json({
+    data: rows,
+    meta: {
+      total: Number(totalRow?.n ?? 0),
+      limit,
+      offset,
+      from: from ?? null,
+      to: to ?? null,
+    },
+  });
+}));
+
 export default router;

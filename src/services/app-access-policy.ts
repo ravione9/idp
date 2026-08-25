@@ -8,6 +8,7 @@ import logger from '../utils/logger.js';
 import { canReceiveSamlAssertion, evaluateEntitlement } from '../saml/entitlements.js';
 import type { EmployeeSamlContext, EntitlementRule } from '../saml/types.js';
 import { ipInAllowlist, parseCidrList } from '../utils/ip-match.js';
+import { provisionAppUser, deprovisionAppUser } from './app-scim-provision.js';
 
 export type AssignmentType = 'USER' | 'TAG_GROUP' | 'GROUP';
 export type AuditAction =
@@ -602,6 +603,15 @@ export async function grantAppAccess(params: {
         groupId: params.assignmentType === 'GROUP' ? targetId : undefined,
       },
     });
+    if (params.assignmentType === 'USER') {
+      void provisionAppUser({
+        appId: params.appId,
+        empId: targetId,
+        actorEmpId: grantedBy,
+        source: params.source ?? 'ADMIN',
+        requestId: params.requestId ?? null,
+      }).catch((err) => logger.warn({ err, appId: params.appId, empId: targetId }, 'App SCIM provision failed'));
+    }
     return existing.id;
   }
 
@@ -627,6 +637,16 @@ export async function grantAppAccess(params: {
       groupId: params.assignmentType === 'GROUP' ? targetId : undefined,
     },
   });
+
+  if (params.assignmentType === 'USER') {
+    void provisionAppUser({
+      appId: params.appId,
+      empId: targetId,
+      actorEmpId: grantedBy,
+      source: params.source ?? 'ADMIN',
+      requestId: params.requestId ?? null,
+    }).catch((err) => logger.warn({ err, appId: params.appId, empId: targetId }, 'App SCIM provision failed'));
+  }
 
   return id;
 }
@@ -738,6 +758,15 @@ export async function revokeAppAccess(
       groupId: row.assignment_type === 'GROUP' ? row.target_id : undefined,
     },
   });
+
+  if (row.assignment_type === 'USER') {
+    void deprovisionAppUser({
+      appId: row.app_id,
+      empId: row.target_id,
+      actorEmpId: revokedBy,
+      source: 'ADMIN',
+    }).catch((err) => logger.warn({ err, appId: row.app_id, empId: row.target_id }, 'App SCIM deprovision failed'));
+  }
 }
 
 // ---------------------------------------------------------------------------
