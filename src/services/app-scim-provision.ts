@@ -109,30 +109,86 @@ function scimUserMatchesEmail(user: ScimUser, email: string): boolean {
   return (user.emails ?? []).some((e) => (e.value ?? '').trim().toLowerCase() === normalized);
 }
 
-async function findScimUserByFilter(cfg: ScimConfig, filter: string): Promise<ScimUser | null> {
+function pickScimUserByEmail(users: ScimUser[], email: string): ScimUser | null {
+  const normalized = email.trim().toLowerCase();
+  for (const user of users) {
+    if (user.id && scimUserMatchesEmail(user, normalized)) return user;
+  }
+  return users.find((u) => u.id) ?? null;
+}
+
+async function listScimUsersByFilter(
+  cfg: ScimConfig,
+  filter: string,
+): Promise<{ users: ScimUser[]; status: number; endpoint: string; httpMethod: 'GET' | 'POST' }> {
   const path = `${cfg.provisionPath}?filter=${encodeURIComponent(filter)}&count=10`;
+  const endpoint = fullEndpoint(cfg.baseUrl, path);
   try {
     const { status, data } = await scimCall(cfg, 'GET', path);
     if (status >= 400) {
       logger.warn({ status, filter, baseUrl: cfg.baseUrl }, 'SCIM user filter lookup failed');
-      return null;
+      return { users: [], status, endpoint, httpMethod: 'GET' };
     }
     const list = data as ScimListResponse;
-    return list.Resources?.[0] ?? null;
+    return { users: list.Resources ?? [], status, endpoint, httpMethod: 'GET' };
   } catch (err) {
     logger.warn({ err, filter, baseUrl: cfg.baseUrl }, 'SCIM user filter lookup error');
-    return null;
+    return { users: [], status: 0, endpoint, httpMethod: 'GET' };
   }
 }
 
-async function findScimUserByEmail(cfg: ScimConfig, email: string): Promise<ScimUser | null> {
+async function searchSlackScimUsersByFilter(
+  cfg: ScimConfig,
+  filter: string,
+): Promise<{ users: ScimUser[]; status: number; endpoint: string; httpMethod: 'GET' | 'POST' }> {
+  const path = `${cfg.provisionPath}/.search`;
+  const endpoint = fullEndpoint(cfg.baseUrl, path);
+  const body = {
+    schemas: ['urn:ietf:params:scim:api:messages:2.0:SearchRequest'],
+    filter,
+    startIndex: 1,
+    count: 10,
+  };
+  try {
+    const { status, data } = await scimCall(cfg, 'POST', path, body);
+    if (status >= 400) {
+      logger.warn({ status, filter, baseUrl: cfg.baseUrl }, 'Slack SCIM search failed');
+      return { users: [], status, endpoint, httpMethod: 'POST' };
+    }
+    const list = data as ScimListResponse;
+    return { users: list.Resources ?? [], status, endpoint, httpMethod: 'POST' };
+  } catch (err) {
+    logger.warn({ err, filter, baseUrl: cfg.baseUrl }, 'Slack SCIM search error');
+    return { users: [], status: 0, endpoint, httpMethod: 'POST' };
+  }
+}
+
+interface ScimEmailLookup {
+  user: ScimUser | null;
+  lastFilter: string | null;
+  lastHttpMethod: 'GET' | 'POST' | null;
+  lastEndpoint: string | null;
+  lastStatus: number | null;
+}
+
+async function findScimUserByEmail(cfg: ScimConfig, email: string): Promise<ScimEmailLookup> {
   const normalized = email.trim().toLowerCase();
-  if (!normalized) return null;
+  const empty: ScimEmailLookup = {
+    user: null,
+    lastFilter: null,
+    lastHttpMethod: null,
+    lastEndpoint: null,
+    lastStatus: null,
+  };
+  if (!normalized) return empty;
 
   const escaped = escapeScimFilterValue(normalized);
-  const filters = isSlackScimEndpoint(cfg.baseUrl)
+  const slack = isSlackScimEndpoint(cfg.baseUrl);
+  const filters = slack
     ? [
       `email eq "${escaped}"`,
+      `emails.value eq "${escaped}"`,
+      `email co "${escaped}"`,
       `userName eq "${escaped}"`,
     ]
     : [
@@ -140,13 +196,43 @@ async function findScimUserByEmail(cfg: ScimConfig, email: string): Promise<Scim
       `emails.value eq "${escaped}"`,
     ];
 
+  let lastFilter: string | null = null;
+  let lastHttpMethod: 'GET' | 'POST' | null = null;
+  let lastEndpoint: string | null = null;
+  let lastStatus: number | null = null;
+
+  const tryLookup = async (
+    filter: string,
+    fetcher: typeof listScimUsersByFilter,
+  ): Promise<ScimUser | null> => {
+    const result = await fetcher(cfg, filter);
+    lastFilter = filter;
+    lastHttpMethod = result.httpMethod;
+    lastEndpoint = result.endpoint;
+    lastStatus = result.status;
+    if (result.status >= 400 || !result.users.length) return null;
+    const match = pickScimUserByEmail(result.users, normalized);
+    if (match?.id && (slack ? scimUserMatchesEmail(match, normalized) : true)) return match;
+    return null;
+  };
+
   for (const filter of filters) {
-    const user = await findScimUserByFilter(cfg, filter);
-    if (user?.id && scimUserMatchesEmail(user, normalized)) return user;
-    if (user?.id && !isSlackScimEndpoint(cfg.baseUrl)) return user;
+    const user = await tryLookup(filter, listScimUsersByFilter);
+    if (user?.id) {
+      return { user, lastFilter, lastHttpMethod, lastEndpoint, lastStatus };
+    }
   }
 
-  return null;
+  if (slack) {
+    for (const filter of [`email eq "${escaped}"`, `emails.value eq "${escaped}"`, `email co "${escaped}"`]) {
+      const user = await tryLookup(filter, searchSlackScimUsersByFilter);
+      if (user?.id) {
+        return { user, lastFilter, lastHttpMethod, lastEndpoint, lastStatus };
+      }
+    }
+  }
+
+  return { user: null, lastFilter, lastHttpMethod, lastEndpoint, lastStatus };
 }
 
 async function loadAppProvisionContext(appId: string): Promise<{
@@ -352,7 +438,8 @@ export async function provisionAppUser(params: AppProvisionParams): Promise<void
     return;
   }
 
-  const existing = await findScimUserByEmail(ctx.scim, email);
+  const lookup = await findScimUserByEmail(ctx.scim, email);
+  const existing = lookup.user;
   if (existing?.id) {
     if (existing.active === false) {
       const path = `${ctx.scim.provisionPath}/${existing.id}`;
@@ -504,17 +591,21 @@ export async function deprovisionAppUser(params: AppProvisionParams): Promise<vo
     return;
   }
 
-  const existing = await findScimUserByEmail(ctx.scim, email);
+  const lookup = await findScimUserByEmail(ctx.scim, email);
+  const existing = lookup.user;
   if (!existing?.id) {
+    const slack = isSlackScimEndpoint(ctx.scim.baseUrl);
     await logAppProvision({
       ...baseLog,
-      httpMethod: 'GET',
-      endpoint: fullEndpoint(ctx.scim.baseUrl, `${ctx.scim.provisionPath}?filter=email eq "${email}"`),
+      httpMethod: lookup.lastHttpMethod ?? 'GET',
+      endpoint: lookup.lastEndpoint
+        ?? fullEndpoint(ctx.scim.baseUrl, `${ctx.scim.provisionPath}?filter=email eq "${email}"`),
       status: 'SKIPPED',
-      statusCode: 404,
-      detail: isSlackScimEndpoint(ctx.scim.baseUrl)
-        ? 'SCIM user not found in Slack (searched by email and userName) — no deactivate call sent'
+      statusCode: lookup.lastStatus && lookup.lastStatus >= 200 && lookup.lastStatus < 300 ? 200 : (lookup.lastStatus ?? null),
+      detail: slack
+        ? `SCIM user not found in Slack (tried filters: email, emails.value, userName${lookup.lastFilter ? `; last: ${lookup.lastFilter}` : ''}) — verify Slack profile email matches ${email}`
         : 'SCIM user not found — already absent from target app',
+      responseBody: lookup.lastFilter ? { lastFilter: lookup.lastFilter } : null,
     });
     return;
   }
