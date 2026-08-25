@@ -1116,7 +1116,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-08-25 — Pre-built Slack connector: SAML SSO + SCIM provisioning
+### (pending) — 2026-08-25 — AD sync: fix ECONNRESET false failures after successful inbound import
+
+**Why** — Incremental AD sync imported ~18k users successfully but connector runs showed **FAILED** with `read ECONNRESET` because the DC dropped the idle LDAP session during group sync or unbind.
+
+**What changed:**
+
+- **`src/adapters/ad-adapter.ts`** — longer LDAP op timeout (120s), `refreshConnection()`, retry paged/search on `ECONNRESET`, non-fatal disconnect when socket already closed.
+- **`src/services/group-sync.ts`** — reuse inbound LDAP session (no second bind), `connectAdAdapterWithFallback`, group sync errors are non-fatal.
+- **`src/services/ad-sync.ts`** — refresh LDAP before group sync; disconnect errors no longer fail the run; PARTIAL when non-fatal group-sync warnings exist.
+
+### 8277fda — 2026-08-25 — Pre-built Slack connector: SAML SSO + SCIM provisioning
 
 **Why** — Slack Enterprise Grid uses SAML for SSO and SCIM for user lifecycle; the pre-built integration catalog should register both in one wizard.
 
@@ -1126,7 +1136,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`POST /api/admin/saml-apps`** — optional `provisioning: true` and `scimConfig` (`baseUrl`, `bearerToken`, `deprovisionMode`) upsert `app_protocol_configs` protocol `SCIM` and set `applications.provisioning = 1`.
 - **`src/services/app-protocol-config.ts`** — shared upsert for SAML mirror + SCIM config; bearer token sealed via `secret-box`.
 
-### (pending) — 2026-08-25 — Directory disable revokes SAML application access
+### 8277fda — 2026-08-25 — Directory disable revokes SAML application access
 
 **Why** — Disabling a user in Universal Directory / AD / Google must deactivate them in SAML apps (e.g. Slack), not only block new SSO assertions.
 
@@ -1137,7 +1147,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`employee-state-machine.ts`** — FSM transitions to `SUSPENDED_*`, `DEPARTED`, `DEPROVISIONED` also revoke app assignments.
 - **`attendance-iga/actions.ts`** — `REMOVE_ALL_APPS` uses the shared revoke helper.
 
-**Note:** SAML-only apps (Slack) cannot be deactivated inside Slack via API — IdP revokes assignment, blocks SSO, and logs deprovision with SP ACS URL. Re-enable in directory does **not** auto-restore app assignments.
+**Note:** When SCIM is configured (e.g. Slack pre-built connector), deprovision calls Slack SCIM PATCH `active: false`. SAML-only apps still rely on IdP assignment revoke and SSO block. Re-enable in directory does **not** auto-restore app assignments.
 
 ### (pending) — 2026-08-25 — Audit: application user provisioning / deprovisioning log
 

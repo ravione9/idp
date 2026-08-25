@@ -1359,8 +1359,15 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
         );
       }
 
+      try {
+        await adapter.refreshConnection();
+      } catch (err) {
+        logger.warn({ connectorId, runId, err }, 'AD sync: LDAP refresh before group sync failed');
+        errors.push(`LDAP refresh before group sync: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
       const { syncAdDirectoryGroups } = await import('./group-sync.js');
-      const gs = await syncAdDirectoryGroups(connectorId, cfg as Record<string, unknown>);
+      const gs = await syncAdDirectoryGroups(connectorId, cfg as Record<string, unknown>, adapter);
       inboundSummary += formatAdGroupSyncSummary(cfg as Record<string, unknown>, gs);
       if (gs.errors.length) errors.push(...gs.errors);
     }
@@ -1543,7 +1550,9 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     }
     } // runOutbound
 
-    await adapter.disconnect();
+    await adapter.disconnect().catch((err) => {
+      logger.warn({ connectorId, runId, err }, 'AD sync: LDAP disconnect after sync (non-fatal)');
+    });
   } catch (fatalErr) {
     logger.error({ connectorId, runId, err: fatalErr }, 'AD sync: fatal error');
     await execute(
@@ -1557,7 +1566,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     throw fatalErr;
   }
 
-  const finalStatus = itemsFailed > 0 ? 'PARTIAL' : 'SUCCESS';
+  const finalStatus = itemsFailed > 0 || errors.length > 0 ? 'PARTIAL' : 'SUCCESS';
   const outboundSummary = runOutbound && outboundProcessed > 0
     ? `Outbound: ${outboundProcessed} employees checked` +
       (outboundSkipped ? `, ${outboundSkipped} skipped (no AD provision needed)` : '') +
