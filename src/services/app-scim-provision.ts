@@ -324,42 +324,6 @@ async function logSamlAccessGrant(params: {
   });
 }
 
-async function logSamlAccessRevoke(params: {
-  ctx: NonNullable<Awaited<ReturnType<typeof loadAppProvisionContext>>>;
-  emp: { email_corp: string | null };
-  baseLog: {
-    appId: string;
-    empId: string;
-    action: 'DEPROVISION';
-    source: string;
-    actorEmpId: string | null;
-    requestId: string | null;
-  };
-}): Promise<void> {
-  const { ctx, emp, baseLog } = params;
-  const saml = ctx.saml!;
-  const launch = samlLaunchPath(saml.slug);
-  await logAppProvision({
-    ...baseLog,
-    httpMethod: 'DELETE',
-    endpoint: 'IdP: DELETE /api/admin/app-access-policy/assignments/:id',
-    status: 'SUCCESS',
-    detail: `SAML access revoked — ${launch} will deny; no assertion sent to ACS`,
-    requestBody: {
-      protocol: 'SAML',
-      email: emp.email_corp,
-      launchPath: launch,
-      acsUrl: saml.acs_url,
-    },
-    responseBody: {
-      protocol: 'SAML',
-      acsUrl: saml.acs_url,
-      sloUrl: saml.slo_url,
-      note: 'Use SAML SLO for SP-side session termination when configured',
-    },
-  });
-}
-
 async function loadEmployee(empId: string): Promise<{
   emp_id: string;
   full_name: string | null;
@@ -549,36 +513,7 @@ export async function deprovisionAppUser(params: AppProvisionParams): Promise<vo
     requestId: params.requestId ?? null,
   };
 
-  if (ctx.saml && !(ctx.app.provisioning && ctx.scim)) {
-    await logSamlAccessRevoke({ ctx, emp, baseLog });
-    return;
-  }
-
-  if (!ctx.app.provisioning) {
-    await logAppProvision({
-      ...baseLog,
-      httpMethod: 'DELETE',
-      endpoint: 'IdP: DELETE /api/admin/app-access-policy/assignments/:id',
-      status: 'SUCCESS',
-      detail: 'IdP access revoke — no outbound SCIM deprovisioning enabled',
-      requestBody: { appSlug: ctx.app.slug, email },
-    });
-    return;
-  }
-
   if (!ctx.scim) {
-    if (ctx.saml) {
-      await logSamlAccessRevoke({ ctx, emp, baseLog });
-      return;
-    }
-    await logAppProvision({
-      ...baseLog,
-      httpMethod: 'DELETE',
-      endpoint: 'IdP: DELETE /api/admin/app-access-policy/assignments/:id',
-      status: 'SUCCESS',
-      detail: 'IdP access revoke — no SCIM config on application',
-      requestBody: { appSlug: ctx.app.slug, email },
-    });
     return;
   }
 
@@ -675,7 +610,7 @@ export async function runApplicationDeprovisionForUser(params: {
   actorEmpId?: string | null;
   source?: string;
   reason?: string;
-  /** When true, write SKIPPED rows for SAML apps that have no SCIM token (manual admin action). */
+  /** When true, write SKIPPED rows for SAML apps that have no SCIM token (manual admin retry only). */
   logSkippedSaml?: boolean;
 }): Promise<{ scimApps: number; attempted: number; skippedSaml: number }> {
   const scimApps = await query<{ id: string; slug: string; name: string }>(
@@ -700,8 +635,7 @@ export async function runApplicationDeprovisionForUser(params: {
   }
 
   let skippedSaml = 0;
-  const shouldLogSkippedSaml = params.logSkippedSaml !== false;
-  if (shouldLogSkippedSaml) {
+  if (params.logSkippedSaml === true) {
     const samlWithoutScim = await query<{ app_id: string | null; slug: string; name: string }>(
       `SELECT a.id AS app_id, sp.slug, sp.name
          FROM saml_service_providers sp
@@ -727,10 +661,10 @@ export async function runApplicationDeprovisionForUser(params: {
     }
   }
 
-  if (!scimApps.length && !skippedSaml) {
-    logger.warn(
+  if (!scimApps.length && params.logSkippedSaml === true && !skippedSaml) {
+    logger.info(
       { empId: params.empId, source: params.source },
-      'Application deprovision: no SAML or SCIM-configured apps found',
+      'Application deprovision: no SCIM-configured apps',
     );
   }
 

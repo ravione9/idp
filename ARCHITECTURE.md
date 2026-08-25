@@ -1124,7 +1124,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 **What changed:**
 
-- **`app-scim-provision.ts`** — lookup by Slack `email eq` filter first, then `userName`; Slack deprovision uses SCIM `DELETE /Users/{id}`; lifecycle sweep runs on all apps with active SCIM config (not only `provisioning = 1`); writes **SKIPPED** DEPROVISION rows for SAML apps missing SCIM so admins see why Slack was not touched; Slack lookup tries `email`, `emails.value`, `email co`, `userName` filters plus POST `/Users/.search` before SKIPPED.
+- **`app-scim-provision.ts`** — lookup by Slack `email eq` filter first, then `userName`; Slack deprovision uses SCIM `DELETE /Users/{id}`; lifecycle sweep runs only on apps with active SCIM config (SAML-only apps are skipped silently); manual **Deprovision from apps** can opt in to SKIPPED audit rows when SCIM is missing; Slack lookup tries `email`, `emails.value`, `email co`, `userName` filters plus POST `/Users/.search` before SKIPPED.
 - **`POST /api/admin/users/:empId/deprovision-applications`** — manual retry for already-suspended users (e.g. after adding SCIM token).
 - **`PUT /api/admin/saml-apps/:id/scim-config`** — update SCIM token/base URL on existing SAML apps without re-creating.
 - **`web/js/views-admin.js`** — SAML **Edit** modal includes SCIM base URL + bearer token fields; list includes `scim_configured`.
