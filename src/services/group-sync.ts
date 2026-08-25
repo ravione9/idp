@@ -8,8 +8,7 @@ import type { admin_directory_v1 } from 'googleapis';
 import { query, queryOne, execute } from '../db/connection.js';
 import { ADAdapter } from '../adapters/ad-adapter.js';
 import { redis } from '../auth/session-store.js';
-import { config } from '../config.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
+import { connectAdAdapterWithFallback } from './ad-ldap-connect.js';
 import {
   buildGoogleJwtAuth,
   normalizeConnectorDirection,
@@ -299,19 +298,6 @@ export async function syncGoogleDirectoryGroups(
   return summary;
 }
 
-function createAdAdapterFromConfig(cfg: Record<string, unknown>): ADAdapter {
-  const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
-  const useSsl = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls = parseConnectorBoolean(cfg['startTls'], false);
-  const port = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
-  const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
-  const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
-  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-  const adUrl = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-  return new ADAdapter(redis, adUrl, bindDn, bindPass, baseDn, undefined, startTls, targetOuRaw);
-}
-
 async function resolveAdGroupKeys(
   adapter: ADAdapter,
   cfg: Record<string, unknown>,
@@ -396,12 +382,19 @@ export async function processAdGroupsFromAgent(
 export async function syncAdDirectoryGroups(
   connectorId: string,
   cfg: Record<string, unknown>,
+  sharedAdapter?: ADAdapter,
 ): Promise<GroupSyncSummary> {
   const summary: GroupSyncSummary = { groupsSynced: 0, membersSynced: 0, errors: [] };
+  const ownsAdapter = !sharedAdapter;
+  let adapter = sharedAdapter;
 
-  const adapter = createAdAdapterFromConfig(cfg);
   try {
-    await adapter.connect();
+    if (!adapter) {
+      const connected = await connectAdAdapterWithFallback(redis, cfg);
+      adapter = connected.adapter;
+    } else {
+      await adapter.refreshConnection();
+    }
 
     const resolved = await resolveAdGroupKeys(adapter, cfg);
     summary.errors.push(...resolved.errors);
@@ -441,8 +434,14 @@ export async function syncAdDirectoryGroups(
         summary.errors.push(`${groupKey}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    summary.errors.push(`AD group sync: ${msg}`);
+    logger.warn({ connectorId, err }, 'AD group sync failed');
   } finally {
-    await adapter.disconnect().catch(() => undefined);
+    if (ownsAdapter && adapter) {
+      await adapter.disconnect().catch(() => undefined);
+    }
   }
 
   return summary;

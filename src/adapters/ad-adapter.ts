@@ -94,13 +94,34 @@ export class ADAdapter extends BaseAdapter {
   // not in Node's trust store — skip verification for internal directory servers.
   private readonly tlsOpts = { rejectUnauthorized: false };
 
+  /** Long-running syncs (18k+ users) need generous LDAP op timeouts; DCs may also idle-drop sessions. */
+  private static readonly LDAP_CONNECT_TIMEOUT_MS = 30_000;
+  private static readonly LDAP_OP_TIMEOUT_MS = 120_000;
+
   private createClient(): Client {
     return new Client({
       url:              this.url,
-      connectTimeout:   10_000,
-      timeout:          15_000,
+      connectTimeout:   ADAdapter.LDAP_CONNECT_TIMEOUT_MS,
+      timeout:          ADAdapter.LDAP_OP_TIMEOUT_MS,
       tlsOptions:       this.tlsOpts,
     });
+  }
+
+  /** Drop a stale socket and bind again — use after long DB-only phases. */
+  async refreshConnection(): Promise<void> {
+    await this.disconnect().catch(() => undefined);
+    this.client = this.createClient();
+    await this.connect();
+  }
+
+  private static isLdapConnectionError(err: unknown): boolean {
+    if (!(err instanceof Error)) return false;
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ECONNRESET'
+      || code === 'ECONNABORTED'
+      || code === 'EPIPE'
+      || code === 'ETIMEDOUT'
+      || /ECONNRESET|ECONNABORTED|EPIPE|connection (?:closed|reset)/i.test(err.message);
   }
 
   async connect(): Promise<void> {
@@ -127,10 +148,19 @@ export class ADAdapter extends BaseAdapter {
   }
 
   async disconnect(): Promise<void> {
-    if (this.connected) {
+    if (!this.connected) return;
+    try {
       await this.client.unbind();
-      this.connected = false;
       logger.info('AD: LDAP unbound');
+    } catch (err) {
+      if (ADAdapter.isLdapConnectionError(err)) {
+        logger.warn({ err }, 'AD: LDAP unbind skipped — connection already closed');
+      } else {
+        throw err;
+      }
+    } finally {
+      this.connected = false;
+      this.client = this.createClient();
     }
   }
 
@@ -234,16 +264,21 @@ export class ADAdapter extends BaseAdapter {
       }
     };
 
-    try {
-      await runPaged();
-      return entries;
-    } catch (err) {
-      this.connected = false;
-      this.client = this.createClient();
-      await this.connect();
-      await runPaged();
-      return entries;
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await runPaged();
+        return entries;
+      } catch (err) {
+        const retryable = ADAdapter.isLdapConnectionError(err);
+        logger.warn({ baseDn, attempt, maxAttempts, err, retryable }, 'AD searchAtPaged: failed');
+        this.connected = false;
+        this.client = this.createClient();
+        if (!retryable || attempt === maxAttempts) throw err;
+        await this.connect();
+      }
     }
+    return entries;
   }
 
   private async searchAt(
@@ -260,16 +295,22 @@ export class ADAdapter extends BaseAdapter {
         attributes,
         sizeLimit:  2000,
       });
-    try {
-      const result = await run();
-      return result.searchEntries as unknown as ADUser[];
-    } catch (err) {
-      this.connected = false;
-      this.client = this.createClient();
-      await this.connect();
-      const result = await run();
-      return result.searchEntries as unknown as ADUser[];
+
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const result = await run();
+        return result.searchEntries as unknown as ADUser[];
+      } catch (err) {
+        const retryable = ADAdapter.isLdapConnectionError(err);
+        logger.warn({ baseDn, attempt, maxAttempts, err, retryable }, 'AD searchAt: failed');
+        this.connected = false;
+        this.client = this.createClient();
+        if (!retryable || attempt === maxAttempts) throw err;
+        await this.connect();
+      }
     }
+    return [];
   }
 
   private async search(filter: string, attributes: string[]): Promise<ADUser[]> {
