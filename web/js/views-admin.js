@@ -102,6 +102,53 @@ function samlSigningHtml(pfx, sp) {
     </div>`;
 }
 
+function samlScimConfigHtml(pfx, sp) {
+  const configured = !!(sp?.scim_configured || sp?.provisioning);
+  const defaultBase = sp?.slug === 'slack' ? 'https://api.slack.com/scim/v2' : '';
+  return `
+    <div class="form-group span2" style="margin-top:0.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <label class="form-label">
+        SCIM provisioning
+        <span class="badge ${configured ? 'badge-success' : 'badge-warning'}" style="margin-left:0.35rem">${configured ? 'Configured' : 'Not configured'}</span>
+      </label>
+      <p class="muted" style="font-size:0.78rem;margin:0 0 0.75rem">
+        Required to deactivate users inside SaaS apps (e.g. Slack) when access is revoked. SAML SSO alone does not remove workspace members.
+      </p>
+      <div class="form-2col">
+        <div class="form-group span2">
+          <label class="form-label">SCIM Base URL</label>
+          <input class="form-input" id="${pfx}-scim-url" type="url" value="${esc(defaultBase)}" placeholder="https://api.slack.com/scim/v2">
+        </div>
+        <div class="form-group span2">
+          <label class="form-label">SCIM Bearer Token ${configured ? '<span class="muted" style="font-weight:400">(leave blank to keep existing)</span>' : '<span style="color:var(--danger)">*</span>'}</label>
+          <input class="form-input" id="${pfx}-scim-token" type="password" value="" placeholder="Token from app admin → Provisioning" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Deprovision action</label>
+          <select class="form-select" id="${pfx}-scim-deprov">
+            <option value="DEACTIVATE">Deactivate user (recommended)</option>
+            <option value="DELETE">Delete user</option>
+          </select>
+        </div>
+      </div>
+    </div>`;
+}
+
+function collectSamlScimConfig(bd, pfx, isEdit, sp) {
+  const baseUrl = bd.querySelector(`#${pfx}-scim-url`)?.value?.trim().replace(/\/+$/, '');
+  const token = bd.querySelector(`#${pfx}-scim-token`)?.value?.trim();
+  const deprovisionMode = bd.querySelector(`#${pfx}-scim-deprov`)?.value || 'DEACTIVATE';
+  if (!baseUrl && !token) return null;
+  if (!baseUrl) return { error: 'SCIM base URL is required when saving SCIM config.' };
+  const configured = !!(sp?.scim_configured || sp?.provisioning);
+  if (!token && (!isEdit || !configured)) {
+    return { error: 'SCIM bearer token is required.' };
+  }
+  const payload = { baseUrl, deprovisionMode };
+  if (token) payload.bearerToken = token;
+  return payload;
+}
+
 function bindSamlAttrEditor(bd, pfx) {
   const rowsEl = bd.querySelector(`#${pfx}-attr-rows`);
   const tpl = bd.querySelector(`#${pfx}-attr-tpl`);
@@ -708,6 +755,7 @@ export async function viewIgaApps(content, opts = {}) {
               </span>
             </label>
           </div>
+          ${isEdit ? samlScimConfigHtml('csp', sp) : ''}
         </div>
         <div id="csp-err"></div>
       </div>
@@ -741,6 +789,9 @@ export async function viewIgaApps(content, opts = {}) {
       if (!entityId) { bd.querySelector('#csp-err').innerHTML = errHtml('SP Entity ID is required.'); return; }
       if (!acsUrl)   { bd.querySelector('#csp-err').innerHTML = errHtml('ACS URL is required.'); return; }
 
+      const scimCfg = isEdit ? collectSamlScimConfig(bd, 'csp', isEdit, sp) : null;
+      if (scimCfg?.error) { bd.querySelector('#csp-err').innerHTML = errHtml(scimCfg.error); return; }
+
       saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
       const data = { name, entityId, acsUrl, nameidFormat,
         sloUrl: sloUrl || undefined, defaultRelayState, iconUrl: iconUrl || undefined,
@@ -749,8 +800,12 @@ export async function viewIgaApps(content, opts = {}) {
       if (!isEdit) data.slug = slug;
 
       try {
-        if (isEdit) await api.updateSamlApp(sp.id, data);
-        else        await api.createSamlApp(data);
+        if (isEdit) {
+          await api.updateSamlApp(sp.id, data);
+          if (scimCfg) await api.updateSamlScimConfig(sp.id, scimCfg);
+        } else {
+          await api.createSamlApp(data);
+        }
         bd.remove();
         await loadApps();
       } catch (e) {
@@ -1085,6 +1140,7 @@ export async function viewSamlApps(me, content, opts = {}) {
               </span>
             </label>
           </div>
+          ${isEdit ? samlScimConfigHtml('sp', sp) : ''}
         </div>
         <div id="sp-err"></div>
       </div>
@@ -1118,6 +1174,9 @@ export async function viewSamlApps(me, content, opts = {}) {
       if (!entityId) { bd.querySelector('#sp-err').innerHTML = errHtml('SP Entity ID is required.'); return; }
       if (!acsUrl)   { bd.querySelector('#sp-err').innerHTML = errHtml('ACS URL is required.'); return; }
 
+      const scimCfg = isEdit ? collectSamlScimConfig(bd, 'sp', isEdit, sp) : null;
+      if (scimCfg?.error) { bd.querySelector('#sp-err').innerHTML = errHtml(scimCfg.error); return; }
+
       saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
       const data = { name, entityId, acsUrl, nameidFormat,
         sloUrl: sloUrl || undefined, defaultRelayState, iconUrl: iconUrl || undefined,
@@ -1126,8 +1185,12 @@ export async function viewSamlApps(me, content, opts = {}) {
       if (!isEdit) data.slug = slug;
 
       try {
-        if (isEdit) await api.updateSamlApp(sp.id, data);
-        else        await api.createSamlApp(data);
+        if (isEdit) {
+          await api.updateSamlApp(sp.id, data);
+          if (scimCfg) await api.updateSamlScimConfig(sp.id, scimCfg);
+        } else {
+          await api.createSamlApp(data);
+        }
         bd.remove();
         viewSamlApps(me, content, opts);
       } catch (e) {

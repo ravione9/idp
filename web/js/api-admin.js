@@ -24,6 +24,7 @@ Object.assign(api, {
   parseSamlMetadata:(metadata) => f('/api/admin/saml-apps/parse-metadata', { method: 'POST', body: JSON.stringify({ metadata }) }),
   deactivateSamlApp:(id) => f(`/api/admin/saml-apps/${id}`, { method: 'DELETE' }),
   updateSamlApp:    (id, data) => f(`/api/admin/saml-apps/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  updateSamlScimConfig: (id, data) => f(`/api/admin/saml-apps/${id}/scim-config`, { method: 'PUT', body: JSON.stringify(data) }),
   activateSamlApp:  (id) => f(`/api/admin/saml-apps/${id}/activate`, { method: 'PUT' }),
   enableSamlRequestAccess: (id) => f(`/api/admin/saml-apps/${id}/enable-request-access`, { method: 'POST' }),
   enableAllSamlRequestAccess: () => f('/api/admin/saml-apps/enable-request-access-all', { method: 'POST' }),
@@ -338,6 +339,7 @@ Object.assign(api, {
   suspendUser:   (empId, reason) => f(`/api/admin/users/${empId}/suspend`, { method: 'POST', body: JSON.stringify({ reason }) }),
   unsuspendUser: (empId, reason) => f(`/api/admin/users/${empId}/unsuspend`, { method: 'POST', body: JSON.stringify({ reason }) }),
   terminateUser: (empId, reason) => f(`/api/admin/users/${empId}/terminate`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  deprovisionUserApps: (empId) => f(`/api/admin/users/${empId}/deprovision-applications`, { method: 'POST', body: '{}' }),
   userLifecycle: (empId) => f(`/api/admin/users/${empId}/lifecycle`),
 
   // Unified directory — hybrid identity,

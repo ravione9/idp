@@ -5921,12 +5921,37 @@ function initUsersTab(panel, me = null) {
       const canSuspend   = state === 'ACTIVE' || state === 'REACTIVATED';
       const canUnsuspend = state === 'SUSPENDED_HR';
       const canTerminate = state !== 'DEPARTED' && state !== 'DEPROVISIONED';
+      const canDeprovisionApps = ['SUSPENDED_AUTO', 'SUSPENDED_HR', 'DEPARTED', 'DEPROVISIONED'].includes(state);
 
       overlay.querySelector('#pp-lifecycle').innerHTML = [
+        canDeprovisionApps ? `<button class="btn btn-sm btn-secondary" id="pp-btn-deprovision-apps" title="Call SCIM to deactivate user in Slack and other provisioned apps">↩ Deprovision from apps</button>` : '',
         canSuspend   ? `<button class="btn btn-sm btn-warning"  id="pp-btn-suspend">⏸ Suspend</button>`    : '',
         canUnsuspend ? `<button class="btn btn-sm btn-success"  id="pp-btn-unsuspend">▶ Unsuspend</button>` : '',
         canTerminate ? `<button class="btn btn-sm btn-danger"   id="pp-btn-terminate">✕ Terminate</button>` : '',
       ].join('');
+
+      if (canDeprovisionApps) {
+        overlay.querySelector('#pp-btn-deprovision-apps').addEventListener('click', async () => {
+          if (!confirm(`Deprovision ${emp.full_name} from all SCIM-enabled applications?\n\nRequires SCIM token on each app (e.g. Slack). Check Audit → App provisioning log for results.`)) return;
+          const btn = overlay.querySelector('#pp-btn-deprovision-apps');
+          btn.disabled = true;
+          btn.textContent = 'Deprovisioning…';
+          try {
+            const res = await api.deprovisionUserApps(empId);
+            const msg = res.scimApps
+              ? `Attempted deprovision on ${res.scimApps} SCIM app(s).`
+              : (res.skippedSaml
+                ? `No SCIM apps configured — ${res.skippedSaml} SAML app(s) skipped. Add SCIM token in Applications → SAML → Edit.`
+                : 'No provisioned applications found.');
+            alert(msg + '\n\nSee Audit → SSO Reports → App provisioning log for details.');
+          } catch (e) {
+            alert('Deprovision failed: ' + e.message);
+          } finally {
+            btn.disabled = false;
+            btn.textContent = '↩ Deprovision from apps';
+          }
+        });
+      }
 
       if (canSuspend) {
         overlay.querySelector('#pp-btn-suspend').addEventListener('click', async () => {

@@ -133,6 +133,8 @@ function mapAdminRow(row: Record<string, unknown>) {
     request_access:    Number(row['app_requestable'] ?? 0) === 1 && Number(row['has_jit_workflow'] ?? 0) === 1,
     app_requestable:   Number(row['app_requestable'] ?? 0) === 1,
     require_mfa:       Number(row['app_require_mfa'] ?? 0) === 1,
+    provisioning:      Number(row['app_provisioning'] ?? 0) === 1,
+    scim_configured:   Number(row['scim_configured'] ?? 0) === 1,
   };
 }
 
@@ -186,6 +188,11 @@ router.get('/', async (_req: Request, res: Response): Promise<void> => {
             sp.merge_default_attrs, sp.active, sp.sort_order, sp.icon_url, sp.created_at,
             COALESCE(a.requestable, 0) AS app_requestable,
             COALESCE(a.require_mfa, 0) AS app_require_mfa,
+            COALESCE(a.provisioning, 0) AS app_provisioning,
+            EXISTS (
+              SELECT 1 FROM app_protocol_configs c
+               WHERE c.app_id = a.id AND c.protocol = 'SCIM' AND c.active = 1
+            ) AS scim_configured,
             EXISTS (
               SELECT 1 FROM app_group_access_workflows w
                WHERE w.app_id = a.id AND w.active = 1

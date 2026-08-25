@@ -578,29 +578,85 @@ export async function deprovisionAppUser(params: AppProvisionParams): Promise<vo
   }
 }
 
-/** Deprovision a user from every SCIM-enabled application (e.g. directory disable without explicit app assignments). */
-export async function deprovisionUserFromAllScimApps(params: {
+/** Deprovision a user from every application with SCIM config (and optional audit when SCIM missing). */
+export async function runApplicationDeprovisionForUser(params: {
   empId: string;
   actorEmpId?: string | null;
   source?: string;
   reason?: string;
-}): Promise<void> {
-  const apps = await query<{ id: string; slug: string }>(
-    `SELECT a.id, a.slug
+  /** When true, write SKIPPED rows for SAML apps that have no SCIM token (manual admin action). */
+  logSkippedSaml?: boolean;
+}): Promise<{ scimApps: number; attempted: number; skippedSaml: number }> {
+  const scimApps = await query<{ id: string; slug: string; name: string }>(
+    `SELECT a.id, a.slug, a.name
        FROM applications a
       INNER JOIN app_protocol_configs c ON c.app_id = a.id AND c.protocol = 'SCIM' AND c.active = 1
-      WHERE a.provisioning = 1 AND a.active = 1`,
+      WHERE a.active = 1`,
     [],
   );
 
-  for (const app of apps) {
+  let attempted = 0;
+  for (const app of scimApps) {
+    attempted++;
     await deprovisionAppUser({
       appId: app.id,
       empId: params.empId,
       actorEmpId: params.actorEmpId ?? null,
       source: params.source ?? 'LIFECYCLE',
     }).catch((err) =>
-      logger.warn({ err, appId: app.id, slug: app.slug, empId: params.empId }, 'SCIM deprovision from all apps failed'),
+      logger.warn({ err, appId: app.id, slug: app.slug, empId: params.empId }, 'SCIM deprovision failed'),
     );
   }
+
+  let skippedSaml = 0;
+  const shouldLogSkippedSaml = params.logSkippedSaml !== false;
+  if (shouldLogSkippedSaml) {
+    const samlWithoutScim = await query<{ app_id: string | null; slug: string; name: string }>(
+      `SELECT a.id AS app_id, sp.slug, sp.name
+         FROM saml_service_providers sp
+         LEFT JOIN applications a ON a.slug = sp.slug AND a.active = 1
+         LEFT JOIN app_protocol_configs c ON c.app_id = a.id AND c.protocol = 'SCIM' AND c.active = 1
+        WHERE sp.active = 1 AND c.id IS NULL`,
+      [],
+    );
+    for (const app of samlWithoutScim) {
+      skippedSaml++;
+      await logAppProvision({
+        appId: app.app_id,
+        empId: params.empId,
+        action: 'DEPROVISION',
+        source: params.source ?? 'ADMIN',
+        httpMethod: 'DELETE',
+        endpoint: `IdP: SCIM not configured for ${app.slug}`,
+        status: 'SKIPPED',
+        detail: `${app.name}: SAML SSO only — add SCIM token in Applications → SAML → Edit to deactivate users inside ${app.name}`,
+        actorEmpId: params.actorEmpId ?? null,
+        responseBody: { protocol: 'SAML', spSlug: app.slug, scimConfigured: false },
+      });
+    }
+  }
+
+  if (!scimApps.length && !skippedSaml) {
+    logger.warn(
+      { empId: params.empId, source: params.source },
+      'Application deprovision: no SAML or SCIM-configured apps found',
+    );
+  }
+
+  return { scimApps: scimApps.length, attempted, skippedSaml };
+}
+
+/** @deprecated use runApplicationDeprovisionForUser */
+export async function deprovisionUserFromAllScimApps(params: {
+  empId: string;
+  actorEmpId?: string | null;
+  source?: string;
+  reason?: string;
+}): Promise<void> {
+  await runApplicationDeprovisionForUser({
+    empId: params.empId,
+    actorEmpId: params.actorEmpId ?? null,
+    source: params.source ?? 'LIFECYCLE',
+    ...(params.reason !== undefined ? { reason: params.reason } : {}),
+  });
 }

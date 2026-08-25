@@ -8,7 +8,7 @@ import logger from '../utils/logger.js';
 import { canReceiveSamlAssertion, evaluateEntitlement } from '../saml/entitlements.js';
 import type { EmployeeSamlContext, EntitlementRule } from '../saml/types.js';
 import { ipInAllowlist, parseCidrList } from '../utils/ip-match.js';
-import { provisionAppUser, deprovisionAppUser, deprovisionUserFromAllScimApps } from './app-scim-provision.js';
+import { provisionAppUser, deprovisionAppUser, runApplicationDeprovisionForUser } from './app-scim-provision.js';
 
 export type AssignmentType = 'USER' | 'TAG_GROUP' | 'GROUP';
 export type AuditAction =
@@ -793,7 +793,7 @@ export async function revokeAllUserAppAccess(params: {
   };
   if (params.reason) scimSweep.reason = params.reason;
 
-  await deprovisionUserFromAllScimApps(scimSweep).catch((err) =>
+  await runApplicationDeprovisionForUser(scimSweep).catch((err) =>
     logger.warn({ err, empId: params.empId }, 'SCIM deprovision sweep after app access revoke failed'),
   );
 
