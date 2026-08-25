@@ -5,7 +5,7 @@
  */
 
 import axios, { AxiosError } from 'axios';
-import { queryOne } from '../db/connection.js';
+import { query, queryOne } from '../db/connection.js';
 import { logAppProvision } from './app-provision-log.js';
 import { samlLaunchPath } from '../saml/launch-url.js';
 import { openSecret } from '../utils/secret-box.js';
@@ -95,17 +95,58 @@ async function scimCall(
   return { status: res.status, data: res.data };
 }
 
-async function findScimUserByEmail(cfg: ScimConfig, email: string): Promise<ScimUser | null> {
-  const filter = encodeURIComponent(`userName eq "${email}"`);
-  const path = `${cfg.provisionPath}?filter=${filter}&count=1`;
+function escapeScimFilterValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function isSlackScimEndpoint(baseUrl: string): boolean {
+  return /slack\.com/i.test(baseUrl);
+}
+
+function scimUserMatchesEmail(user: ScimUser, email: string): boolean {
+  const normalized = email.trim().toLowerCase();
+  if ((user.userName ?? '').trim().toLowerCase() === normalized) return true;
+  return (user.emails ?? []).some((e) => (e.value ?? '').trim().toLowerCase() === normalized);
+}
+
+async function findScimUserByFilter(cfg: ScimConfig, filter: string): Promise<ScimUser | null> {
+  const path = `${cfg.provisionPath}?filter=${encodeURIComponent(filter)}&count=10`;
   try {
     const { status, data } = await scimCall(cfg, 'GET', path);
-    if (status >= 400) return null;
+    if (status >= 400) {
+      logger.warn({ status, filter, baseUrl: cfg.baseUrl }, 'SCIM user filter lookup failed');
+      return null;
+    }
     const list = data as ScimListResponse;
     return list.Resources?.[0] ?? null;
-  } catch {
+  } catch (err) {
+    logger.warn({ err, filter, baseUrl: cfg.baseUrl }, 'SCIM user filter lookup error');
     return null;
   }
+}
+
+async function findScimUserByEmail(cfg: ScimConfig, email: string): Promise<ScimUser | null> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return null;
+
+  const escaped = escapeScimFilterValue(normalized);
+  const filters = isSlackScimEndpoint(cfg.baseUrl)
+    ? [
+      `email eq "${escaped}"`,
+      `userName eq "${escaped}"`,
+    ]
+    : [
+      `userName eq "${escaped}"`,
+      `emails.value eq "${escaped}"`,
+    ];
+
+  for (const filter of filters) {
+    const user = await findScimUserByFilter(cfg, filter);
+    if (user?.id && scimUserMatchesEmail(user, normalized)) return user;
+    if (user?.id && !isSlackScimEndpoint(cfg.baseUrl)) return user;
+  }
+
+  return null;
 }
 
 async function loadAppProvisionContext(appId: string): Promise<{
@@ -317,7 +358,7 @@ export async function provisionAppUser(params: AppProvisionParams): Promise<void
       const path = `${ctx.scim.provisionPath}/${existing.id}`;
       const patchBody = {
         schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
-        Operations: [{ op: 'Replace', path: 'active', value: true }],
+        Operations: [{ op: 'replace', path: 'active', value: true }],
       };
       try {
         const { status, data } = await scimCall(ctx.scim, 'PATCH', path, patchBody);
@@ -468,17 +509,20 @@ export async function deprovisionAppUser(params: AppProvisionParams): Promise<vo
     await logAppProvision({
       ...baseLog,
       httpMethod: 'GET',
-      endpoint: fullEndpoint(ctx.scim.baseUrl, `${ctx.scim.provisionPath}?filter=userName eq "${email}"`),
-      status: 'SUCCESS',
-      statusCode: 200,
-      detail: 'SCIM user not found — already absent from target app',
+      endpoint: fullEndpoint(ctx.scim.baseUrl, `${ctx.scim.provisionPath}?filter=email eq "${email}"`),
+      status: 'SKIPPED',
+      statusCode: 404,
+      detail: isSlackScimEndpoint(ctx.scim.baseUrl)
+        ? 'SCIM user not found in Slack (searched by email and userName) — no deactivate call sent'
+        : 'SCIM user not found — already absent from target app',
     });
     return;
   }
 
   const userPath = `${ctx.scim.provisionPath}/${existing.id}`;
+  const useSlackDelete = isSlackScimEndpoint(ctx.scim.baseUrl);
 
-  if (ctx.scim.deprovisionMode === 'DELETE') {
+  if (ctx.scim.deprovisionMode === 'DELETE' || useSlackDelete) {
     try {
       const { status, data } = await scimCall(ctx.scim, 'DELETE', userPath);
       const ok = status >= 200 && status < 300 || status === 404;
@@ -488,7 +532,9 @@ export async function deprovisionAppUser(params: AppProvisionParams): Promise<vo
         endpoint: fullEndpoint(ctx.scim.baseUrl, userPath),
         status: ok ? 'SUCCESS' : 'FAILED',
         statusCode: status,
-        detail: ok ? `Deleted SCIM user ${existing.id}` : `SCIM DELETE failed (${status})`,
+        detail: ok
+          ? (useSlackDelete ? `Deactivated Slack user ${existing.id} (SCIM DELETE)` : `Deleted SCIM user ${existing.id}`)
+          : `SCIM DELETE failed (${status})`,
         responseBody: typeof data === 'object' && data ? data as Record<string, unknown> : null,
       });
     } catch (err) {
@@ -505,7 +551,7 @@ export async function deprovisionAppUser(params: AppProvisionParams): Promise<vo
 
   const patchBody = {
     schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
-    Operations: [{ op: 'Replace', path: 'active', value: false }],
+    Operations: [{ op: 'replace', path: 'active', value: false }],
   };
   try {
     const { status, data } = await scimCall(ctx.scim, 'PATCH', userPath, patchBody);
@@ -529,5 +575,32 @@ export async function deprovisionAppUser(params: AppProvisionParams): Promise<vo
       detail: err instanceof Error ? err.message : String(err),
       requestBody: patchBody,
     });
+  }
+}
+
+/** Deprovision a user from every SCIM-enabled application (e.g. directory disable without explicit app assignments). */
+export async function deprovisionUserFromAllScimApps(params: {
+  empId: string;
+  actorEmpId?: string | null;
+  source?: string;
+  reason?: string;
+}): Promise<void> {
+  const apps = await query<{ id: string; slug: string }>(
+    `SELECT a.id, a.slug
+       FROM applications a
+      INNER JOIN app_protocol_configs c ON c.app_id = a.id AND c.protocol = 'SCIM' AND c.active = 1
+      WHERE a.provisioning = 1 AND a.active = 1`,
+    [],
+  );
+
+  for (const app of apps) {
+    await deprovisionAppUser({
+      appId: app.id,
+      empId: params.empId,
+      actorEmpId: params.actorEmpId ?? null,
+      source: params.source ?? 'LIFECYCLE',
+    }).catch((err) =>
+      logger.warn({ err, appId: app.id, slug: app.slug, empId: params.empId }, 'SCIM deprovision from all apps failed'),
+    );
   }
 }
