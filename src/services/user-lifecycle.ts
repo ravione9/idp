@@ -284,17 +284,20 @@ export async function applyDirectorySourceDisabled(
   );
   if (!emp) return;
 
-  if (isPortalAccessible(emp.ilg_state)) {
-    await fsm.transition({
-      empId,
-      toState: ILGState.SUSPENDED_AUTO,
-      actor: TransitionActor.SYSTEM,
-      actorId: 'directory-sync',
-      origin: TransitionOrigin.EXTERNAL,
-      reasonCode: `DIRECTORY_DISABLED:${source}`,
-      evidence: { source, reason },
-    });
+  if (!isPortalAccessible(emp.ilg_state)) {
+    logger.debug({ empId, source, ilg_state: emp.ilg_state }, 'Directory disable: already suspended, skipping side effects');
+    return;
   }
+
+  await fsm.transition({
+    empId,
+    toState: ILGState.SUSPENDED_AUTO,
+    actor: TransitionActor.SYSTEM,
+    actorId: 'directory-sync',
+    origin: TransitionOrigin.EXTERNAL,
+    reasonCode: `DIRECTORY_DISABLED:${source}`,
+    evidence: { source, reason },
+  });
 
   await revokeAllSessions(empId);
 

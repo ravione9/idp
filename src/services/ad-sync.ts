@@ -24,7 +24,7 @@ import {
 } from './ad-ldap-connect.js';
 import { applyDirectorySourceDisabled, applyDirectorySourceEnabled, preserveIlgStateOnDirectoryImport } from './user-lifecycle.js';
 import { updateConnectorRunProgress } from './connector-run-lifecycle.js';
-import { ILGState } from '../fsm/states.js';
+import { ILGState, isPortalAccessible } from '../fsm/states.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // ---------------------------------------------------------------------------
@@ -265,11 +265,85 @@ function isAdHashEmpId(empId: string): boolean {
   return /^AD-[A-F0-9]{12}$/i.test(empId.trim());
 }
 
+interface CachedEmployee {
+  emp_id: string;
+  ilg_state: string;
+  email_corp: string | null;
+  sync_status: string | null;
+  full_name: string | null;
+  dept_id: string | null;
+  role: string | null;
+  ad_object_guid: string | null;
+}
+
+interface AdInboundSyncCache {
+  empById: Map<string, CachedEmployee>;
+  empByEmail: Map<string, string>;
+  empByAdSam: Map<string, string>;
+}
+
+async function buildAdInboundSyncCache(): Promise<AdInboundSyncCache> {
+  const rows = await query<CachedEmployee>(
+    `SELECT emp_id, ilg_state, email_corp, sync_status, full_name, dept_id, role, ad_object_guid
+       FROM employees`,
+    [],
+  );
+  const empById = new Map<string, CachedEmployee>();
+  const empByEmail = new Map<string, string>();
+  for (const row of rows) {
+    empById.set(row.emp_id, row);
+    const email = row.email_corp?.trim().toLowerCase();
+    if (email) empByEmail.set(email, row.emp_id);
+  }
+  const linkRows = await query<{ emp_id: string; external_id: string }>(
+    `SELECT emp_id, external_id FROM identity_links
+      WHERE \`system\` = 'AD' AND status != 'DELETED'`,
+    [],
+  );
+  const empByAdSam = new Map<string, string>();
+  for (const link of linkRows) {
+    empByAdSam.set(link.external_id.trim().toLowerCase(), link.emp_id);
+  }
+  return { empById, empByEmail, empByAdSam };
+}
+
+function rememberCachedEmployee(
+  cache: AdInboundSyncCache,
+  row: CachedEmployee,
+): void {
+  cache.empById.set(row.emp_id, row);
+  const email = row.email_corp?.trim().toLowerCase();
+  if (email) cache.empByEmail.set(email, row.emp_id);
+}
+
+function employeeProfileChanged(
+  cached: CachedEmployee,
+  fields: {
+    fullName: string;
+    emailCorp: string;
+    department: string | null;
+    title: string | null;
+    adObjectGuid: string | null;
+    ilgState: string;
+    syncStatus?: string | null;
+  },
+): boolean {
+  if ((cached.full_name ?? '') !== fields.fullName) return true;
+  if ((cached.email_corp ?? '').trim().toLowerCase() !== fields.emailCorp.trim().toLowerCase()) return true;
+  if ((cached.dept_id ?? null) !== fields.department) return true;
+  if ((cached.role ?? null) !== fields.title) return true;
+  if (cached.ilg_state !== fields.ilgState) return true;
+  if (fields.syncStatus !== undefined && (cached.sync_status ?? null) !== fields.syncStatus) return true;
+  if (fields.adObjectGuid && (cached.ad_object_guid ?? null) !== fields.adObjectGuid) return true;
+  return false;
+}
+
 /** Find an existing directory row for sam@configured-domain (Google/HR import or prior sync). */
 async function findCanonicalEmpIdBySamEmail(
   sam: string,
   upnDomains: string[],
   defaultEmailDomain: string,
+  cache?: AdInboundSyncCache,
 ): Promise<string | null> {
   const normalizedSam = sam.trim().toLowerCase();
   if (!normalizedSam) return null;
@@ -282,11 +356,16 @@ async function findCanonicalEmpIdBySamEmail(
 
   for (const domain of domains) {
     const email = `${normalizedSam}@${domain}`;
-    const row = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
-      [email],
-    );
-    if (row) return row.emp_id;
+    if (cache) {
+      const empId = cache.empByEmail.get(email);
+      if (empId) return empId;
+    } else {
+      const row = await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
+        [email],
+      );
+      if (row) return row.emp_id;
+    }
   }
   return null;
 }
@@ -305,71 +384,76 @@ async function resolveEmpIdForAdUser(
   errors: string[],
   upnDomains: string[],
   defaultEmailDomain: string,
+  cache?: AdInboundSyncCache,
 ): Promise<string | null> {
   const sam = getLdapAttr(adUser, 'sAMAccountName').trim();
   const adEmpId = readAdEmployeeId(adUser);
   const emailNorm = email.trim().toLowerCase();
+  const samKey = sam.toLowerCase();
 
   if (emailNorm && !emailNorm.endsWith('@ad-sync.local')) {
-    const byEmail = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
-      [emailNorm],
-    );
-    if (byEmail) {
-      if (adEmpId && byEmail.emp_id.startsWith('AD-') && byEmail.emp_id !== adEmpId && isTrustedPrimaryEmpId(adEmpId)) {
+    const byEmailEmpId = cache?.empByEmail.get(emailNorm)
+      ?? (await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
+        [emailNorm],
+      ))?.emp_id;
+    if (byEmailEmpId) {
+      if (adEmpId && byEmailEmpId.startsWith('AD-') && byEmailEmpId !== adEmpId && isTrustedPrimaryEmpId(adEmpId)) {
         try {
-          const outcome = await tryMigrateEmpId(byEmail.emp_id, adEmpId, emailNorm);
+          const outcome = await tryMigrateEmpId(byEmailEmpId, adEmpId, emailNorm);
           if (outcome === 'migrated' || outcome === 'merged') {
             logger.info(
-              { from: byEmail.emp_id, to: adEmpId, email: emailNorm, outcome },
+              { from: byEmailEmpId, to: adEmpId, email: emailNorm, outcome },
               'AD sync: migrated placeholder emp_id to AD employeeID',
             );
             return adEmpId;
           }
-          if (outcome === 'skipped') return byEmail.emp_id;
+          if (outcome === 'skipped') return byEmailEmpId;
         } catch (err) {
           errors.push(
-            `${byEmail.emp_id} -> ${adEmpId}: emp_id migration failed — ${err instanceof Error ? err.message : String(err)}`,
+            `${byEmailEmpId} -> ${adEmpId}: emp_id migration failed — ${err instanceof Error ? err.message : String(err)}`,
           );
-          return byEmail.emp_id;
+          return byEmailEmpId;
         }
       }
-      return byEmail.emp_id;
+      return byEmailEmpId;
     }
   }
 
   if (sam) {
-    const bySamLink = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM identity_links
-        WHERE \`system\` = 'AD' AND external_id = ? AND status != 'DELETED'`,
-      [sam],
-    );
-    if (bySamLink) {
-      const canonical = await findCanonicalEmpIdBySamEmail(sam, upnDomains, defaultEmailDomain);
-      if (canonical && canonical !== bySamLink.emp_id && isAdHashEmpId(bySamLink.emp_id)) {
+    const bySamEmpId = cache?.empByAdSam.get(samKey)
+      ?? (await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM identity_links
+          WHERE \`system\` = 'AD' AND external_id = ? AND status != 'DELETED'`,
+        [sam],
+      ))?.emp_id;
+    if (bySamEmpId) {
+      const canonical = await findCanonicalEmpIdBySamEmail(sam, upnDomains, defaultEmailDomain, cache);
+      if (canonical && canonical !== bySamEmpId && isAdHashEmpId(bySamEmpId)) {
         return canonical;
       }
-      return bySamLink.emp_id;
+      return bySamEmpId;
     }
 
-    const canonical = await findCanonicalEmpIdBySamEmail(sam, upnDomains, defaultEmailDomain);
+    const canonical = await findCanonicalEmpIdBySamEmail(sam, upnDomains, defaultEmailDomain, cache);
     if (canonical) return canonical;
   }
 
   if (adEmpId && isTrustedPrimaryEmpId(adEmpId)) {
-    const byAdId = await queryOne<{ emp_id: string; email_corp: string }>(
-      `SELECT emp_id, email_corp FROM employees WHERE emp_id = ?`,
-      [adEmpId],
-    );
+    const byAdId = cache?.empById.get(adEmpId)
+      ?? await queryOne<{ emp_id: string; email_corp: string }>(
+        `SELECT emp_id, email_corp FROM employees WHERE emp_id = ?`,
+        [adEmpId],
+      );
     if (byAdId) {
-      const existingLink = sam
-        ? await queryOne<{ external_id: string }>(
+      const existingLinkSam = cache?.empByAdSam
+        ? [...cache.empByAdSam.entries()].find(([, empId]) => empId === adEmpId)?.[0]
+        : (await queryOne<{ external_id: string }>(
           `SELECT external_id FROM identity_links
             WHERE emp_id = ? AND \`system\` = 'AD' AND status != 'DELETED'`,
           [adEmpId],
-        )
-        : null;
-      if (existingLink && existingLink.external_id.toLowerCase() !== sam.toLowerCase()) {
+        ))?.external_id;
+      if (existingLinkSam && existingLinkSam.toLowerCase() !== samKey) {
         return deriveEmpIdHashFromSam(adUser);
       }
       return adEmpId;
@@ -378,10 +462,12 @@ async function resolveEmpIdForAdUser(
   }
 
   if (adEmpId) {
-    const byAdId = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM employees WHERE emp_id = ?`,
-      [adEmpId],
-    );
+    const byAdId = cache?.empById.has(adEmpId)
+      ? adEmpId
+      : (await queryOne<{ emp_id: string }>(
+        `SELECT emp_id FROM employees WHERE emp_id = ?`,
+        [adEmpId],
+      ))?.emp_id;
     if (byAdId) {
       return deriveEmpIdHashFromSam(adUser);
     }
@@ -809,6 +895,12 @@ export async function processInboundAdUsers(
     'AD sync inbound: listing directory users',
   );
 
+  const cache = await buildAdInboundSyncCache();
+  logger.info(
+    { employees: cache.empById.size, adLinks: cache.empByAdSam.size },
+    'AD sync inbound: directory cache loaded',
+  );
+
   // One-time diagnostic: dump every populated attribute for the first user
   // so we can identify which AD attribute actually holds the employee ID.
   // The same content is surfaced in the run's error_summary so it's visible
@@ -861,7 +953,7 @@ export async function processInboundAdUsers(
 
   for (const adUser of adUsers) {
     processed++;
-    if (options?.onProgress && (processed === 1 || processed % 250 === 0 || processed === adUsers.length)) {
+    if (options?.onProgress && (processed === 1 || processed % 1000 === 0 || processed === adUsers.length)) {
       await options.onProgress({
         processed,
         succeeded,
@@ -897,21 +989,35 @@ export async function processInboundAdUsers(
       const department = getLdapAttr(adUser, 'department').trim().slice(0, 50) || null;
       const title      = getLdapAttr(adUser, 'title').trim().slice(0, 100) || null;
 
-      const empId = await resolveEmpIdForAdUser(adUser, emailCorp, errors, upnDomains, defaultEmailDomain);
+      const empId = await resolveEmpIdForAdUser(adUser, emailCorp, errors, upnDomains, defaultEmailDomain, cache);
       if (!empId) {
         skipped++;
         succeeded++;
         continue;
       }
       let targetEmpId = empId;
-      let exists = await queryOne<{ emp_id: string }>(
-        `SELECT emp_id FROM employees WHERE emp_id = ?`,
-        [targetEmpId],
-      );
+      const cached = cache.empById.get(targetEmpId) ?? null;
 
       if (disabled) {
         const disabledState = ILGState.SUSPENDED_AUTO;
-        if (exists) {
+        const needsDisableSideEffects = !cached || isPortalAccessible(cached.ilg_state);
+        if (cached) {
+          if (!employeeProfileChanged(cached, {
+            fullName, emailCorp, department, title, adObjectGuid, ilgState: disabledState, syncStatus: 'DISABLED',
+          })) {
+            cache.empByAdSam.set(sam.toLowerCase(), targetEmpId);
+            if (needsDisableSideEffects) {
+              await execute(
+                `UPDATE employees SET sync_status = 'DISABLED', updated_at = UTC_TIMESTAMP() WHERE emp_id = ?`,
+                [targetEmpId],
+              );
+              await upsertAdIdentityLink(targetEmpId, sam, 'DISABLED');
+              await applyDirectorySourceDisabled(targetEmpId, 'AD', 'ad_account_disabled');
+            }
+            linked++;
+            succeeded++;
+            continue;
+          }
           await execute(
             `UPDATE employees
                 SET full_name = ?, first_name = ?, last_name = ?, email_corp = ?, dept_id = ?, role = ?,
@@ -921,7 +1027,19 @@ export async function processInboundAdUsers(
             [fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, targetEmpId],
           );
           await upsertAdIdentityLink(targetEmpId, sam, 'DISABLED');
-          await applyDirectorySourceDisabled(targetEmpId, 'AD', 'ad_account_disabled');
+          if (needsDisableSideEffects) {
+            await applyDirectorySourceDisabled(targetEmpId, 'AD', 'ad_account_disabled');
+          }
+          rememberCachedEmployee(cache, {
+            emp_id: targetEmpId,
+            ilg_state: needsDisableSideEffects ? disabledState : cached.ilg_state,
+            email_corp: emailCorp,
+            sync_status: 'DISABLED',
+            full_name: fullName,
+            dept_id: department,
+            role: title,
+            ad_object_guid: adObjectGuid ?? cached.ad_object_guid,
+          });
           linked++;
         } else {
           try {
@@ -937,13 +1055,13 @@ export async function processInboundAdUsers(
             imported++;
           } catch (err) {
             if (isDuplicateKeyError(err) && emailNorm) {
-              const byEmail = await queryOne<{ emp_id: string }>(
-                `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
-                [emailNorm],
-              );
-              if (byEmail) {
-                targetEmpId = byEmail.emp_id;
-                exists = byEmail;
+              const byEmailEmpId = cache.empByEmail.get(emailNorm)
+                ?? (await queryOne<{ emp_id: string }>(
+                  `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
+                  [emailNorm],
+                ))?.emp_id;
+              if (byEmailEmpId) {
+                targetEmpId = byEmailEmpId;
                 await execute(
                   `UPDATE employees
                       SET full_name = ?, first_name = ?, last_name = ?, dept_id = ?, role = ?,
@@ -953,7 +1071,10 @@ export async function processInboundAdUsers(
                   [fullName, firstName, lastName, department, title, adObjectGuid, targetEmpId],
                 );
                 await upsertAdIdentityLink(targetEmpId, sam, 'DISABLED');
-                await applyDirectorySourceDisabled(targetEmpId, 'AD', 'ad_account_disabled');
+                const dupCached = cache.empById.get(targetEmpId);
+                if (!dupCached || isPortalAccessible(dupCached.ilg_state)) {
+                  await applyDirectorySourceDisabled(targetEmpId, 'AD', 'ad_account_disabled');
+                }
                 linked++;
               } else {
                 throw err;
@@ -967,14 +1088,10 @@ export async function processInboundAdUsers(
         continue;
       }
 
-      const existingState = exists
-        ? (await queryOne<{ ilg_state: string }>(
-          `SELECT ilg_state FROM employees WHERE emp_id = ?`,
-          [targetEmpId],
-        ))?.ilg_state
-        : undefined;
+      const existingState = cached?.ilg_state;
+      const wasSuspendedAuto = existingState === ILGState.SUSPENDED_AUTO;
 
-      if (existingState === ILGState.SUSPENDED_AUTO) {
+      if (wasSuspendedAuto) {
         await applyDirectorySourceEnabled(targetEmpId, 'AD');
       }
 
@@ -983,7 +1100,16 @@ export async function processInboundAdUsers(
         ? preserveIlgStateOnDirectoryImport(existingState)
         : ILGState.ACTIVE;
 
-      if (exists) {
+      if (cached) {
+        if (!employeeProfileChanged(cached, {
+          fullName, emailCorp, department, title, adObjectGuid, ilgState,
+        }) && !wasSuspendedAuto) {
+          cache.empByAdSam.set(sam.toLowerCase(), targetEmpId);
+          linked++;
+          succeeded++;
+          if (dn) empIdByDn.set(dn.toLowerCase(), targetEmpId);
+          continue;
+        }
         await execute(
           `UPDATE employees
               SET full_name = ?, first_name = ?, last_name = ?, email_corp = ?, dept_id = ?, role = ?,
@@ -992,6 +1118,16 @@ export async function processInboundAdUsers(
             WHERE emp_id = ?`,
           [fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, ilgState, targetEmpId],
         );
+        rememberCachedEmployee(cache, {
+          emp_id: targetEmpId,
+          ilg_state: ilgState,
+          email_corp: emailCorp,
+          sync_status: cached.sync_status,
+          full_name: fullName,
+          dept_id: department,
+          role: title,
+          ad_object_guid: adObjectGuid ?? cached.ad_object_guid,
+        });
         linked++;
       } else {
         try {
@@ -1005,12 +1141,13 @@ export async function processInboundAdUsers(
           imported++;
         } catch (err) {
           if (isDuplicateKeyError(err) && emailNorm) {
-            const byEmail = await queryOne<{ emp_id: string }>(
-              `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
-              [emailNorm],
-            );
-            if (byEmail) {
-              targetEmpId = byEmail.emp_id;
+            const byEmailEmpId = cache.empByEmail.get(emailNorm)
+              ?? (await queryOne<{ emp_id: string }>(
+                `SELECT emp_id FROM employees WHERE LOWER(TRIM(email_corp)) = ?`,
+                [emailNorm],
+              ))?.emp_id;
+            if (byEmailEmpId) {
+              targetEmpId = byEmailEmpId;
               await execute(
                 `UPDATE employees
                     SET full_name = ?, first_name = ?, last_name = ?, dept_id = ?, role = ?,
