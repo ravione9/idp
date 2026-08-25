@@ -1138,7 +1138,8 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 **What changed:**
 
-- **`src/services/ad-sync.ts`** — live progress heartbeats (`starting` → `connecting` → `listing` → `inbound` → `outbound`) via `updateConnectorRunProgress`, including per-page LDAP updates during 18k user fetch.
+- **`src/services/ad-sync.ts`** — live progress heartbeats (`starting` → `connecting` → `listing` → `inbound` → `outbound`) via `updateConnectorRunProgress`, including per-page LDAP updates during 18k user fetch; **inbound cache** preloads employees + AD links (avoids 2–4 DB queries per user); **skips unchanged rows** on incremental sync; **skips repeat deprovision** for already-suspended users.
+- **`src/services/user-lifecycle.ts`** — `applyDirectorySourceDisabled` no-op when user is already suspended (avoids re-running SCIM deprovision every sync).
 - **`src/adapters/ad-adapter.ts`** — optional `onPage` callback during paged LDAP search.
 - **`src/services/connector-run-lifecycle.ts`** — zero-progress reclaim skips runs with a recent `progressAtMs` heartbeat; timeout raised to 30 minutes.
 
