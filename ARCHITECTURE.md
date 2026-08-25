@@ -476,6 +476,7 @@ To add a new migration:
 | `app_access_assignments` | **(013, 018)** User, identity-group (`GROUP`), or tag-group (`TAG_GROUP`) grants to applications |
 | `app_group_access_workflows` | **(013)** Configurable approval chains for group access requests |
 | `app_access_audit_log` | **(013)** Audit trail for assignments, requests, approvals, provisioning, revocations |
+| `app_provision_log` | **(064)** Application SCIM / IdP provision & deprovision endpoint audit |
 | `access_review_campaigns` | **(003)** Quarterly certification campaigns |
 | `access_review_items` | **(003)** Items routed to a reviewer in a campaign |
 | `sod_policies` | **(003)** Segregation-of-Duties rules (toxic combinations) |
@@ -632,6 +633,7 @@ To add a new migration:
 | `POST` | `/api/admin/audit/sessions/:id/revoke` | Admin force-logout (sets `revoked_at`, clears Redis) |
 | `GET` | `/api/admin/audit/integrity` | Verify `audit_log` hash chain |
 | `GET` | `/api/admin/audit/summary` | Compliance counters for a date window (includes sessions created / active) |
+| `GET` | `/api/admin/audit/app-provisioning` | Application user provision/deprovision log (`from`/`to`/`q`/`app`/`action`/`status`; `export=csv`) |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/radius/clients[/:id]` | RADIUS NAS clients (shared secret sealed at rest) |
 | `POST` | `/api/admin/radius/clients/:id/reveal-secret` | Reveal shared secret for FreeRADIUS config |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/radius/policies[/:id]` | RADIUS auth policies (groups, MFA, reply attrs) |
@@ -795,7 +797,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault · System Users — **SUPER_ADMIN only** (PAM AES-GCM vault; no session broker yet). End-user personal vault is under workspace **Vault**, not here. |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
 | **Workflows** | Workflows (tabs: Definitions · Event Triggers · Run History) · Notifications |
-| **Reports** | **Overview** (executive KPIs, trends, report catalog) · **Identity & Access** (access inventory · MFA coverage · lifecycle · access requests · certifications · SoD · app access changes) · Audit & SSO Reports (SSO assertions · System audit · Auth attempts · Sessions · SSO analytics) · Compliance Reports (evidence snapshots) — all with filters + CSV where applicable |
+| **Reports** | **Overview** (executive KPIs, trends, report catalog) · **Identity & Access** (access inventory · MFA coverage · lifecycle · access requests · certifications · SoD · app access changes) · Audit & SSO Reports (SSO assertions · System audit · Auth attempts · Sessions · SSO analytics · **User provisioning log**) · Compliance Reports (evidence snapshots) — all with filters + CSV where applicable |
 | **Settings** | General · Branding & Login · License · Tickets · System Health |
 
 **Merged / redirected routes** (bookmarks still work): `loginCustomization`→`branding`, `connectors`→`directorySync`, `eventTriggers`→`workflowLibrary?tab=triggers`, `appDiscovery`→`applications?tab=discovery`, `ssoReports`→`audit?tab=sso`. Groups also exposes Tag Groups under `/?v=groups&tab=tags`.
@@ -1115,6 +1117,22 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-25 — Audit: application user provisioning / deprovisioning log
+
+**Why** — Admins need a dedicated audit view (like Slack SCIM integration) showing which HTTP endpoint was called when a user is provisioned into or deprovisioned from a SaaS application.
+
+**What changed:**
+
+- **`migrations/064_app_provision_log.sql`** — `app_provision_log` table (action, endpoint, HTTP method, status, request/response JSON).
+- **`src/services/app-provision-log.ts`**, **`src/services/app-scim-provision.ts`** — write log rows; SCIM POST/PATCH/DELETE when `applications.provisioning = 1` and `app_protocol_configs` has SCIM `baseUrl` + bearer token.
+- **`src/services/app-access-policy.ts`** — trigger provision on USER grant, deprovision on revoke.
+- **`src/api/admin-audit.ts`** — `GET /api/admin/audit/app-provisioning` (filters + CSV export).
+- **`web/js/views-admin.js`** — Audit & SSO Reports → **User provisioning log** tab.
+
+**SCIM config** (optional, per app): `{ "baseUrl": "…", "bearerToken": "…" }` in `app_protocol_configs` protocol `SCIM` when outbound SCIM is required.
+
+**SAML apps (Slack, etc.):** no SCIM needed — grant/revoke logs IdP assignment + SP `acs_url`; each SSO issues a `SAML_ASSERTION` row when the assertion is delivered to the ACS.
 
 ### (pending) — 2026-08-24 — AD LDAP: fix port 389 / StartTLS connectivity
 

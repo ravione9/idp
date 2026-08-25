@@ -1907,7 +1907,7 @@ async function downloadAuditCsv(url, filename) {
 }
 
 export async function viewAudit(content, initialTab = 'saml') {
-  const tabs = ['saml', 'system', 'auth', 'sessions', 'sso'];
+  const tabs = ['saml', 'system', 'auth', 'sessions', 'sso', 'provisioning'];
   const validTab = tabs.includes(initialTab) ? initialTab : 'saml';
   const wrap = el(`<div class="ent-page">${header('Audit & SSO Reports', 'Low-level audit trails, login forensics, session history, and SSO analytics for compliance')}
     <div class="inline-tabs" id="audit-tabs" style="margin-bottom:1rem">
@@ -1916,6 +1916,7 @@ export async function viewAudit(content, initialTab = 'saml') {
       <button type="button" class="inline-tab${validTab === 'auth' ? ' active' : ''}" data-tab="auth">Auth attempts</button>
       <button type="button" class="inline-tab${validTab === 'sessions' ? ' active' : ''}" data-tab="sessions">Sessions</button>
       <button type="button" class="inline-tab${validTab === 'sso' ? ' active' : ''}" data-tab="sso">SSO analytics</button>
+      <button type="button" class="inline-tab${validTab === 'provisioning' ? ' active' : ''}" data-tab="provisioning">User provisioning log</button>
     </div>
     <div id="aud-summary" class="stat-grid audit-summary-grid" style="margin-bottom:1rem"></div>
     <div id="aud-saml" ${validTab !== 'saml' ? 'hidden' : ''}><div class="loading-row"><span class="spinner"></span></div></div>
@@ -1923,6 +1924,7 @@ export async function viewAudit(content, initialTab = 'saml') {
     <div id="aud-auth" ${validTab !== 'auth' ? 'hidden' : ''}></div>
     <div id="aud-sessions" ${validTab !== 'sessions' ? 'hidden' : ''}></div>
     <div id="aud-sso" ${validTab !== 'sso' ? 'hidden' : ''}></div>
+    <div id="aud-provisioning" ${validTab !== 'provisioning' ? 'hidden' : ''}></div>
   </div>`);
   content.replaceChildren(wrap);
   const panels = {
@@ -1931,12 +1933,14 @@ export async function viewAudit(content, initialTab = 'saml') {
     auth: wrap.querySelector('#aud-auth'),
     sessions: wrap.querySelector('#aud-sessions'),
     sso: wrap.querySelector('#aud-sso'),
+    provisioning: wrap.querySelector('#aud-provisioning'),
   };
   const state = {
     saml: { from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', binding: '', offset: 0, limit: 50 },
     system: { from: isoDateDaysAgo(30), to: todayIso(), q: '', actor: '', action: '', offset: 0, limit: 50 },
     auth: { from: isoDateDaysAgo(30), to: todayIso(), q: '', ip: '', success: '', reason: '', offset: 0, limit: 50 },
     sessions: { from: isoDateDaysAgo(30), to: todayIso(), q: '', ip: '', status: '', iss: '', offset: 0, limit: 50 },
+    provisioning: { from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', action: '', status: '', offset: 0, limit: 50 },
   };
 
   async function refreshSummary(from, to) {
@@ -1976,6 +1980,11 @@ export async function viewAudit(content, initialTab = 'saml') {
       state.sessions.ip = panel.querySelector('.audit-ip')?.value.trim() || '';
       state.sessions.status = panel.querySelector('.audit-status')?.value || '';
       state.sessions.iss = panel.querySelector('.audit-iss')?.value || '';
+    } else if (kind === 'provisioning') {
+      state.provisioning.q = panel.querySelector('.audit-q')?.value.trim() || '';
+      state.provisioning.app = panel.querySelector('.audit-app')?.value.trim() || '';
+      state.provisioning.action = panel.querySelector('.audit-action')?.value || '';
+      state.provisioning.status = panel.querySelector('.audit-status')?.value || '';
     }
     return state[kind];
   }
@@ -1995,7 +2004,11 @@ export async function viewAudit(content, initialTab = 'saml') {
       void reload();
     });
     panel.querySelector('.audit-reset')?.addEventListener('click', () => {
-      state[kind] = { ...state[kind], from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', binding: '', actor: '', action: '', ip: '', success: '', reason: '', status: '', iss: '', offset: 0 };
+      state[kind] = {
+        ...state[kind],
+        from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', binding: '', actor: '', action: '', ip: '',
+        success: '', reason: '', status: '', iss: '', offset: 0,
+      };
       void reload(true);
     });
     panel.querySelector('.audit-export')?.addEventListener('click', async () => {
@@ -2014,6 +2027,11 @@ export async function viewAudit(content, initialTab = 'saml') {
         if (f.ip) params.ip = f.ip;
         if (f.status) params.status = f.status;
         if (f.iss) params.iss = f.iss;
+      } else if (kind === 'provisioning') {
+        if (f.q) params.q = f.q;
+        if (f.app) params.app = f.app;
+        if (f.action) params.action = f.action;
+        if (f.status) params.status = f.status;
       } else {
         if (f.q) params.q = f.q;
         if (f.ip) params.ip = f.ip;
@@ -2023,6 +2041,7 @@ export async function viewAudit(content, initialTab = 'saml') {
       const pathKind = kind === 'auth' ? 'auth-attempts'
         : kind === 'system' ? 'system'
         : kind === 'sessions' ? 'sessions'
+        : kind === 'provisioning' ? 'app-provisioning'
         : 'saml';
       try {
         await downloadAuditCsv(api.auditExportUrl(pathKind, params), `${pathKind}-${f.from}-${f.to}.csv`);
@@ -2345,6 +2364,96 @@ export async function viewAudit(content, initialTab = 'saml') {
     }
   }
 
+  function provStatusBadge(status) {
+    if (status === 'SUCCESS') return '<span class="badge badge-success">Success</span>';
+    if (status === 'FAILED') return '<span class="badge badge-danger">Failed</span>';
+    if (status === 'SKIPPED') return '<span class="badge badge-neutral">Skipped</span>';
+    return `<span class="badge badge-neutral">${esc(status || '—')}</span>`;
+  }
+
+  function provActionBadge(action) {
+    if (action === 'PROVISION') return '<span class="badge badge-success">Provision</span>';
+    if (action === 'DEPROVISION') return '<span class="badge badge-danger">Deprovision</span>';
+    return `<span class="badge badge-info">${esc(action || '—')}</span>`;
+  }
+
+  function formatJsonCell(raw) {
+    if (raw == null || raw === '') return '—';
+    let obj = raw;
+    if (typeof raw === 'string') {
+      try { obj = JSON.parse(raw); } catch { return esc(raw); }
+    }
+    const s = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+    return `<code class="muted" style="font-size:0.72rem;white-space:pre-wrap;display:block;max-width:220px">${esc(s)}</code>`;
+  }
+
+  async function loadProvisioning(rebuild = false) {
+    const t = panels.provisioning;
+    if (rebuild || !t.querySelector('.audit-filter-panel')) {
+      t.innerHTML = `${auditFilterBar(`
+        <div class="form-group"><label class="form-label">User / email</label>
+          <input class="form-input audit-q" placeholder="name, email, endpoint" value="${esc(state.provisioning.q)}"></div>
+        <div class="form-group"><label class="form-label">Application</label>
+          <input class="form-input audit-app" placeholder="app name or slug" value="${esc(state.provisioning.app)}"></div>
+        <div class="form-group"><label class="form-label">Action</label>
+          <select class="form-select audit-action">
+            <option value="">All</option>
+            <option value="PROVISION" ${state.provisioning.action === 'PROVISION' ? 'selected' : ''}>Provision</option>
+            <option value="DEPROVISION" ${state.provisioning.action === 'DEPROVISION' ? 'selected' : ''}>Deprovision</option>
+          </select></div>
+        <div class="form-group"><label class="form-label">Result</label>
+          <select class="form-select audit-status">
+            <option value="">All</option>
+            <option value="SUCCESS" ${state.provisioning.status === 'SUCCESS' ? 'selected' : ''}>Success</option>
+            <option value="FAILED" ${state.provisioning.status === 'FAILED' ? 'selected' : ''}>Failed</option>
+            <option value="SKIPPED" ${state.provisioning.status === 'SKIPPED' ? 'selected' : ''}>Skipped</option>
+          </select></div>`)}
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">For <strong>SAML apps</strong> (e.g. Slack): access grant/revoke is logged with the SP ACS URL; each SSO login logs a <code>SAML_ASSERTION</code> row when the assertion is POSTed to the application. SCIM apps log outbound API calls when SCIM provisioning is enabled.</p>
+        <div class="audit-table-area"><div class="loading-row"><span class="spinner"></span></div></div>`;
+      wireFilterChrome(t, 'provisioning', (rb) => loadProvisioning(!!rb));
+    }
+    const area = t.querySelector('.audit-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const f = readFilters(t, 'provisioning');
+      await refreshSummary(f.from, f.to);
+      const params = { from: f.from, to: f.to, limit: String(f.limit), offset: String(f.offset) };
+      if (f.q) params.q = f.q;
+      if (f.app) params.app = f.app;
+      if (f.action) params.action = f.action;
+      if (f.status) params.status = f.status;
+      const r = await api.appProvisionAudit(params);
+      const rows = r.data || [];
+      const meta = r.meta || {};
+      t.querySelector('.audit-meta-count').textContent = `${meta.total ?? rows.length} provision events`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Time</th><th>Action</th><th>Application</th><th>User</th><th>Source</th><th>Endpoint</th><th>Result</th><th>Detail</th><th>Response</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="muted">${fmtDate(row.created_at)}</td>
+              <td>${provActionBadge(row.action)}</td>
+              <td class="cell-strong">${esc(row.app_name || '—')}<br><span class="muted" style="font-size:0.75rem">${esc(row.app_slug || '')}</span></td>
+              <td>${esc(row.emp_name || row.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(row.emp_email || '')}</span></td>
+              <td><span class="badge badge-neutral">${esc(row.source || '—')}</span></td>
+              <td><span class="badge badge-info">${esc(row.http_method || '—')}</span><br><span class="muted truncate" style="font-size:0.72rem;font-family:var(--mono,monospace)" title="${esc(row.endpoint || '')}">${esc(row.endpoint || '—')}</span></td>
+              <td>${provStatusBadge(row.status)}${row.status_code ? `<br><span class="muted">${esc(String(row.status_code))}</span>` : ''}</td>
+              <td class="muted" style="font-size:0.78rem">${esc(row.detail || '—')}</td>
+              <td>${formatJsonCell(row.response_body)}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(meta, f.offset, f.limit)}`
+        : `<div class="card empty-state"><span class="empty-icon">⌖</span>No provisioning events for this filter</div>`;
+      area.querySelector('.audit-prev')?.addEventListener('click', () => {
+        state.provisioning.offset = Math.max(0, state.provisioning.offset - state.provisioning.limit);
+        void loadProvisioning();
+      });
+      area.querySelector('.audit-next')?.addEventListener('click', () => {
+        state.provisioning.offset += state.provisioning.limit;
+        void loadProvisioning();
+      });
+    } catch (err) {
+      area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
   async function showTab(name) {
     wrap.querySelectorAll('#audit-tabs .inline-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     for (const [id, panel] of Object.entries(panels)) panel.hidden = id !== name;
@@ -2357,6 +2466,7 @@ export async function viewAudit(content, initialTab = 'saml') {
       panels.sso.innerHTML = '';
       await viewSsoReports(panels.sso, { embed: true });
     }
+    else if (name === 'provisioning') await loadProvisioning(true);
   }
   wrap.querySelector('#audit-tabs').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-tab]');
