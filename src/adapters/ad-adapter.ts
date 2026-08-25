@@ -237,6 +237,7 @@ export class ADAdapter extends BaseAdapter {
     filter: string,
     attributes: string[],
     scope: 'sub' | 'one' = 'sub',
+    onPage?: (pages: number, fetched: number, baseDn: string) => void | Promise<void>,
   ): Promise<ADUser[]> {
     await this.ensureConnected();
     const entries: ADUser[] = [];
@@ -254,6 +255,12 @@ export class ADAdapter extends BaseAdapter {
       })) {
         pages++;
         entries.push(...(result.searchEntries as unknown as ADUser[]));
+        if (onPage && (pages === 1 || pages % 2 === 0)) {
+          await onPage(pages, entries.length, baseDn);
+        }
+      }
+      if (onPage && pages > 0) {
+        await onPage(pages, entries.length, baseDn);
       }
       logger.info({ baseDn, pages, total: entries.length, pageSize }, 'AD searchAtPaged: complete');
       if (entries.length === 1000) {
@@ -322,7 +329,10 @@ export class ADAdapter extends BaseAdapter {
   // ---------------------------------------------------------------------------
 
   /** List person accounts under the configured sync scope (inbound directory import). */
-  async listDirectoryUsers(scope?: AdSyncScope): Promise<AdapterResult<ADUser[]>> {
+  async listDirectoryUsers(
+    scope?: AdSyncScope,
+    opts?: { onPage?: (pages: number, fetched: number, baseDn: string) => void | Promise<void> },
+  ): Promise<AdapterResult<ADUser[]>> {
     return this.safe(async () => {
       const syncScope = scope ?? { orgUnits: [], users: [], includeSubOrgUnits: true };
       const attrs = AD_USER_IMPORT_ATTRS;
@@ -336,7 +346,7 @@ export class ADAdapter extends BaseAdapter {
 
       const merged: ADUser[] = [];
       for (const base of bases) {
-        const batch = await this.searchAtPaged(base, filter, attrs, ldapScope);
+        const batch = await this.searchAtPaged(base, filter, attrs, ldapScope, opts?.onPage);
         logger.info({ base, rawCount: batch.length, ldapScope }, 'AD listDirectoryUsers: LDAP search');
         merged.push(...batch);
       }

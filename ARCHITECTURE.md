@@ -1134,6 +1134,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 **Ops:** Applications → SAML → Edit Slack → paste SCIM token → Universal Directory → user profile → **Deprovision from apps** → verify DEPROVISION row with `DELETE https://api.slack.com/scim/v2/Users/…` in Audit → App provisioning log.
 
+### (pending) — 2026-08-25 — AD sync: fix zero-progress reclaim killing long LDAP imports
+
+**Why** — After a successful 18k-user sync, incremental runs showed **FAILED** with `Reclaimed: zero-progress timeout` every ~15 minutes (0 processed). AD sync never wrote live progress during the long LDAP paged search, so the reclaim job treated active runs as stuck and killed them before import started.
+
+**What changed:**
+
+- **`src/services/ad-sync.ts`** — live progress heartbeats (`starting` → `connecting` → `listing` → `inbound` → `outbound`) via `updateConnectorRunProgress`, including per-page LDAP updates during 18k user fetch.
+- **`src/adapters/ad-adapter.ts`** — optional `onPage` callback during paged LDAP search.
+- **`src/services/connector-run-lifecycle.ts`** — zero-progress reclaim skips runs with a recent `progressAtMs` heartbeat; timeout raised to 30 minutes.
+
 ### (pending) — 2026-08-25 — AD sync: fix ECONNRESET false failures after successful inbound import
 
 **Why** — Incremental AD sync imported ~18k users successfully but connector runs showed **FAILED** with `read ECONNRESET` because the DC dropped the idle LDAP session during group sync or unbind.

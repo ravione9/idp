@@ -23,6 +23,7 @@ import {
   describeAdLdapMode,
 } from './ad-ldap-connect.js';
 import { applyDirectorySourceDisabled, applyDirectorySourceEnabled, preserveIlgStateOnDirectoryImport } from './user-lifecycle.js';
+import { updateConnectorRunProgress } from './connector-run-lifecycle.js';
 import { ILGState } from '../fsm/states.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -718,6 +719,10 @@ async function importAdDirectoryUsers(
   dirConfig: AdDirectoryConfig,
   cfg: Record<string, unknown>,
   errors: string[],
+  opts?: {
+    onProgress?: (p: { processed: number; succeeded: number; failed: number; total: number }) => void | Promise<void>;
+    onLdapPage?: (pages: number, fetched: number, baseDn: string) => void | Promise<void>;
+  },
 ): Promise<{
   found: number;
   imported: number;
@@ -734,12 +739,20 @@ async function importAdDirectoryUsers(
   diag: string;
 }> {
   const syncScope = resolveAdSyncScope(cfg);
-  const listResult = await adapter.listDirectoryUsers(syncScope);
+  const listOpts = opts?.onLdapPage ? { onPage: opts.onLdapPage } : undefined;
+  const listResult = await adapter.listDirectoryUsers(syncScope, listOpts);
   if (!listResult.success) {
     throw new Error(listResult.error ?? 'Failed to list AD users');
   }
 
-  return processInboundAdUsers(listResult.data, dirConfig, errors, { adapter, cfg });
+  const processOpts: {
+    adapter: ADAdapter;
+    cfg: Record<string, unknown>;
+    onProgress?: (p: { processed: number; succeeded: number; failed: number; total: number }) => void | Promise<void>;
+  } = { adapter, cfg };
+  if (opts?.onProgress) processOpts.onProgress = opts.onProgress;
+
+  return processInboundAdUsers(listResult.data, dirConfig, errors, processOpts);
 }
 
 /** Apply inbound AD user objects (from direct LDAP or on-prem agent). */
@@ -747,7 +760,12 @@ export async function processInboundAdUsers(
   adUsers: Record<string, unknown>[],
   dirConfig: AdDirectoryConfig,
   errors: string[],
-  options?: { adapter?: ADAdapter | null; cfg?: Record<string, unknown>; defaultEmailDomain?: string },
+  options?: {
+    adapter?: ADAdapter | null;
+    cfg?: Record<string, unknown>;
+    defaultEmailDomain?: string;
+    onProgress?: (p: { processed: number; succeeded: number; failed: number; total: number }) => void | Promise<void>;
+  },
 ): Promise<{
   found: number;
   imported: number;
@@ -843,6 +861,14 @@ export async function processInboundAdUsers(
 
   for (const adUser of adUsers) {
     processed++;
+    if (options?.onProgress && (processed === 1 || processed % 250 === 0 || processed === adUsers.length)) {
+      await options.onProgress({
+        processed,
+        succeeded,
+        failed,
+        total: adUsers.length,
+      });
+    }
     const sam = getLdapAttr(adUser, 'sAMAccountName').trim();
     const dn = getLdapAttr(adUser, 'dn');
 
@@ -1252,6 +1278,22 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     [runId, connectorId],
   );
 
+  let itemsProcessed = 0;
+  let itemsSucceeded = 0;
+  let itemsFailed = 0;
+
+  const reportProgress = async (phase: string, detail?: string) => {
+    await updateConnectorRunProgress(runId, {
+      phase,
+      itemsProcessed,
+      itemsSucceeded,
+      itemsFailed,
+      ...(detail !== undefined ? { detail } : {}),
+    });
+  };
+
+  await reportProgress('starting', 'Starting AD sync');
+
   // ── Build ADAdapter from connector's stored config_json ──────────────────
   // Falls back to env vars so existing deployments keep working.
   const connRow = await queryOne<{ config_json: string | Record<string, unknown>; direction: string }>(
@@ -1295,6 +1337,8 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     'AD sync: connecting',
   );
 
+  await reportProgress('connecting', `Connecting to ${host}`);
+
   let adapter: ADAdapter;
   const connectErrors: string[] = [];
 
@@ -1316,9 +1360,6 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     throw err;
   }
 
-  let itemsProcessed = 0;
-  let itemsSucceeded = 0;
-  let itemsFailed = 0;
   const errors: string[] = [];
   let inboundSummary = '';
   let outboundProcessed = 0;
@@ -1328,7 +1369,18 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
 
   try {
     if (runInbound) {
-      const inbound = await importAdDirectoryUsers(adapter, dirConfig, cfg, errors);
+      await reportProgress('listing', 'Fetching users from Active Directory (LDAP paged search)');
+      const inbound = await importAdDirectoryUsers(adapter, dirConfig, cfg, errors, {
+        onLdapPage: async (pages, fetched, baseDn) => {
+          await reportProgress('listing', `LDAP page ${pages}: ${fetched} users from ${baseDn}`);
+        },
+        onProgress: async (p) => {
+          itemsProcessed = p.processed;
+          itemsSucceeded = p.succeeded;
+          itemsFailed = p.failed;
+          await reportProgress('inbound', `${p.processed} / ${p.total} AD users imported`);
+        },
+      });
       itemsProcessed += inbound.processed;
       itemsSucceeded += inbound.succeeded;
       itemsFailed += inbound.failed;
@@ -1373,6 +1425,7 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
     }
 
     if (runOutbound) {
+    await reportProgress('outbound', 'Reconciling IdP employees with AD');
     const googleLinked = new Set(
       (await query<{ emp_id: string }>(
         `SELECT emp_id FROM identity_links
