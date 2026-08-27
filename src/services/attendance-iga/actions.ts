@@ -6,6 +6,7 @@ import { redis } from '../../auth/session-store.js';
 import { EmployeeStateMachine } from '../../fsm/employee-state-machine.js';
 import { ILGState, TransitionActor, TransitionOrigin } from '../../fsm/states.js';
 import { sendNotification } from '../notification.js';
+import { revokeAllUserAppAccess } from '../app-access-policy.js';
 import logger from '../../utils/logger.js';
 import type { AttendanceAction, AttendanceIgaConfig, RollbackSnapshot } from './types.js';
 
@@ -99,19 +100,13 @@ export async function executeAttendanceActions(params: {
           break;
 
         case 'REMOVE_ALL_APPS': {
-          const assignments = await query<{ id: string; app_id: string }>(
-            `SELECT id, app_id FROM app_access_assignments
-              WHERE active = 1 AND assignment_type = 'USER' AND target_id = ?`,
-            [params.empId],
-          );
-          for (const a of assignments) {
-            await execute(
-              `UPDATE app_access_assignments SET active = 0, revoked_at = UTC_TIMESTAMP(), revoked_by = ?
-               WHERE id = ?`,
-              [params.executedBy, a.id],
-            );
-            appsRemoved.push(a.app_id);
-          }
+          const r = await revokeAllUserAppAccess({
+            empId: params.empId,
+            revokedBy: params.executedBy,
+            source: 'ATTENDANCE_IGA',
+            reason: params.ruleKey,
+          });
+          appsRemoved.push(...r.appIds);
           break;
         }
 

@@ -8,7 +8,7 @@ import logger from '../utils/logger.js';
 export const CONNECTOR_RUN_STALE_HOURS = 3;
 
 /** Runs that never incremented items_processed are reclaimed sooner (auth/config crash). */
-export const CONNECTOR_RUN_ZERO_PROGRESS_MINUTES = 15;
+export const CONNECTOR_RUN_ZERO_PROGRESS_MINUTES = 30;
 
 const ACTIVE_STATUSES_SQL = "('RUNNING', 'PENDING_AGENT')";
 
@@ -19,8 +19,14 @@ export async function reclaimStaleConnectorRuns(connectorId?: string): Promise<n
     `status IN ${ACTIVE_STATUSES_SQL}
        AND ended_at IS NULL
        AND items_processed = 0
-       AND started_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? MINUTE)`,
-    [CONNECTOR_RUN_ZERO_PROGRESS_MINUTES],
+       AND started_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? MINUTE)
+       AND (
+         payload IS NULL
+         OR JSON_EXTRACT(payload, '$.progressAtMs') IS NULL
+         OR CAST(JSON_EXTRACT(payload, '$.progressAtMs') AS UNSIGNED)
+            < (UNIX_TIMESTAMP(UTC_TIMESTAMP()) - ? * 60) * 1000
+       )`,
+    [CONNECTOR_RUN_ZERO_PROGRESS_MINUTES, CONNECTOR_RUN_ZERO_PROGRESS_MINUTES],
     connectorId,
     'zero-progress timeout',
   );
@@ -157,6 +163,7 @@ export async function updateConnectorRunProgress(
     phase: progress.phase,
     detail: progress.detail ?? null,
     progressAt: new Date().toISOString(),
+    progressAtMs: Date.now(),
   };
   if (progress.userResults?.length) {
     payload.userResults = progress.userResults;

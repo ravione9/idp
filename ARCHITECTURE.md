@@ -477,6 +477,7 @@ To add a new migration:
 | `app_access_assignments` | **(013, 018)** User, identity-group (`GROUP`), or tag-group (`TAG_GROUP`) grants to applications |
 | `app_group_access_workflows` | **(013)** Configurable approval chains for group access requests |
 | `app_access_audit_log` | **(013)** Audit trail for assignments, requests, approvals, provisioning, revocations |
+| `app_provision_log` | **(064)** Application SCIM / IdP provision & deprovision endpoint audit |
 | `access_review_campaigns` | **(003)** Quarterly certification campaigns |
 | `access_review_items` | **(003)** Items routed to a reviewer in a campaign |
 | `sod_policies` | **(003)** Segregation-of-Duties rules (toxic combinations) |
@@ -605,7 +606,7 @@ To add a new migration:
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD (**SUPER_ADMIN** session; includes `/status`) |
 | `GET` | `/auth/local/bootstrap-status` | Public boolean `{ bootstrapEnabled }` only (no admin count) |
 | `POST` | `/auth/local/bootstrap` | First SUPER_ADMIN via `LOCAL_BOOTSTRAP_TOKEN` (rate-limited) |
-| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; list includes `request_access` JIT flag) |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; `POST` accepts optional `provisioning` + `scimConfig` for outbound SCIM; list includes `request_access` JIT flag and `scim_configured`; `PUT /:id/scim-config` updates SCIM token on existing apps) |
 | `POST` | `/api/admin/saml-apps/:id/enable-request-access` | Enable IGA JIT for one SAML SP (mirror + default workflow + `requestable`) |
 | `POST` | `/api/admin/saml-apps/enable-request-access-all` | Enable IGA JIT for every active SAML SP |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/api/admin/app-discovery[/:id]` | App Discovery inventory (`discovered_apps`) |
@@ -631,6 +632,7 @@ To add a new migration:
 | `POST` | `/api/admin/audit/sessions/:id/revoke` | Admin force-logout (sets `revoked_at`, clears Redis) |
 | `GET` | `/api/admin/audit/integrity` | Verify `audit_log` hash chain |
 | `GET` | `/api/admin/audit/summary` | Compliance counters for a date window (includes sessions created / active) |
+| `GET` | `/api/admin/audit/app-provisioning` | Application user provision/deprovision log (`from`/`to`/`q`/`app`/`action`/`status`; `export=csv`) |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/radius/clients[/:id]` | RADIUS NAS clients (shared secret sealed at rest) |
 | `POST` | `/api/admin/radius/clients/:id/reveal-secret` | Reveal shared secret for FreeRADIUS config |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/radius/policies[/:id]` | RADIUS auth policies (groups, MFA, reply attrs) |
@@ -795,7 +797,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault · System Users — **SUPER_ADMIN only** (PAM AES-GCM vault; no session broker yet). End-user personal vault is under workspace **Vault**, not here. |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
 | **Workflows** | Workflows (tabs: Definitions · Event Triggers · Run History) · Notifications |
-| **Reports** | **Overview** (executive KPIs, trends, report catalog) · **Identity & Access** (access inventory · MFA coverage · lifecycle · access requests · certifications · SoD · app access changes) · Audit & SSO Reports (SSO assertions · System audit · Auth attempts · Sessions · SSO analytics) · Compliance Reports (evidence snapshots) — all with filters + CSV where applicable |
+| **Reports** | **Overview** (executive KPIs, trends, report catalog) · **Identity & Access** (access inventory · MFA coverage · lifecycle · access requests · certifications · SoD · app access changes) · Audit & SSO Reports (SSO assertions · System audit · Auth attempts · Sessions · SSO analytics · **User provisioning log**) · Compliance Reports (evidence snapshots) — all with filters + CSV where applicable |
 | **Settings** | General · Branding & Login · License · Tickets · System Health |
 
 **Merged / redirected routes** (bookmarks still work): `loginCustomization`→`branding`, `connectors`→`directorySync`, `eventTriggers`→`workflowLibrary?tab=triggers`, `appDiscovery`→`applications?tab=discovery`, `ssoReports`→`audit?tab=sso`. Groups also exposes Tag Groups under `/?v=groups&tab=tags`.
@@ -1044,7 +1046,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import **skips suspended Google accounts** (same rules as AD); outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank OU/user scope syncs the full directory; non-empty filters combine with AND logic; blank/`*` **Sync Groups** auto-mirrors up to 200 Workspace groups into `groups` / `group_members` (requires `admin.directory.group.readonly` domain-wide delegation)
 - ✅ **Connector sync scheduler** — `src/services/connector-sync-scheduler.ts` ticks every 60s (Redis `withSchedLock('connector-sync', …)`); reads each connector's `sync_schedule` (`every:15m`, `every:1h`, custom interval, or 5-field cron) and triggers `POST`-equivalent sync when due for `CONNECTED`/`ACTIVE` connectors; Directory Sync UI exposes presets + custom interval/cron
 - ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; AD writeback auto-retries StartTLS/LDAPS when the connector uses plain LDAP; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
-- ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate` — admin suspend sets `SUSPENDED_HR` (hidden from directory, login blocked); revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`
+- ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate|deprovision-applications` — admin suspend sets `SUSPENDED_HR` (hidden from directory, login blocked); revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`; `deprovision-applications` retries SCIM deactivate for suspended users
 - ✅ **Access review campaign generator** — `POST /api/iga/access-reviews` + `POST /api/iga/access-reviews/:id/items/:itemId/decision` in `src/services/access-review.ts` (scopes: ALL_USERS, APP_SPECIFIC, HIGH_RISK; auto-closes campaign when all items reviewed; REVOKE triggers user_entitlement revocation)
 - ✅ **SoD evaluator** — `src/services/sod-evaluator.ts` runs on every entitlement grant; populates `sod_violations`; full-scan available
 - ✅ **Notification dispatcher** — `src/services/notification.ts` dispatches EMAIL (nodemailer), SLACK (webhook), TEAMS, IN_APP; called by access-request, lifecycle, and review workflows
@@ -1113,6 +1115,82 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-25 — Fix Slack SCIM deprovisioning (email lookup + manual retry + SCIM on edit)
+
+**Why** — Slack stores `userName` as a workspace handle (not email); deprovision searched `userName eq email` and never found users. Existing Slack SAML apps had no SCIM token, so no DEPROVISION audit rows appeared and members stayed active in Slack after directory suspend.
+
+**What changed:**
+
+- **`app-scim-provision.ts`** — lookup by Slack `email eq` filter first, then `userName`; Slack deprovision uses SCIM `DELETE /Users/{id}`; lifecycle sweep runs only on apps with active SCIM config (SAML-only apps are skipped silently); manual **Deprovision from apps** can opt in to SKIPPED audit rows when SCIM is missing; Slack lookup tries `email`, `emails.value`, `email co`, `userName` filters plus POST `/Users/.search` before SKIPPED.
+- **`POST /api/admin/users/:empId/deprovision-applications`** — manual retry for already-suspended users (e.g. after adding SCIM token).
+- **`PUT /api/admin/saml-apps/:id/scim-config`** — update SCIM token/base URL on existing SAML apps without re-creating.
+- **`web/js/views-admin.js`** — SAML **Edit** modal includes SCIM base URL + bearer token fields; list includes `scim_configured`.
+- **`web/js/views-stubs.js`** — user profile drawer **Deprovision from apps** button for suspended/departed users.
+- **`app-provision-log.ts`** — ensures `applications` mirror exists before SAML assertion rows (fixes empty Application column).
+- Pre-built Slack wizard default base URL → `https://api.slack.com/scim/v2`.
+
+**Ops:** Applications → SAML → Edit Slack → paste SCIM token → Universal Directory → user profile → **Deprovision from apps** → verify DEPROVISION row with `DELETE https://api.slack.com/scim/v2/Users/…` in Audit → App provisioning log.
+
+### (pending) — 2026-08-25 — AD sync: fix zero-progress reclaim killing long LDAP imports
+
+**Why** — After a successful 18k-user sync, incremental runs showed **FAILED** with `Reclaimed: zero-progress timeout` every ~15 minutes (0 processed). AD sync never wrote live progress during the long LDAP paged search, so the reclaim job treated active runs as stuck and killed them before import started.
+
+**What changed:**
+
+- **`src/services/ad-sync.ts`** — live progress heartbeats (`starting` → `connecting` → `listing` → `inbound` → `outbound`) via `updateConnectorRunProgress`, including per-page LDAP updates during 18k user fetch; **inbound cache** preloads employees + AD links (avoids 2–4 DB queries per user); **skips unchanged rows** on incremental sync; **skips repeat deprovision** for already-suspended users.
+- **`src/services/user-lifecycle.ts`** — `applyDirectorySourceDisabled` no-op when user is already suspended (avoids re-running SCIM deprovision every sync).
+- **`src/adapters/ad-adapter.ts`** — optional `onPage` callback during paged LDAP search.
+- **`src/services/connector-run-lifecycle.ts`** — zero-progress reclaim skips runs with a recent `progressAtMs` heartbeat; timeout raised to 30 minutes.
+
+### (pending) — 2026-08-25 — AD sync: fix ECONNRESET false failures after successful inbound import
+
+**Why** — Incremental AD sync imported ~18k users successfully but connector runs showed **FAILED** with `read ECONNRESET` because the DC dropped the idle LDAP session during group sync or unbind.
+
+**What changed:**
+
+- **`src/adapters/ad-adapter.ts`** — longer LDAP op timeout (120s), `refreshConnection()`, retry paged/search on `ECONNRESET`, non-fatal disconnect when socket already closed.
+- **`src/services/group-sync.ts`** — reuse inbound LDAP session (no second bind), `connectAdAdapterWithFallback`, group sync errors are non-fatal.
+- **`src/services/ad-sync.ts`** — refresh LDAP before group sync; disconnect errors no longer fail the run; PARTIAL when non-fatal group-sync warnings exist.
+
+### 8277fda — 2026-08-25 — Pre-built Slack connector: SAML SSO + SCIM provisioning
+
+**Why** — Slack Enterprise Grid uses SAML for SSO and SCIM for user lifecycle; the pre-built integration catalog should register both in one wizard.
+
+**What changed:**
+
+- **`web/js/views-stubs.js`** — Slack catalog entry is **SAML + SCIM** (was OIDC). Five-step wizard: Overview → IdP → SP (ACS from Slack admin) → SCIM (`https://api.slack.com/scim/v1` + bearer token) → Activate. Catalog card shows **SCIM** badge.
+- **`POST /api/admin/saml-apps`** — optional `provisioning: true` and `scimConfig` (`baseUrl`, `bearerToken`, `deprovisionMode`) upsert `app_protocol_configs` protocol `SCIM` and set `applications.provisioning = 1`.
+- **`src/services/app-protocol-config.ts`** — shared upsert for SAML mirror + SCIM config; bearer token sealed via `secret-box`.
+
+### 8277fda — 2026-08-25 — Directory disable revokes SAML application access
+
+**Why** — Disabling a user in Universal Directory / AD / Google must deactivate them in SAML apps (e.g. Slack), not only block new SSO assertions.
+
+**What changed:**
+
+- **`revokeAllUserAppAccess()`** in **`app-access-policy.ts`** — revokes all active USER app assignments and logs deprovision (SAML ACS / SCIM) per app.
+- **`user-lifecycle.ts`** — directory disable, suspend, terminate, and deprovision call app access revoke.
+- **`employee-state-machine.ts`** — FSM transitions to `SUSPENDED_*`, `DEPARTED`, `DEPROVISIONED` also revoke app assignments.
+- **`attendance-iga/actions.ts`** — `REMOVE_ALL_APPS` uses the shared revoke helper.
+
+**Note:** When SCIM is configured (e.g. Slack pre-built connector), deprovision calls Slack SCIM PATCH `active: false`. SAML-only apps still rely on IdP assignment revoke and SSO block. Re-enable in directory does **not** auto-restore app assignments.
+
+### (pending) — 2026-08-25 — Audit: application user provisioning / deprovisioning log
+
+**Why** — Admins need a dedicated audit view (like Slack SCIM integration) showing which HTTP endpoint was called when a user is provisioned into or deprovisioned from a SaaS application.
+
+**What changed:**
+
+- **`migrations/064_app_provision_log.sql`** — `app_provision_log` table (action, endpoint, HTTP method, status, request/response JSON).
+- **`src/services/app-provision-log.ts`**, **`src/services/app-scim-provision.ts`** — write log rows; SCIM POST/PATCH/DELETE when `applications.provisioning = 1` and `app_protocol_configs` has SCIM `baseUrl` + bearer token.
+- **`src/services/app-access-policy.ts`** — trigger provision on USER grant, deprovision on revoke.
+- **`src/api/admin-audit.ts`** — `GET /api/admin/audit/app-provisioning` (filters + CSV export).
+- **`web/js/views-admin.js`** — Audit & SSO Reports → **User provisioning log** tab.
+
+**SCIM config** (optional, per app): `{ "baseUrl": "…", "bearerToken": "…" }` in `app_protocol_configs` protocol `SCIM` when outbound SCIM is required.
+
+**SAML apps (Slack, etc.):** no SCIM needed — grant/revoke logs IdP assignment + SP `acs_url`; each SSO issues a `SAML_ASSERTION` row when the assertion is delivered to the ACS.
 
 ### (pending) — 2026-08-24 — AD LDAP: fix port 389 / StartTLS connectivity
 

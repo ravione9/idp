@@ -24,6 +24,7 @@ Object.assign(api, {
   parseSamlMetadata:(metadata) => f('/api/admin/saml-apps/parse-metadata', { method: 'POST', body: JSON.stringify({ metadata }) }),
   deactivateSamlApp:(id) => f(`/api/admin/saml-apps/${id}`, { method: 'DELETE' }),
   updateSamlApp:    (id, data) => f(`/api/admin/saml-apps/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  updateSamlScimConfig: (id, data) => f(`/api/admin/saml-apps/${id}/scim-config`, { method: 'PUT', body: JSON.stringify(data) }),
   activateSamlApp:  (id) => f(`/api/admin/saml-apps/${id}/activate`, { method: 'PUT' }),
   enableSamlRequestAccess: (id) => f(`/api/admin/saml-apps/${id}/enable-request-access`, { method: 'POST' }),
   enableAllSamlRequestAccess: () => f('/api/admin/saml-apps/enable-request-access-all', { method: 'POST' }),
@@ -34,6 +35,7 @@ Object.assign(api, {
   revokeAuditSession: (id) => f(`/api/admin/audit/sessions/${encodeURIComponent(id)}/revoke`, { method: 'POST' }),
   auditIntegrity:   (limit = 1000) => f(`/api/admin/audit/integrity?limit=${limit}`),
   auditSummary:     (params = {}) => f(`/api/admin/audit/summary?${new URLSearchParams(params)}`),
+  appProvisionAudit:(params = {}) => f(`/api/admin/audit/app-provisioning?${new URLSearchParams(params)}`),
   auditExportUrl:   (kind, params = {}) => {
     const q = new URLSearchParams({ ...params, export: 'csv' });
     return `/api/admin/audit/${kind}?${q}`;
@@ -338,6 +340,7 @@ Object.assign(api, {
   suspendUser:   (empId, reason) => f(`/api/admin/users/${empId}/suspend`, { method: 'POST', body: JSON.stringify({ reason }) }),
   unsuspendUser: (empId, reason) => f(`/api/admin/users/${empId}/unsuspend`, { method: 'POST', body: JSON.stringify({ reason }) }),
   terminateUser: (empId, reason) => f(`/api/admin/users/${empId}/terminate`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  deprovisionUserApps: (empId) => f(`/api/admin/users/${empId}/deprovision-applications`, { method: 'POST', body: '{}' }),
   userLifecycle: (empId) => f(`/api/admin/users/${empId}/lifecycle`),
 
   // Unified directory — hybrid identity,
