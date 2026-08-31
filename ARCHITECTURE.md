@@ -596,6 +596,9 @@ To add a new migration:
 | `GET` | `/api/admin/bulk-users/template` | CSV template for bulk import |
 | `POST` | `/api/admin/bulk-users/validate` | Dry-run validation + preview |
 | `POST` | `/api/admin/bulk-users/import` | Alias of `/batch` with import report CSV |
+| `GET` | `/api/admin/bulk-passwords/template` | CSV template for bulk password update (`email`, `new_password`) |
+| `POST` | `/api/admin/bulk-passwords/validate` | Dry-run validation for bulk password CSV rows |
+| `POST` | `/api/admin/bulk-passwords/batch` | Apply password updates with local + AD/Google writeback (max 500 rows per request) |
 | `GET` | `/api/admin/users/export` | CSV export of directory users |
 | `POST` | `/api/admin/users/bulk-action` | Bulk enable/disable/delete/reset/assign/welcome |
 | `GET/PUT` | `/api/admin/directory/google/attr-maps` | Google → local attribute mapping |
@@ -1115,6 +1118,21 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-31 — Bulk password update from CSV
+
+**Why** — Admins need to set specific passwords for many users at once (onboarding, store rollouts) with the same AD/Google writeback as single-user reset, not the random-password bulk selection bar.
+
+**What changed:**
+
+- **`src/services/admin-password-reset.ts`** — shared `resetEmployeePassword()` for local account + AD/Google writeback (policy + history checks).
+- **`src/services/bulk-password-update.ts`** — validate/batch CSV rows; resolve user by email or emp_id.
+- **`src/api/admin-bulk-passwords.ts`** — `GET /template`, `POST /validate`, `POST /batch` (max 500 rows/chunk, 10k total).
+- **`web/js/views-stubs.js`** — Universal Directory **Bulk password update** button + modal (template, validate, chunked apply, error report).
+- **`web/js/api-admin.js`** — `bulkPasswordsValidate`, `bulkPasswordsBatch`, `bulkPasswordsTemplateUrl`.
+- **`POST /api/admin/users/:empId/reset-password`** — refactored to use shared reset service.
+
+**CSV columns:** `email`, `new_password` (aliases: `emp_id`, `employee_id`, `password`).
 
 ### (pending) — 2026-08-25 — Fix Slack SCIM deprovisioning (email lookup + manual retry + SCIM on edit)
 
