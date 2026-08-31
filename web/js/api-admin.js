@@ -394,6 +394,12 @@ Object.assign(api, {
     f('/api/admin/bulk-users/validate', { method: 'POST', body: JSON.stringify({ rows }) }),
   bulkUsersTemplateUrl: (format = 'csv') => `/api/admin/bulk-users/template?format=${format}`,
 
+  bulkPasswordsBatch: (rows) =>
+    f('/api/admin/bulk-passwords/batch', { method: 'POST', body: JSON.stringify({ rows }) }),
+  bulkPasswordsValidate: (rows) =>
+    f('/api/admin/bulk-passwords/validate', { method: 'POST', body: JSON.stringify({ rows }) }),
+  bulkPasswordsTemplateUrl: () => '/api/admin/bulk-passwords/template',
+
   // Google directory attribute map + sync,
   getGoogleAttrMaps: () => f('/api/admin/directory/google/attr-maps'),
   saveGoogleAttrMaps: (maps) => f('/api/admin/directory/google/attr-maps', { method: 'PUT', body: JSON.stringify({ maps }) }),

@@ -5466,6 +5466,7 @@ function initUsersTab(panel, me = null) {
         <div class="page-toolbar-actions">
           <button type="button" class="btn btn-secondary btn-sm btn-with-icon" id="ud-refresh-btn">${svgIcon('refresh')}<span>Refresh</span></button>
           <button type="button" class="btn btn-secondary btn-sm" id="ud-bulk-upload-btn">Bulk upload</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="ud-bulk-password-btn">Bulk password update</button>
           <button type="button" class="btn btn-primary btn-sm btn-with-icon" id="ud-create-btn">${svgIcon('plus')}<span>Local user</span></button>
         </div>
       </div>
@@ -6823,6 +6824,177 @@ function initUsersTab(panel, me = null) {
     bd.querySelector('#bu-cancel').addEventListener('click', () => bd.remove());
   }
 
+  function openBulkPasswordModal() {
+    const bd = openModal(`<div class="modal" style="width:760px;max-width:96vw">
+      <div class="modal-header"><h2>Bulk Password Update</h2></div>
+      <div class="modal-body">
+        <div class="alert alert-warning" style="font-size:0.85rem;margin-bottom:1rem">
+          Passwords are applied to local login and written back to linked AD / Google accounts.
+          Each row must include <strong>email</strong> (or emp_id) and <strong>new_password</strong>.
+        </div>
+        <ol class="muted" style="font-size:0.85rem;margin:0 0 1rem;padding-left:1.2rem;line-height:1.6">
+          <li>Download the CSV template</li>
+          <li>Add one row per user with their new password</li>
+          <li>Upload, validate, preview, then apply</li>
+        </ol>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem">
+          <a class="btn btn-secondary btn-sm" href="${api.bulkPasswordsTemplateUrl()}" target="_blank">Download CSV Template</a>
+          <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
+            Choose file <input type="file" id="bp-file" accept=".csv,text/csv" hidden>
+          </label>
+        </div>
+        <div id="bp-progress" hidden>
+          <div class="muted" style="font-size:0.8rem;margin-bottom:0.35rem" id="bp-progress-label">Working…</div>
+          <div style="height:8px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden">
+            <div id="bp-progress-bar" style="height:100%;width:0%;background:var(--accent,#4c8bf5);transition:width 0.2s"></div>
+          </div>
+        </div>
+        <div id="bp-preview" style="margin-top:1rem"></div>
+        <div id="bp-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="bp-cancel">Cancel</button>
+        <button class="btn btn-secondary" id="bp-validate" disabled>Validate</button>
+        <button class="btn btn-primary" id="bp-apply" disabled>Update Passwords</button>
+      </div>
+    </div>`);
+
+    let parsedRows = [];
+    const setProgress = (pct, label) => {
+      bd.querySelector('#bp-progress').hidden = false;
+      bd.querySelector('#bp-progress-bar').style.width = pct + '%';
+      bd.querySelector('#bp-progress-label').textContent = label || '';
+    };
+
+    function parsePasswordCsv(text) {
+      const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length < 2) return [];
+      const headers = lines[0].split(',').map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
+      const idx = (names) => {
+        for (const n of names) {
+          const i = headers.indexOf(n);
+          if (i >= 0) return i;
+        }
+        return -1;
+      };
+      const col = {
+        email: idx(['email', 'email_corp', 'corporate_email']),
+        empId: idx(['emp_id', 'empid', 'employee_id', 'employeeid']),
+        newPassword: idx(['new_password', 'password', 'newpassword']),
+      };
+      const cell = (parts, i) => (i >= 0 ? (parts[i] || '').trim().replace(/^"|"$/g, '') : '');
+      const out = [];
+      for (let li = 1; li < lines.length; li++) {
+        const parts = lines[li].match(/("([^"]|"")*"|[^,]*)/g)?.map((p) => p.replace(/^"|"$/g, '').replace(/""/g, '"')) || lines[li].split(',');
+        const email = cell(parts, col.email);
+        const empId = cell(parts, col.empId);
+        const newPassword = cell(parts, col.newPassword);
+        if (!email && !empId) continue;
+        out.push({
+          line: li + 1,
+          email: email || undefined,
+          empId: empId || undefined,
+          employeeId: empId || undefined,
+          newPassword,
+        });
+      }
+      return out;
+    }
+
+    bd.querySelector('#bp-file').addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      bd.querySelector('#bp-err').innerHTML = '';
+      setProgress(20, 'Reading file…');
+      try {
+        parsedRows = parsePasswordCsv(await file.text());
+        setProgress(100, `Loaded ${parsedRows.length} rows`);
+        bd.querySelector('#bp-validate').disabled = parsedRows.length === 0;
+        bd.querySelector('#bp-apply').disabled = true;
+        bd.querySelector('#bp-preview').innerHTML = `<p class="muted" style="font-size:0.85rem">${parsedRows.length} rows ready. Click Validate.</p>`;
+      } catch (err) {
+        bd.querySelector('#bp-err').innerHTML = errHtml(err.message);
+      }
+    });
+
+    bd.querySelector('#bp-validate').addEventListener('click', async () => {
+      try {
+        setProgress(40, 'Validating…');
+        const r = await api.bulkPasswordsValidate(parsedRows);
+        setProgress(100, `Valid ${r.valid} · Invalid ${r.invalid}`);
+        const warnHtml = (r.warnings || []).length
+          ? `<div class="alert alert-warning" style="font-size:0.8rem;margin-bottom:0.75rem">${esc((r.warnings || []).join(' · '))}</div>`
+          : '';
+        const previewRows = (r.preview || []).slice(0, 50).map((p) => `
+          <tr>
+            <td>${esc(String(p.line || ''))}</td>
+            <td>${esc(p.email || '')}</td>
+            <td>${esc(p.empId || '')}</td>
+            <td class="muted" style="font-size:0.75rem">${esc((p.linkedSystems || []).join(', '))}</td>
+            <td>${p.valid ? '<span class="badge badge-success">OK</span>' : '<span class="badge badge-danger">Error</span>'}</td>
+            <td class="muted" style="font-size:0.75rem">${esc((p.errors || []).join('; '))}</td>
+          </tr>`).join('');
+        bd.querySelector('#bp-preview').innerHTML = `
+          ${warnHtml}
+          <div class="kpi-strip" style="margin-bottom:0.75rem">
+            <div class="kpi"><div class="kpi-val">${r.valid + r.invalid}</div><div class="kpi-label">Total</div></div>
+            <div class="kpi"><div class="kpi-val">${r.valid}</div><div class="kpi-label">Valid</div></div>
+            <div class="kpi"><div class="kpi-val">${r.invalid}</div><div class="kpi-label">Invalid</div></div>
+          </div>
+          <div class="table-wrap"><table class="dense-table">
+            <thead><tr><th>Line</th><th>Email</th><th>Emp ID</th><th>Linked</th><th>Status</th><th>Errors</th></tr></thead>
+            <tbody>${previewRows || '<tr><td colspan="6">No rows</td></tr>'}</tbody>
+          </table></div>`;
+        bd.querySelector('#bp-apply').disabled = r.valid === 0;
+      } catch (err) {
+        bd.querySelector('#bp-err').innerHTML = errHtml(err.message);
+      }
+    });
+
+    bd.querySelector('#bp-apply').addEventListener('click', async () => {
+      if (!confirm(`Update passwords for ${parsedRows.length} users? This writes to local login and linked AD/Google accounts.`)) return;
+      try {
+        setProgress(10, 'Updating passwords…');
+        const chunk = 200;
+        let updated = 0, failed = 0, skipped = 0;
+        let reportCsv = 'line,email,emp_id,action,error,code\n';
+        for (let i = 0; i < parsedRows.length; i += chunk) {
+          const part = parsedRows.slice(i, i + chunk);
+          const r = await api.bulkPasswordsBatch(part);
+          updated += r.updated ?? 0;
+          failed += r.failed ?? 0;
+          skipped += r.skipped ?? 0;
+          if (r.reportCsv) {
+            const lines = r.reportCsv.split('\n').slice(1).filter(Boolean);
+            reportCsv += lines.join('\n') + (lines.length ? '\n' : '');
+          }
+          setProgress(Math.round(((i + part.length) / parsedRows.length) * 100), `Updated ${i + part.length}/${parsedRows.length}`);
+        }
+        bd.querySelector('#bp-preview').innerHTML = `
+          <div class="alert alert-success">Password update complete</div>
+          <div class="kpi-strip">
+            <div class="kpi"><div class="kpi-val">${parsedRows.length}</div><div class="kpi-label">Total</div></div>
+            <div class="kpi"><div class="kpi-val">${updated}</div><div class="kpi-label">Updated</div></div>
+            <div class="kpi"><div class="kpi-val">${skipped}</div><div class="kpi-label">Skipped</div></div>
+            <div class="kpi"><div class="kpi-val">${failed}</div><div class="kpi-label">Failed</div></div>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="bp-dl-report" style="margin-top:0.75rem">Download error report</button>`;
+        bd.querySelector('#bp-dl-report')?.addEventListener('click', () => {
+          const blob = new Blob([reportCsv], { type: 'text/csv' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'bulk-password-update-report.csv';
+          a.click();
+        });
+        toast(`Bulk password update: ${updated} updated, ${failed} failed`);
+      } catch (err) {
+        bd.querySelector('#bp-err').innerHTML = errHtml(err.message);
+      }
+    });
+
+    bd.querySelector('#bp-cancel').addEventListener('click', () => bd.remove());
+  }
+
   // ── Wire up search / filters ─────────────────────────────────────────────────
   function getFilters() {
     return {
@@ -6869,6 +7041,7 @@ function initUsersTab(panel, me = null) {
 
   panel.querySelector('#ud-create-btn').addEventListener('click', openCreateUserModal);
   panel.querySelector('#ud-bulk-upload-btn')?.addEventListener('click', openBulkUploadModal);
+  panel.querySelector('#ud-bulk-password-btn')?.addEventListener('click', openBulkPasswordModal);
 
   panel.querySelector('#ud-bulk-clear')?.addEventListener('click', () => {
     selected.clear();
