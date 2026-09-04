@@ -4297,7 +4297,7 @@ const FIELD_LABELS = {
   serviceAccountKey:  'Service Account JSON Key',
   adminEmail:         'Admin Email (Workspace super admin — required for domain-wide delegation)',
   syncOrgUnits:       'Sync OUs (one per line — blank = all users under Base DN)',
-  syncGroups:         'Sync Groups (Google: group email, blank/* = all Workspace groups up to 200; AD: CN/sAMAccountName/DN, blank/* = all security groups)',
+  syncGroups:         'Sync Groups (Google: group email, blank/* = all Workspace groups; AD: CN/sAMAccountName/DN, blank/* = all security groups)',
   idpUrl:             'IdP URL (HTTPS, port 443 — e.g. https://idp.lenskart.com)',
   syncGroupMemberships: 'Mirror group membership into IdP Groups (on by default)',
   syncUsers:          'Sync Users (one email per line — always imported even if outside OU/group scope)',
@@ -4720,7 +4720,7 @@ function initSourcesTab(panel) {
           ? 'sales-team@company.com&#10;it-admins@company.com'
           : 'IT-Admins&#10;VPN-Users&#10;*';
         const hint = (connectorType === 'AD' || isAdAgent)
-          ? '<p class="muted" style="font-size:0.75rem;margin-top:0.35rem">One group per line. Members appear after users are linked in AD sync. Use <code>*</code> to mirror all security groups (max 200).</p>'
+          ? '<p class="muted" style="font-size:0.75rem;margin-top:0.35rem">One group per line. Members appear after users are linked in AD sync. Use <code>*</code> to mirror all security groups.</p>'
           : '';
         return `<div class="form-group" style="grid-column:1/-1">
           <label class="form-label">${esc(label)}</label>
