@@ -3,6 +3,7 @@
  */
 import bcrypt from 'bcryptjs';
 import { query, queryOne } from '../db/connection.js';
+import { redirectUrisMatch } from './redirect-uris.js';
 
 export interface OidcClient {
   id: string;
@@ -97,7 +98,7 @@ export async function getOidcClientByClientId(clientId: string): Promise<OidcCli
 }
 
 export function isRedirectUriAllowed(client: OidcClient, redirectUri: string): boolean {
-  return client.redirectUris.includes(redirectUri);
+  return client.redirectUris.some((r) => redirectUrisMatch(r, redirectUri));
 }
 
 export function intersectScopes(requested: string[], allowed: string[]): string[] {

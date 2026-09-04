@@ -61,7 +61,7 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
       if (!ok) return null;
       const cidrs = await getApplicationAllowedCidrs(app.slug);
       return {
-        id: app.id,
+        id: app.appId,
         name: app.name,
         slug: app.slug,
         iconUrl: app.iconUrl,

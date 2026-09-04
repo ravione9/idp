@@ -6,9 +6,13 @@ import { query, queryOne, execute } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { resolveOidcCatalogSlug, GENERIC_CATALOG_SLUGS } from '../utils/app-slug.js';
 import { ensureOidcProtocolLaunchConfig } from './portal-launch.js';
+import { expandOidcRedirectUris } from './redirect-uris.js';
 
 export interface OidcPortalApp {
+  /** `oidc_clients.id` */
   id: string;
+  /** `applications.id` — used for Access Policy grants */
+  appId: string;
   clientId: string;
   slug: string;
   name: string;
@@ -229,7 +233,7 @@ export async function syncOidcAppsToCatalog(): Promise<number> {
         [c.id],
       );
       if (clientRow) {
-        const uris = parseJsonArray(clientRow.redirect_uris);
+        const uris = await repairOidcClientRedirectUris(c.id, parseJsonArray(clientRow.redirect_uris));
         await ensureOidcProtocolLaunchConfig({
           appId: linkedAppId,
           clientId: clientRow.client_id,
@@ -253,6 +257,7 @@ export async function getActiveOidcPortalApps(): Promise<OidcPortalApp[]> {
   const nameExpr = colSet.has('name') ? 'c.name' : 'c.client_id AS name';
   const rows = await query<{
     id: string;
+    app_id: string;
     client_id: string;
     name: string;
     redirect_uris: unknown;
@@ -261,7 +266,7 @@ export async function getActiveOidcPortalApps(): Promise<OidcPortalApp[]> {
     app_name: string;
     icon_url: string | null;
   }>(
-    `SELECT c.id, c.client_id, ${nameExpr},
+    `SELECT c.id, c.app_id, c.client_id, ${nameExpr},
             c.redirect_uris, c.scopes,
             a.slug, a.name AS app_name, a.icon_url
        FROM oidc_clients c
@@ -273,6 +278,7 @@ export async function getActiveOidcPortalApps(): Promise<OidcPortalApp[]> {
 
   return rows.map((row) => ({
     id: row.id,
+    appId: row.app_id,
     clientId: row.client_id,
     slug: row.slug,
     name: row.app_name || row.name,
@@ -290,4 +296,47 @@ export async function getOidcPortalAppBySlug(slug: string): Promise<OidcPortalAp
 export async function getOidcPortalAppByClientId(clientId: string): Promise<OidcPortalApp | null> {
   const apps = await getActiveOidcPortalApps();
   return apps.find((a) => a.clientId === clientId) ?? null;
+}
+
+/** Linked catalog row for OAuth authorize access checks (no full portal sync). */
+export async function getOidcLinkedApplication(clientId: string): Promise<{
+  id: string;
+  slug: string;
+  name: string;
+} | null> {
+  const colSet = await oidcColumnSet();
+  if (!colSet.has('app_id')) return null;
+  const nameExpr = colSet.has('name') ? 'c.name' : 'c.client_id AS name';
+  const row = await queryOne<{
+    app_id: string;
+    slug: string;
+    app_name: string;
+    client_name: string;
+  }>(
+    `SELECT a.id AS app_id, a.slug, a.name AS app_name, ${nameExpr} AS client_name
+       FROM oidc_clients c
+       INNER JOIN applications a ON a.id = c.app_id
+      WHERE c.client_id = ? AND c.active = 1 AND a.active = 1
+      LIMIT 1`,
+    [clientId],
+  );
+  if (!row) return null;
+  return {
+    id: row.app_id,
+    slug: row.slug,
+    name: row.app_name || row.client_name,
+  };
+}
+
+async function repairOidcClientRedirectUris(oidcClientId: string, uris: string[]): Promise<string[]> {
+  const expanded = expandOidcRedirectUris(uris);
+  const same = expanded.length === uris.length
+    && expanded.every((u, i) => u === uris[i]);
+  if (same) return uris;
+  await execute(
+    `UPDATE oidc_clients SET redirect_uris = ? WHERE id = ?`,
+    [JSON.stringify(expanded), oidcClientId],
+  );
+  logger.info({ oidcClientId, added: expanded.length - uris.length }, 'Expanded OIDC redirect URIs for Grafana/PMM');
+  return expanded;
 }
