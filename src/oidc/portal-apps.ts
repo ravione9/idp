@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query, queryOne, execute } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { resolveOidcCatalogSlug, GENERIC_CATALOG_SLUGS } from '../utils/app-slug.js';
+import { ensureOidcProtocolLaunchConfig } from './portal-launch.js';
 
 export interface OidcPortalApp {
   id: string;
@@ -216,6 +217,25 @@ export async function syncOidcAppsToCatalog(): Promise<number> {
       if (beforeAppId !== (after?.app_id ?? null)) touched += 1;
     } else if (appId) {
       touched += 1;
+    }
+
+    const linkedAppId = appId ?? beforeAppId;
+    if (linkedAppId) {
+      const clientRow = await queryOne<{
+        client_id: string;
+        redirect_uris: unknown;
+      }>(
+        `SELECT client_id, redirect_uris FROM oidc_clients WHERE id = ?`,
+        [c.id],
+      );
+      if (clientRow) {
+        const uris = parseJsonArray(clientRow.redirect_uris);
+        await ensureOidcProtocolLaunchConfig({
+          appId: linkedAppId,
+          clientId: clientRow.client_id,
+          redirectUris: uris,
+        }).catch(() => undefined);
+      }
     }
   }
   if (touched > 0) {

@@ -387,7 +387,7 @@ This IdP is also an OpenID Provider. Relying parties register in `oidc_clients` 
 |---|---|
 | `GET /.well-known/openid-configuration` | Discovery document |
 | `GET /.well-known/jwks.json` | Public JWKS (RS256) |
-| `GET /oauth/launch/:slug` | IdP-initiated OIDC launch from portal tile → `/oauth/authorize` |
+| `GET /oauth/launch/:slug` | Portal tile → SP OAuth login URL (e.g. Grafana `/login/generic_oauth`), then SP-initiated `/oauth/authorize` with PKCE |
 | `GET /oauth/authorize` | Authorization Code + **S256 PKCE**; unauthenticated users → login → `/oauth/resume/:id` |
 | `GET /oauth/resume/:pendingId` | Resume authorize after portal sign-in |
 | `POST /oauth/token` | `authorization_code` and `refresh_token` grants; issues JWT access + ID tokens |

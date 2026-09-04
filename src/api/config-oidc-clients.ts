@@ -13,6 +13,7 @@ import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { resolveOrCreateOidcCatalogApp, ensureOidcAppMirrored, syncOidcAppsToCatalog } from '../oidc/portal-apps.js';
+import { ensureOidcProtocolLaunchConfig } from '../oidc/portal-launch.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -45,6 +46,7 @@ const createSchema = z.object({
   require_pkce: z.boolean().default(true),
   catalog_slug: z.string().max(80).optional(),
   category: z.string().max(50).optional(),
+  portal_launch_url: z.string().url().optional(),
 });
 
 const updateSchema = z.object({
@@ -198,6 +200,14 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       [id],
     );
     appId = mirrored?.app_id ?? null;
+  }
+  if (appId) {
+    await ensureOidcProtocolLaunchConfig({
+      appId,
+      clientId,
+      redirectUris: d.redirect_uris,
+      portalLaunchUrl: d.portal_launch_url ?? null,
+    }).catch((err) => logger.warn({ err, appId }, 'OIDC portal launch config save failed'));
   }
 
   res.status(201).json({

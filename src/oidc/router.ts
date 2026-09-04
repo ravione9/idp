@@ -37,6 +37,7 @@ import {
 import { loadUserClaims } from './claims.js';
 import { getOidcJwks } from './keys.js';
 import { getOidcPortalAppByClientId, getOidcPortalAppBySlug } from './portal-apps.js';
+import { resolveOidcSpLaunchUrl } from './portal-launch.js';
 import {
   consumeAuthorizationCode,
   consumeRefreshToken,
@@ -307,16 +308,18 @@ router.get('/oauth/launch/:slug', asyncHandler(async (req: Request, res: Respons
     return;
   }
 
-  const redirectUri = app.redirectUris[0]!;
-  const scopes = (client.scopes.length ? client.scopes : ['openid', 'email', 'profile']).join(' ');
-  const url = new URL(`${issuerFrom(req)}/oauth/authorize`);
-  url.searchParams.set('client_id', client.clientId);
-  url.searchParams.set('redirect_uri', redirectUri);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', scopes);
-  url.searchParams.set('state', uuidv4());
+  const spLaunchUrl = await resolveOidcSpLaunchUrl(app.slug, app.redirectUris);
+  if (!spLaunchUrl) {
+    sendLaunchDeniedPage(res, {
+      title: `${app.name} — cannot launch`,
+      message: 'No portal launch URL is configured for this OIDC application.',
+      detail: 'Set the application redirect URI (e.g. Grafana: https://your-host/login/generic_oauth) or register portal_launch_url on the OIDC client.',
+    });
+    return;
+  }
 
-  res.redirect(url.toString());
+  logger.info({ empId: session.empId, slug: app.slug, spLaunchUrl }, 'OIDC portal launch → SP-initiated OAuth');
+  res.redirect(spLaunchUrl);
 }));
 
 router.get('/oauth/authorize', asyncHandler(async (req: Request, res: Response) => {
