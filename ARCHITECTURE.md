@@ -920,7 +920,7 @@ Target topology is multi-replica API behind a load balancer with shared MySQL + 
 | Outbox drain | Existing Redis leader election in `src/services/outbox-worker.ts` |
 | SAML/OIDC signing keys | Inject `SAML_IDP_PRIVATE_KEY_PEM` + `SAML_IDP_CERT_PEM` from Vault (Agent Injector → process env on Multiverse; or External Secrets elsewhere); `ensureSamlKeys()` short-circuits; `ensureOidcKeys()` reuses SAML key when SAML is enabled |
 
-**Lenskart Multiverse (prod EKS):** Helm values overlay and Vault key template live in this repo at `deploy/multiverse/` for copy into `multiverse-application-helm` — `values-lk-multiverse-platform-eks.yaml` (ns `it-idp`, host `idp.lenskart.com`, RDS + ElastiCache + SQS FIFO) and `vault-multiverse-config-idp.template.env` (KV v1 `multiverse/config/idp`, role `idp`, SA `idp-sa`). EC2/docker-compose config is unchanged.
+**Lenskart Multiverse (prod EKS):** Helm values overlay and Vault key template live in this repo at `deploy/multiverse/` for copy into `multiverse-application-helm` — `values-lk-multiverse-platform-eks.yaml` (ns `it-idp`, host `idp.lenskart.com`, RDS + ElastiCache + SQS FIFO, pod `dnsPolicy: None` + `dnsConfig.nameservers: [192.168.32.3]` / `searches: [lenskart.in]` for on-prem DNS) and `vault-multiverse-config-idp.template.env` (KV v1 `multiverse/config/idp`, role `idp`, SA `idp-sa`). EC2/docker-compose config is unchanged.
 
 **Production SAML key generation (K8s / Vault):** do **not** rely on in-pod `ensureSamlKeys()` auto-generation (3-year validity, per-replica risk). Generate once offline with **15-year** validity and load into Vault:
 
@@ -1123,6 +1123,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-09-04 — Pod DNS config for Multiverse EKS (lenskart.in resolver)
+
+**Why** — IDP pods on `lk-multiverse-platform-eks` must resolve on-prem / corp hostnames via the internal nameserver `192.168.32.3`.
+
+**What changed:**
+
+- **`deploy/multiverse/values-lk-multiverse-platform-eks.yaml`** — `dnsPolicy: None`, `dnsConfig` with nameserver `192.168.32.3`, search domain `lenskart.in`, `ndots: 2`.
+- **`charts/lilg/`** — optional `dnsPolicy` / `dnsConfig` values wired into API, worker, and migrate Job pod specs.
 
 ### (pending) — 2026-09-04 — OIDC authorize redirect URI + access policy fixes (Grafana / PMM)
 
