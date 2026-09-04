@@ -1537,6 +1537,16 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
         (runOutbound ? ` | Outbound: see employee reconcile below` : '');
       logger.info({ connectorId, runId, ...inbound }, 'AD sync inbound complete');
 
+      try {
+        const { reconcileAllDynamicGroups } = await import('./dynamic-groups.js');
+        const dg = await reconcileAllDynamicGroups(null);
+        if (dg.added || dg.removed) {
+          logger.info({ connectorId, runId, ...dg }, 'Dynamic groups reconciled after AD inbound sync');
+        }
+      } catch (err) {
+        logger.warn({ connectorId, runId, err }, 'Dynamic group reconcile after AD sync failed');
+      }
+
       if (inbound.found === 0) {
         errors.push(
           `Inbound: 0 users returned from AD under ${dirConfig.searchBaseDn}. ` +

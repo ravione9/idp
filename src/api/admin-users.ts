@@ -17,6 +17,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { resetEmployeePassword } from '../services/admin-password-reset.js';
+import { reconcileDynamicGroupsForEmployee } from '../services/dynamic-groups.js';
 import { backfillAdIdentityLinkIfMissing } from '../services/ad-sync.js';
 import { assignPortalRole, revokePortalRole } from '../services/local-admin.js';
 import { asyncHandler } from '../utils/async-handler.js';
@@ -1053,6 +1054,12 @@ router.put('/:empId/profile', asyncHandler(async (req: Request, res: Response) =
   sets.push(`sync_status = 'MANUAL'`, 'updated_at = UTC_TIMESTAMP()');
   await execute(`UPDATE employees SET ${sets.join(', ')} WHERE emp_id = ?`, [...params, empId]);
 
+  if (changes.dept_id) {
+    await reconcileDynamicGroupsForEmployee(empId, String(adminId)).catch((err) =>
+      logger.warn({ err, empId }, 'Dynamic group reconcile after profile dept change failed'),
+    );
+  }
+
   await writeDirectoryUserAudit({
     empId,
     action: 'MANUAL_PROFILE_UPDATE',
@@ -1334,6 +1341,10 @@ router.post('/local', async (req: Request, res: Response): Promise<void> => {
       );
     }
   }
+
+  await reconcileDynamicGroupsForEmployee(empId, adminId).catch((err) =>
+    logger.warn({ err, empId }, 'Dynamic group reconcile after local user create failed'),
+  );
 
   await writeDirectoryUserAudit({
     empId,

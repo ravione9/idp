@@ -11,6 +11,17 @@ import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne, execute } from '../db/connection.js';
 import { safeQuery } from '../db/safe-query.js';
 import { isGroupSyncSchemaReady } from '../services/group-sync.js';
+import {
+  assertNotDynamicGroup,
+  buildDynamicRule,
+  parseDynamicRule,
+  reconcileAllDynamicGroups,
+  reconcileDynamicGroup,
+  summarizeDynamicRule,
+  validateDynamicRule,
+  listDistinctDepartments,
+} from '../services/dynamic-groups.js';
+import { z } from 'zod';
 import logger from '../utils/logger.js';
 
 const router = Router();
@@ -18,7 +29,7 @@ router.use(requireAuth);
 router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requirePortalModule('identity_groups'));
 
 const LEGACY_GROUP_LIST_SQL = `
-  SELECT g.id, g.name, g.description, g.type, g.active, g.created_at,
+  SELECT g.id, g.name, g.description, g.type, g.rule_json, g.active, g.created_at,
          'LOCAL' AS source_system, NULL AS external_id, NULL AS connector_id,
          NULL AS last_synced_at, NULL AS connector_name,
     (SELECT COUNT(*) FROM group_members m
@@ -34,7 +45,7 @@ const GROUP_MEMBERS_SQL = `
   WHERE m.group_id = ?`;
 
 const GROUP_LIST_SQL = `
-  SELECT g.id, g.name, g.description, g.type, g.source_system, g.external_id,
+  SELECT g.id, g.name, g.description, g.type, g.rule_json, g.source_system, g.external_id,
          g.connector_id, g.last_synced_at, g.active, g.created_at,
          c.name AS connector_name,
     (SELECT COUNT(*) FROM group_members m
@@ -49,6 +60,11 @@ function normalizeGroupRows(rows: Record<string, unknown>[]): Record<string, unk
     const out: Record<string, unknown> = { ...row };
     if (typeof out['member_count'] === 'bigint') {
       out['member_count'] = Number(out['member_count']);
+    }
+    const rule = parseDynamicRule(out['rule_json']);
+    out['rule_summary'] = out['type'] === 'DYNAMIC' ? summarizeDynamicRule(rule) : null;
+    if (typeof out['rule_json'] === 'string') {
+      try { out['rule_json'] = JSON.parse(out['rule_json']); } catch { /* keep raw */ }
     }
     for (const key of ['created_at', 'updated_at', 'last_synced_at'] as const) {
       const v = out[key];
@@ -280,6 +296,56 @@ async function bulkMutateMembers(
   return { added, removed, skipped, failed, results };
 }
 
+const createGroupSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  type: z.enum(['STATIC', 'DYNAMIC']).default('STATIC'),
+  rule_json: z.unknown().optional(),
+  dept_ids: z.array(z.string().min(1).max(100)).optional(),
+});
+
+const updateGroupSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  description: z.string().max(500).optional(),
+  active: z.number().int().min(0).max(1).optional(),
+  type: z.enum(['STATIC', 'DYNAMIC']).optional(),
+  rule_json: z.unknown().optional(),
+  dept_ids: z.array(z.string().min(1).max(100)).optional(),
+});
+
+function resolveRuleFromBody(body: {
+  type?: string | undefined;
+  rule_json?: unknown;
+  dept_ids?: string[] | undefined;
+}): { rule_json: unknown | null; error: string | null } {
+  if (body.type !== 'DYNAMIC') {
+    return { rule_json: null, error: null };
+  }
+
+  let rule = parseDynamicRule(body.rule_json);
+  if (body.dept_ids?.length) {
+    rule = buildDynamicRule(body.dept_ids);
+  }
+
+  const ruleErr = validateDynamicRule(rule);
+  if (ruleErr) return { rule_json: null, error: ruleErr };
+
+  return { rule_json: rule, error: null };
+}
+
+// GET /departments — distinct department values for dynamic group rules
+router.get('/departments', asyncHandler(async (_req: Request, res: Response) => {
+  const departments = await listDistinctDepartments();
+  res.json({ data: departments });
+}));
+
+// POST /reconcile — reconcile all local dynamic groups
+router.post('/reconcile', asyncHandler(async (req: Request, res: Response) => {
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? null;
+  const result = await reconcileAllDynamicGroups(adminId);
+  res.json({ success: true, ...result });
+}));
+
 // POST /sync — pull groups + members from Google / AD connectors (syncGroups config)
 router.post('/sync', asyncHandler(async (_req: Request, res: Response) => {
   if (!(await isGroupSyncSchemaReady())) {
@@ -314,10 +380,19 @@ router.get('/members/csv-template', asyncHandler(async (_req: Request, res: Resp
 
 // POST / — create group
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
-  const { name, description, type = 'STATIC', rule_json } = req.body as {
-    name: string; description?: string; type?: string; rule_json?: unknown;
-  };
-  if (!name) { res.status(400).json({ error: 'name required' }); return; }
+  const parsed = createGroupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const { name, description, type } = parsed.data;
+  const { rule_json, error: ruleErr } = resolveRuleFromBody(parsed.data);
+  if (ruleErr) {
+    res.status(400).json({ error: ruleErr, code: 'INVALID_RULE' });
+    return;
+  }
+
   const id = uuidv4();
   const empId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? null;
   await execute(
@@ -325,7 +400,13 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
      VALUES (?, ?, ?, ?, ?, ?)`,
     [id, name, description ?? null, type, rule_json ? JSON.stringify(rule_json) : null, empId],
   );
-  res.status(201).json({ id });
+
+  let reconcileResult = { added: 0, removed: 0, matched: 0 };
+  if (type === 'DYNAMIC' && rule_json) {
+    reconcileResult = await reconcileDynamicGroup(id, empId);
+  }
+
+  res.status(201).json({ id, reconcile: reconcileResult });
 }));
 
 // GET /:id — get group with members
@@ -355,19 +436,65 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
 
 // PUT /:id — update group
 router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
-  const { name, description, active } = req.body as {
-    name?: string; description?: string; active?: number;
-  };
+  const parsed = updateGroupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const groupId = req.params['id']!;
+  const existing = await queryOne<{ type: string; rule_json: unknown }>(
+    `SELECT type, rule_json FROM \`groups\` WHERE id = ?`,
+    [groupId],
+  );
+  if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
+
+  const nextType = parsed.data.type ?? existing.type;
+  const { rule_json, error: ruleErr } = resolveRuleFromBody({
+    type: nextType,
+    rule_json: parsed.data.rule_json ?? existing.rule_json,
+    dept_ids: parsed.data.dept_ids,
+  });
+  if (ruleErr) {
+    res.status(400).json({ error: ruleErr, code: 'INVALID_RULE' });
+    return;
+  }
+
+  const { name, description, active } = parsed.data;
   await execute(
     `UPDATE \`groups\` SET
        name = COALESCE(?, name),
        description = COALESCE(?, description),
        active = COALESCE(?, active),
+       type = ?,
+       rule_json = ?,
        updated_at = UTC_TIMESTAMP()
      WHERE id = ?`,
-    [name ?? null, description ?? null, active ?? null, req.params['id']],
+    [
+      name ?? null,
+      description ?? null,
+      active ?? null,
+      nextType,
+      nextType === 'DYNAMIC' && rule_json ? JSON.stringify(rule_json) : null,
+      groupId,
+    ],
   );
-  res.json({ success: true });
+
+  let reconcileResult = null;
+  if (nextType === 'DYNAMIC' && rule_json) {
+    const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? null;
+    reconcileResult = await reconcileDynamicGroup(groupId, adminId);
+  }
+
+  res.json({ success: true, reconcile: reconcileResult });
+}));
+
+// POST /:id/reconcile — reconcile one dynamic group
+router.post('/:id/reconcile', asyncHandler(async (req: Request, res: Response) => {
+  const groupId = req.params['id']!;
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? null;
+  const result = await reconcileDynamicGroup(groupId, adminId);
+  res.json({ success: true, ...result });
 }));
 
 // DELETE /:id — soft delete
@@ -388,6 +515,12 @@ router.post('/:id/members', asyncHandler(async (req: Request, res: Response) => 
   if (!exists) { res.status(404).json({ error: 'Group not found' }); return; }
   if ((await groupSourceSystem(req.params['id']!)) !== 'LOCAL') {
     res.status(409).json({ error: 'Members of synced groups are managed by directory sync (Google / AD)' });
+    return;
+  }
+  try {
+    await assertNotDynamicGroup(req.params['id']!);
+  } catch (err) {
+    res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
     return;
   }
   const body = req.body as { empId?: string; employeeNumber?: string; email?: string };
@@ -416,6 +549,12 @@ router.post('/:id/members/bulk', asyncHandler(async (req: Request, res: Response
   if (!exists) { res.status(404).json({ error: 'Group not found' }); return; }
   if ((await groupSourceSystem(groupId)) !== 'LOCAL') {
     res.status(409).json({ error: 'Members of synced groups are managed by directory sync (Google / AD)' });
+    return;
+  }
+  try {
+    await assertNotDynamicGroup(groupId);
+  } catch (err) {
+    res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
     return;
   }
 
@@ -464,6 +603,12 @@ router.delete('/:id/members/:empId', asyncHandler(async (req: Request, res: Resp
   if (!exists) { res.status(404).json({ error: 'Group not found' }); return; }
   if ((await groupSourceSystem(req.params['id']!)) !== 'LOCAL') {
     res.status(409).json({ error: 'Members of synced groups are managed by directory sync (Google / AD)' });
+    return;
+  }
+  try {
+    await assertNotDynamicGroup(req.params['id']!);
+  } catch (err) {
+    res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
     return;
   }
   // Allow remove by emp_id or employee_number
