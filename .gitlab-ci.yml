@@ -1,9 +1,6 @@
 # IDP prod CI/CD — lk-multiverse-platform-eks / namespace it-idp
 # GitLab CI variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 # Optional: GITLAB_READ_TOKEN (read multiverse-application-helm)
-#
-# Helm values: deploy/multiverse/values-lk-multiverse-platform-eks.yaml in THIS repo
-# (dnsPolicy, envvars, ingress, etc.). Chart templates come from multiverse-application-helm.
 
 stages:
   - build
@@ -16,8 +13,7 @@ variables:
   RELEASE: idp
   NAMESPACE: it-idp
   CHART: multiverse/idp
-  CHART_VALUES_FILE: values-lk-multiverse-platform-eks.yaml
-  VALUES_OVERLAY: deploy/multiverse/values-lk-multiverse-platform-eks.yaml
+  VALUES_FILE: values-lk-multiverse-platform-eks.yaml
   HELM_REPO: infra-platform/multiverse-application-helm
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
 
@@ -101,13 +97,9 @@ deploy-prod:
     - aws eks update-kubeconfig --name "${EKS_CLUSTER}" --region "${AWS_DEFAULT_REGION}"
   script:
     - |
-      CHART_VALUES="./helm/${CHART}/${CHART_VALUES_FILE}"
-      test -f "${CHART_VALUES}" || (echo "Missing chart values ${CHART_VALUES}" && exit 1)
-      test -f "${CI_PROJECT_DIR}/${VALUES_OVERLAY}" || (echo "Missing values overlay ${VALUES_OVERLAY}" && exit 1)
       helm upgrade --install "${RELEASE}" "./helm/${CHART}" \
         -n "${NAMESPACE}" \
-        -f "${CHART_VALUES}" \
-        -f "${CI_PROJECT_DIR}/${VALUES_OVERLAY}" \
+        -f "./helm/${CHART}/${VALUES_FILE}" \
         --set-string "image.tag=${IMAGE_TAG}" \
         --wait --timeout 15m
       kubectl rollout restart deployment -n "${NAMESPACE}" -l "release=${RELEASE}" || true
