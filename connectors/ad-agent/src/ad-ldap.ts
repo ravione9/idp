@@ -429,7 +429,7 @@ export class AdLdapClient {
     ]);
   }
 
-  /** List security groups (max 200), skipping built-in domain groups. */
+  /** List security groups, skipping built-in domain groups. */
   async listDirectoryGroups(): Promise<Array<{ dn: string; name: string; sam?: string }>> {
     const skipCn = new Set([
       'domain users', 'domain computers', 'domain controllers',
@@ -453,7 +453,6 @@ export class AdLdapClient {
       const sam = getAttr(e, 'sAMAccountName');
       const name = getAttr(e, 'displayName') || getAttr(e, 'cn') || sam || dn;
       out.push(sam ? { dn, name, sam } : { dn, name });
-      if (out.length >= 200) break;
     }
     return out;
   }

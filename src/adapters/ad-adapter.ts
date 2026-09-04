@@ -683,7 +683,7 @@ export class ADAdapter extends BaseAdapter {
 
   /**
    * List security groups under the domain root (for syncGroups = *).
-   * Skips built-in domain groups; capped at 200.
+   * Skips built-in domain groups.
    */
   async listDirectoryGroups(): Promise<AdapterResult<Array<{ dn: string; name: string; sam?: string }>>> {
     return this.safe(async () => {
@@ -712,7 +712,6 @@ export class ADAdapter extends BaseAdapter {
         const row: { dn: string; name: string; sam?: string } = { dn, name };
         if (sam) row.sam = sam;
         out.push(row);
-        if (out.length >= 200) break;
       }
       return out;
     });
