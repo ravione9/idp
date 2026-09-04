@@ -11,7 +11,8 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requireAnyPortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne, execute } from '../db/connection.js';
-import { ensureOidcAppMirrored } from '../oidc/portal-apps.js';
+import logger from '../utils/logger.js';
+import { resolveOrCreateOidcCatalogApp, ensureOidcAppMirrored, syncOidcAppsToCatalog } from '../oidc/portal-apps.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -62,6 +63,7 @@ const updateSchema = z.object({
 
 // GET /
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {
+  await syncOidcAppsToCatalog();
   const cols = await oidcColumns();
   const nameCol = cols.has('name') ? 'name' : 'client_id AS name';
   const authCol = cols.has('token_endpoint_auth_method')
@@ -72,9 +74,10 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   const typeCol = cols.has('client_type') ? 'client_type' : "'CONFIDENTIAL' AS client_type";
   const pkceCol = cols.has('require_pkce') ? 'require_pkce' : '1 AS require_pkce';
 
+  const appCol = cols.has('app_id') ? ', app_id' : '';
   const rows = await query(
     `SELECT id, client_id, ${nameCol}, redirect_uris, scopes, grant_types, response_types,
-            ${authCol}, ${typeCol}, ${pkceCol}, active, created_at
+            ${authCol}, ${typeCol}, ${pkceCol}, active, created_at${appCol}
      FROM oidc_clients ORDER BY ${cols.has('name') ? 'name' : 'client_id'}`,
     [],
   );
@@ -135,25 +138,14 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const responseJson = JSON.stringify(d.response_types);
 
   let appId: string | null = null;
-  if (d.catalog_slug) {
-    const slug = d.catalog_slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
-    if (slug) {
-      const existing = await queryOne<{ id: string }>(
-        `SELECT id FROM applications WHERE slug = ?`,
-        [slug],
-      );
-      if (existing) {
-        appId = existing.id;
-      } else {
-        appId = uuidv4();
-        await execute(
-          `INSERT INTO applications
-             (id, slug, name, category, visibility, sso_enabled, provisioning)
-           VALUES (?, ?, ?, ?, 'RESTRICTED', 1, 0)`,
-          [appId, slug, d.name, d.category ?? null],
-        );
-      }
-    }
+  try {
+    appId = await resolveOrCreateOidcCatalogApp({
+      name: d.name,
+      ...(d.catalog_slug ? { catalogSlug: d.catalog_slug } : {}),
+      category: d.category ?? 'OIDC',
+    });
+  } catch (err) {
+    logger.warn({ err, name: d.name }, 'OIDC catalog row create failed');
   }
 
   const existCols = await oidcColumns();

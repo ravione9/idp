@@ -8,6 +8,7 @@ import logger from '../utils/logger.js';
 import { canReceiveSamlAssertion, evaluateEntitlement } from '../saml/entitlements.js';
 import type { EmployeeSamlContext, EntitlementRule } from '../saml/types.js';
 import { ipInAllowlist, parseCidrList } from '../utils/ip-match.js';
+import { syncOidcAppsToCatalog } from '../oidc/portal-apps.js';
 import { provisionAppUser, deprovisionAppUser, runApplicationDeprovisionForUser } from './app-scim-provision.js';
 
 export type AssignmentType = 'USER' | 'TAG_GROUP' | 'GROUP';
@@ -114,13 +115,20 @@ export async function syncSamlAppsToCatalog(): Promise<number> {
 
 export async function listAssignableApplications(): Promise<Record<string, unknown>[]> {
   await syncSamlAppsToCatalog();
-  const { syncOidcAppsToCatalog } = await import('../oidc/portal-apps.js');
-  await syncOidcAppsToCatalog();
+  try {
+    await syncOidcAppsToCatalog();
+  } catch (err) {
+    logger.warn({ err }, 'OIDC catalog sync failed during assignable app list');
+  }
   const rows = await query<Record<string, unknown>>(
     `SELECT a.id, a.slug, a.name, a.icon_url, a.category, a.active, a.allowed_cidrs,
             EXISTS (
               SELECT 1 FROM saml_service_providers sp WHERE sp.slug = a.slug AND sp.active = 1
-            ) AS has_saml
+            ) AS has_saml,
+            EXISTS (
+              SELECT 1 FROM oidc_clients oc
+               WHERE oc.app_id = a.id AND oc.active = 1
+            ) AS has_oidc
        FROM applications a
       WHERE a.active = 1
       ORDER BY a.sort_order ASC, a.name ASC`,

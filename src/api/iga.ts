@@ -41,6 +41,7 @@ import {
 } from '../services/app-access-policy.js';
 import { createCampaign, submitReviewDecision } from '../services/access-review.js';
 import { evaluateSodForGrant } from '../services/sod-evaluator.js';
+import { normalizeAppSlug } from '../utils/app-slug.js';
 
 const router = Router();
 
@@ -61,7 +62,10 @@ function paginate(req: Request, defaultLimit = 50, maxLimit = 200): { limit: num
 // /applications — protocol-agnostic application catalog
 // ===========================================================================
 const appSchema = z.object({
-  slug:        z.string().min(1).max(80).regex(/^[a-z0-9-]+$/),
+  slug: z.string().min(1).max(80).transform(normalizeAppSlug).refine(
+    (s) => /^[a-z0-9-]+$/.test(s),
+    { message: 'Slug must use lowercase letters, numbers, and hyphens only (e.g. ppm-eks)' },
+  ),
   name:        z.string().min(1).max(150),
   description: z.string().max(2000).optional(),
   iconUrl:     z.union([z.string().url(), z.literal('')]).optional().transform((v) => (v ? v : undefined)),

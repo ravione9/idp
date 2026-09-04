@@ -4,6 +4,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { query, queryOne, execute } from '../db/connection.js';
 import logger from '../utils/logger.js';
+import { resolveOidcCatalogSlug, GENERIC_CATALOG_SLUGS } from '../utils/app-slug.js';
 
 export interface OidcPortalApp {
   id: string;
@@ -28,12 +29,13 @@ function parseJsonArray(raw: unknown): string[] {
   return [];
 }
 
-function slugifyName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80);
+async function oidcColumnSet(): Promise<Set<string>> {
+  const colRows = await query<{ COLUMN_NAME: string }>(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'oidc_clients'`,
+    [],
+  );
+  return new Set(colRows.map((r) => r.COLUMN_NAME));
 }
 
 async function uniqueSlug(base: string): Promise<string> {
@@ -50,16 +52,94 @@ async function uniqueSlug(base: string): Promise<string> {
   return candidate;
 }
 
+export async function resolveOrCreateOidcCatalogApp(params: {
+  name: string;
+  catalogSlug?: string | null;
+  category?: string | null;
+}): Promise<string> {
+  const slug = await uniqueSlug(resolveOidcCatalogSlug(params.name, params.catalogSlug));
+  const existing = await queryOne<{ id: string }>(
+    `SELECT id FROM applications WHERE slug = ? LIMIT 1`,
+    [slug],
+  );
+  if (existing) {
+    await execute(
+      `UPDATE applications
+          SET active = 1, visibility = 'RESTRICTED', name = ?,
+              category = COALESCE(?, category), sso_enabled = 1
+        WHERE id = ?`,
+      [params.name, params.category ?? null, existing.id],
+    );
+    return existing.id;
+  }
+
+  const appId = uuidv4();
+  await execute(
+    `INSERT INTO applications
+       (id, slug, name, category, visibility, sso_enabled, provisioning, sort_order, active)
+     VALUES (?, ?, ?, ?, 'RESTRICTED', 1, 0, 0, 1)`,
+    [appId, slug, params.name, params.category ?? 'OIDC'],
+  );
+  logger.info({ appId, slug, name: params.name }, 'Created OIDC application catalog row');
+  return appId;
+}
+
+async function linkOidcClientToApp(oidcClientId: string, appId: string, hasAppId: boolean): Promise<void> {
+  if (!hasAppId) return;
+  await execute(`UPDATE oidc_clients SET app_id = ? WHERE id = ?`, [appId, oidcClientId]);
+}
+
+async function repairLinkedCatalogApp(
+  appId: string,
+  clientName: string,
+  category: string | null,
+): Promise<string> {
+  const row = await queryOne<{ id: string; slug: string; visibility: string; active: number }>(
+    `SELECT id, slug, visibility, active FROM applications WHERE id = ? LIMIT 1`,
+    [appId],
+  );
+  if (!row) return appId;
+
+  const desiredSlug = resolveOidcCatalogSlug(clientName);
+  if (GENERIC_CATALOG_SLUGS.has(row.slug) && desiredSlug && desiredSlug !== row.slug) {
+    const target = await queryOne<{ id: string }>(
+      `SELECT id FROM applications WHERE slug = ? LIMIT 1`,
+      [desiredSlug],
+    );
+    if (target) {
+      await execute(
+        `UPDATE applications
+            SET active = 1, visibility = 'RESTRICTED', name = ?
+          WHERE id = ?`,
+        [clientName, target.id],
+      );
+      return target.id;
+    }
+    await execute(
+      `UPDATE applications
+          SET slug = ?, name = ?, active = 1, visibility = 'RESTRICTED',
+              category = COALESCE(?, category)
+        WHERE id = ?`,
+      [desiredSlug, clientName, category, row.id],
+    );
+    logger.info({ appId: row.id, from: row.slug, to: desiredSlug }, 'Renamed generic OIDC catalog slug');
+    return row.id;
+  }
+
+  if (row.visibility !== 'RESTRICTED' || Number(row.active) !== 1) {
+    await execute(
+      `UPDATE applications SET visibility = 'RESTRICTED', active = 1, name = ? WHERE id = ?`,
+      [clientName, row.id],
+    );
+  }
+  return row.id;
+}
+
 /**
  * Ensure an active OIDC client has a RESTRICTED `applications` row (required for Access Policy grants).
  */
 export async function ensureOidcAppMirrored(oidcClientId: string): Promise<string | null> {
-  const cols = await query<{ COLUMN_NAME: string }>(
-    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'oidc_clients'`,
-    [],
-  );
-  const colSet = new Set(cols.map((r) => r.COLUMN_NAME));
+  const colSet = await oidcColumnSet();
   const nameExpr = colSet.has('name') ? 'name' : 'client_id AS name';
   const hasAppId = colSet.has('app_id');
 
@@ -77,56 +157,66 @@ export async function ensureOidcAppMirrored(oidcClientId: string): Promise<strin
   if (!client || !client.active) return null;
 
   if (hasAppId && client.app_id) {
-    const existing = await queryOne<{ id: string; visibility: string }>(
-      `SELECT id, visibility FROM applications WHERE id = ? LIMIT 1`,
-      [client.app_id],
+    const repairedId = await repairLinkedCatalogApp(client.app_id, client.name, 'OIDC');
+    await linkOidcClientToApp(oidcClientId, repairedId, hasAppId);
+    return repairedId;
+  }
+
+  const desiredSlug = resolveOidcCatalogSlug(client.name);
+  const bySlug = desiredSlug
+    ? await queryOne<{ id: string }>(
+      `SELECT id FROM applications WHERE slug = ? LIMIT 1`,
+      [desiredSlug],
+    )
+    : null;
+  if (bySlug) {
+    await execute(
+      `UPDATE applications
+          SET active = 1, visibility = 'RESTRICTED', name = ?, sso_enabled = 1
+        WHERE id = ?`,
+      [client.name, bySlug.id],
     );
-    if (existing) {
-      if (existing.visibility !== 'RESTRICTED') {
-        await execute(
-          `UPDATE applications SET visibility = 'RESTRICTED' WHERE id = ?`,
-          [existing.id],
-        );
-        logger.info({ oidcClientId, appId: existing.id }, 'Forced OIDC-linked application visibility to RESTRICTED');
-      }
-      return existing.id;
-    }
+    await linkOidcClientToApp(oidcClientId, bySlug.id, hasAppId);
+    return bySlug.id;
   }
 
-  const slug = await uniqueSlug(slugifyName(client.name || client.client_id));
-  const appId = uuidv4();
-  await execute(
-    `INSERT INTO applications
-       (id, slug, name, category, visibility, sso_enabled, provisioning, sort_order, active)
-     VALUES (?, ?, ?, 'OIDC', 'RESTRICTED', 1, 0, 0, 1)`,
-    [appId, slug, client.name || client.client_id],
-  );
-
-  if (hasAppId) {
-    await execute(`UPDATE oidc_clients SET app_id = ? WHERE id = ?`, [appId, oidcClientId]);
-  }
-
-  logger.info({ oidcClientId, appId, slug }, 'Mirrored OIDC client into applications catalog as RESTRICTED');
+  const appId = await resolveOrCreateOidcCatalogApp({
+    name: client.name || client.client_id,
+    catalogSlug: client.name,
+    category: 'OIDC',
+  });
+  await linkOidcClientToApp(oidcClientId, appId, hasAppId);
   return appId;
 }
 
 export async function syncOidcAppsToCatalog(): Promise<number> {
+  const colSet = await oidcColumnSet();
+  const hasAppId = colSet.has('app_id');
+
   const clients = await query<{ id: string }>(
     `SELECT id FROM oidc_clients WHERE active = 1`,
     [],
   );
   let touched = 0;
   for (const c of clients) {
-    const before = await queryOne<{ app_id: string | null }>(
-      `SELECT app_id FROM oidc_clients WHERE id = ?`,
-      [c.id],
-    );
-    await ensureOidcAppMirrored(c.id);
-    const after = await queryOne<{ app_id: string | null }>(
-      `SELECT app_id FROM oidc_clients WHERE id = ?`,
-      [c.id],
-    );
-    if (before?.app_id !== after?.app_id) touched += 1;
+    let beforeAppId: string | null = null;
+    if (hasAppId) {
+      const before = await queryOne<{ app_id: string | null }>(
+        `SELECT app_id FROM oidc_clients WHERE id = ?`,
+        [c.id],
+      );
+      beforeAppId = before?.app_id ?? null;
+    }
+    const appId = await ensureOidcAppMirrored(c.id);
+    if (hasAppId) {
+      const after = await queryOne<{ app_id: string | null }>(
+        `SELECT app_id FROM oidc_clients WHERE id = ?`,
+        [c.id],
+      );
+      if (beforeAppId !== (after?.app_id ?? null)) touched += 1;
+    } else if (appId) {
+      touched += 1;
+    }
   }
   if (touched > 0) {
     logger.info({ touched }, 'Synced OIDC clients into applications catalog');
@@ -137,12 +227,7 @@ export async function syncOidcAppsToCatalog(): Promise<number> {
 export async function getActiveOidcPortalApps(): Promise<OidcPortalApp[]> {
   await syncOidcAppsToCatalog();
 
-  const colRows = await query<{ COLUMN_NAME: string }>(
-    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'oidc_clients'`,
-    [],
-  );
-  const colSet = new Set(colRows.map((r) => r.COLUMN_NAME));
+  const colSet = await oidcColumnSet();
   if (!colSet.has('app_id')) return [];
 
   const nameExpr = colSet.has('name') ? 'c.name' : 'c.client_id AS name';
