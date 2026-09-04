@@ -387,7 +387,7 @@ This IdP is also an OpenID Provider. Relying parties register in `oidc_clients` 
 |---|---|
 | `GET /.well-known/openid-configuration` | Discovery document |
 | `GET /.well-known/jwks.json` | Public JWKS (RS256) |
-| `GET /oauth/launch/:slug` | Portal tile → SP OAuth login URL (e.g. Grafana `/login/generic_oauth`), then SP-initiated `/oauth/authorize` with PKCE |
+| `GET /oauth/launch/:slug` | Portal tile → SP OAuth login URL (e.g. Grafana `/login/generic_oauth` or PMM `/graph/login/generic_oauth`), then SP-initiated `/oauth/authorize` with PKCE |
 | `GET /oauth/authorize` | Authorization Code + **S256 PKCE**; unauthenticated users → login → `/oauth/resume/:id` |
 | `GET /oauth/resume/:pendingId` | Resume authorize after portal sign-in |
 | `POST /oauth/token` | `authorization_code` and `refresh_token` grants; issues JWT access + ID tokens |
@@ -1123,6 +1123,29 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-09-04 — OIDC authorize redirect URI + access policy fixes (Grafana / PMM)
+
+**Why** — Grafana/PMM SSO failed with “Login provider denied login request” when the registered redirect URI was `…/graph/login` but the SP sends `…/graph/login/generic_oauth`, and when Access Policy grants were stored on `applications.id` but authorize checked the wrong id.
+
+**What changed:**
+
+- **`src/oidc/redirect-uris.ts`** — normalize and match Grafana-style redirect URIs; auto-expand `…/login` → `…/login/generic_oauth` on client create/update and catalog sync.
+- **`src/oidc/clients.ts`**, **`src/oidc/router.ts`** — flexible redirect URI validation; canonical URI on auth codes; fuzzy match at token exchange.
+- **`src/oidc/portal-apps.ts`** — `OidcPortalApp.appId` (`applications.id`); `getOidcLinkedApplication()` for authorize checks; repair redirect URIs on sync.
+- **`src/services/app-access-policy.ts`** — `hasPolicyAppAccessByAppId()`; `evaluateAppLaunch` accepts `appId` for OIDC grant resolution.
+- **`src/api/apps.ts`** — OIDC tile `id` is catalog `applications.id`.
+
+### (pending) — 2026-09-04 — OIDC portal launch URL inference (Grafana / PMM subpaths)
+
+**Why** — Portal tile launch for Grafana-based apps (including PMM under `/graph`) failed with “Login provider denied login request” because the IdP redirected to a bare login or callback URL instead of the SP’s `…/login/generic_oauth` entrypoint.
+
+**What changed:**
+
+- **`src/oidc/portal-launch.ts`** — infer `/graph/login/generic_oauth` (and root `/login/generic_oauth`) from redirect URIs; never treat arbitrary redirect URIs as launch URLs; repair invalid stored `portalLaunchUrl` on sync.
+- **`src/api/config-oidc-clients.ts`** — `portal_launch_url` on PUT; re-sync launch config after redirect URI updates.
+- **`web/js/views-stubs.js`** — optional **Portal launch URL** on OIDC registration wizard (auto-filled for Grafana/PMM).
+- **`src/oidc/portal-launch.test.ts`** — unit tests for launch URL inference.
 
 ### (pending) — 2026-09-04 — Remove 200 cap on directory group auto-sync
 

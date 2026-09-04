@@ -14,6 +14,7 @@ import { query, queryOne, execute } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { resolveOrCreateOidcCatalogApp, ensureOidcAppMirrored, syncOidcAppsToCatalog } from '../oidc/portal-apps.js';
 import { ensureOidcProtocolLaunchConfig } from '../oidc/portal-launch.js';
+import { expandOidcRedirectUris } from '../oidc/redirect-uris.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -61,6 +62,7 @@ const updateSchema = z.object({
   client_type: z.enum(['CONFIDENTIAL', 'PUBLIC']).optional(),
   require_pkce: z.boolean().optional(),
   active: z.union([z.boolean(), z.number().int().min(0).max(1)]).optional(),
+  portal_launch_url: z.string().url().optional(),
 });
 
 // GET /
@@ -120,6 +122,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     return;
   }
   const d = { ...parsed.data };
+  d.redirect_uris = expandOidcRedirectUris(d.redirect_uris);
   if (!d.scopes.includes('openid')) {
     res.status(400).json({ error: 'scopes must include openid' });
     return;
@@ -238,6 +241,7 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     vals.push(d.name);
   }
   if (d.redirect_uris !== undefined) {
+    d.redirect_uris = expandOidcRedirectUris(d.redirect_uris);
     sets.push('redirect_uris = ?');
     vals.push(JSON.stringify(d.redirect_uris));
   }
@@ -293,6 +297,34 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     res.status(404).json({ error: 'OIDC client not found' });
     return;
   }
+
+  if (d.redirect_uris !== undefined || d.portal_launch_url !== undefined) {
+    const row = await queryOne<{
+      app_id: string | null;
+      client_id: string;
+      redirect_uris: unknown;
+    }>(
+      `SELECT app_id, client_id, redirect_uris FROM oidc_clients WHERE id = ?`,
+      [req.params['id']],
+    );
+    if (row?.app_id) {
+      const redirectUris = d.redirect_uris ?? (
+        typeof row.redirect_uris === 'string'
+          ? (JSON.parse(row.redirect_uris) as string[])
+          : Array.isArray(row.redirect_uris)
+            ? row.redirect_uris.map(String)
+            : []
+      );
+      await ensureOidcProtocolLaunchConfig({
+        appId: row.app_id,
+        clientId: row.client_id,
+        redirectUris,
+        portalLaunchUrl: d.portal_launch_url ?? null,
+      }).catch((err) => logger.warn({ err, clientId: row.client_id }, 'OIDC portal launch config update failed'));
+    }
+  }
+
+  await ensureOidcAppMirrored(req.params['id']!);
   res.json({ success: true });
 }));
 

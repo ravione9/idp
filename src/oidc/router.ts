@@ -36,8 +36,9 @@ import {
 } from './clients.js';
 import { loadUserClaims } from './claims.js';
 import { getOidcJwks } from './keys.js';
-import { getOidcPortalAppByClientId, getOidcPortalAppBySlug } from './portal-apps.js';
+import { getOidcPortalAppBySlug, getOidcLinkedApplication } from './portal-apps.js';
 import { resolveOidcSpLaunchUrl } from './portal-launch.js';
+import { canonicalRedirectUri, redirectUrisMatch } from './redirect-uris.js';
 import {
   consumeAuthorizationCode,
   consumeRefreshToken,
@@ -102,12 +103,15 @@ async function enforceOidcAppAccess(
   req: Request,
   res: Response,
   empId: string,
-  appSlug: string,
-  appName: string,
+  app: { id: string; slug: string; name: string },
   oauthRedirect?: { redirectUri: string; state?: string },
 ): Promise<boolean> {
   const emp = await getEmployeeForSaml(empId);
   if (!emp) {
+    if (oauthRedirect) {
+      oauthErrorRedirect(res, oauthRedirect.redirectUri, 'access_denied', 'Employee record not found', oauthRedirect.state);
+      return false;
+    }
     sendLaunchDeniedPage(res, {
       title: 'Access denied',
       message: 'Your employee record could not be loaded.',
@@ -115,21 +119,28 @@ async function enforceOidcAppAccess(
     return false;
   }
 
-  const decision = await evaluateAppLaunch(emp, appSlug, null, {
+  const decision = await evaluateAppLaunch(emp, app.slug, null, {
     clientIp: getClientIp(req),
     enforceIp: true,
+    appId: app.id,
   });
   if (!decision.allowed) {
     const message = decision.reason === 'IP_DENIED'
       ? 'Your current network is not allowed to launch this application.'
       : decision.reason === 'NO_GRANT'
         ? 'You do not have access to this application. Request access from your administrator.'
-        : 'You are not permitted to sign in to this application.';
+        : decision.reason === 'ILG_STATE'
+          ? 'SSO is not permitted for your account state.'
+          : 'You are not permitted to sign in to this application.';
+    logger.info(
+      { empId, appId: app.id, slug: app.slug, reason: decision.reason },
+      'OIDC access denied',
+    );
     if (oauthRedirect) {
       oauthErrorRedirect(res, oauthRedirect.redirectUri, 'access_denied', message, oauthRedirect.state);
       return false;
     }
-    sendLaunchDeniedPage(res, { title: `${appName} — access denied`, message });
+    sendLaunchDeniedPage(res, { title: `${app.name} — access denied`, message });
     return false;
   }
   return true;
@@ -257,7 +268,7 @@ async function completeAuthorize(
     clientId: client.clientId,
     empId,
     scope: scopes.join(' '),
-    redirectUri: params.redirect_uri,
+    redirectUri: canonicalRedirectUri(client.redirectUris, params.redirect_uri),
   };
   if (params.nonce) codeParams.nonce = params.nonce;
   if (params.code_challenge) {
@@ -292,7 +303,11 @@ router.get('/oauth/launch/:slug', asyncHandler(async (req: Request, res: Respons
     return;
   }
 
-  if (!(await enforceOidcAppAccess(req, res, session.empId, app.slug, app.name))) return;
+  if (!(await enforceOidcAppAccess(req, res, session.empId, {
+    id: app.appId,
+    slug: app.slug,
+    name: app.name,
+  }))) return;
 
   const appMfa = await getAppMfaBySlug(app.slug);
   const mfaOk = await enforceCriticalAppMfaOrRedirect(req, res, {
@@ -367,14 +382,13 @@ router.get('/oauth/authorize', asyncHandler(async (req: Request, res: Response) 
     return;
   }
 
-  const linkedApp = await getOidcPortalAppByClientId(params.client_id);
+  const linkedApp = await getOidcLinkedApplication(params.client_id);
   if (linkedApp) {
     const allowed = await enforceOidcAppAccess(
       req,
       res,
       user.empId,
-      linkedApp.slug,
-      linkedApp.name,
+      linkedApp,
       { redirectUri: params.redirect_uri, ...(params.state ? { state: params.state } : {}) },
     );
     if (!allowed) return;
@@ -420,14 +434,13 @@ router.get('/oauth/resume/:pendingId', asyncHandler(async (req: Request, res: Re
     return;
   }
 
-  const linkedApp = await getOidcPortalAppByClientId(params.client_id);
+  const linkedApp = await getOidcLinkedApplication(params.client_id);
   if (linkedApp) {
     const allowed = await enforceOidcAppAccess(
       req,
       res,
       user.empId,
-      linkedApp.slug,
-      linkedApp.name,
+      linkedApp,
       { redirectUri: params.redirect_uri, ...(params.state ? { state: params.state } : {}) },
     );
     if (!allowed) {
@@ -529,7 +542,7 @@ router.post('/oauth/token', asyncHandler(async (req: Request, res: Response) => 
       tokenError(res, 400, 'invalid_grant', 'Authorization code is invalid or expired');
       return;
     }
-    if (stored.redirectUri !== redirectUri) {
+    if (!stored.redirectUri || !redirectUrisMatch(stored.redirectUri, redirectUri)) {
       tokenError(res, 400, 'invalid_grant', 'redirect_uri mismatch');
       return;
     }

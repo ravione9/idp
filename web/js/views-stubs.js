@@ -3314,6 +3314,28 @@ function openSamlWizard(app) {
 }
 
 // OIDC integration wizard — 4 steps: Overview, Redirect URIs, Advanced, Review
+function inferOidcPortalLaunchFromRedirects(uris) {
+  const cleaned = (uris || []).map((u) => String(u).trim()).filter(Boolean);
+  for (const uri of cleaned) {
+    try {
+      if (new URL(uri).pathname.toLowerCase().includes('generic_oauth')) return uri;
+    } catch { /* skip */ }
+  }
+  for (const uri of cleaned) {
+    try {
+      const u = new URL(uri);
+      const path = u.pathname.replace(/\/+$/, '') || '/';
+      if (/\/login$/i.test(path) && !path.toLowerCase().includes('generic_oauth')) {
+        return `${u.origin}${path}/generic_oauth`;
+      }
+      if (path === '/graph' || path.endsWith('/graph')) {
+        return `${u.origin}${path}/login/generic_oauth`;
+      }
+    } catch { /* skip */ }
+  }
+  return '';
+}
+
 function openOidcWizard(app, opts = {}) {
   const origin = window.location.origin;
   const idpIssuer     = origin;
@@ -3331,6 +3353,7 @@ function openOidcWizard(app, opts = {}) {
     catalog_slug:   app.id,
     category:       app.cat,
     redirectsRaw:   '',
+    portalLaunchUrl: '',
     grants:         (app.grants || ['authorization_code', 'refresh_token']).filter((g) => allowedGrants.has(g)),
     scopes:         (app.scopes || ['openid', 'email', 'profile']).filter((s) => allowedScopes.has(s)),
     response_types: ['code'],
@@ -3415,7 +3438,28 @@ function openOidcWizard(app, opts = {}) {
             <label class="form-label">Display name</label>
             <input class="form-input" id="w-name" value="${esc(d.name)}">
           </div>
+          <div class="form-group">
+            <label class="form-label">Portal launch URL</label>
+            <input class="form-input" id="w-portal-launch" value="${esc(d.portalLaunchUrl || '')}"
+              placeholder="https://pmm.example.com/graph/login/generic_oauth">
+            <p class="muted" style="font-size:0.8rem;margin-top:0.35rem">
+              Where the user portal sends users to start SSO. For Grafana / PMM use the same URL as the
+              <strong>Sign in with SSO</strong> button (often <code>…/login/generic_oauth</code>, sometimes under <code>/graph</code>).
+            </p>
+          </div>
         `,
+        bind: (body, d) => {
+          const launchInput = body.querySelector('#w-portal-launch');
+          const urisInput = body.querySelector('#w-uris');
+          const syncLaunch = () => {
+            if (launchInput.value.trim()) return;
+            const uris = urisInput.value.split('\n').map((s) => s.trim()).filter(Boolean);
+            const inferred = inferOidcPortalLaunchFromRedirects(uris);
+            if (inferred) launchInput.value = inferred;
+          };
+          urisInput.addEventListener('blur', syncLaunch);
+          if (!d.portalLaunchUrl) syncLaunch();
+        },
         validate: (_d, body) => {
           if (!body.querySelector('#w-name').value.trim()) return 'Display name is required.';
           const lines = body.querySelector('#w-uris').value
@@ -3430,6 +3474,7 @@ function openOidcWizard(app, opts = {}) {
         collect: (d, body) => {
           d.name = body.querySelector('#w-name').value.trim();
           d.redirectsRaw = body.querySelector('#w-uris').value;
+          d.portalLaunchUrl = body.querySelector('#w-portal-launch').value.trim();
         },
       },
       {
@@ -3498,6 +3543,7 @@ function openOidcWizard(app, opts = {}) {
               <div class="kv-list">
                 <div class="kv"><div class="k">Name</div><div class="v">${esc(d.name)}</div></div>
                 <div class="kv"><div class="k">Redirect URIs</div><div class="v" style="word-break:break-all">${uris.map((u) => `<code style="font-size:0.78rem;display:block">${esc(u)}</code>`).join('') || '—'}</div></div>
+                ${d.portalLaunchUrl ? `<div class="kv"><div class="k">Portal launch</div><div class="v" style="word-break:break-all"><code style="font-size:0.78rem">${esc(d.portalLaunchUrl)}</code></div></div>` : ''}
                 <div class="kv"><div class="k">Grant types</div><div class="v">${esc(d.grants.join(', ') || '—')}</div></div>
                 <div class="kv"><div class="k">Scopes</div><div class="v">${esc(d.scopes.join(', ') || '—')}</div></div>
                 <div class="kv"><div class="k">Token auth</div><div class="v"><code>${esc(d.token_endpoint_auth_method)}</code></div></div>
@@ -3517,6 +3563,7 @@ function openOidcWizard(app, opts = {}) {
         token_endpoint_auth_method: d.token_endpoint_auth_method,
         catalog_slug:   d.catalog_slug === 'custom-oidc' ? undefined : d.catalog_slug,
         category:       d.category,
+        portal_launch_url: d.portalLaunchUrl || undefined,
       });
       bd.querySelector('.wizard-stepper').style.display = 'none';
       bd.querySelector('#wiz-body').innerHTML = `

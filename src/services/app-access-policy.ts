@@ -263,6 +263,8 @@ export interface AppLaunchOptions {
    * Catalog listing must leave this false so apps stay visible; SSO launch sets true.
    */
   enforceIp?: boolean;
+  /** When set, policy grants are resolved by application id (more reliable for OIDC). */
+  appId?: string;
 }
 
 export async function evaluateAppLaunch(
@@ -277,7 +279,9 @@ export async function evaluateAppLaunch(
 
   try {
     const requiresGrant = await appRequiresExplicitGrant(slug);
-    const policyAccess = await hasPolicyAppAccess(emp.emp_id, slug);
+    const policyAccess = opts?.appId
+      ? await hasPolicyAppAccessByAppId(emp.emp_id, opts.appId)
+      : await hasPolicyAppAccess(emp.emp_id, slug);
     let entitled = false;
     if (requiresGrant) {
       if (!policyAccess) {
@@ -357,6 +361,42 @@ export async function hasPolicyAppAccess(empId: string, appSlug: string): Promis
     [appSlug, empId, empId, empId],
   );
   // mysql2 may return TINYINT/Buffer — coerce before comparing
+  return Number(row?.ok ?? 0) === 1;
+}
+
+/** Same as hasPolicyAppAccess but keyed by catalog application id (avoids slug mismatches). */
+export async function hasPolicyAppAccessByAppId(empId: string, appId: string): Promise<boolean> {
+  const row = await queryOne<{ ok: number }>(
+    `SELECT 1 AS ok
+       FROM applications a
+      WHERE a.id = ? AND a.active = 1
+        AND (
+          EXISTS (
+            SELECT 1 FROM app_access_assignments x
+             WHERE x.app_id = a.id AND x.active = 1
+               AND x.assignment_type = 'USER'
+               AND x.target_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+          )
+          OR EXISTS (
+            SELECT 1 FROM app_access_assignments x
+              JOIN tag_group_members tgm
+                ON tgm.tag_group_id COLLATE utf8mb4_unicode_ci = x.target_id COLLATE utf8mb4_unicode_ci
+             WHERE x.app_id = a.id AND x.active = 1
+               AND x.assignment_type = 'TAG_GROUP'
+               AND tgm.emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+          )
+          OR EXISTS (
+            SELECT 1 FROM app_access_assignments x
+              JOIN group_members gm
+                ON gm.group_id COLLATE utf8mb4_unicode_ci = x.target_id COLLATE utf8mb4_unicode_ci
+             WHERE x.app_id = a.id AND x.active = 1
+               AND x.assignment_type = 'GROUP'
+               AND gm.emp_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+          )
+        )
+      LIMIT 1`,
+    [appId, empId, empId, empId],
+  );
   return Number(row?.ok ?? 0) === 1;
 }
 
