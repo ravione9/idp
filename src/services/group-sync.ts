@@ -19,9 +19,6 @@ import {
 } from './google-directory-config.js';
 import logger from '../utils/logger.js';
 
-/** Cap auto-discovered Google groups (same idea as AD’s 200). */
-const GOOGLE_GROUP_AUTO_CAP = 200;
-
 let groupSyncSchemaReady: boolean | null = null;
 
 export async function isGroupSyncSchemaReady(): Promise<boolean> {
@@ -168,7 +165,7 @@ async function resolveEmpIdByAdMember(member: {
 
 async function listGoogleDirectoryGroupEmails(
   directory: admin_directory_v1.Admin,
-): Promise<{ emails: string[]; truncated: boolean; error?: string }> {
+): Promise<{ emails: string[]; error?: string }> {
   const emails: string[] = [];
   let pageToken: string | undefined;
   try {
@@ -183,17 +180,13 @@ async function listGoogleDirectoryGroupEmails(
         const email = (g.email ?? '').trim().toLowerCase();
         if (!email) continue;
         emails.push(email);
-        if (emails.length >= GOOGLE_GROUP_AUTO_CAP) {
-          return { emails, truncated: true };
-        }
       }
       pageToken = res.data.nextPageToken ?? undefined;
     } while (pageToken);
-    return { emails, truncated: false };
+    return { emails };
   } catch (err) {
     return {
       emails: [],
-      truncated: false,
       error: err instanceof Error ? err.message : String(err),
     };
   }
@@ -220,11 +213,7 @@ async function resolveGoogleGroupKeys(
       autoAll: true,
     };
   }
-  const errors: string[] = [];
-  if (listed.truncated) {
-    errors.push(`Auto-sync capped at ${GOOGLE_GROUP_AUTO_CAP} groups — list emails in Sync Groups to target specific ones`);
-  }
-  return { keys: listed.emails, errors, autoAll: true };
+  return { keys: listed.emails, errors: [], autoAll: true };
 }
 
 export async function syncGoogleDirectoryGroups(
