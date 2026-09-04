@@ -1,6 +1,9 @@
 # IDP prod CI/CD — lk-multiverse-platform-eks / namespace it-idp
 # GitLab CI variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 # Optional: GITLAB_READ_TOKEN (read multiverse-application-helm)
+#
+# Helm values: deploy/multiverse/values-lk-multiverse-platform-eks.yaml in THIS repo
+# (dnsPolicy, envvars, ingress, etc.). Chart templates come from multiverse-application-helm.
 
 stages:
   - build
@@ -13,10 +16,9 @@ variables:
   RELEASE: idp
   NAMESPACE: it-idp
   CHART: multiverse/idp
-  VALUES_FILE: values-lk-multiverse-platform-eks.yaml
+  VALUES_FILE: deploy/multiverse/values-lk-multiverse-platform-eks.yaml
   HELM_REPO: infra-platform/multiverse-application-helm
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
-
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
@@ -96,13 +98,13 @@ deploy-prod:
       git clone --depth 1 -b main "${CLONE_URL}" helm
     - aws eks update-kubeconfig --name "${EKS_CLUSTER}" --region "${AWS_DEFAULT_REGION}"
   script:
+    - test -f "${CI_PROJECT_DIR}/${VALUES_FILE}" || (echo "Missing ${VALUES_FILE}" && exit 1)
     - |
       helm upgrade --install "${RELEASE}" "./helm/${CHART}" \
         -n "${NAMESPACE}" \
-        -f "./helm/${CHART}/${VALUES_FILE}" \
+        -f "${CI_PROJECT_DIR}/${VALUES_FILE}" \
         --set-string "image.tag=${IMAGE_TAG}" \
         --wait --timeout 15m
       kubectl rollout restart deployment -n "${NAMESPACE}" -l "release=${RELEASE}" || true
-      kubectl rollout status deployment -n "${NAMESPACE}" -l "release=${RELEASE}" --timeout=10m
-  rules:
+      kubectl rollout status deployment -n "${NAMESPACE}" -l "release=${RELEASE}" --timeout=10m  rules:
     - when: manual

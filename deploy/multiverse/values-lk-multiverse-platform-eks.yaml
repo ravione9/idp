@@ -1,9 +1,10 @@
 # IDP prod — lk-multiverse-platform-eks (CCMS-style values layout)
 #
 # Chart: multiverse-application-helm/multiverse/idp
-# Install:
+# GitLab CI deploy-prod uses THIS file from the idp repo (see .gitlab-ci.yml VALUES_FILE).
+# Local install (copy chart into multiverse-application-helm first):
 #   helm upgrade -i idp ./multiverse/idp -n it-idp \
-#     -f ./multiverse/idp/values-lk-multiverse-platform-eks.yaml \
+#     -f ./deploy/multiverse/values-lk-multiverse-platform-eks.yaml \
 #     --set image.tag=<git-sha>
 #
 # Secrets: Vault KV v1 at multiverse/config/idp — CCMS-style VAULT_* env (app calls Vault at boot).
