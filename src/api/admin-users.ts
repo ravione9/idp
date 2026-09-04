@@ -16,9 +16,10 @@ import bcrypt from 'bcryptjs';
 import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requirePortalModule } from '../auth/rbac.js';
 import { query, queryOne, execute } from '../db/connection.js';
-import { writebackPassword, ensureWritebackIdentityLinks } from '../services/password-writeback.js';
+import { resetEmployeePassword } from '../services/admin-password-reset.js';
+import { reconcileDynamicGroupsForEmployee } from '../services/dynamic-groups.js';
 import { backfillAdIdentityLinkIfMissing } from '../services/ad-sync.js';
-import { assignPortalRole, hashPassword, revokePortalRole } from '../services/local-admin.js';
+import { assignPortalRole, revokePortalRole } from '../services/local-admin.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import logger from '../utils/logger.js';
 import { z } from 'zod';
@@ -1053,6 +1054,12 @@ router.put('/:empId/profile', asyncHandler(async (req: Request, res: Response) =
   sets.push(`sync_status = 'MANUAL'`, 'updated_at = UTC_TIMESTAMP()');
   await execute(`UPDATE employees SET ${sets.join(', ')} WHERE emp_id = ?`, [...params, empId]);
 
+  if (changes.dept_id) {
+    await reconcileDynamicGroupsForEmployee(empId, String(adminId)).catch((err) =>
+      logger.warn({ err, empId }, 'Dynamic group reconcile after profile dept change failed'),
+    );
+  }
+
   await writeDirectoryUserAudit({
     empId,
     action: 'MANUAL_PROFILE_UPDATE',
@@ -1335,6 +1342,10 @@ router.post('/local', async (req: Request, res: Response): Promise<void> => {
     }
   }
 
+  await reconcileDynamicGroupsForEmployee(empId, adminId).catch((err) =>
+    logger.warn({ err, empId }, 'Dynamic group reconcile after local user create failed'),
+  );
+
   await writeDirectoryUserAudit({
     empId,
     action: 'USER_CREATED',
@@ -1375,14 +1386,8 @@ router.post('/:empId/reset-password', asyncHandler(async (req: Request, res: Res
   const { newPassword, notifyUser } = parsed.data;
   const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'admin';
 
-  const policyErr = await enforcePasswordPolicy(newPassword);
-  if (policyErr) {
-    res.status(400).json({ error: policyErr, code: 'PASSWORD_POLICY' });
-    return;
-  }
-
-  const employee = await queryOne<{ emp_id: string; email_corp: string; role: string | null }>(
-    `SELECT emp_id, email_corp, role FROM employees WHERE emp_id = ?`,
+  const employee = await queryOne<{ emp_id: string }>(
+    `SELECT emp_id FROM employees WHERE emp_id = ?`,
     [requestedEmpId],
   );
   if (!employee) {
@@ -1390,88 +1395,30 @@ router.post('/:empId/reset-password', asyncHandler(async (req: Request, res: Res
     return;
   }
 
-  const empId = await ensureWritebackIdentityLinks(requestedEmpId);
-
-  const localResults: { system: string; status: string; error?: string }[] = [];
-
-  // 1. Local IdP password (email/password login at /login)
-  const localAccount = await queryOne<{ id: number }>(
-    `SELECT id FROM local_accounts WHERE emp_id = ? AND active = 1`, [empId],
-  );
-  const passwordHash = await hashPassword(newPassword);
-
-  if (localAccount) {
-    await execute(
-      `UPDATE local_accounts SET password_hash = ? WHERE emp_id = ? AND active = 1`,
-      [passwordHash, empId],
-    );
-    localResults.push({ system: 'LOCAL', status: 'SUCCESS' });
-    logger.info({ empId, adminId }, 'Local password reset by admin');
-  } else if (employee.email_corp) {
-    const email = employee.email_corp.toLowerCase().trim();
-    const emailTaken = await queryOne<{ emp_id: string }>(
-      `SELECT emp_id FROM local_accounts WHERE email = ? AND active = 1`,
-      [email],
-    );
-    if (emailTaken && emailTaken.emp_id !== empId) {
-      localResults.push({
-        system: 'LOCAL',
-        status: 'FAILED',
-        error: `Corporate email already tied to local account ${emailTaken.emp_id}`,
-      });
-    } else {
-      const existingPortal = await queryOne<{ role: string }>(
-        `SELECT role FROM local_accounts WHERE emp_id = ? AND active = 1`,
-        [empId],
-      );
-      const localRole = existingPortal?.role ?? 'USER';
-      await execute(
-        `INSERT INTO local_accounts (emp_id, email, password_hash, role, created_by, active)
-         VALUES (?, ?, ?, ?, ?, 1)
-         ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), active = 1`,
-        [empId, email, passwordHash, localRole, adminId],
-      );
-      localResults.push({ system: 'LOCAL', status: 'SUCCESS' });
-      logger.info({ empId, adminId }, 'Local account provisioned during admin password reset');
-    }
-  } else {
-    localResults.push({
-      system: 'LOCAL',
-      status: 'SKIPPED',
-      error: 'No local login account and no corporate email on file',
-    });
-  }
-
-  // 2. Writeback to AD and Google (if linked)
-  let writebackResults: { system: string; status: string; error?: string }[] = [];
-  try {
-    writebackResults = await writebackPassword(empId, newPassword, adminId);
-  } catch (err) {
-    logger.warn({ empId, err }, 'Password writeback threw unexpectedly');
-    writebackResults = [{ system: 'WRITEBACK', status: 'FAILED', error: String(err) }];
-  }
+  const reset = await resetEmployeePassword({
+    empId: requestedEmpId,
+    newPassword,
+    adminId,
+  });
 
   if (notifyUser) {
-    logger.info({ empId, adminId }, 'Password reset notifyUser requested (email delivery not yet implemented)');
+    logger.info({ empId: reset.empId, adminId }, 'Password reset notifyUser requested (email delivery not yet implemented)');
   }
 
-  const allResults = [...localResults, ...writebackResults];
-  const anySuccess = allResults.some((r) => r.status === 'SUCCESS');
-  const anyFailed = allResults.some((r) => r.status === 'FAILED');
-
-  if (!anySuccess) {
+  if (!reset.success) {
     res.status(400).json({
       success: false,
-      results: allResults,
-      summary: 'Password was not updated in any system — check results below',
+      results: reset.results,
+      summary: reset.results.find((r) => r.system === 'POLICY')?.error
+        ?? 'Password was not updated in any system — check results below',
     });
     return;
   }
 
   res.json({
-    success: !anyFailed,
-    results: allResults,
-    summary: !anyFailed
+    success: !reset.partialFailure,
+    results: reset.results,
+    summary: !reset.partialFailure
       ? 'Password reset across all linked systems'
       : 'Password reset with some failures — check results',
   });

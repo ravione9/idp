@@ -11,6 +11,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requireAnyPortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { query, queryOne, execute } from '../db/connection.js';
+import { ensureOidcAppMirrored } from '../oidc/portal-apps.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -148,7 +149,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
         await execute(
           `INSERT INTO applications
              (id, slug, name, category, visibility, sso_enabled, provisioning)
-           VALUES (?, ?, ?, ?, 'PUBLIC', 1, 0)`,
+           VALUES (?, ?, ?, ?, 'RESTRICTED', 1, 0)`,
           [appId, slug, d.name, d.category ?? null],
         );
       }
@@ -196,6 +197,15 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   } else {
     res.status(500).json({ error: 'oidc_clients table is missing required columns — run migrations 010+' });
     return;
+  }
+
+  await ensureOidcAppMirrored(id);
+  if (!appId) {
+    const mirrored = await queryOne<{ app_id: string | null }>(
+      `SELECT app_id FROM oidc_clients WHERE id = ?`,
+      [id],
+    );
+    appId = mirrored?.app_id ?? null;
   }
 
   res.status(201).json({

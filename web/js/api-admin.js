@@ -71,7 +71,10 @@ Object.assign(api, {
   connectorRunExportUrl: (connectorId, runId) => `/api/iga/connectors/${connectorId}/runs/${runId}/export`,
   adAgentPackageUrl: () => '/api/iga/connectors/ad-agent-package.zip',
   listGroups:       () => f('/api/admin/groups'),
+  listGroupDepartments: () => f('/api/admin/groups/departments'),
   syncDirectoryGroups: () => f('/api/admin/groups/sync', { method: 'POST' }),
+  reconcileDynamicGroups: () => f('/api/admin/groups/reconcile', { method: 'POST' }),
+  reconcileDynamicGroup: (id) => f(`/api/admin/groups/${id}/reconcile`, { method: 'POST' }),
   getGroup:         (id) => f(`/api/admin/groups/${id}`),
   createGroup:      (data) => f('/api/admin/groups', { method: 'POST', body: JSON.stringify(data) }),
   updateGroup:      (id, data) => f(`/api/admin/groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
@@ -394,6 +397,12 @@ Object.assign(api, {
   bulkUsersValidate: (rows) =>
     f('/api/admin/bulk-users/validate', { method: 'POST', body: JSON.stringify({ rows }) }),
   bulkUsersTemplateUrl: (format = 'csv') => `/api/admin/bulk-users/template?format=${format}`,
+
+  bulkPasswordsBatch: (rows) =>
+    f('/api/admin/bulk-passwords/batch', { method: 'POST', body: JSON.stringify({ rows }) }),
+  bulkPasswordsValidate: (rows) =>
+    f('/api/admin/bulk-passwords/validate', { method: 'POST', body: JSON.stringify({ rows }) }),
+  bulkPasswordsTemplateUrl: () => '/api/admin/bulk-passwords/template',
 
   // Google directory attribute map + sync,
   getGoogleAttrMaps: () => f('/api/admin/directory/google/attr-maps'),

@@ -114,6 +114,8 @@ export async function syncSamlAppsToCatalog(): Promise<number> {
 
 export async function listAssignableApplications(): Promise<Record<string, unknown>[]> {
   await syncSamlAppsToCatalog();
+  const { syncOidcAppsToCatalog } = await import('../oidc/portal-apps.js');
+  await syncOidcAppsToCatalog();
   const rows = await query<Record<string, unknown>>(
     `SELECT a.id, a.slug, a.name, a.icon_url, a.category, a.active, a.allowed_cidrs,
             EXISTS (
@@ -207,6 +209,18 @@ export async function appRequiresExplicitGrant(appSlug: string): Promise<boolean
   );
   if (saml) {
     await ensureSamlAppMirrored(appSlug);
+    return true;
+  }
+
+  const oidc = await queryOne<{ ok: number }>(
+    `SELECT 1 AS ok
+       FROM oidc_clients c
+       JOIN applications a ON a.id = c.app_id
+      WHERE a.slug = ? AND c.active = 1 AND a.active = 1
+      LIMIT 1`,
+    [appSlug],
+  );
+  if (oidc) {
     return true;
   }
 

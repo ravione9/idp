@@ -678,15 +678,18 @@ export async function viewHome(me, content, initialTab = 'all') {
     const fb = app.iconUrl || app.icon_url
       ? `<img class="app-icon" src="${esc(app.iconUrl || app.icon_url)}" alt="" onerror="this.style.display='none'" />`
       : `<div class="app-icon app-icon-fallback">${esc((app.name || '?').charAt(0).toUpperCase())}</div>`;
-    const launch = app.launchUrl || (app.slug ? `/saml/launch/${app.slug}` : '#');
+    const launch = app.launchUrl || (app.slug ? (app.protocol === 'OIDC' ? `/oauth/launch/${app.slug}` : `/saml/launch/${app.slug}`) : '#');
     const appKey = app.slug || app.name;
     const isFav = favs.includes(appKey);
     const ipHint = app.ipRestricted
       ? ' title="IP-restricted — launch verifies your public IP"'
       : ` title="${esc(app.name)}"`;
+    const protocolBadge = app.protocol === 'OIDC'
+      ? '<span class="saml-badge" style="background:#2563eb">O</span>'
+      : '<span class="saml-badge">S</span>';
     return `<div class="app-tile-wrap" style="position:relative">
       <a class="app-tile" href="${esc(launch)}" target="_blank" rel="noopener"${ipHint}>
-        <span class="saml-badge">S</span>${fb}
+        ${protocolBadge}${fb}
         <span class="app-name">${esc(app.name)}</span>
         ${app.ipRestricted ? '<span class="saml-badge" style="left:auto;right:0.35rem;background:#b45309" title="IP restricted">IP</span>' : ''}
       </a>

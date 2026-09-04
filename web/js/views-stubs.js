@@ -148,12 +148,13 @@ export async function viewGroups(content, initialTab = 'directory') {
     AD:     '<span class="badge badge-success">AD</span>',
   }[src || 'LOCAL'] || `<span class="badge badge-neutral">${esc(src)}</span>`);
 
-  async function openGroupMembersModal(groupId, groupName, isSynced) {
+  async function openGroupMembersModal(groupId, groupName, isSynced, isDynamic) {
     const bd = openModal(`<div class="modal modal-wide"><div class="modal-header"><h2>${esc(groupName)} — Members</h2></div>
       <div class="modal-body">
         ${isSynced ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">Membership is synced from Google Workspace or Active Directory. Run <strong>Sync from Directory</strong> or trigger a connector sync to refresh.</div>' : ''}
+        ${isDynamic ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">This is a <strong>dynamic</strong> group — members are added automatically when a user\'s department matches the rule. Use <strong>Reconcile now</strong> to refresh membership.</div>' : ''}
         <div id="gm-list">${loading()}</div>
-        ${isSynced ? '' : `<div class="form-group" style="margin-top:1rem">
+        ${isSynced || isDynamic ? '' : `<div class="form-group" style="margin-top:1rem">
           <label class="form-label">Add member</label>
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
             <input class="form-input" id="gm-search" placeholder="Search name or email…" style="flex:1;min-width:180px">
@@ -213,13 +214,13 @@ export async function viewGroups(content, initialTab = 'directory') {
               ${m.employee_number && m.emp_id && String(m.employee_number) !== String(m.emp_id)
                 ? `<div class="muted" style="font-size:0.72rem">Dir: ${esc(m.emp_id)}</div>` : ''}
             </td>
-            ${isSynced ? '<td></td>' : `<td><button class="btn btn-sm btn-danger gm-rm" data-emp="${esc(m.emp_id)}">Remove</button></td>`}
+            ${isSynced || isDynamic ? '<td></td>' : `<td><button class="btn btn-sm btn-danger gm-rm" data-emp="${esc(m.emp_id)}">Remove</button></td>`}
           </tr>`).join('')
           : `<tr><td colspan="4"><p class="muted">No members yet.</p></td></tr>`;
         bd.querySelector('#gm-list').innerHTML = `<div class="table-wrap"><table>
-          <thead><tr><th>Name</th><th>Email</th><th>Employee ID</th>${isSynced ? '' : '<th></th>'}</tr></thead>
+          <thead><tr><th>Name</th><th>Email</th><th>Employee ID</th>${isSynced || isDynamic ? '' : '<th></th>'}</tr></thead>
           <tbody>${rows}</tbody></table></div>`;
-        if (!isSynced) {
+        if (!isSynced && !isDynamic) {
           bd.querySelectorAll('.gm-rm').forEach(btn => {
             btn.addEventListener('click', async () => {
               try { await api.removeGroupMember(groupId, btn.dataset.emp); await loadMembers(); await load(); }
@@ -232,7 +233,31 @@ export async function viewGroups(content, initialTab = 'directory') {
 
     bd.querySelector('#gm-close').addEventListener('click', () => bd.remove());
 
-    if (!isSynced) {
+    if (isDynamic) {
+      const footer = bd.querySelector('.modal-footer');
+      const recBtn = document.createElement('button');
+      recBtn.className = 'btn btn-primary';
+      recBtn.type = 'button';
+      recBtn.textContent = 'Reconcile now';
+      recBtn.addEventListener('click', async () => {
+        recBtn.disabled = true;
+        recBtn.textContent = 'Reconciling…';
+        try {
+          const r = await api.reconcileDynamicGroup(groupId);
+          bd.querySelector('#gm-err').innerHTML = `<div class="alert alert-success">Added ${r.added}, removed ${r.removed} (${r.matched} matched)</div>`;
+          await loadMembers();
+          await load();
+        } catch (e) {
+          bd.querySelector('#gm-err').innerHTML = errHtml(e.message);
+        } finally {
+          recBtn.disabled = false;
+          recBtn.textContent = 'Reconcile now';
+        }
+      });
+      footer?.insertBefore(recBtn, footer.firstChild);
+    }
+
+    if (!isSynced && !isDynamic) {
       let searchTimer;
       bd.querySelector('#gm-search').addEventListener('input', () => {
         clearTimeout(searchTimer);
@@ -371,21 +396,24 @@ export async function viewGroups(content, initialTab = 'directory') {
       const groups = norm(await api.listGroups());
       const rows = groups.length ? groups.map(g => {
         const synced = g.source_system && g.source_system !== 'LOCAL';
+        const isDynamic = g.type === 'DYNAMIC' && !synced;
         return `<tr>
           <td class="cell-strong">${esc(g.name)}</td>
           <td>${g.type === 'DYNAMIC' ? '<span class="badge badge-success">DYNAMIC</span>' : '<span class="badge badge-info">STATIC</span>'}</td>
+          <td class="muted" style="font-size:0.78rem">${esc(g.rule_summary || (isDynamic ? '—' : ''))}</td>
           <td>${sourceBadge(g.source_system)}</td>
           <td>${g.member_count ?? 0}</td>
           <td>${g.last_synced_at ? `<span class="muted" style="font-size:0.78rem">${fmtDate(g.last_synced_at)}</span>` : '—'}</td>
           <td style="white-space:nowrap">
-            <button class="btn btn-sm btn-secondary mgr-group" data-id="${esc(String(g.id))}" data-name="${esc(g.name)}" data-synced="${synced ? '1' : '0'}">${synced ? 'View Members' : 'Manage Members'}</button>
+            <button class="btn btn-sm btn-secondary mgr-group" data-id="${esc(String(g.id))}" data-name="${esc(g.name)}" data-synced="${synced ? '1' : '0'}" data-dynamic="${isDynamic ? '1' : '0'}">${synced || isDynamic ? 'View Members' : 'Manage Members'}</button>
+            ${isDynamic ? `<button class="btn btn-sm btn-secondary edit-group" data-id="${esc(String(g.id))}" data-name="${esc(g.name)}">Edit Rule</button>` : ''}
             ${synced ? '' : `<button class="btn btn-sm btn-danger del-group" data-id="${esc(String(g.id))}">Delete</button>`}
           </td>
         </tr>`;
-      }).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No groups yet. Create a local group or sync from Google / AD connectors.</p></div></td></tr>`;
+      }).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">◎</div><p>No groups yet. Create a local group or sync from Google / AD connectors.</p></div></td></tr>`;
       wrap.querySelector('#list-area').innerHTML = `
-        <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">Google/AD connectors mirror directory groups on sync (blank Sync Groups = auto). Or click <strong>Sync from Directory</strong> here. Ensure Google domain-wide delegation includes <code>admin.directory.group.readonly</code>.</p>
-        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Source</th><th>Members</th><th>Last Sync</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">Google/AD connectors mirror directory groups on sync. <strong>Dynamic</strong> local groups auto-add users by department when they are created or their department changes.</p>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Rule</th><th>Source</th><th>Members</th><th>Last Sync</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
       wrap.querySelectorAll('.del-group').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Delete this group?')) return;
@@ -393,7 +421,10 @@ export async function viewGroups(content, initialTab = 'directory') {
         });
       });
       wrap.querySelectorAll('.mgr-group').forEach(btn => {
-        btn.addEventListener('click', () => openGroupMembersModal(btn.dataset.id, btn.dataset.name, btn.dataset.synced === '1'));
+        btn.addEventListener('click', () => openGroupMembersModal(btn.dataset.id, btn.dataset.name, btn.dataset.synced === '1', btn.dataset.dynamic === '1'));
+      });
+      wrap.querySelectorAll('.edit-group').forEach(btn => {
+        btn.addEventListener('click', () => openEditDynamicGroupModal(btn.dataset.id, btn.dataset.name));
       });
     } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
   }
@@ -412,20 +443,103 @@ export async function viewGroups(content, initialTab = 'directory') {
     syncBtn.disabled = false; syncBtn.textContent = '⟳ Sync from Directory';
   });
 
-  newGroupBtn.addEventListener('click', () => {
+  newGroupBtn.addEventListener('click', () => openNewGroupModal());
+
+  async function loadDepartmentOptions(selected = []) {
+    try {
+      const r = await api.listGroupDepartments();
+      const depts = r.data || r || [];
+      const sel = new Set((selected || []).map((d) => String(d).toLowerCase()));
+      return depts.map((d) =>
+        `<option value="${esc(d)}"${sel.has(String(d).toLowerCase()) ? ' selected' : ''}>${esc(d)}</option>`,
+      ).join('');
+    } catch {
+      return '';
+    }
+  }
+
+  function toggleDynamicFields(bd) {
+    const isDynamic = bd.querySelector('#g-type')?.value === 'DYNAMIC';
+    const wrap = bd.querySelector('#g-dynamic-fields');
+    if (wrap) wrap.hidden = !isDynamic;
+  }
+
+  async function openNewGroupModal() {
+    const deptOptions = await loadDepartmentOptions();
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>New Group</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="g-name" placeholder="Group name"></div>
       <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="g-desc" placeholder="Description"></div>
-      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="g-type"><option value="STATIC">STATIC</option><option value="DYNAMIC">DYNAMIC</option></select></div>
+      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="g-type"><option value="STATIC">STATIC — manual members</option><option value="DYNAMIC">DYNAMIC — by department</option></select></div>
+      <div id="g-dynamic-fields" hidden>
+        <div class="form-group">
+          <label class="form-label">Departments</label>
+          <p class="muted" style="font-size:0.78rem;margin:0 0 0.35rem">All ACTIVE users in selected departments are added automatically. New users are added when created or synced.</p>
+          <select class="form-select" id="g-depts" multiple size="8" style="min-height:140px">${deptOptions || '<option disabled>No departments in directory yet</option>'}</select>
+          <input class="form-input" id="g-dept-custom" placeholder="Or type department names (comma-separated)" style="margin-top:0.5rem">
+        </div>
+      </div>
       <div id="g-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="g-save">Create</button><button class="btn btn-secondary" id="g-cancel">Cancel</button></div></div>`);
+    bd.querySelector('#g-type').addEventListener('change', () => toggleDynamicFields(bd));
     bd.querySelector('#g-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#g-save').addEventListener('click', async () => {
-      const data = { name: bd.querySelector('#g-name').value, description: bd.querySelector('#g-desc').value, type: bd.querySelector('#g-type').value };
+      const type = bd.querySelector('#g-type').value;
+      const data = { name: bd.querySelector('#g-name').value.trim(), description: bd.querySelector('#g-desc').value.trim(), type };
       if (!data.name) { bd.querySelector('#g-err').innerHTML = errHtml('Name is required'); return; }
-      try { await api.createGroup(data); bd.remove(); await load(); } catch(e) { bd.querySelector('#g-err').innerHTML = errHtml(e.message); }
+      if (type === 'DYNAMIC') {
+        const fromSelect = [...bd.querySelector('#g-depts').selectedOptions].map((o) => o.value.trim()).filter(Boolean);
+        const fromCustom = (bd.querySelector('#g-dept-custom').value || '').split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
+        data.dept_ids = [...new Set([...fromSelect, ...fromCustom])];
+        if (!data.dept_ids.length) {
+          bd.querySelector('#g-err').innerHTML = errHtml('Select or enter at least one department');
+          return;
+        }
+      }
+      try {
+        const r = await api.createGroup(data);
+        bd.remove();
+        const note = r.reconcile
+          ? ` Created with ${r.reconcile.matched ?? 0} members (${r.reconcile.added ?? 0} added).`
+          : '';
+        wrap.querySelector('#grp-msg').innerHTML = `<div class="alert alert-success">Group created.${note}</div>`;
+        await load();
+      } catch(e) { bd.querySelector('#g-err').innerHTML = errHtml(e.message); }
     });
-  });
+  }
+
+  async function openEditDynamicGroupModal(groupId, groupName) {
+    let group;
+    try { group = await api.getGroup(groupId); } catch (e) { alert(e.message); return; }
+    const rule = group.rule_json || {};
+    const currentDepts = rule.dept_ids || (rule.field === 'dept_id' && rule.value ? (Array.isArray(rule.value) ? rule.value : [rule.value]) : []);
+    const deptOptions = await loadDepartmentOptions(currentDepts);
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Edit Dynamic Group — ${esc(groupName)}</h2></div><div class="modal-body">
+      <div class="form-group"><label class="form-label">Departments</label>
+        <select class="form-select" id="eg-depts" multiple size="8" style="min-height:140px">${deptOptions}</select>
+        <input class="form-input" id="eg-dept-custom" placeholder="Or type department names (comma-separated)" style="margin-top:0.5rem">
+      </div>
+      <div id="eg-err"></div>
+    </div><div class="modal-footer"><button class="btn btn-primary" id="eg-save">Save & Reconcile</button><button class="btn btn-secondary" id="eg-cancel">Cancel</button></div></div>`);
+    bd.querySelector('#eg-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#eg-save').addEventListener('click', async () => {
+      const fromSelect = [...bd.querySelector('#eg-depts').selectedOptions].map((o) => o.value.trim()).filter(Boolean);
+      const fromCustom = (bd.querySelector('#eg-dept-custom').value || '').split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
+      const dept_ids = [...new Set([...fromSelect, ...fromCustom])];
+      if (!dept_ids.length) {
+        bd.querySelector('#eg-err').innerHTML = errHtml('Select or enter at least one department');
+        return;
+      }
+      try {
+        const r = await api.updateGroup(groupId, { type: 'DYNAMIC', dept_ids });
+        bd.remove();
+        const note = r.reconcile
+          ? ` ${r.reconcile.matched ?? 0} members (${r.reconcile.added ?? 0} added, ${r.reconcile.removed ?? 0} removed).`
+          : '';
+        wrap.querySelector('#grp-msg').innerHTML = `<div class="alert alert-success">Rule updated.${note}</div>`;
+        await load();
+      } catch (e) { bd.querySelector('#eg-err').innerHTML = errHtml(e.message); }
+    });
+  }
 
   async function openTagGroupMembersModal(groupId, groupName) {
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Tag Group — ${esc(groupName)}</h2></div>
@@ -5501,6 +5615,7 @@ function initUsersTab(panel, me = null) {
         <div class="page-toolbar-actions">
           <button type="button" class="btn btn-secondary btn-sm btn-with-icon" id="ud-refresh-btn">${svgIcon('refresh')}<span>Refresh</span></button>
           <button type="button" class="btn btn-secondary btn-sm" id="ud-bulk-upload-btn">Bulk upload</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="ud-bulk-password-btn">Bulk password update</button>
           <button type="button" class="btn btn-primary btn-sm btn-with-icon" id="ud-create-btn">${svgIcon('plus')}<span>Local user</span></button>
         </div>
       </div>
@@ -6858,6 +6973,177 @@ function initUsersTab(panel, me = null) {
     bd.querySelector('#bu-cancel').addEventListener('click', () => bd.remove());
   }
 
+  function openBulkPasswordModal() {
+    const bd = openModal(`<div class="modal" style="width:760px;max-width:96vw">
+      <div class="modal-header"><h2>Bulk Password Update</h2></div>
+      <div class="modal-body">
+        <div class="alert alert-warning" style="font-size:0.85rem;margin-bottom:1rem">
+          Passwords are applied to local login and written back to linked AD / Google accounts.
+          Each row must include <strong>email</strong> (or emp_id) and <strong>new_password</strong>.
+        </div>
+        <ol class="muted" style="font-size:0.85rem;margin:0 0 1rem;padding-left:1.2rem;line-height:1.6">
+          <li>Download the CSV template</li>
+          <li>Add one row per user with their new password</li>
+          <li>Upload, validate, preview, then apply</li>
+        </ol>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem">
+          <a class="btn btn-secondary btn-sm" href="${api.bulkPasswordsTemplateUrl()}" target="_blank">Download CSV Template</a>
+          <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
+            Choose file <input type="file" id="bp-file" accept=".csv,text/csv" hidden>
+          </label>
+        </div>
+        <div id="bp-progress" hidden>
+          <div class="muted" style="font-size:0.8rem;margin-bottom:0.35rem" id="bp-progress-label">Working…</div>
+          <div style="height:8px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden">
+            <div id="bp-progress-bar" style="height:100%;width:0%;background:var(--accent,#4c8bf5);transition:width 0.2s"></div>
+          </div>
+        </div>
+        <div id="bp-preview" style="margin-top:1rem"></div>
+        <div id="bp-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="bp-cancel">Cancel</button>
+        <button class="btn btn-secondary" id="bp-validate" disabled>Validate</button>
+        <button class="btn btn-primary" id="bp-apply" disabled>Update Passwords</button>
+      </div>
+    </div>`);
+
+    let parsedRows = [];
+    const setProgress = (pct, label) => {
+      bd.querySelector('#bp-progress').hidden = false;
+      bd.querySelector('#bp-progress-bar').style.width = pct + '%';
+      bd.querySelector('#bp-progress-label').textContent = label || '';
+    };
+
+    function parsePasswordCsv(text) {
+      const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length < 2) return [];
+      const headers = lines[0].split(',').map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
+      const idx = (names) => {
+        for (const n of names) {
+          const i = headers.indexOf(n);
+          if (i >= 0) return i;
+        }
+        return -1;
+      };
+      const col = {
+        email: idx(['email', 'email_corp', 'corporate_email']),
+        empId: idx(['emp_id', 'empid', 'employee_id', 'employeeid']),
+        newPassword: idx(['new_password', 'password', 'newpassword']),
+      };
+      const cell = (parts, i) => (i >= 0 ? (parts[i] || '').trim().replace(/^"|"$/g, '') : '');
+      const out = [];
+      for (let li = 1; li < lines.length; li++) {
+        const parts = lines[li].match(/("([^"]|"")*"|[^,]*)/g)?.map((p) => p.replace(/^"|"$/g, '').replace(/""/g, '"')) || lines[li].split(',');
+        const email = cell(parts, col.email);
+        const empId = cell(parts, col.empId);
+        const newPassword = cell(parts, col.newPassword);
+        if (!email && !empId) continue;
+        out.push({
+          line: li + 1,
+          email: email || undefined,
+          empId: empId || undefined,
+          employeeId: empId || undefined,
+          newPassword,
+        });
+      }
+      return out;
+    }
+
+    bd.querySelector('#bp-file').addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      bd.querySelector('#bp-err').innerHTML = '';
+      setProgress(20, 'Reading file…');
+      try {
+        parsedRows = parsePasswordCsv(await file.text());
+        setProgress(100, `Loaded ${parsedRows.length} rows`);
+        bd.querySelector('#bp-validate').disabled = parsedRows.length === 0;
+        bd.querySelector('#bp-apply').disabled = true;
+        bd.querySelector('#bp-preview').innerHTML = `<p class="muted" style="font-size:0.85rem">${parsedRows.length} rows ready. Click Validate.</p>`;
+      } catch (err) {
+        bd.querySelector('#bp-err').innerHTML = errHtml(err.message);
+      }
+    });
+
+    bd.querySelector('#bp-validate').addEventListener('click', async () => {
+      try {
+        setProgress(40, 'Validating…');
+        const r = await api.bulkPasswordsValidate(parsedRows);
+        setProgress(100, `Valid ${r.valid} · Invalid ${r.invalid}`);
+        const warnHtml = (r.warnings || []).length
+          ? `<div class="alert alert-warning" style="font-size:0.8rem;margin-bottom:0.75rem">${esc((r.warnings || []).join(' · '))}</div>`
+          : '';
+        const previewRows = (r.preview || []).slice(0, 50).map((p) => `
+          <tr>
+            <td>${esc(String(p.line || ''))}</td>
+            <td>${esc(p.email || '')}</td>
+            <td>${esc(p.empId || '')}</td>
+            <td class="muted" style="font-size:0.75rem">${esc((p.linkedSystems || []).join(', '))}</td>
+            <td>${p.valid ? '<span class="badge badge-success">OK</span>' : '<span class="badge badge-danger">Error</span>'}</td>
+            <td class="muted" style="font-size:0.75rem">${esc((p.errors || []).join('; '))}</td>
+          </tr>`).join('');
+        bd.querySelector('#bp-preview').innerHTML = `
+          ${warnHtml}
+          <div class="kpi-strip" style="margin-bottom:0.75rem">
+            <div class="kpi"><div class="kpi-val">${r.valid + r.invalid}</div><div class="kpi-label">Total</div></div>
+            <div class="kpi"><div class="kpi-val">${r.valid}</div><div class="kpi-label">Valid</div></div>
+            <div class="kpi"><div class="kpi-val">${r.invalid}</div><div class="kpi-label">Invalid</div></div>
+          </div>
+          <div class="table-wrap"><table class="dense-table">
+            <thead><tr><th>Line</th><th>Email</th><th>Emp ID</th><th>Linked</th><th>Status</th><th>Errors</th></tr></thead>
+            <tbody>${previewRows || '<tr><td colspan="6">No rows</td></tr>'}</tbody>
+          </table></div>`;
+        bd.querySelector('#bp-apply').disabled = r.valid === 0;
+      } catch (err) {
+        bd.querySelector('#bp-err').innerHTML = errHtml(err.message);
+      }
+    });
+
+    bd.querySelector('#bp-apply').addEventListener('click', async () => {
+      if (!confirm(`Update passwords for ${parsedRows.length} users? This writes to local login and linked AD/Google accounts.`)) return;
+      try {
+        setProgress(10, 'Updating passwords…');
+        const chunk = 200;
+        let updated = 0, failed = 0, skipped = 0;
+        let reportCsv = 'line,email,emp_id,action,error,code\n';
+        for (let i = 0; i < parsedRows.length; i += chunk) {
+          const part = parsedRows.slice(i, i + chunk);
+          const r = await api.bulkPasswordsBatch(part);
+          updated += r.updated ?? 0;
+          failed += r.failed ?? 0;
+          skipped += r.skipped ?? 0;
+          if (r.reportCsv) {
+            const lines = r.reportCsv.split('\n').slice(1).filter(Boolean);
+            reportCsv += lines.join('\n') + (lines.length ? '\n' : '');
+          }
+          setProgress(Math.round(((i + part.length) / parsedRows.length) * 100), `Updated ${i + part.length}/${parsedRows.length}`);
+        }
+        bd.querySelector('#bp-preview').innerHTML = `
+          <div class="alert alert-success">Password update complete</div>
+          <div class="kpi-strip">
+            <div class="kpi"><div class="kpi-val">${parsedRows.length}</div><div class="kpi-label">Total</div></div>
+            <div class="kpi"><div class="kpi-val">${updated}</div><div class="kpi-label">Updated</div></div>
+            <div class="kpi"><div class="kpi-val">${skipped}</div><div class="kpi-label">Skipped</div></div>
+            <div class="kpi"><div class="kpi-val">${failed}</div><div class="kpi-label">Failed</div></div>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="bp-dl-report" style="margin-top:0.75rem">Download error report</button>`;
+        bd.querySelector('#bp-dl-report')?.addEventListener('click', () => {
+          const blob = new Blob([reportCsv], { type: 'text/csv' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'bulk-password-update-report.csv';
+          a.click();
+        });
+        toast(`Bulk password update: ${updated} updated, ${failed} failed`);
+      } catch (err) {
+        bd.querySelector('#bp-err').innerHTML = errHtml(err.message);
+      }
+    });
+
+    bd.querySelector('#bp-cancel').addEventListener('click', () => bd.remove());
+  }
+
   // ── Wire up search / filters ─────────────────────────────────────────────────
   function getFilters() {
     return {
@@ -6904,6 +7190,7 @@ function initUsersTab(panel, me = null) {
 
   panel.querySelector('#ud-create-btn').addEventListener('click', openCreateUserModal);
   panel.querySelector('#ud-bulk-upload-btn')?.addEventListener('click', openBulkUploadModal);
+  panel.querySelector('#ud-bulk-password-btn')?.addEventListener('click', openBulkPasswordModal);
 
   panel.querySelector('#ud-bulk-clear')?.addEventListener('click', () => {
     selected.clear();
