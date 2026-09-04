@@ -1,7 +1,8 @@
 # IDP prod — lk-multiverse-platform-eks (CCMS-style values layout)
 #
 # Chart: multiverse-application-helm/multiverse/idp
-# GitLab CI deploy-prod uses THIS file from the idp repo (see .gitlab-ci.yml VALUES_FILE).
+# GitLab CI deploy-prod merges THIS overlay on top of multiverse-application-helm chart values
+# (see .gitlab-ci.yml CHART_VALUES_FILE + VALUES_OVERLAY).
 # Local install (copy chart into multiverse-application-helm first):
 #   helm upgrade -i idp ./multiverse/idp -n it-idp \
 #     -f ./deploy/multiverse/values-lk-multiverse-platform-eks.yaml \
@@ -71,6 +72,9 @@ pdb:
 worker:
   enabled: true
   replicas: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
   resources:
     requests:
       memory: "256Mi"

@@ -920,7 +920,7 @@ Target topology is multi-replica API behind a load balancer with shared MySQL + 
 | Outbox drain | Existing Redis leader election in `src/services/outbox-worker.ts` |
 | SAML/OIDC signing keys | Inject `SAML_IDP_PRIVATE_KEY_PEM` + `SAML_IDP_CERT_PEM` from Vault (Agent Injector → process env on Multiverse; or External Secrets elsewhere); `ensureSamlKeys()` short-circuits; `ensureOidcKeys()` reuses SAML key when SAML is enabled |
 
-**Lenskart Multiverse (prod EKS):** Chart templates from `infra-platform/multiverse-application-helm`; **Helm values** from this repo at `deploy/multiverse/values-lk-multiverse-platform-eks.yaml` (ns `it-idp`, host `idp.lenskart.com`, RDS + ElastiCache + SQS FIFO, pod `dnsPolicy: None` + `dnsConfig.nameservers: [192.168.32.3]` / `searches: [lenskart.in]`). GitLab CI **`.gitlab-ci.yml`** — manual `build-prod` then `deploy-prod` on `main` (or **Run pipeline** from GitLab UI); `deploy-prod` runs `helm upgrade` with `-f deploy/multiverse/values-lk-multiverse-platform-eks.yaml` and `image.tag=$CI_COMMIT_SHORT_SHA`. Vault template: `deploy/multiverse/vault-multiverse-config-idp.template.env` (KV v1 `multiverse/config/idp`, role `idp`, SA `idp-sa`). EC2/docker-compose unchanged.
+**Lenskart Multiverse (prod EKS):** Chart templates and base values from `infra-platform/multiverse-application-helm`; **overlay** in this repo at `deploy/multiverse/values-lk-multiverse-platform-eks.yaml` (pod DNS, env overrides). GitLab CI **`.gitlab-ci.yml`** — manual `build-prod` then `deploy-prod`; `helm upgrade` uses **both** chart values + overlay, with `image.tag=$CI_COMMIT_SHORT_SHA`.
 
 **Production SAML key generation (K8s / Vault):** do **not** rely on in-pod `ensureSamlKeys()` auto-generation (3-year validity, per-replica risk). Generate once offline with **15-year** validity and load into Vault:
 
@@ -1130,7 +1130,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 **What changed:**
 
-- **`.gitlab-ci.yml`** — `helm upgrade -f ${CI_PROJECT_DIR}/deploy/multiverse/values-lk-multiverse-platform-eks.yaml` (chart still cloned from `multiverse-application-helm`).
+- **`.gitlab-ci.yml`** — `helm upgrade` with chart base values from `multiverse-application-helm` plus idp repo overlay (`deploy/multiverse/values-lk-multiverse-platform-eks.yaml` for DNS etc.).
 
 ### (pending) — 2026-09-04 — Pod DNS config for Multiverse EKS (lenskart.in resolver)
 

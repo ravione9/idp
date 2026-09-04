@@ -16,7 +16,8 @@ variables:
   RELEASE: idp
   NAMESPACE: it-idp
   CHART: multiverse/idp
-  VALUES_FILE: deploy/multiverse/values-lk-multiverse-platform-eks.yaml
+  CHART_VALUES_FILE: values-lk-multiverse-platform-eks.yaml
+  VALUES_OVERLAY: deploy/multiverse/values-lk-multiverse-platform-eks.yaml
   HELM_REPO: infra-platform/multiverse-application-helm
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
 
@@ -99,11 +100,14 @@ deploy-prod:
       git clone --depth 1 -b main "${CLONE_URL}" helm
     - aws eks update-kubeconfig --name "${EKS_CLUSTER}" --region "${AWS_DEFAULT_REGION}"
   script:
-    - test -f "${CI_PROJECT_DIR}/${VALUES_FILE}" || (echo "Missing ${VALUES_FILE}" && exit 1)
     - |
+      CHART_VALUES="./helm/${CHART}/${CHART_VALUES_FILE}"
+      test -f "${CHART_VALUES}" || (echo "Missing chart values ${CHART_VALUES}" && exit 1)
+      test -f "${CI_PROJECT_DIR}/${VALUES_OVERLAY}" || (echo "Missing values overlay ${VALUES_OVERLAY}" && exit 1)
       helm upgrade --install "${RELEASE}" "./helm/${CHART}" \
         -n "${NAMESPACE}" \
-        -f "${CI_PROJECT_DIR}/${VALUES_FILE}" \
+        -f "${CHART_VALUES}" \
+        -f "${CI_PROJECT_DIR}/${VALUES_OVERLAY}" \
         --set-string "image.tag=${IMAGE_TAG}" \
         --wait --timeout 15m
       kubectl rollout restart deployment -n "${NAMESPACE}" -l "release=${RELEASE}" || true
