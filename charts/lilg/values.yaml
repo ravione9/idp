@@ -12,6 +12,16 @@ image:
 # Public identity of this IdP
 idpHostname: idp.lenskart.com
 
+# Pod DNS — optional override (e.g. on-prem nameserver for corp short names)
+# Example:
+#   dnsPolicy: None
+#   dnsConfig:
+#     nameservers: ["192.168.32.3"]
+#     searches: ["lenskart.in"]
+#     options: [{ name: ndots, value: "2" }]
+dnsPolicy: ""
+dnsConfig: {}
+
 api:
   replicaCount: 3
   resources:

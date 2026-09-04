@@ -20,6 +20,13 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- if .Values.dnsPolicy }}
+      dnsPolicy: {{ .Values.dnsPolicy }}
+      {{- end }}
+      {{- with .Values.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: migrate
           image: {{ include "lilg.image" . }}
