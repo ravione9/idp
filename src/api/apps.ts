@@ -1,5 +1,5 @@
 /**
- * LILG — User application catalog (SAML SP launcher)
+ * LILG — User application catalog (SAML + OIDC launcher)
  * All authenticated users see apps they are entitled to (by Access Policy grant).
  * IP allowlists are enforced at SSO launch time, not when listing tiles.
  */
@@ -9,6 +9,8 @@ import { requireAuth } from '../auth/middleware.js';
 import { isSamlEnabled } from '../config.js';
 import { canReceiveSamlAssertion } from '../saml/entitlements.js';
 import { samlLaunchPath } from '../saml/launch-url.js';
+import { oidcLaunchPath } from '../oidc/launch-url.js';
+import { getActiveOidcPortalApps } from '../oidc/portal-apps.js';
 import { getActiveServiceProviders, getEmployeeForSaml } from '../saml/sp-registry.js';
 import {
   canUserLaunchApp,
@@ -18,15 +20,10 @@ import {
 const router = Router();
 
 // ---------------------------------------------------------------------------
-// GET /api/apps — SAML apps the current user may see (grant-based)
+// GET /api/apps — SAML + OIDC apps the current user may see (grant-based)
 // ---------------------------------------------------------------------------
 router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
-
-  if (!isSamlEnabled()) {
-    res.json({ samlEnabled: false, data: [] });
-    return;
-  }
 
   const emp = await getEmployeeForSaml(user.empId);
   if (!emp) {
@@ -34,30 +31,53 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
     return;
   }
 
-  const allApps = await getActiveServiceProviders();
-  const launchChecks = await Promise.all(
-    allApps.map(async (sp) => {
-      // Catalog: grant only — do not hide apps due to IP allowlist.
+  const samlEnabled = isSamlEnabled();
+  const samlApps = samlEnabled ? await getActiveServiceProviders() : [];
+  const oidcApps = await getActiveOidcPortalApps();
+
+  if (!samlEnabled && !oidcApps.length) {
+    res.json({ samlEnabled: false, data: [] });
+    return;
+  }
+
+  const launchChecks = await Promise.all([
+    ...samlApps.map(async (sp) => {
       const ok = await canUserLaunchApp(emp, sp.slug, sp.entitlement_rule);
-      if (!ok) return { sp, ok: false, ipRestricted: false };
+      if (!ok) return null;
       const cidrs = await getApplicationAllowedCidrs(sp.slug);
-      return { sp, ok: true, ipRestricted: cidrs.length > 0 };
+      return {
+        id: sp.id,
+        name: sp.name,
+        slug: sp.slug,
+        iconUrl: sp.icon_url,
+        launchUrl: samlLaunchPath(sp.slug, sp.default_relay_state),
+        protocol: 'SAML' as const,
+        entityId: sp.entity_id,
+        ipRestricted: cidrs.length > 0,
+      };
     }),
-  );
-  const entitled = launchChecks.filter((c) => c.ok);
+    ...oidcApps.map(async (app) => {
+      const ok = await canUserLaunchApp(emp, app.slug, null);
+      if (!ok) return null;
+      const cidrs = await getApplicationAllowedCidrs(app.slug);
+      return {
+        id: app.id,
+        name: app.name,
+        slug: app.slug,
+        iconUrl: app.iconUrl,
+        launchUrl: oidcLaunchPath(app.slug),
+        protocol: 'OIDC' as const,
+        ipRestricted: cidrs.length > 0,
+      };
+    }),
+  ]);
+
+  const entitled = launchChecks.filter((row): row is NonNullable<typeof row> => row !== null);
 
   res.json({
-    samlEnabled: true,
-    ssoAllowed:  canReceiveSamlAssertion(emp),
-    data: entitled.map(({ sp, ipRestricted }) => ({
-      id:           sp.id,
-      name:         sp.name,
-      slug:         sp.slug,
-      iconUrl:      sp.icon_url,
-      launchUrl:    samlLaunchPath(sp.slug, sp.default_relay_state),
-      entityId:     sp.entity_id,
-      ipRestricted,
-    })),
+    samlEnabled,
+    ssoAllowed: canReceiveSamlAssertion(emp),
+    data: entitled,
   });
 });
 
