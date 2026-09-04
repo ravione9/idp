@@ -1145,7 +1145,8 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/api/apps.ts`** — returns SAML + OIDC apps the user may launch (`protocol: SAML | OIDC`).
 - **`src/oidc/router.ts`** — `GET /oauth/launch/:slug` (IdP-initiated tile launch); `/oauth/authorize` and `/oauth/resume` enforce Access Policy when `app_id` is linked.
 - **`src/services/app-access-policy.ts`** — OIDC-linked apps require explicit grants (same as SAML).
-- **`web/js/views-end-user.js`** — OIDC tiles show **O** badge and `/oauth/launch/:slug`.
+- **`web/js/views-admin.js`** — OIDC tiles show **O** badge and `/oauth/launch/:slug`.
+- **`src/index.ts`** — boot-time sync of SAML/OIDC apps into `applications` so Access Policy is populated after restart.
 
 ### (pending) — 2026-08-31 — Department-based dynamic groups
 

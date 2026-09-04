@@ -19,8 +19,10 @@ import {
   listAssignableApplications,
   setApplicationRequestable,
   setApplicationAllowedCidrs,
+  syncSamlAppsToCatalog,
   type ApprovalLevel,
 } from '../services/app-access-policy.js';
+import { syncOidcAppsToCatalog } from '../oidc/portal-apps.js';
 import { parseCidrList } from '../utils/ip-match.js';
 
 const router = Router();
@@ -66,6 +68,19 @@ router.get('/summary', asyncHandler(async (_req: Request, res: Response) => {
 router.get('/applications', asyncHandler(async (_req: Request, res: Response) => {
   const rows = await listAssignableApplications();
   res.json({ data: rows });
+}));
+
+// POST /sync-catalog — repair SAML/OIDC → applications links (idempotent)
+router.post('/sync-catalog', asyncHandler(async (_req: Request, res: Response) => {
+  let oidcSynced = 0;
+  try {
+    oidcSynced = await syncOidcAppsToCatalog();
+  } catch (err) {
+    logger.warn({ err }, 'OIDC catalog sync failed');
+  }
+  const samlSynced = await syncSamlAppsToCatalog();
+  const rows = await listAssignableApplications();
+  res.json({ samlSynced, oidcSynced, assignable: rows.length, data: rows });
 }));
 
 // ===========================================================================

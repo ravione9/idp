@@ -309,6 +309,7 @@ Object.assign(api, {
   // Application Access Policy,
   appAccessSummary:     () => f('/api/admin/app-access-policy/summary'),
   listAppAccessApps:    () => f('/api/admin/app-access-policy/applications'),
+  syncAppAccessCatalog: () => f('/api/admin/app-access-policy/sync-catalog', { method: 'POST' }),
   updateAppIpPolicy:    (appId, allowedCidrs) =>
     f(`/api/admin/app-access-policy/applications/${encodeURIComponent(appId)}/ip-policy`, {
       method: 'PUT',

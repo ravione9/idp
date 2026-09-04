@@ -14,6 +14,27 @@ function openModal(html) {
 }
 function errHtml(msg) { return `<div class="alert alert-error">${esc(msg)}</div>`; }
 
+function slugifyAppSlug(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80);
+}
+
+function formatApiError(err) {
+  const details = err?.body?.details;
+  if (Array.isArray(details) && details.length) {
+    return details.map((d) => {
+      const field = Array.isArray(d.path) && d.path.length ? d.path.join('.') : 'field';
+      return `${field}: ${d.message || 'invalid'}`;
+    }).join('; ');
+  }
+  return err?.message || 'Request failed';
+}
+
 let _samlAttrFieldsCache = null;
 async function loadSamlAttributeFields() {
   if (_samlAttrFieldsCache) return _samlAttrFieldsCache;
@@ -959,8 +980,9 @@ export async function viewIgaApps(content, opts = {}) {
           <div class="form-group">
             <label class="form-label">Slug <span style="color:var(--danger)">*</span></label>
             <input class="form-input" id="ac-slug" value="${esc(app?.slug||'')}"
-              placeholder="e.g. slack" pattern="[a-z0-9-]+"
+              placeholder="e.g. ppm-eks" pattern="[a-z0-9-]+"
               ${isEdit ? 'readonly title="Slug cannot be changed after creation"' : ''}>
+            <p class="hint muted" style="font-size:0.75rem;margin-top:0.35rem">Lowercase letters, numbers, and hyphens only. Underscores are converted automatically.</p>
           </div>
           <div class="form-group span2">
             <label class="form-label">Description</label>
@@ -1001,10 +1023,23 @@ export async function viewIgaApps(content, opts = {}) {
     </div>`);
 
     bd.querySelector('#ac-cancel').addEventListener('click', () => bd.remove());
+
+    if (!isEdit) {
+      const nameInput = bd.querySelector('#ac-name');
+      const slugInput = bd.querySelector('#ac-slug');
+      let slugTouched = !!slugInput.value.trim();
+      slugInput.addEventListener('input', () => { slugTouched = true; });
+      nameInput.addEventListener('input', () => {
+        if (slugTouched) return;
+        slugInput.value = slugifyAppSlug(nameInput.value);
+      });
+    }
+
     bd.querySelector('#ac-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#ac-save');
       const name  = bd.querySelector('#ac-name').value.trim();
-      const slug  = bd.querySelector('#ac-slug').value.trim();
+      let slug  = slugifyAppSlug(bd.querySelector('#ac-slug').value);
+      if (!isEdit) bd.querySelector('#ac-slug').value = slug;
       const desc  = bd.querySelector('#ac-desc').value.trim();
       const cat   = bd.querySelector('#ac-cat').value.trim();
       const vis   = bd.querySelector('#ac-vis-sel').value;
@@ -1013,7 +1048,11 @@ export async function viewIgaApps(content, opts = {}) {
       const prov  = bd.querySelector('#ac-prov').checked;
 
       if (!name) { bd.querySelector('#ac-err').innerHTML = errHtml('Name is required.'); return; }
-      if (!isEdit && !slug) { bd.querySelector('#ac-err').innerHTML = errHtml('Slug is required.'); return; }
+      if (!isEdit && !slug) { bd.querySelector('#ac-err').innerHTML = errHtml('Slug is required (use lowercase letters, numbers, and hyphens).'); return; }
+      if (!isEdit && !/^[a-z0-9-]+$/.test(slug)) {
+        bd.querySelector('#ac-err').innerHTML = errHtml('Slug must use lowercase letters, numbers, and hyphens only (e.g. ppm-eks).');
+        return;
+      }
 
       saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Registering…';
       const data = { name, description: desc||undefined, category: cat||undefined,
@@ -1026,7 +1065,7 @@ export async function viewIgaApps(content, opts = {}) {
         bd.remove();
         await loadApps();
       } catch(e) {
-        bd.querySelector('#ac-err').innerHTML = errHtml(e.message);
+        bd.querySelector('#ac-err').innerHTML = errHtml(formatApiError(e));
         saveBtn.disabled = false; saveBtn.textContent = isEdit ? 'Save Changes' : 'Register';
       }
     });

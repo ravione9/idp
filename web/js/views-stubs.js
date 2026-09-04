@@ -3515,7 +3515,7 @@ function openOidcWizard(app, opts = {}) {
         scopes:         d.scopes,
         response_types: ['code'],
         token_endpoint_auth_method: d.token_endpoint_auth_method,
-        catalog_slug:   d.catalog_slug,
+        catalog_slug:   d.catalog_slug === 'custom-oidc' ? undefined : d.catalog_slug,
         category:       d.category,
       });
       bd.querySelector('.wizard-stepper').style.display = 'none';
@@ -7545,15 +7545,35 @@ export async function viewAppAccessPolicy(content) {
   let tagGroupsCache = [];
   let identityGroupsCache = [];
 
+  let appsLoadError = '';
+
   async function loadAppsAndGroups() {
+    appsLoadError = '';
     const [apps, tagGroups, identityGroups] = await Promise.all([
-      api.listAppAccessApps().catch(() => ({ data: [] })),
+      api.listAppAccessApps().catch((e) => {
+        appsLoadError = e.message || 'Failed to load assignable applications';
+        return { data: [] };
+      }),
       api.listTagGroups().catch(() => ({ data: [] })),
       api.listGroups().catch(() => ({ data: [] })),
     ]);
     appsCache = norm(apps);
     tagGroupsCache = norm(tagGroups);
     identityGroupsCache = norm(identityGroups);
+  }
+
+  async function syncCatalogAndReload() {
+    try {
+      const r = await api.syncAppAccessCatalog();
+      appsCache = norm(r);
+      appsLoadError = '';
+      await loadAssignTab();
+      await loadStats();
+      if (wrap.querySelector('#tab-ip').style.display !== 'none') await loadIpTab();
+      if (wrap.querySelector('#tab-workflow').style.display !== 'none') await loadWorkflowTab();
+    } catch (e) {
+      alert(e.message || 'Catalog sync failed');
+    }
   }
 
   function switchTab(name) {
@@ -7629,9 +7649,12 @@ export async function viewAppAccessPolicy(content) {
           </div>
           <div class="aap-actions-btns">
             <button class="btn btn-primary" id="aap-assign-btn">+ Assign Access</button>
+            <button class="btn btn-secondary" id="aap-sync-btn" title="Link OIDC/SAML apps into the assignable catalog">Sync catalog</button>
             <button class="btn btn-secondary" id="aap-tg-btn">+ Tag Group</button>
           </div>
         </div>
+        ${appsLoadError ? `<div class="alert alert-error" style="margin-bottom:1rem">${esc(appsLoadError)}</div>` : ''}
+        ${!appsCache.length && !appsLoadError ? '<div class="alert alert-info" style="margin-bottom:1rem">No assignable applications yet. Register under <strong>Applications → OIDC / OAuth</strong>, then click <strong>Sync catalog</strong>.</div>' : ''}
         <h3 class="section-title">Active Assignments</h3>
         <div class="table-wrap aap-table"><table>
           <thead><tr><th>Application</th><th>Type</th><th>Target</th><th>Granted</th><th></th></tr></thead>
@@ -7644,6 +7667,7 @@ export async function viewAppAccessPolicy(content) {
         </table></div>`;
 
       area.querySelector('#aap-assign-btn').addEventListener('click', () => openAssignModal());
+      area.querySelector('#aap-sync-btn')?.addEventListener('click', () => syncCatalogAndReload());
       area.querySelector('#aap-tg-btn').addEventListener('click', openTagGroupModal);
       area.querySelectorAll('.edit-assign').forEach(btn => {
         btn.addEventListener('click', () => openAssignModal({
@@ -7676,8 +7700,11 @@ export async function viewAppAccessPolicy(content) {
 
     const isEdit = !!(existing && existing.id);
     const appOpts = appsCache.length
-      ? appsCache.map(a => `<option value="${esc(a.id)}"${isEdit && existing.appId === a.id ? ' selected' : ''}>${esc(a.name)}${a.has_saml ? ' (SAML)' : ''}</option>`).join('')
-      : '<option value="" disabled>No applications — register SAML/IGA apps first</option>';
+      ? appsCache.map(a => {
+          const tag = a.has_saml ? ' (SAML)' : (a.has_oidc ? ' (OIDC)' : '');
+          return `<option value="${esc(a.id)}"${isEdit && existing.appId === a.id ? ' selected' : ''}>${esc(a.name)}${tag}</option>`;
+        }).join('')
+      : '<option value="" disabled>No applications — register SAML/OIDC apps or add to IGA catalog first</option>';
     const hasAnyGroup = identityGroupsCache.length || tagGroupsCache.length;
     const identityOpts = identityGroupsCache.length
       ? `<optgroup label="Identity Groups (Identity → Groups)">${identityGroupsCache.map(g =>
@@ -7697,7 +7724,7 @@ export async function viewAppAccessPolicy(content) {
     const empVal = isEdit && existing.assignmentType === 'USER' ? esc(existing.targetId || '') : '';
 
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${isEdit ? 'Edit Application Access' : 'Assign Application Access'}</h2></div><div class="modal-body">
-      ${!appsCache.length ? '<div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">No applications in the catalog yet. Register a SAML app under <strong>Applications</strong> or add one in the IGA catalog — it will appear here automatically.</div>' : ''}
+      ${!appsCache.length ? '<div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">No applications in the assignable catalog yet. Register under <strong>Applications → SAML</strong> or <strong>OIDC / OAuth</strong> (auto-synced here), or add one in the IGA catalog with a valid slug (e.g. <code>ppm-eks</code>).</div>' : ''}
       ${!hasAnyGroup ? '<div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">No groups yet. Create one under <strong>Identity → Groups</strong> (recommended) or click <strong>+ Tag Group</strong> on this page.</div>' : ''}
       <div class="form-group"><label class="form-label">Application</label>
         <select class="form-select" id="aa-app"><option value="">— Select —</option>${appOpts}</select></div>

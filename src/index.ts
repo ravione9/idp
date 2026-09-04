@@ -394,6 +394,20 @@ async function main(): Promise<void> {
   startDeprovisionScheduler();
   startRadiusUdpServer();
 
+  try {
+    const { syncSamlAppsToCatalog } = await import('./services/app-access-policy.js');
+    const { syncOidcAppsToCatalog } = await import('./oidc/portal-apps.js');
+    const [samlSynced, oidcSynced] = await Promise.all([
+      syncSamlAppsToCatalog(),
+      syncOidcAppsToCatalog(),
+    ]);
+    if (samlSynced > 0 || oidcSynced > 0) {
+      logger.info({ samlSynced, oidcSynced }, 'Boot: synced protocol apps into applications catalog');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Boot: application catalog sync failed (Access Policy may be missing apps until retried)');
+  }
+
   const server = app.listen(config.app.port, () => {
     logger.info({ port: config.app.port, env: config.app.nodeEnv }, 'IDP API server started');
   });
