@@ -350,11 +350,12 @@ Each SAML application is registered in `saml_service_providers`:
 | `merge_default_attrs` | Merge IdP default attribute map (default true) |
 | `entitlement_rule` | JSON ABAC rule (`all_active`, `roles`, `dept_ids`, `deny_ilg_states`) |
 
-**Launch entitlement** (`evaluateAppLaunch` / `canUserLaunchApp` in `src/services/app-access-policy.ts`) is evaluated for `GET /api/apps`, `/saml/launch/:slug`, and SP-initiated SSO (including `/saml/resume`):
+**Launch entitlement** (`evaluateAppLaunch` / `canUserLaunchApp` in `src/services/app-access-policy.ts`) is evaluated for `GET /api/apps`, `/saml/launch/:slug`, SP-initiated SSO (including `/saml/resume`), `/oauth/launch/:slug`, and `/oauth/authorize` (when the client is linked to `applications` via `oidc_clients.app_id`):
 
 | Condition | Who may launch |
 |---|---|
 | **Active SAML SP** (any slug in `saml_service_providers`) | **Only** users with an explicit Application Access Policy grant (USER / GROUP / TAG_GROUP). Birthright via `entitlement_rule.all_active` is **not** enough. On check, the SP is auto-mirrored into `applications` as `RESTRICTED` if missing. |
+| **Active OIDC client** (linked to `applications` via `oidc_clients.app_id`) | **Only** users with an explicit Application Access Policy grant. On check, the client is auto-mirrored into `applications` as `RESTRICTED` if missing (`ensureOidcAppMirrored`). |
 | Non-SAML catalog app with `visibility = RESTRICTED` **or** any active assignment | Explicit grant only |
 | Other non-SAML catalog apps | Grant **or** `entitlement_rule` birthright |
 | **IP allowlist** (`applications.allowed_cidrs`, migration `043`) | When non-empty, verified **at SSO launch** (not catalog listing). Client IP (`CF-Connecting-IP` / `X-Forwarded-For`) must match a CIDR, exact IP, or trailing-dot prefix. Empty/null = unrestricted. Denied launches show an HTML page: “Unrestricted IP — application access denied.” |
@@ -387,6 +388,7 @@ This IdP is also an OpenID Provider. Relying parties register in `oidc_clients` 
 |---|---|
 | `GET /.well-known/openid-configuration` | Discovery document |
 | `GET /.well-known/jwks.json` | Public JWKS (RS256) |
+| `GET /oauth/launch/:slug` | IdP-initiated OIDC launch from portal tile → `/oauth/authorize` |
 | `GET /oauth/authorize` | Authorization Code + **S256 PKCE**; unauthenticated users → login → `/oauth/resume/:id` |
 | `GET /oauth/resume/:pendingId` | Resume authorize after portal sign-in |
 | `POST /oauth/token` | `authorization_code` and `refresh_token` grants; issues JWT access + ID tokens |
@@ -1123,6 +1125,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-09-04 — OIDC apps in end-user portal catalog
+
+**Why** — Registered OIDC/OAuth clients with Application Access Policy grants did not appear under **All Applications**; `/api/apps` only listed SAML service providers.
+
+**What changed:**
+
+- **`src/oidc/portal-apps.ts`** — mirror active `oidc_clients` into `applications` as `RESTRICTED` (`ensureOidcAppMirrored` / `syncOidcAppsToCatalog`); list entitled OIDC portal apps.
+- **`src/api/apps.ts`** — returns SAML + OIDC apps the user may launch (`protocol: SAML | OIDC`).
+- **`src/oidc/router.ts`** — `GET /oauth/launch/:slug` (IdP-initiated tile launch); `/oauth/authorize` and `/oauth/resume` enforce Access Policy when `app_id` is linked.
+- **`src/services/app-access-policy.ts`** — OIDC-linked apps require explicit grants (same as SAML).
+- **`web/js/views-end-user.js`** — OIDC tiles show **O** badge and `/oauth/launch/:slug`.
 
 ### (pending) — 2026-08-31 — Department-based dynamic groups
 

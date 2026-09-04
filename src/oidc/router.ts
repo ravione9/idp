@@ -3,6 +3,7 @@
  *
  *   GET  /.well-known/openid-configuration
  *   GET  /.well-known/jwks.json
+ *   GET  /oauth/launch/:slug
  *   GET  /oauth/authorize
  *   GET  /oauth/resume/:pendingId
  *   POST /oauth/token
@@ -14,12 +15,15 @@ import { importJWK, jwtVerify } from 'jose';
 import { z } from 'zod';
 import { resolveSession } from '../auth/middleware.js';
 import { redis } from '../auth/session-store.js';
-import { getPublicOrigin } from '../utils/request-context.js';
+import { getPublicOrigin, getClientIp } from '../utils/request-context.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import logger from '../utils/logger.js';
+import { getEmployeeForSaml } from '../saml/sp-registry.js';
+import { evaluateAppLaunch } from '../services/app-access-policy.js';
 import {
   enforceCriticalAppMfaOrRedirect,
   getAppMfaByOidcClientId,
+  getAppMfaBySlug,
   redirectAppMfaStepUp,
   sessionSatisfiesAppMfa,
 } from '../services/app-mfa-stepup.js';
@@ -32,6 +36,7 @@ import {
 } from './clients.js';
 import { loadUserClaims } from './claims.js';
 import { getOidcJwks } from './keys.js';
+import { getOidcPortalAppByClientId, getOidcPortalAppBySlug } from './portal-apps.js';
 import {
   consumeAuthorizationCode,
   consumeRefreshToken,
@@ -46,6 +51,88 @@ const PENDING_OAUTH_PREFIX = 'lilg:oauth-pending:';
 const PENDING_OAUTH_TTL_S = 600;
 
 const router = Router();
+
+function safeReturnPath(path: string): string {
+  if (!path.startsWith('/') || path.startsWith('//')) return '/';
+  return path;
+}
+
+async function requireSessionOrLogin(
+  req: Request,
+  res: Response,
+  returnPath: string,
+): Promise<{ empId: string; sessionId: string } | null> {
+  const user = await resolveSession(req, res);
+  if (!user) {
+    res.redirect(`/login?returnTo=${encodeURIComponent(safeReturnPath(returnPath))}`);
+    return null;
+  }
+  return { empId: user.empId, sessionId: user.sessionId };
+}
+
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function sendLaunchDeniedPage(
+  res: Response,
+  opts: { title: string; message: string; detail?: string },
+): void {
+  const detail = opts.detail
+    ? `<p style="color:#64748b;font-size:0.9rem;margin:0 0 1.25rem">${escHtml(opts.detail)}</p>`
+    : '';
+  res.status(403).setHeader('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>${escHtml(opts.title)}</title></head>
+<body style="font-family:system-ui,sans-serif;background:#f1f5f9;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0">
+  <div style="background:#fff;padding:2rem;border-radius:12px;max-width:440px;box-shadow:0 10px 40px rgba(15,23,42,.08)">
+    <h1 style="font-size:1.15rem;margin:0 0 .75rem">${escHtml(opts.title)}</h1>
+    <p style="line-height:1.5;color:#334155">${escHtml(opts.message)}</p>
+    ${detail}
+    <a href="/" style="color:#4f46e5;font-weight:600;text-decoration:none">← Back to portal</a>
+  </div>
+</body></html>`);
+}
+
+async function enforceOidcAppAccess(
+  req: Request,
+  res: Response,
+  empId: string,
+  appSlug: string,
+  appName: string,
+  oauthRedirect?: { redirectUri: string; state?: string },
+): Promise<boolean> {
+  const emp = await getEmployeeForSaml(empId);
+  if (!emp) {
+    sendLaunchDeniedPage(res, {
+      title: 'Access denied',
+      message: 'Your employee record could not be loaded.',
+    });
+    return false;
+  }
+
+  const decision = await evaluateAppLaunch(emp, appSlug, null, {
+    clientIp: getClientIp(req),
+    enforceIp: true,
+  });
+  if (!decision.allowed) {
+    const message = decision.reason === 'IP_DENIED'
+      ? 'Your current network is not allowed to launch this application.'
+      : decision.reason === 'NO_GRANT'
+        ? 'You do not have access to this application. Request access from your administrator.'
+        : 'You are not permitted to sign in to this application.';
+    if (oauthRedirect) {
+      oauthErrorRedirect(res, oauthRedirect.redirectUri, 'access_denied', message, oauthRedirect.state);
+      return false;
+    }
+    sendLaunchDeniedPage(res, { title: `${appName} — access denied`, message });
+    return false;
+  }
+  return true;
+}
 
 function issuerFrom(req: Request): string {
   return getPublicOrigin(req);
@@ -186,6 +273,52 @@ async function completeAuthorize(
   res.redirect(url.toString());
 }
 
+// ---------------------------------------------------------------------------
+// IdP-initiated OIDC launch (user clicks app tile in portal)
+// ---------------------------------------------------------------------------
+router.get('/oauth/launch/:slug', asyncHandler(async (req: Request, res: Response) => {
+  const slug = req.params['slug'] ?? '';
+  const session = await requireSessionOrLogin(req, res, `/oauth/launch/${slug}`);
+  if (!session) return;
+
+  const app = await getOidcPortalAppBySlug(slug);
+  if (!app) {
+    res.status(404).send('Application not found');
+    return;
+  }
+  if (!app.redirectUris.length) {
+    res.status(400).send('No redirect URI configured for this application');
+    return;
+  }
+
+  if (!(await enforceOidcAppAccess(req, res, session.empId, app.slug, app.name))) return;
+
+  const appMfa = await getAppMfaBySlug(app.slug);
+  const mfaOk = await enforceCriticalAppMfaOrRedirect(req, res, {
+    sessionId: session.sessionId,
+    returnPath: `/oauth/launch/${slug}`,
+    app: appMfa,
+  });
+  if (!mfaOk) return;
+
+  const client = await getOidcClientByClientId(app.clientId);
+  if (!client) {
+    res.status(404).send('OIDC client not found');
+    return;
+  }
+
+  const redirectUri = app.redirectUris[0]!;
+  const scopes = (client.scopes.length ? client.scopes : ['openid', 'email', 'profile']).join(' ');
+  const url = new URL(`${issuerFrom(req)}/oauth/authorize`);
+  url.searchParams.set('client_id', client.clientId);
+  url.searchParams.set('redirect_uri', redirectUri);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('scope', scopes);
+  url.searchParams.set('state', uuidv4());
+
+  res.redirect(url.toString());
+}));
+
 router.get('/oauth/authorize', asyncHandler(async (req: Request, res: Response) => {
   const parsed = authorizeQuerySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -231,6 +364,19 @@ router.get('/oauth/authorize', asyncHandler(async (req: Request, res: Response) 
     return;
   }
 
+  const linkedApp = await getOidcPortalAppByClientId(params.client_id);
+  if (linkedApp) {
+    const allowed = await enforceOidcAppAccess(
+      req,
+      res,
+      user.empId,
+      linkedApp.slug,
+      linkedApp.name,
+      { redirectUri: params.redirect_uri, ...(params.state ? { state: params.state } : {}) },
+    );
+    if (!allowed) return;
+  }
+
   {
     const appMfa = await getAppMfaByOidcClientId(params.client_id);
     if (!(await sessionSatisfiesAppMfa(user.sessionId, appMfa))) {
@@ -269,6 +415,22 @@ router.get('/oauth/resume/:pendingId', asyncHandler(async (req: Request, res: Re
     await redis.del(pendingKey);
     res.status(400).send('Invalid OAuth client or redirect URI');
     return;
+  }
+
+  const linkedApp = await getOidcPortalAppByClientId(params.client_id);
+  if (linkedApp) {
+    const allowed = await enforceOidcAppAccess(
+      req,
+      res,
+      user.empId,
+      linkedApp.slug,
+      linkedApp.name,
+      { redirectUri: params.redirect_uri, ...(params.state ? { state: params.state } : {}) },
+    );
+    if (!allowed) {
+      await redis.del(pendingKey);
+      return;
+    }
   }
 
   {
