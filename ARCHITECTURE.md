@@ -680,7 +680,10 @@ To add a new migration:
 | `GET`/`POST` | `/api/admin/app-access-policy/tag-groups[/:id]` | Tag group CRUD |
 | `POST`/`DELETE` | `/api/admin/app-access-policy/tag-groups/:id/members[/:empId]` | Tag group membership |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/groups[/:id]` | Identity directory groups (local + synced) |
-| `POST`/`DELETE` | `/api/admin/groups/:id/members[/:empId]` | Add/remove member on **local** groups (accepts email, `employee_number`, or `emp_id`) |
+| `GET` | `/api/admin/groups/departments` | Distinct `dept_id` values for dynamic group rules |
+| `POST` | `/api/admin/groups/reconcile` | Reconcile all local DYNAMIC groups |
+| `POST` | `/api/admin/groups/:id/reconcile` | Reconcile one DYNAMIC group from `rule_json` |
+| `POST`/`DELETE` | `/api/admin/groups/:id/members[/:empId]` | Add/remove member on **local STATIC** groups (accepts email, `employee_number`, or `emp_id`) |
 | `GET` | `/api/admin/groups/members/csv-template` | CSV template for bulk add/remove (`email,employee_id`) |
 | `POST` | `/api/admin/groups/:id/members/bulk` | Bulk add/remove on a **local** group (`{ members[] }` or `{ csvText }`, `action: add\|remove`, max 500) |
 | `POST` | `/api/admin/groups/sync` | Pull groups/members from Google / AD connectors |
@@ -1120,6 +1123,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-08-31 — Department-based dynamic groups
+
+**Why** — DYNAMIC group type existed in schema/UI but `rule_json` was never evaluated; admins need department-wise groups that auto-add members when users are created or their department changes.
+
+**What changed:**
+
+- **`src/services/dynamic-groups.ts`** — parse `rule_json` (`dept_ids`), match ACTIVE employees by `dept_id`, reconcile membership add/remove.
+- **`src/api/config-groups.ts`** — validate rules on create/update; block manual member edits on DYNAMIC groups; `GET /departments`, `POST /reconcile`, `POST /:id/reconcile`.
+- **Hooks** — `admin-users` create + profile dept change, `bulk-user-import`, AD/Google inbound sync (batch reconcile after sync).
+- **`web/js/views-stubs.js`** — New Group modal: pick departments for DYNAMIC; Edit Rule; read-only members + Reconcile.
 
 ### (pending) — 2026-08-31 — Bulk password update from CSV
 

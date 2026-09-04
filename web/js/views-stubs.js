@@ -148,12 +148,13 @@ export async function viewGroups(content, initialTab = 'directory') {
     AD:     '<span class="badge badge-success">AD</span>',
   }[src || 'LOCAL'] || `<span class="badge badge-neutral">${esc(src)}</span>`);
 
-  async function openGroupMembersModal(groupId, groupName, isSynced) {
+  async function openGroupMembersModal(groupId, groupName, isSynced, isDynamic) {
     const bd = openModal(`<div class="modal modal-wide"><div class="modal-header"><h2>${esc(groupName)} — Members</h2></div>
       <div class="modal-body">
         ${isSynced ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">Membership is synced from Google Workspace or Active Directory. Run <strong>Sync from Directory</strong> or trigger a connector sync to refresh.</div>' : ''}
+        ${isDynamic ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">This is a <strong>dynamic</strong> group — members are added automatically when a user\'s department matches the rule. Use <strong>Reconcile now</strong> to refresh membership.</div>' : ''}
         <div id="gm-list">${loading()}</div>
-        ${isSynced ? '' : `<div class="form-group" style="margin-top:1rem">
+        ${isSynced || isDynamic ? '' : `<div class="form-group" style="margin-top:1rem">
           <label class="form-label">Add member</label>
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
             <input class="form-input" id="gm-search" placeholder="Search name or email…" style="flex:1;min-width:180px">
@@ -213,13 +214,13 @@ export async function viewGroups(content, initialTab = 'directory') {
               ${m.employee_number && m.emp_id && String(m.employee_number) !== String(m.emp_id)
                 ? `<div class="muted" style="font-size:0.72rem">Dir: ${esc(m.emp_id)}</div>` : ''}
             </td>
-            ${isSynced ? '<td></td>' : `<td><button class="btn btn-sm btn-danger gm-rm" data-emp="${esc(m.emp_id)}">Remove</button></td>`}
+            ${isSynced || isDynamic ? '<td></td>' : `<td><button class="btn btn-sm btn-danger gm-rm" data-emp="${esc(m.emp_id)}">Remove</button></td>`}
           </tr>`).join('')
           : `<tr><td colspan="4"><p class="muted">No members yet.</p></td></tr>`;
         bd.querySelector('#gm-list').innerHTML = `<div class="table-wrap"><table>
-          <thead><tr><th>Name</th><th>Email</th><th>Employee ID</th>${isSynced ? '' : '<th></th>'}</tr></thead>
+          <thead><tr><th>Name</th><th>Email</th><th>Employee ID</th>${isSynced || isDynamic ? '' : '<th></th>'}</tr></thead>
           <tbody>${rows}</tbody></table></div>`;
-        if (!isSynced) {
+        if (!isSynced && !isDynamic) {
           bd.querySelectorAll('.gm-rm').forEach(btn => {
             btn.addEventListener('click', async () => {
               try { await api.removeGroupMember(groupId, btn.dataset.emp); await loadMembers(); await load(); }
@@ -232,7 +233,31 @@ export async function viewGroups(content, initialTab = 'directory') {
 
     bd.querySelector('#gm-close').addEventListener('click', () => bd.remove());
 
-    if (!isSynced) {
+    if (isDynamic) {
+      const footer = bd.querySelector('.modal-footer');
+      const recBtn = document.createElement('button');
+      recBtn.className = 'btn btn-primary';
+      recBtn.type = 'button';
+      recBtn.textContent = 'Reconcile now';
+      recBtn.addEventListener('click', async () => {
+        recBtn.disabled = true;
+        recBtn.textContent = 'Reconciling…';
+        try {
+          const r = await api.reconcileDynamicGroup(groupId);
+          bd.querySelector('#gm-err').innerHTML = `<div class="alert alert-success">Added ${r.added}, removed ${r.removed} (${r.matched} matched)</div>`;
+          await loadMembers();
+          await load();
+        } catch (e) {
+          bd.querySelector('#gm-err').innerHTML = errHtml(e.message);
+        } finally {
+          recBtn.disabled = false;
+          recBtn.textContent = 'Reconcile now';
+        }
+      });
+      footer?.insertBefore(recBtn, footer.firstChild);
+    }
+
+    if (!isSynced && !isDynamic) {
       let searchTimer;
       bd.querySelector('#gm-search').addEventListener('input', () => {
         clearTimeout(searchTimer);
@@ -371,21 +396,24 @@ export async function viewGroups(content, initialTab = 'directory') {
       const groups = norm(await api.listGroups());
       const rows = groups.length ? groups.map(g => {
         const synced = g.source_system && g.source_system !== 'LOCAL';
+        const isDynamic = g.type === 'DYNAMIC' && !synced;
         return `<tr>
           <td class="cell-strong">${esc(g.name)}</td>
           <td>${g.type === 'DYNAMIC' ? '<span class="badge badge-success">DYNAMIC</span>' : '<span class="badge badge-info">STATIC</span>'}</td>
+          <td class="muted" style="font-size:0.78rem">${esc(g.rule_summary || (isDynamic ? '—' : ''))}</td>
           <td>${sourceBadge(g.source_system)}</td>
           <td>${g.member_count ?? 0}</td>
           <td>${g.last_synced_at ? `<span class="muted" style="font-size:0.78rem">${fmtDate(g.last_synced_at)}</span>` : '—'}</td>
           <td style="white-space:nowrap">
-            <button class="btn btn-sm btn-secondary mgr-group" data-id="${esc(String(g.id))}" data-name="${esc(g.name)}" data-synced="${synced ? '1' : '0'}">${synced ? 'View Members' : 'Manage Members'}</button>
+            <button class="btn btn-sm btn-secondary mgr-group" data-id="${esc(String(g.id))}" data-name="${esc(g.name)}" data-synced="${synced ? '1' : '0'}" data-dynamic="${isDynamic ? '1' : '0'}">${synced || isDynamic ? 'View Members' : 'Manage Members'}</button>
+            ${isDynamic ? `<button class="btn btn-sm btn-secondary edit-group" data-id="${esc(String(g.id))}" data-name="${esc(g.name)}">Edit Rule</button>` : ''}
             ${synced ? '' : `<button class="btn btn-sm btn-danger del-group" data-id="${esc(String(g.id))}">Delete</button>`}
           </td>
         </tr>`;
-      }).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><p>No groups yet. Create a local group or sync from Google / AD connectors.</p></div></td></tr>`;
+      }).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">◎</div><p>No groups yet. Create a local group or sync from Google / AD connectors.</p></div></td></tr>`;
       wrap.querySelector('#list-area').innerHTML = `
-        <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">Google/AD connectors mirror directory groups on sync (blank Sync Groups = auto). Or click <strong>Sync from Directory</strong> here. Ensure Google domain-wide delegation includes <code>admin.directory.group.readonly</code>.</p>
-        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Source</th><th>Members</th><th>Last Sync</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        <p class="muted" style="font-size:0.85rem;margin:0 0 0.75rem">Google/AD connectors mirror directory groups on sync. <strong>Dynamic</strong> local groups auto-add users by department when they are created or their department changes.</p>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Rule</th><th>Source</th><th>Members</th><th>Last Sync</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
       wrap.querySelectorAll('.del-group').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!confirm('Delete this group?')) return;
@@ -393,7 +421,10 @@ export async function viewGroups(content, initialTab = 'directory') {
         });
       });
       wrap.querySelectorAll('.mgr-group').forEach(btn => {
-        btn.addEventListener('click', () => openGroupMembersModal(btn.dataset.id, btn.dataset.name, btn.dataset.synced === '1'));
+        btn.addEventListener('click', () => openGroupMembersModal(btn.dataset.id, btn.dataset.name, btn.dataset.synced === '1', btn.dataset.dynamic === '1'));
+      });
+      wrap.querySelectorAll('.edit-group').forEach(btn => {
+        btn.addEventListener('click', () => openEditDynamicGroupModal(btn.dataset.id, btn.dataset.name));
       });
     } catch(e) { wrap.querySelector('#list-area').innerHTML = errHtml(e.message); }
   }
@@ -412,20 +443,103 @@ export async function viewGroups(content, initialTab = 'directory') {
     syncBtn.disabled = false; syncBtn.textContent = '⟳ Sync from Directory';
   });
 
-  newGroupBtn.addEventListener('click', () => {
+  newGroupBtn.addEventListener('click', () => openNewGroupModal());
+
+  async function loadDepartmentOptions(selected = []) {
+    try {
+      const r = await api.listGroupDepartments();
+      const depts = r.data || r || [];
+      const sel = new Set((selected || []).map((d) => String(d).toLowerCase()));
+      return depts.map((d) =>
+        `<option value="${esc(d)}"${sel.has(String(d).toLowerCase()) ? ' selected' : ''}>${esc(d)}</option>`,
+      ).join('');
+    } catch {
+      return '';
+    }
+  }
+
+  function toggleDynamicFields(bd) {
+    const isDynamic = bd.querySelector('#g-type')?.value === 'DYNAMIC';
+    const wrap = bd.querySelector('#g-dynamic-fields');
+    if (wrap) wrap.hidden = !isDynamic;
+  }
+
+  async function openNewGroupModal() {
+    const deptOptions = await loadDepartmentOptions();
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>New Group</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="g-name" placeholder="Group name"></div>
       <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="g-desc" placeholder="Description"></div>
-      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="g-type"><option value="STATIC">STATIC</option><option value="DYNAMIC">DYNAMIC</option></select></div>
+      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="g-type"><option value="STATIC">STATIC — manual members</option><option value="DYNAMIC">DYNAMIC — by department</option></select></div>
+      <div id="g-dynamic-fields" hidden>
+        <div class="form-group">
+          <label class="form-label">Departments</label>
+          <p class="muted" style="font-size:0.78rem;margin:0 0 0.35rem">All ACTIVE users in selected departments are added automatically. New users are added when created or synced.</p>
+          <select class="form-select" id="g-depts" multiple size="8" style="min-height:140px">${deptOptions || '<option disabled>No departments in directory yet</option>'}</select>
+          <input class="form-input" id="g-dept-custom" placeholder="Or type department names (comma-separated)" style="margin-top:0.5rem">
+        </div>
+      </div>
       <div id="g-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="g-save">Create</button><button class="btn btn-secondary" id="g-cancel">Cancel</button></div></div>`);
+    bd.querySelector('#g-type').addEventListener('change', () => toggleDynamicFields(bd));
     bd.querySelector('#g-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#g-save').addEventListener('click', async () => {
-      const data = { name: bd.querySelector('#g-name').value, description: bd.querySelector('#g-desc').value, type: bd.querySelector('#g-type').value };
+      const type = bd.querySelector('#g-type').value;
+      const data = { name: bd.querySelector('#g-name').value.trim(), description: bd.querySelector('#g-desc').value.trim(), type };
       if (!data.name) { bd.querySelector('#g-err').innerHTML = errHtml('Name is required'); return; }
-      try { await api.createGroup(data); bd.remove(); await load(); } catch(e) { bd.querySelector('#g-err').innerHTML = errHtml(e.message); }
+      if (type === 'DYNAMIC') {
+        const fromSelect = [...bd.querySelector('#g-depts').selectedOptions].map((o) => o.value.trim()).filter(Boolean);
+        const fromCustom = (bd.querySelector('#g-dept-custom').value || '').split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
+        data.dept_ids = [...new Set([...fromSelect, ...fromCustom])];
+        if (!data.dept_ids.length) {
+          bd.querySelector('#g-err').innerHTML = errHtml('Select or enter at least one department');
+          return;
+        }
+      }
+      try {
+        const r = await api.createGroup(data);
+        bd.remove();
+        const note = r.reconcile
+          ? ` Created with ${r.reconcile.matched ?? 0} members (${r.reconcile.added ?? 0} added).`
+          : '';
+        wrap.querySelector('#grp-msg').innerHTML = `<div class="alert alert-success">Group created.${note}</div>`;
+        await load();
+      } catch(e) { bd.querySelector('#g-err').innerHTML = errHtml(e.message); }
     });
-  });
+  }
+
+  async function openEditDynamicGroupModal(groupId, groupName) {
+    let group;
+    try { group = await api.getGroup(groupId); } catch (e) { alert(e.message); return; }
+    const rule = group.rule_json || {};
+    const currentDepts = rule.dept_ids || (rule.field === 'dept_id' && rule.value ? (Array.isArray(rule.value) ? rule.value : [rule.value]) : []);
+    const deptOptions = await loadDepartmentOptions(currentDepts);
+    const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Edit Dynamic Group — ${esc(groupName)}</h2></div><div class="modal-body">
+      <div class="form-group"><label class="form-label">Departments</label>
+        <select class="form-select" id="eg-depts" multiple size="8" style="min-height:140px">${deptOptions}</select>
+        <input class="form-input" id="eg-dept-custom" placeholder="Or type department names (comma-separated)" style="margin-top:0.5rem">
+      </div>
+      <div id="eg-err"></div>
+    </div><div class="modal-footer"><button class="btn btn-primary" id="eg-save">Save & Reconcile</button><button class="btn btn-secondary" id="eg-cancel">Cancel</button></div></div>`);
+    bd.querySelector('#eg-cancel').addEventListener('click', () => bd.remove());
+    bd.querySelector('#eg-save').addEventListener('click', async () => {
+      const fromSelect = [...bd.querySelector('#eg-depts').selectedOptions].map((o) => o.value.trim()).filter(Boolean);
+      const fromCustom = (bd.querySelector('#eg-dept-custom').value || '').split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
+      const dept_ids = [...new Set([...fromSelect, ...fromCustom])];
+      if (!dept_ids.length) {
+        bd.querySelector('#eg-err').innerHTML = errHtml('Select or enter at least one department');
+        return;
+      }
+      try {
+        const r = await api.updateGroup(groupId, { type: 'DYNAMIC', dept_ids });
+        bd.remove();
+        const note = r.reconcile
+          ? ` ${r.reconcile.matched ?? 0} members (${r.reconcile.added ?? 0} added, ${r.reconcile.removed ?? 0} removed).`
+          : '';
+        wrap.querySelector('#grp-msg').innerHTML = `<div class="alert alert-success">Rule updated.${note}</div>`;
+        await load();
+      } catch (e) { bd.querySelector('#eg-err').innerHTML = errHtml(e.message); }
+    });
+  }
 
   async function openTagGroupMembersModal(groupId, groupName) {
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Tag Group — ${esc(groupName)}</h2></div>

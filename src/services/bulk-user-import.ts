@@ -7,6 +7,7 @@ import type { PoolConnection } from 'mysql2/promise';
 import { query, execute, transaction, queryOne } from '../db/connection.js';
 import logger from '../utils/logger.js';
 import { writeDirectoryUserAudit } from './google-attr-map.js';
+import { reconcileDynamicGroupsForEmployee } from './dynamic-groups.js';
 
 const EMP_TYPES = new Set(['CORPORATE', 'STORE', 'PLANT', 'DC']);
 const ILG_STATES = new Set([
@@ -498,6 +499,10 @@ export async function processBulkUserBatch(
           groupsAddedForRow++;
         }
         if (groupsAddedForRow > 0) rowResult.groupsAdded = groupsAddedForRow;
+
+        await reconcileDynamicGroupsForEmployee(empId, addedBy).catch((err) =>
+          logger.debug({ err, empId, email }, 'Dynamic group reconcile after bulk user row failed'),
+        );
 
         result.rows.push(rowResult);
       } catch (err) {

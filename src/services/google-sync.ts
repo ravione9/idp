@@ -833,6 +833,16 @@ export async function runGoogleSync(
       itemsProcessed = inbound.processed;
       itemsSucceeded = inbound.succeeded;
       itemsFailed = inbound.failed;
+
+      try {
+        const { reconcileAllDynamicGroups } = await import('./dynamic-groups.js');
+        const dg = await reconcileAllDynamicGroups(null);
+        if (dg.added || dg.removed) {
+          logger.info({ connectorId, runId, ...dg }, 'Dynamic groups reconciled after Google inbound sync');
+        }
+      } catch (err) {
+        logger.warn({ connectorId, runId, err }, 'Dynamic group reconcile after Google sync failed');
+      }
       usersAdded = inbound.imported;
       usersUpdated = inbound.updated;
       usersDisabled = inbound.disabled;
