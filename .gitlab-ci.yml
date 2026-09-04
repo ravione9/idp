@@ -19,6 +19,7 @@ variables:
   VALUES_FILE: deploy/multiverse/values-lk-multiverse-platform-eks.yaml
   HELM_REPO: infra-platform/multiverse-application-helm
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
@@ -106,5 +107,6 @@ deploy-prod:
         --set-string "image.tag=${IMAGE_TAG}" \
         --wait --timeout 15m
       kubectl rollout restart deployment -n "${NAMESPACE}" -l "release=${RELEASE}" || true
-      kubectl rollout status deployment -n "${NAMESPACE}" -l "release=${RELEASE}" --timeout=10m  rules:
+      kubectl rollout status deployment -n "${NAMESPACE}" -l "release=${RELEASE}" --timeout=10m
+  rules:
     - when: manual
