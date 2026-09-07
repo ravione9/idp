@@ -1,0 +1,15 @@
+# Minimal Helm overlay applied by GitLab deploy-prod on top of
+# multiverse-application-helm/multiverse/idp/values-lk-multiverse-platform-eks.yaml
+#
+# Keep this file small — only keys you want the idp repo to override at deploy time.
+# Full reference values: values-lk-multiverse-platform-eks.yaml (same folder).
+
+dnsPolicy: None
+dnsConfig:
+  nameservers:
+    - 192.168.32.3
+  searches:
+    - lenskart.in
+  options:
+    - name: ndots
+      value: "2"
