@@ -14,6 +14,7 @@ variables:
   NAMESPACE: it-idp
   CHART: multiverse/idp
   VALUES_FILE: values-lk-multiverse-platform-eks.yaml
+  VALUES_OVERLAY: deploy/multiverse/values-overlay.yaml
   HELM_REPO: infra-platform/multiverse-application-helm
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
 
@@ -97,9 +98,14 @@ deploy-prod:
     - aws eks update-kubeconfig --name "${EKS_CLUSTER}" --region "${AWS_DEFAULT_REGION}"
   script:
     - |
+      CHART_VALUES="./helm/${CHART}/${VALUES_FILE}"
+      OVERLAY="${CI_PROJECT_DIR}/${VALUES_OVERLAY}"
+      test -f "${CHART_VALUES}" || (echo "Missing chart values ${CHART_VALUES}" && exit 1)
+      test -f "${OVERLAY}" || (echo "Missing values overlay ${VALUES_OVERLAY}" && exit 1)
       helm upgrade --install "${RELEASE}" "./helm/${CHART}" \
         -n "${NAMESPACE}" \
-        -f "./helm/${CHART}/${VALUES_FILE}" \
+        -f "${CHART_VALUES}" \
+        -f "${OVERLAY}" \
         --set-string "image.tag=${IMAGE_TAG}" \
         --wait --timeout 15m
       kubectl rollout restart deployment -n "${NAMESPACE}" -l "release=${RELEASE}" || true

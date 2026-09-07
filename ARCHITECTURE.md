@@ -920,7 +920,7 @@ Target topology is multi-replica API behind a load balancer with shared MySQL + 
 | Outbox drain | Existing Redis leader election in `src/services/outbox-worker.ts` |
 | SAML/OIDC signing keys | Inject `SAML_IDP_PRIVATE_KEY_PEM` + `SAML_IDP_CERT_PEM` from Vault (Agent Injector → process env on Multiverse; or External Secrets elsewhere); `ensureSamlKeys()` short-circuits; `ensureOidcKeys()` reuses SAML key when SAML is enabled |
 
-**Lenskart Multiverse (prod EKS):** Helm values overlay and Vault key template live in this repo at `deploy/multiverse/` for copy into `multiverse-application-helm` — `values-lk-multiverse-platform-eks.yaml` (ns `it-idp`, host `idp.lenskart.com`, RDS + ElastiCache + SQS FIFO, pod `dnsPolicy: None` + `dnsConfig.nameservers: [192.168.32.3]` / `searches: [lenskart.in]` for on-prem DNS) and `vault-multiverse-config-idp.template.env` (KV v1 `multiverse/config/idp`, role `idp`, SA `idp-sa`). GitLab CI `deploy-prod` uses values from `multiverse-application-helm` only (`-f ./helm/multiverse/idp/values-lk-multiverse-platform-eks.yaml`). EC2/docker-compose config is unchanged.
+**Lenskart Multiverse (prod EKS):** Chart values from `multiverse-application-helm`; GitLab `deploy-prod` merges **`deploy/multiverse/values-overlay.yaml`** (pod DNS) on top. Full reference values: `deploy/multiverse/values-lk-multiverse-platform-eks.yaml`.
 
 **Production SAML key generation (K8s / Vault):** do **not** rely on in-pod `ensureSamlKeys()` auto-generation (3-year validity, per-replica risk). Generate once offline with **15-year** validity and load into Vault:
 

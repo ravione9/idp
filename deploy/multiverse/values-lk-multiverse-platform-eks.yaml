@@ -1,8 +1,10 @@
 # IDP prod — lk-multiverse-platform-eks (CCMS-style values layout)
 #
 # Chart: multiverse-application-helm/multiverse/idp
-# Copy DNS / env changes into multiverse-application-helm before pipeline deploy.
-# Install:
+#
+# GitLab CI deploy-prod uses chart values from multiverse-application-helm PLUS
+# values-overlay.yaml from this repo (DNS only). Edit values-overlay.yaml for pipeline DNS changes.
+# This file is the full reference — copy sections into multiverse-application-helm when needed.
 #   helm upgrade -i idp ./multiverse/idp -n it-idp \
 #     -f ./multiverse/idp/values-lk-multiverse-platform-eks.yaml \
 #     --set image.tag=<git-sha>
