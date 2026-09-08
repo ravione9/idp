@@ -309,6 +309,12 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
       friendly = `No Such Object (LDAP error 32) — bindDn not found. DN used: ${bindDn}`;
     } else if (raw.includes('ECONNREFUSED')) {
       friendly = `Connection refused — IdP cannot reach ${host} on port 389/636. Open firewall from IdP to the domain controller, or use the on-prem AD Agent connector.`;
+    } else if (raw.includes('ECONNRESET') || raw.includes('ECONNABORTED') || raw.includes('EPIPE')) {
+      friendly =
+        `Connection reset by ${host} — LDAP sessions from this IdP host are being dropped ` +
+        `(common when IdP runs in cloud/EKS and AD is on-prem). ` +
+        `Use the on-prem AD Agent connector (Directory Sync → download agent package) on a domain-joined Windows server, ` +
+        `or ask network/firewall to allow outbound LDAP/LDAPS from IdP pods to the DC on ports 389 and 636.`;
     } else if (raw.includes('ETIMEDOUT') || raw.includes('connectTimeout')) {
       friendly = `Connection timed out reaching ${host} on port 389/636 — check network/firewall routes from IdP to AD.`;
     } else if (raw.includes('ENOTFOUND') || raw.includes('getaddrinfo')) {
