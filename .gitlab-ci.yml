@@ -110,5 +110,6 @@ deploy-prod:
         --wait --timeout 15m
       kubectl rollout restart deployment -n "${NAMESPACE}" -l "release=${RELEASE}" || true
       kubectl rollout status deployment -n "${NAMESPACE}" -l "release=${RELEASE}" --timeout=10m
+      helm get manifest "${RELEASE}" -n "${NAMESPACE}" | grep -q 'dnsPolicy' || echo "WARN: no dnsPolicy in rendered manifest — patch multiverse-application-helm (see deploy/multiverse/chart-dns-template-patch.md)"
   rules:
     - when: manual
