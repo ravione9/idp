@@ -85,6 +85,7 @@ import { startAccessRequestExpiryScheduler } from './services/access-request-exp
 import { startConnectorHealthScheduler } from './services/connector-health.js';
 import { startConnectorSyncScheduler } from './services/connector-sync-scheduler.js';
 import { startDeprovisionScheduler } from './services/deprovision-scheduler.js';
+import { startDynamicGroupScheduler } from './services/dynamic-group-scheduler.js';
 import { reclaimStaleConnectorRuns } from './services/connector-run-lifecycle.js';
 import { ensureMasterAdminFromEnv } from './services/local-admin.js';
 
@@ -391,6 +392,7 @@ async function main(): Promise<void> {
   }
   startConnectorSyncScheduler();
   startDeprovisionScheduler();
+  startDynamicGroupScheduler();
   startRadiusUdpServer();
 
   const server = app.listen(config.app.port, () => {

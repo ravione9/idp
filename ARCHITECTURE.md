@@ -859,6 +859,8 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | optional fallback | — | Outbound email if Admin GUI SMTP fields are empty |
 | `EMAIL_API_URL` / `EMAIL_API_KEY` | optional fallback | — | HTTP email API if Admin GUI Email API fields are empty |
 | `SMS_API_URL` / `SMS_API_KEY` | optional fallback | — | SMS gateway if Admin GUI SMS fields are empty |
+| `DYNAMIC_GROUP_RECONCILE_ENABLED` | optional | `true` | Set `false` to disable the 5-minute dynamic group membership sweep |
+| `DYNAMIC_GROUP_RECONCILE_INTERVAL_MS` | optional | `300000` | Interval between dynamic group reconcile sweeps (minimum 60000) |
 | `MFA_OTP_DEV_LOG` | no | — | Dev only fallback; prefer Admin GUI “Development mode” toggle |
 | `SMS_DEV_LOG` | no | — | Dev only fallback; prefer Admin GUI “SMS development log” |
 | `WEBAUTHN_RP_ID` / `WEBAUTHN_RP_NAME` | no | request hostname / `Lenskart IdP` | WebAuthn relying party |
@@ -1126,6 +1128,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-09-08 — Dynamic group auto-reconcile every 5 minutes
+
+**Why** — Email-domain / department dynamic groups (e.g. FOS Users) only picked up new members on manual Reconcile or full directory sync; admins need automatic membership refresh.
+
+**What changed:**
+
+- **`src/services/dynamic-group-scheduler.ts`** — every 5 min (Redis `withSchedLock`), runs `reconcileAllDynamicGroups()` on the API process.
+- **`src/index.ts`** — starts scheduler at boot.
+- **`web/js/views-stubs.js`** — dynamic group members modal notes 5-minute auto-refresh.
+- **Env:** `DYNAMIC_GROUP_RECONCILE_ENABLED` (default on), `DYNAMIC_GROUP_RECONCILE_INTERVAL_MS` (default 300000).
 
 ### (pending) — 2026-09-08 — Group members search and CSV export
 

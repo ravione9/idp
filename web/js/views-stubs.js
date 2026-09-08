@@ -152,7 +152,7 @@ export async function viewGroups(content, initialTab = 'directory') {
     const bd = openModal(`<div class="modal modal-wide"><div class="modal-header"><h2>${esc(groupName)} — Members</h2></div>
       <div class="modal-body">
         ${isSynced ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">Membership is synced from Google Workspace or Active Directory. Run <strong>Sync from Directory</strong> or trigger a connector sync to refresh.</div>' : ''}
-        ${isDynamic ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">This is a <strong>dynamic</strong> group — members are added automatically when a user matches the department and/or email-domain rule. Use <strong>Reconcile now</strong> to refresh membership.</div>' : ''}
+        ${isDynamic ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">This is a <strong>dynamic</strong> group — members are added automatically when a user matches the department and/or email-domain rule. Membership refreshes every <strong>5 minutes</strong> and on directory sync; use <strong>Reconcile now</strong> for an immediate refresh.</div>' : ''}
         <div class="filter-toolbar" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-bottom:0.75rem">
           <input class="form-input" id="gm-filter" placeholder="Search members by name, email, or ID…" style="flex:1;min-width:200px">
           <button type="button" class="btn btn-secondary btn-sm" id="gm-export" disabled>Export CSV</button>
