@@ -1127,6 +1127,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-08 — Fix dynamic group create 500 on legacy schema / large domains
+
+**Why** — Creating DYNAMIC groups (especially by email domain like `@lenskart.in`) returned **Internal server error** on some deployments: reconcile queried `groups.source_system` before migration 014, and inserted members one row at a time (timeout on large domains).
+
+**What changed:**
+
+- **`src/services/dynamic-groups.ts`** — schema-aware group load (legacy DB without `source_system`); batch member insert/delete (300 per chunk).
+- **`src/api/config-groups.ts`** — duplicate name → 409; reconcile failure after create → 201 with `reconcile.error` instead of 500.
+- **`web/js/views-stubs.js`** — show reconcile warning when group is created but membership sync failed.
+
 ### (pending) — 2026-09-08 — Directory search, domain dynamic groups, optional SCIM on SAML save
 
 **Why** — Universal Directory domain searches (e.g. `fos.lenskart.in`) sometimes returned unrelated users; admins need email-domain dynamic groups (e.g. all `@fos.lenskart.in` users); SAML app save failed when SCIM fields were empty because Slack pre-filled a SCIM base URL.

@@ -8,7 +8,10 @@
  *   { "field": "dept_id", "op": "in", "value": ["Engineering", "IT"] }
  */
 import { query, queryOne, execute } from '../db/connection.js';
+import { isGroupSyncSchemaReady } from './group-sync.js';
 import logger from '../utils/logger.js';
+
+const MEMBER_BATCH = 300;
 
 export interface DynamicGroupRule {
   dept_ids?: string[];
@@ -143,12 +146,80 @@ export function employeeMatchesDynamicRule(
 }
 
 async function loadDynamicGroup(groupId: string): Promise<DynamicGroupRow | null> {
-  return queryOne<DynamicGroupRow>(
-    `SELECT id, name, type, rule_json, source_system, active
+  const schemaReady = await isGroupSyncSchemaReady();
+  const row = schemaReady
+    ? await queryOne<DynamicGroupRow>(
+        `SELECT id, name, type, rule_json, source_system, active
+           FROM \`groups\`
+          WHERE id = ? AND active = 1`,
+        [groupId],
+      )
+    : await queryOne<Omit<DynamicGroupRow, 'source_system'> & { source_system?: string }>(
+        `SELECT id, name, type, rule_json, active
+           FROM \`groups\`
+          WHERE id = ? AND active = 1`,
+        [groupId],
+      );
+  if (!row) return null;
+  return { ...row, source_system: row.source_system ?? 'LOCAL' };
+}
+
+async function listLocalDynamicGroupRows(): Promise<DynamicGroupRow[]> {
+  const schemaReady = await isGroupSyncSchemaReady();
+  if (schemaReady) {
+    return query<DynamicGroupRow>(
+      `SELECT id, name, type, rule_json, source_system, active
+         FROM \`groups\`
+        WHERE type = 'DYNAMIC' AND active = 1
+          AND (source_system IS NULL OR source_system = 'LOCAL')`,
+      [],
+    );
+  }
+  const rows = await query<Omit<DynamicGroupRow, 'source_system'> & { source_system?: string }>(
+    `SELECT id, name, type, rule_json, active
        FROM \`groups\`
-      WHERE id = ? AND active = 1`,
-    [groupId],
+      WHERE type = 'DYNAMIC' AND active = 1`,
+    [],
   );
+  return rows.map((r) => ({ ...r, source_system: 'LOCAL' }));
+}
+
+async function insertGroupMembersBatch(
+  groupId: string,
+  empIds: string[],
+  addedBy: string | null,
+): Promise<number> {
+  if (!empIds.length) return 0;
+  let added = 0;
+  for (let i = 0; i < empIds.length; i += MEMBER_BATCH) {
+    const chunk = empIds.slice(i, i + MEMBER_BATCH);
+    const placeholders = chunk.map(() => '(?, ?, ?)').join(', ');
+    const params: unknown[] = [];
+    for (const empId of chunk) {
+      params.push(groupId, empId, addedBy);
+    }
+    const header = await execute(
+      `INSERT IGNORE INTO group_members (group_id, emp_id, added_by) VALUES ${placeholders}`,
+      params,
+    );
+    added += header.affectedRows ?? 0;
+  }
+  return added;
+}
+
+async function deleteGroupMembersBatch(groupId: string, empIds: string[]): Promise<number> {
+  if (!empIds.length) return 0;
+  let removed = 0;
+  for (let i = 0; i < empIds.length; i += MEMBER_BATCH) {
+    const chunk = empIds.slice(i, i + MEMBER_BATCH);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const header = await execute(
+      `DELETE FROM group_members WHERE group_id = ? AND emp_id IN (${placeholders})`,
+      [groupId, ...chunk],
+    );
+    removed += header.affectedRows ?? 0;
+  }
+  return removed;
 }
 
 async function isLocalDynamicGroup(groupId: string): Promise<boolean> {
@@ -192,13 +263,7 @@ export async function reconcileDynamicGroupsForEmployee(
   );
   if (!emp) return { added: 0, removed: 0 };
 
-  const groups = await query<DynamicGroupRow>(
-    `SELECT id, name, type, rule_json, source_system, active
-       FROM \`groups\`
-      WHERE type = 'DYNAMIC' AND active = 1
-        AND (source_system IS NULL OR source_system = 'LOCAL')`,
-    [],
-  );
+  const groups = await listLocalDynamicGroupRows();
 
   let added = 0;
   let removed = 0;
@@ -286,28 +351,11 @@ export async function reconcileDynamicGroup(
   );
   const currentSet = new Set(current.map((m) => m.emp_id));
 
-  let added = 0;
-  let removed = 0;
+  const toAdd = [...matchSet].filter((empId) => !currentSet.has(empId));
+  const toRemove = [...currentSet].filter((empId) => !matchSet.has(empId));
 
-  for (const empId of matchSet) {
-    if (!currentSet.has(empId)) {
-      await execute(
-        `INSERT IGNORE INTO group_members (group_id, emp_id, added_by) VALUES (?, ?, ?)`,
-        [groupId, empId, addedBy],
-      );
-      added += 1;
-    }
-  }
-
-  for (const empId of currentSet) {
-    if (!matchSet.has(empId)) {
-      await execute(
-        `DELETE FROM group_members WHERE group_id = ? AND emp_id = ?`,
-        [groupId, empId],
-      );
-      removed += 1;
-    }
-  }
+  const added = await insertGroupMembersBatch(groupId, toAdd, addedBy);
+  const removed = await deleteGroupMembersBatch(groupId, toRemove);
 
   logger.info({ groupId, added, removed, matched: matchSet.size }, 'Reconciled dynamic group');
   return { added, removed, matched: matchSet.size };
@@ -317,12 +365,7 @@ export async function reconcileDynamicGroup(
 export async function reconcileAllDynamicGroups(
   addedBy: string | null = null,
 ): Promise<{ groups: number; added: number; removed: number }> {
-  const groups = await query<{ id: string }>(
-    `SELECT id FROM \`groups\`
-      WHERE type = 'DYNAMIC' AND active = 1
-        AND (source_system IS NULL OR source_system = 'LOCAL')`,
-    [],
-  );
+  const groups = await listLocalDynamicGroupRows();
 
   let added = 0;
   let removed = 0;

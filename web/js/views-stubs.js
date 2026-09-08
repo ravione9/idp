@@ -542,10 +542,12 @@ export async function viewGroups(content, initialTab = 'directory') {
       try {
         const r = await api.createGroup(data);
         bd.remove();
-        const note = r.reconcile
-          ? ` Created with ${r.reconcile.matched ?? 0} members (${r.reconcile.added ?? 0} added).`
-          : '';
-        wrap.querySelector('#grp-msg').innerHTML = `<div class="alert alert-success">Group created.${note}</div>`;
+        const note = r.reconcile?.error
+          ? ` Created, but reconcile failed: ${r.reconcile.error}`
+          : r.reconcile
+            ? ` Created with ${r.reconcile.matched ?? 0} members (${r.reconcile.added ?? 0} added).`
+            : '';
+        wrap.querySelector('#grp-msg').innerHTML = `<div class="alert alert-${r.reconcile?.error ? 'warning' : 'success'}">Group created.${note}</div>`;
         await load();
       } catch(e) { bd.querySelector('#g-err').innerHTML = errHtml(e.message); }
     });
