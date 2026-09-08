@@ -1,0 +1,14 @@
+# Applied by GitLab deploy-prod ON TOP OF multiverse-application-helm chart values.
+# Edit this file for pipeline DNS changes (not values-lk-multiverse-platform-eks.yaml).
+#
+# REQUIRES chart template support — see chart-dns-template-patch.md in this folder.
+
+dnsPolicy: None
+dnsConfig:
+  nameservers:
+    - 192.168.32.3
+  searches:
+    - lenskart.in
+  options:
+    - name: ndots
+      value: "2"

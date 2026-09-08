@@ -1,6 +1,8 @@
 # IDP prod — lk-multiverse-platform-eks (CCMS-style values layout)
 #
 # Chart: multiverse-application-helm/multiverse/idp
+# Pipeline DNS: edit deploy/multiverse/values-overlay.yaml (merged by .gitlab-ci.yml deploy-prod).
+# Chart must render dnsPolicy/dnsConfig — see deploy/multiverse/chart-dns-template-patch.md
 # Install:
 #   helm upgrade -i idp ./multiverse/idp -n it-idp \
 #     -f ./multiverse/idp/values-lk-multiverse-platform-eks.yaml \
@@ -44,6 +46,17 @@ topologySpreadConstraints:
     labelSelector:
       matchLabels:
         app: idp-api
+
+# Reference copy of DNS — pipeline uses deploy/multiverse/values-overlay.yaml instead.
+dnsPolicy: None
+dnsConfig:
+  nameservers:
+    - 192.168.32.3
+  searches:
+    - lenskart.in
+  options:
+    - name: ndots
+      value: "2"
 
 hpa:
   enabled: true
