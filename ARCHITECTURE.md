@@ -1127,6 +1127,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-08 — Group members search and CSV export
+
+**Why** — Dynamic and synced group member modals had no way to search the list or export members (e.g. FOS Users group).
+
+**What changed:**
+
+- **`web/js/views-stubs.js`** — Group **Members** modal: filter by name/email/ID; **Export CSV** (respects current filter); member count label.
+
 ### (pending) — 2026-09-08 — Fix dynamic group create 500 on legacy schema / large domains
 
 **Why** — Creating DYNAMIC groups (especially by email domain like `@lenskart.in`) returned **Internal server error** on some deployments: reconcile queried `groups.source_system` before migration 014, and inserted members one row at a time (timeout on large domains).

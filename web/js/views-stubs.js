@@ -152,7 +152,12 @@ export async function viewGroups(content, initialTab = 'directory') {
     const bd = openModal(`<div class="modal modal-wide"><div class="modal-header"><h2>${esc(groupName)} — Members</h2></div>
       <div class="modal-body">
         ${isSynced ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">Membership is synced from Google Workspace or Active Directory. Run <strong>Sync from Directory</strong> or trigger a connector sync to refresh.</div>' : ''}
-        ${isDynamic ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">This is a <strong>dynamic</strong> group — members are added automatically when a user\'s department matches the rule. Use <strong>Reconcile now</strong> to refresh membership.</div>' : ''}
+        ${isDynamic ? '<div class="alert alert-info" style="font-size:0.85rem;margin-bottom:1rem">This is a <strong>dynamic</strong> group — members are added automatically when a user matches the department and/or email-domain rule. Use <strong>Reconcile now</strong> to refresh membership.</div>' : ''}
+        <div class="filter-toolbar" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-bottom:0.75rem">
+          <input class="form-input" id="gm-filter" placeholder="Search members by name, email, or ID…" style="flex:1;min-width:200px">
+          <button type="button" class="btn btn-secondary btn-sm" id="gm-export" disabled>Export CSV</button>
+          <span class="muted" style="font-size:0.78rem" id="gm-count"></span>
+        </div>
         <div id="gm-list">${loading()}</div>
         ${isSynced || isDynamic ? '' : `<div class="form-group" style="margin-top:1rem">
           <label class="form-label">Add member</label>
@@ -201,11 +206,39 @@ export async function viewGroups(content, initialTab = 'directory') {
       return m.employee_number || m.emp_id || '—';
     }
 
-    async function loadMembers() {
-      try {
-        const g = await api.getGroup(groupId);
-        const members = g.members || [];
-        const rows = members.length ? members.map(m => `
+    let allMembers = [];
+    let memberFilter = '';
+
+    function memberMatchesFilter(m, q) {
+      if (!q) return true;
+      const hay = [
+        m.full_name,
+        m.email_corp,
+        m.emp_id,
+        m.employee_number,
+      ].map((v) => String(v || '').toLowerCase()).join(' ');
+      return hay.includes(q);
+    }
+
+    function filteredMembers() {
+      const q = memberFilter.trim().toLowerCase();
+      return q ? allMembers.filter((m) => memberMatchesFilter(m, q)) : allMembers;
+    }
+
+    function updateMemberCount(shown, total) {
+      const el = bd.querySelector('#gm-count');
+      if (!el) return;
+      if (!total) {
+        el.textContent = '0 members';
+        return;
+      }
+      el.textContent = shown === total
+        ? `${total.toLocaleString()} member${total === 1 ? '' : 's'}`
+        : `Showing ${shown.toLocaleString()} of ${total.toLocaleString()}`;
+    }
+
+    function renderMembers(members) {
+      const rows = members.length ? members.map(m => `
           <tr>
             <td class="cell-strong">${esc(m.full_name || m.emp_id)}</td>
             <td class="muted">${esc(m.email_corp || '—')}</td>
@@ -216,20 +249,66 @@ export async function viewGroups(content, initialTab = 'directory') {
             </td>
             ${isSynced || isDynamic ? '<td></td>' : `<td><button class="btn btn-sm btn-danger gm-rm" data-emp="${esc(m.emp_id)}">Remove</button></td>`}
           </tr>`).join('')
-          : `<tr><td colspan="4"><p class="muted">No members yet.</p></td></tr>`;
-        bd.querySelector('#gm-list').innerHTML = `<div class="table-wrap"><table>
+        : `<tr><td colspan="4"><p class="muted">${memberFilter.trim() ? 'No members match your search.' : 'No members yet.'}</p></td></tr>`;
+      bd.querySelector('#gm-list').innerHTML = `<div class="table-wrap"><table>
           <thead><tr><th>Name</th><th>Email</th><th>Employee ID</th>${isSynced || isDynamic ? '' : '<th></th>'}</tr></thead>
           <tbody>${rows}</tbody></table></div>`;
-        if (!isSynced && !isDynamic) {
-          bd.querySelectorAll('.gm-rm').forEach(btn => {
-            btn.addEventListener('click', async () => {
-              try { await api.removeGroupMember(groupId, btn.dataset.emp); await loadMembers(); await load(); }
-              catch (e) { alert(e.message); }
-            });
+      if (!isSynced && !isDynamic) {
+        bd.querySelectorAll('.gm-rm').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            try { await api.removeGroupMember(groupId, btn.dataset.emp); await loadMembers(); await load(); }
+            catch (e) { alert(e.message); }
           });
-        }
+        });
+      }
+      updateMemberCount(members.length, allMembers.length);
+      const exportBtn = bd.querySelector('#gm-export');
+      if (exportBtn) exportBtn.disabled = members.length === 0;
+    }
+
+    function exportMembersCsv() {
+      const members = filteredMembers();
+      if (!members.length) return;
+      const escCsv = (v) => {
+        const s = String(v ?? '');
+        return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const lines = [
+        'full_name,email,employee_id,directory_id',
+        ...members.map((m) => [
+          escCsv(m.full_name || ''),
+          escCsv(m.email_corp || ''),
+          escCsv(m.employee_number || ''),
+          escCsv(m.emp_id || ''),
+        ].join(',')),
+      ];
+      const slug = String(groupName || 'group').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'group';
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${slug}-members.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    async function loadMembers() {
+      try {
+        const g = await api.getGroup(groupId);
+        allMembers = g.members || [];
+        memberFilter = bd.querySelector('#gm-filter')?.value?.trim() || memberFilter;
+        renderMembers(filteredMembers());
       } catch (e) { bd.querySelector('#gm-list').innerHTML = errHtml(e.message); }
     }
+
+    let filterTimer;
+    bd.querySelector('#gm-filter')?.addEventListener('input', () => {
+      clearTimeout(filterTimer);
+      filterTimer = setTimeout(() => {
+        memberFilter = bd.querySelector('#gm-filter').value.trim();
+        renderMembers(filteredMembers());
+      }, 200);
+    });
+    bd.querySelector('#gm-export')?.addEventListener('click', () => exportMembersCsv());
 
     bd.querySelector('#gm-close').addEventListener('click', () => bd.remove());
 
