@@ -408,15 +408,31 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
 
   const id = uuidv4();
   const empId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? null;
-  await execute(
-    `INSERT INTO \`groups\` (id, name, description, type, rule_json, created_by)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, name, description ?? null, type, rule_json ? JSON.stringify(rule_json) : null, empId],
-  );
+  try {
+    await execute(
+      `INSERT INTO \`groups\` (id, name, description, type, rule_json, created_by)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, name, description ?? null, type, rule_json ? JSON.stringify(rule_json) : null, empId],
+    );
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ER_DUP_ENTRY') {
+      res.status(409).json({ error: 'A group with this name already exists' });
+      return;
+    }
+    throw err;
+  }
 
-  let reconcileResult = { added: 0, removed: 0, matched: 0 };
+  let reconcileResult: { added: number; removed: number; matched: number; error?: string } = {
+    added: 0, removed: 0, matched: 0,
+  };
   if (type === 'DYNAMIC' && rule_json) {
-    reconcileResult = await reconcileDynamicGroup(id, empId);
+    try {
+      reconcileResult = await reconcileDynamicGroup(id, empId);
+    } catch (reconcileErr) {
+      const message = reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr);
+      logger.error({ err: reconcileErr, groupId: id }, 'Dynamic group reconcile failed after create');
+      reconcileResult = { added: 0, removed: 0, matched: 0, error: message };
+    }
   }
 
   res.status(201).json({ id, reconcile: reconcileResult });
