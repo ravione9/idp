@@ -1129,6 +1129,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-08 — Clearer AD ECONNRESET hint for cloud IdP → on-prem AD
+
+**Why** — Test Connection on EKS prod showed raw `read ECONNRESET` with no guidance; direct LDAP from cloud to on-prem AD usually requires AD Agent or firewall rules.
+
+**What changed:**
+
+- **`src/services/connector-health.ts`** — friendly message for `ECONNRESET` / `ECONNABORTED` / `EPIPE` suggesting on-prem AD Agent or firewall LDAP/LDAPS to DC.
+
 ### (pending) — 2026-09-08 — Dynamic group auto-reconcile every 5 minutes
 
 **Why** — Email-domain / department dynamic groups (e.g. FOS Users) only picked up new members on manual Reconcile or full directory sync; admins need automatic membership refresh.
