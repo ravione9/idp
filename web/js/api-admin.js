@@ -72,6 +72,7 @@ Object.assign(api, {
   adAgentPackageUrl: () => '/api/iga/connectors/ad-agent-package.zip',
   listGroups:       () => f('/api/admin/groups'),
   listGroupDepartments: () => f('/api/admin/groups/departments'),
+  listGroupEmailDomains: () => f('/api/admin/groups/email-domains'),
   syncDirectoryGroups: () => f('/api/admin/groups/sync', { method: 'POST' }),
   reconcileDynamicGroups: () => f('/api/admin/groups/reconcile', { method: 'POST' }),
   reconcileDynamicGroup: (id) => f(`/api/admin/groups/${id}/reconcile`, { method: 'POST' }),

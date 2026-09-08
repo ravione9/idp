@@ -1,8 +1,8 @@
 /**
- * Dynamic group membership — department-based rules on local DYNAMIC groups.
+ * Dynamic group membership — department and email-domain rules on local DYNAMIC groups.
  *
  * Rule shape (stored in groups.rule_json):
- *   { "dept_ids": ["Engineering", "IT"] }
+ *   { "dept_ids": ["Engineering", "IT"], "email_domains": ["fos.lenskart.in"] }
  * or legacy:
  *   { "field": "dept_id", "op": "eq"|"in", "value": "Engineering" }
  *   { "field": "dept_id", "op": "in", "value": ["Engineering", "IT"] }
@@ -12,6 +12,7 @@ import logger from '../utils/logger.js';
 
 export interface DynamicGroupRule {
   dept_ids?: string[];
+  email_domains?: string[];
 }
 
 interface DynamicGroupRow {
@@ -26,12 +27,24 @@ interface DynamicGroupRow {
 interface EmployeeRow {
   emp_id: string;
   dept_id: string | null;
+  email_corp: string | null;
   ilg_state: string;
 }
 
 function normList(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.map((x) => String(x).trim()).filter(Boolean);
+}
+
+function normDomains(v: unknown): string[] {
+  return normList(v).map((d) => d.replace(/^@+/, '').toLowerCase()).filter(Boolean);
+}
+
+export function emailDomainOf(email: string | null | undefined): string | null {
+  const raw = (email || '').trim().toLowerCase();
+  const at = raw.lastIndexOf('@');
+  if (at < 1 || at >= raw.length - 1) return null;
+  return raw.slice(at + 1);
 }
 
 export function parseDynamicRule(raw: unknown): DynamicGroupRule {
@@ -49,8 +62,13 @@ export function parseDynamicRule(raw: unknown): DynamicGroupRule {
     return {};
   }
 
+  const rule: DynamicGroupRule = {};
   const deptIds = normList(obj.dept_ids);
-  if (deptIds.length) return { dept_ids: deptIds };
+  const domains = normDomains(obj.email_domains);
+  if (deptIds.length) rule.dept_ids = deptIds;
+  if (domains.length) rule.email_domains = domains;
+
+  if (rule.dept_ids?.length || rule.email_domains?.length) return rule;
 
   const field = String(obj.field ?? '').toLowerCase();
   if (field === 'dept_id' || field === 'department') {
@@ -66,39 +84,62 @@ export function parseDynamicRule(raw: unknown): DynamicGroupRule {
   return {};
 }
 
-export function buildDynamicRule(deptIds: string[]): DynamicGroupRule {
-  const cleaned = normList(deptIds);
-  return { dept_ids: cleaned };
+export function buildDynamicRule(input: {
+  dept_ids?: string[];
+  email_domains?: string[];
+}): DynamicGroupRule {
+  const rule: DynamicGroupRule = {};
+  const depts = normList(input.dept_ids);
+  const domains = normDomains(input.email_domains);
+  if (depts.length) rule.dept_ids = depts;
+  if (domains.length) rule.email_domains = domains;
+  return rule;
 }
 
 export function validateDynamicRule(rule: DynamicGroupRule): string | null {
   const depts = normList(rule.dept_ids);
-  if (!depts.length) {
-    return 'At least one department is required for a dynamic group';
+  const domains = normDomains(rule.email_domains);
+  if (!depts.length && !domains.length) {
+    return 'At least one department or email domain is required for a dynamic group';
   }
   return null;
 }
 
 export function summarizeDynamicRule(rule: DynamicGroupRule): string {
   const depts = normList(rule.dept_ids);
-  if (!depts.length) return 'No rule configured';
-  return `Department: ${depts.join(', ')}`;
+  const domains = normDomains(rule.email_domains);
+  const parts: string[] = [];
+  if (depts.length) parts.push(`Department: ${depts.join(', ')}`);
+  if (domains.length) parts.push(`Email domain: ${domains.map((d) => `@${d}`).join(', ')}`);
+  if (!parts.length) return 'No rule configured';
+  return parts.join(' · ');
 }
 
-/** Active directory users match department rules. */
+function ruleHasCriteria(rule: DynamicGroupRule): boolean {
+  return normList(rule.dept_ids).length > 0 || normDomains(rule.email_domains).length > 0;
+}
+
+/** Active directory users match department and/or email-domain rules. */
 export function employeeMatchesDynamicRule(
-  emp: Pick<EmployeeRow, 'dept_id' | 'ilg_state'>,
+  emp: Pick<EmployeeRow, 'dept_id' | 'email_corp' | 'ilg_state'>,
   rule: DynamicGroupRule,
 ): boolean {
   if (emp.ilg_state !== 'ACTIVE') return false;
 
   const depts = normList(rule.dept_ids).map((d) => d.toLowerCase());
-  if (!depts.length) return false;
+  const domains = normDomains(rule.email_domains);
 
-  const empDept = (emp.dept_id || '').trim().toLowerCase();
-  if (!empDept) return false;
+  if (depts.length) {
+    const empDept = (emp.dept_id || '').trim().toLowerCase();
+    if (!empDept || !depts.includes(empDept)) return false;
+  }
 
-  return depts.includes(empDept);
+  if (domains.length) {
+    const empDomain = emailDomainOf(emp.email_corp);
+    if (!empDomain || !domains.includes(empDomain)) return false;
+  }
+
+  return depts.length > 0 || domains.length > 0;
 }
 
 async function loadDynamicGroup(groupId: string): Promise<DynamicGroupRow | null> {
@@ -127,13 +168,26 @@ export async function listDistinctDepartments(): Promise<string[]> {
   return rows.map((r) => r.dept_id.trim()).filter(Boolean);
 }
 
+export async function listDistinctEmailDomains(): Promise<string[]> {
+  const rows = await query<{ domain: string }>(
+    `SELECT DISTINCT LOWER(TRIM(SUBSTRING_INDEX(email_corp, '@', -1))) AS domain
+       FROM employees
+      WHERE email_corp IS NOT NULL
+        AND TRIM(email_corp) != ''
+        AND email_corp LIKE '%@%'
+      ORDER BY domain`,
+    [],
+  );
+  return rows.map((r) => r.domain.trim()).filter(Boolean);
+}
+
 /** Add/remove one employee across all active local DYNAMIC groups. */
 export async function reconcileDynamicGroupsForEmployee(
   empId: string,
   addedBy: string | null = null,
 ): Promise<{ added: number; removed: number }> {
   const emp = await queryOne<EmployeeRow>(
-    `SELECT emp_id, dept_id, ilg_state FROM employees WHERE emp_id = ?`,
+    `SELECT emp_id, dept_id, email_corp, ilg_state FROM employees WHERE emp_id = ?`,
     [empId],
   );
   if (!emp) return { added: 0, removed: 0 };
@@ -151,7 +205,7 @@ export async function reconcileDynamicGroupsForEmployee(
 
   for (const group of groups) {
     const rule = parseDynamicRule(group.rule_json);
-    if (!normList(rule.dept_ids).length) continue;
+    if (!ruleHasCriteria(rule)) continue;
 
     const shouldMember = employeeMatchesDynamicRule(emp, rule);
     const existing = await queryOne<{ emp_id: string }>(
@@ -181,6 +235,31 @@ export async function reconcileDynamicGroupsForEmployee(
   return { added, removed };
 }
 
+async function queryMatchingEmployees(rule: DynamicGroupRule): Promise<EmployeeRow[]> {
+  const depts = normList(rule.dept_ids).map((d) => d.toLowerCase());
+  const domains = normDomains(rule.email_domains);
+
+  const where: string[] = [`ilg_state = 'ACTIVE'`];
+  const params: unknown[] = [];
+
+  if (depts.length) {
+    const placeholders = depts.map(() => '?').join(', ');
+    where.push(`dept_id IS NOT NULL AND LOWER(TRIM(dept_id)) IN (${placeholders})`);
+    params.push(...depts);
+  }
+
+  if (domains.length) {
+    const domainClauses = domains.map(() => `LOWER(TRIM(SUBSTRING_INDEX(email_corp, '@', -1))) = ?`);
+    where.push(`email_corp IS NOT NULL AND (${domainClauses.join(' OR ')})`);
+    params.push(...domains);
+  }
+
+  return query<EmployeeRow>(
+    `SELECT emp_id, dept_id, email_corp, ilg_state FROM employees WHERE ${where.join(' AND ')}`,
+    params,
+  );
+}
+
 /** Reconcile all employees for one dynamic group. */
 export async function reconcileDynamicGroup(
   groupId: string,
@@ -198,16 +277,7 @@ export async function reconcileDynamicGroup(
   const ruleErr = validateDynamicRule(rule);
   if (ruleErr) throw new Error(ruleErr);
 
-  const depts = normList(rule.dept_ids).map((d) => d.toLowerCase());
-  const placeholders = depts.map(() => '?').join(', ');
-
-  const matching = await query<EmployeeRow>(
-    `SELECT emp_id, dept_id, ilg_state FROM employees
-      WHERE ilg_state = 'ACTIVE'
-        AND dept_id IS NOT NULL
-        AND LOWER(TRIM(dept_id)) IN (${placeholders})`,
-    depts,
-  );
+  const matching = await queryMatchingEmployees(rule);
   const matchSet = new Set(matching.map((e) => e.emp_id));
 
   const current = await query<{ emp_id: string }>(
@@ -272,6 +342,6 @@ export async function reconcileAllDynamicGroups(
 
 export async function assertNotDynamicGroup(groupId: string): Promise<void> {
   if (await isLocalDynamicGroup(groupId)) {
-    throw new Error('Members of dynamic groups are managed automatically from department rules');
+    throw new Error('Members of dynamic groups are managed automatically from department/domain rules');
   }
 }
