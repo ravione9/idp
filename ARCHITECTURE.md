@@ -682,6 +682,7 @@ To add a new migration:
 | `POST`/`DELETE` | `/api/admin/app-access-policy/tag-groups/:id/members[/:empId]` | Tag group membership |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/groups[/:id]` | Identity directory groups (local + synced) |
 | `GET` | `/api/admin/groups/departments` | Distinct `dept_id` values for dynamic group rules |
+| `GET` | `/api/admin/groups/email-domains` | Distinct corporate email domains for dynamic group rules |
 | `POST` | `/api/admin/groups/reconcile` | Reconcile all local DYNAMIC groups |
 | `POST` | `/api/admin/groups/:id/reconcile` | Reconcile one DYNAMIC group from `rule_json` |
 | `POST`/`DELETE` | `/api/admin/groups/:id/members[/:empId]` | Add/remove member on **local STATIC** groups (accepts email, `employee_number`, or `emp_id`) |
@@ -1123,6 +1124,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-09-08 — Directory search, domain dynamic groups, optional SCIM on SAML save
+
+**Why** — Universal Directory domain searches (e.g. `fos.lenskart.in`) sometimes returned unrelated users; admins need email-domain dynamic groups (e.g. all `@fos.lenskart.in` users); SAML app save failed when SCIM fields were empty because Slack pre-filled a SCIM base URL.
+
+**What changed:**
+
+- **`src/api/admin-users.ts`** — domain-style `q` matches `email_corp` suffix (`%@domain`) instead of substring-only LIKE.
+- **`web/js/views-stubs.js`** — reliable initial user-directory load; DYNAMIC groups support **email domains** (with optional departments); `GET /email-domains` picker.
+- **`src/services/dynamic-groups.ts`** — `rule_json.email_domains`; reconcile on email or department change.
+- **`src/api/config-groups.ts`** — `email_domains` on create/update; `GET /email-domains`.
+- **`web/js/views-admin.js`** — **Enable SCIM provisioning** checkbox on SAML edit; no SCIM validation/save when disabled; removed Slack default SCIM URL prefill.
 
 ### (pending) — 2026-09-04 — Pod DNS config for Multiverse EKS (lenskart.in resolver)
 

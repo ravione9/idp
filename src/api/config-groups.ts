@@ -20,6 +20,7 @@ import {
   summarizeDynamicRule,
   validateDynamicRule,
   listDistinctDepartments,
+  listDistinctEmailDomains,
 } from '../services/dynamic-groups.js';
 import { z } from 'zod';
 import logger from '../utils/logger.js';
@@ -302,6 +303,7 @@ const createGroupSchema = z.object({
   type: z.enum(['STATIC', 'DYNAMIC']).default('STATIC'),
   rule_json: z.unknown().optional(),
   dept_ids: z.array(z.string().min(1).max(100)).optional(),
+  email_domains: z.array(z.string().min(1).max(253)).optional(),
 });
 
 const updateGroupSchema = z.object({
@@ -311,20 +313,25 @@ const updateGroupSchema = z.object({
   type: z.enum(['STATIC', 'DYNAMIC']).optional(),
   rule_json: z.unknown().optional(),
   dept_ids: z.array(z.string().min(1).max(100)).optional(),
+  email_domains: z.array(z.string().min(1).max(253)).optional(),
 });
 
 function resolveRuleFromBody(body: {
   type?: string | undefined;
   rule_json?: unknown;
   dept_ids?: string[] | undefined;
+  email_domains?: string[] | undefined;
 }): { rule_json: unknown | null; error: string | null } {
   if (body.type !== 'DYNAMIC') {
     return { rule_json: null, error: null };
   }
 
   let rule = parseDynamicRule(body.rule_json);
-  if (body.dept_ids?.length) {
-    rule = buildDynamicRule(body.dept_ids);
+  if (body.dept_ids?.length || body.email_domains?.length) {
+    const input: { dept_ids?: string[]; email_domains?: string[] } = {};
+    if (body.dept_ids?.length) input.dept_ids = body.dept_ids;
+    if (body.email_domains?.length) input.email_domains = body.email_domains;
+    rule = buildDynamicRule(input);
   }
 
   const ruleErr = validateDynamicRule(rule);
@@ -337,6 +344,12 @@ function resolveRuleFromBody(body: {
 router.get('/departments', asyncHandler(async (_req: Request, res: Response) => {
   const departments = await listDistinctDepartments();
   res.json({ data: departments });
+}));
+
+// GET /email-domains — distinct corporate email domains for dynamic group rules
+router.get('/email-domains', asyncHandler(async (_req: Request, res: Response) => {
+  const domains = await listDistinctEmailDomains();
+  res.json({ data: domains });
 }));
 
 // POST /reconcile — reconcile all local dynamic groups
@@ -454,6 +467,7 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     type: nextType,
     rule_json: parsed.data.rule_json ?? existing.rule_json,
     dept_ids: parsed.data.dept_ids,
+    email_domains: parsed.data.email_domains,
   });
   if (ruleErr) {
     res.status(400).json({ error: ruleErr, code: 'INVALID_RULE' });
