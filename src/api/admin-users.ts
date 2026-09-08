@@ -99,6 +99,23 @@ async function isUserExcludedFromPolicyMfa(empId: string): Promise<boolean> {
   }
 }
 
+/** Detect email-domain style queries (e.g. fos.lenskart.in or @fos.lenskart.in). */
+function parseDirectorySearchQuery(raw: string): { mode: 'domain' | 'general'; domain?: string; text: string } {
+  const text = raw.trim();
+  if (!text) return { mode: 'general', text };
+
+  const candidate = text.replace(/^@+/, '').toLowerCase();
+  if (
+    candidate.includes('.')
+    && !candidate.includes(' ')
+    && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(candidate)
+  ) {
+    return { mode: 'domain', domain: candidate, text };
+  }
+
+  return { mode: 'general', text };
+}
+
 // ---------------------------------------------------------------------------
 // GET /  — paginated employee list with linked identity sources
 // ---------------------------------------------------------------------------
@@ -119,9 +136,20 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   const params: unknown[] = [];
 
   if (search) {
-    where.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR e.emp_id LIKE ? OR e.employee_number LIKE ? OR e.username LIKE ?)');
-    const like = `%${search}%`;
-    params.push(like, like, like, like, like);
+    const parsed = parseDirectorySearchQuery(search);
+    if (parsed.mode === 'domain' && parsed.domain) {
+      const domainLike = `%@${parsed.domain}`;
+      where.push(`(
+        LOWER(e.email_corp) LIKE ?
+        OR e.full_name LIKE ? OR e.emp_id LIKE ? OR e.employee_number LIKE ? OR e.username LIKE ?
+      )`);
+      const like = `%${parsed.text}%`;
+      params.push(domainLike, like, like, like, like);
+    } else {
+      where.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR e.emp_id LIKE ? OR e.employee_number LIKE ? OR e.username LIKE ?)');
+      const like = `%${search}%`;
+      params.push(like, like, like, like, like);
+    }
   }
   if (employeeId) {
     where.push('(e.emp_id = ? OR e.employee_number = ?)');

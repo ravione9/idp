@@ -458,6 +458,41 @@ export async function viewGroups(content, initialTab = 'directory') {
     }
   }
 
+  async function loadEmailDomainOptions(selected = []) {
+    try {
+      const r = await api.listGroupEmailDomains();
+      const domains = r.data || r || [];
+      const sel = new Set((selected || []).map((d) => String(d).replace(/^@+/, '').toLowerCase()));
+      return domains.map((d) =>
+        `<option value="${esc(d)}"${sel.has(String(d).toLowerCase()) ? ' selected' : ''}>@${esc(d)}</option>`,
+      ).join('');
+    } catch {
+      return '';
+    }
+  }
+
+  function collectDynamicRuleFields(bd, prefix) {
+    const fromSelect = [...bd.querySelector(`#${prefix}-depts`)?.selectedOptions || []].map((o) => o.value.trim()).filter(Boolean);
+    const fromCustom = (bd.querySelector(`#${prefix}-dept-custom`)?.value || '').split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
+    const dept_ids = [...new Set([...fromSelect, ...fromCustom])];
+
+    const fromDomSelect = [...bd.querySelector(`#${prefix}-domains`)?.selectedOptions || []].map((o) => o.value.trim()).filter(Boolean);
+    const fromDomCustom = (bd.querySelector(`#${prefix}-domain-custom`)?.value || '')
+      .split(/[,;]+/)
+      .map((s) => s.trim().replace(/^@+/, ''))
+      .filter(Boolean);
+    const email_domains = [...new Set([...fromDomSelect, ...fromDomCustom])];
+
+    return { dept_ids, email_domains };
+  }
+
+  function validateDynamicRuleFields(dept_ids, email_domains) {
+    if (!dept_ids.length && !email_domains.length) {
+      return 'Select or enter at least one department or email domain';
+    }
+    return null;
+  }
+
   function toggleDynamicFields(bd) {
     const isDynamic = bd.querySelector('#g-type')?.value === 'DYNAMIC';
     const wrap = bd.querySelector('#g-dynamic-fields');
@@ -465,17 +500,25 @@ export async function viewGroups(content, initialTab = 'directory') {
   }
 
   async function openNewGroupModal() {
-    const deptOptions = await loadDepartmentOptions();
+    const [deptOptions, domainOptions] = await Promise.all([
+      loadDepartmentOptions(),
+      loadEmailDomainOptions(),
+    ]);
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>New Group</h2></div><div class="modal-body">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="g-name" placeholder="Group name"></div>
       <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="g-desc" placeholder="Description"></div>
-      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="g-type"><option value="STATIC">STATIC — manual members</option><option value="DYNAMIC">DYNAMIC — by department</option></select></div>
+      <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="g-type"><option value="STATIC">STATIC — manual members</option><option value="DYNAMIC">DYNAMIC — by department / email domain</option></select></div>
       <div id="g-dynamic-fields" hidden>
+        <p class="muted" style="font-size:0.78rem;margin:0 0 0.75rem">All ACTIVE users matching the selected departments and/or email domains are added automatically. New users are added when created or synced.</p>
         <div class="form-group">
-          <label class="form-label">Departments</label>
-          <p class="muted" style="font-size:0.78rem;margin:0 0 0.35rem">All ACTIVE users in selected departments are added automatically. New users are added when created or synced.</p>
-          <select class="form-select" id="g-depts" multiple size="8" style="min-height:140px">${deptOptions || '<option disabled>No departments in directory yet</option>'}</select>
+          <label class="form-label">Departments <span class="muted" style="font-weight:400">(optional)</span></label>
+          <select class="form-select" id="g-depts" multiple size="6" style="min-height:120px">${deptOptions || '<option disabled>No departments in directory yet</option>'}</select>
           <input class="form-input" id="g-dept-custom" placeholder="Or type department names (comma-separated)" style="margin-top:0.5rem">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email domains <span class="muted" style="font-weight:400">(optional)</span></label>
+          <select class="form-select" id="g-domains" multiple size="6" style="min-height:120px">${domainOptions || '<option disabled>No email domains in directory yet</option>'}</select>
+          <input class="form-input" id="g-domain-custom" placeholder="Or type domains (e.g. fos.lenskart.in)" style="margin-top:0.5rem">
         </div>
       </div>
       <div id="g-err"></div>
@@ -487,13 +530,14 @@ export async function viewGroups(content, initialTab = 'directory') {
       const data = { name: bd.querySelector('#g-name').value.trim(), description: bd.querySelector('#g-desc').value.trim(), type };
       if (!data.name) { bd.querySelector('#g-err').innerHTML = errHtml('Name is required'); return; }
       if (type === 'DYNAMIC') {
-        const fromSelect = [...bd.querySelector('#g-depts').selectedOptions].map((o) => o.value.trim()).filter(Boolean);
-        const fromCustom = (bd.querySelector('#g-dept-custom').value || '').split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
-        data.dept_ids = [...new Set([...fromSelect, ...fromCustom])];
-        if (!data.dept_ids.length) {
-          bd.querySelector('#g-err').innerHTML = errHtml('Select or enter at least one department');
+        const { dept_ids, email_domains } = collectDynamicRuleFields(bd, 'g');
+        const ruleErr = validateDynamicRuleFields(dept_ids, email_domains);
+        if (ruleErr) {
+          bd.querySelector('#g-err').innerHTML = errHtml(ruleErr);
           return;
         }
+        if (dept_ids.length) data.dept_ids = dept_ids;
+        if (email_domains.length) data.email_domains = email_domains;
       }
       try {
         const r = await api.createGroup(data);
@@ -512,25 +556,36 @@ export async function viewGroups(content, initialTab = 'directory') {
     try { group = await api.getGroup(groupId); } catch (e) { alert(e.message); return; }
     const rule = group.rule_json || {};
     const currentDepts = rule.dept_ids || (rule.field === 'dept_id' && rule.value ? (Array.isArray(rule.value) ? rule.value : [rule.value]) : []);
-    const deptOptions = await loadDepartmentOptions(currentDepts);
+    const currentDomains = rule.email_domains || [];
+    const [deptOptions, domainOptions] = await Promise.all([
+      loadDepartmentOptions(currentDepts),
+      loadEmailDomainOptions(currentDomains),
+    ]);
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Edit Dynamic Group — ${esc(groupName)}</h2></div><div class="modal-body">
-      <div class="form-group"><label class="form-label">Departments</label>
-        <select class="form-select" id="eg-depts" multiple size="8" style="min-height:140px">${deptOptions}</select>
+      <p class="muted" style="font-size:0.78rem;margin:0 0 0.75rem">Users must match all selected criteria (department and/or email domain).</p>
+      <div class="form-group"><label class="form-label">Departments <span class="muted" style="font-weight:400">(optional)</span></label>
+        <select class="form-select" id="eg-depts" multiple size="6" style="min-height:120px">${deptOptions}</select>
         <input class="form-input" id="eg-dept-custom" placeholder="Or type department names (comma-separated)" style="margin-top:0.5rem">
+      </div>
+      <div class="form-group"><label class="form-label">Email domains <span class="muted" style="font-weight:400">(optional)</span></label>
+        <select class="form-select" id="eg-domains" multiple size="6" style="min-height:120px">${domainOptions}</select>
+        <input class="form-input" id="eg-domain-custom" placeholder="Or type domains (e.g. fos.lenskart.in)" style="margin-top:0.5rem">
       </div>
       <div id="eg-err"></div>
     </div><div class="modal-footer"><button class="btn btn-primary" id="eg-save">Save & Reconcile</button><button class="btn btn-secondary" id="eg-cancel">Cancel</button></div></div>`);
     bd.querySelector('#eg-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#eg-save').addEventListener('click', async () => {
-      const fromSelect = [...bd.querySelector('#eg-depts').selectedOptions].map((o) => o.value.trim()).filter(Boolean);
-      const fromCustom = (bd.querySelector('#eg-dept-custom').value || '').split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
-      const dept_ids = [...new Set([...fromSelect, ...fromCustom])];
-      if (!dept_ids.length) {
-        bd.querySelector('#eg-err').innerHTML = errHtml('Select or enter at least one department');
+      const { dept_ids, email_domains } = collectDynamicRuleFields(bd, 'eg');
+      const ruleErr = validateDynamicRuleFields(dept_ids, email_domains);
+      if (ruleErr) {
+        bd.querySelector('#eg-err').innerHTML = errHtml(ruleErr);
         return;
       }
       try {
-        const r = await api.updateGroup(groupId, { type: 'DYNAMIC', dept_ids });
+        const payload = { type: 'DYNAMIC' };
+        if (dept_ids.length) payload.dept_ids = dept_ids;
+        if (email_domains.length) payload.email_domains = email_domains;
+        const r = await api.updateGroup(groupId, payload);
         bd.remove();
         const note = r.reconcile
           ? ` ${r.reconcile.matched ?? 0} members (${r.reconcile.added ?? 0} added, ${r.reconcile.removed ?? 0} removed).`
@@ -7196,10 +7251,8 @@ function initUsersTab(panel, me = null) {
   });
 
   // ── Initial load ─────────────────────────────────────────────────────────────
-  if (!panel.querySelector('#ud-search').value) {
-    const f0 = getFilters();
-    loadUsers(f0.q, f0.state, f0.source);
-  }
+  const f0 = getFilters();
+  loadUsers(f0.q, f0.state, f0.source);
 }
 
 // ─── 11. Business Roles ───────────────────────────────────────────────────────

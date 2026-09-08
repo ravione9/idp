@@ -104,45 +104,60 @@ function samlSigningHtml(pfx, sp) {
 
 function samlScimConfigHtml(pfx, sp) {
   const configured = !!(sp?.scim_configured || sp?.provisioning);
-  const defaultBase = sp?.slug === 'slack' ? 'https://api.slack.com/scim/v2' : '';
+  const defaultBase = configured && sp?.scim_base_url ? String(sp.scim_base_url) : '';
   return `
     <div class="form-group span2" style="margin-top:0.25rem;padding-top:1rem;border-top:1px solid var(--border)">
-      <label class="form-label">
-        SCIM provisioning
-        <span class="badge ${configured ? 'badge-success' : 'badge-warning'}" style="margin-left:0.35rem">${configured ? 'Configured' : 'Not configured'}</span>
+      <label class="mfa-toggle-row" style="display:flex;gap:0.55rem;align-items:flex-start;cursor:pointer;margin:0 0 0.75rem">
+        <input type="checkbox" id="${pfx}-scim-enabled" ${configured ? 'checked' : ''} style="margin-top:0.2rem">
+        <span>
+          <strong>Enable SCIM provisioning</strong>
+          <span class="badge ${configured ? 'badge-success' : 'badge-neutral'}" style="margin-left:0.35rem">${configured ? 'Configured' : 'Optional'}</span>
+          <span class="muted" style="display:block;font-size:0.78rem;font-weight:400;margin-top:0.2rem">
+            When enabled, users can be deactivated inside SaaS apps (e.g. Slack) when access is revoked. SAML SSO alone does not remove workspace members.
+          </span>
+        </span>
       </label>
-      <p class="muted" style="font-size:0.78rem;margin:0 0 0.75rem">
-        Required to deactivate users inside SaaS apps (e.g. Slack) when access is revoked. SAML SSO alone does not remove workspace members.
-      </p>
-      <div class="form-2col">
-        <div class="form-group span2">
-          <label class="form-label">SCIM Base URL</label>
-          <input class="form-input" id="${pfx}-scim-url" type="url" value="${esc(defaultBase)}" placeholder="https://api.slack.com/scim/v2">
-        </div>
-        <div class="form-group span2">
-          <label class="form-label">SCIM Bearer Token ${configured ? '<span class="muted" style="font-weight:400">(leave blank to keep existing)</span>' : '<span style="color:var(--danger)">*</span>'}</label>
-          <input class="form-input" id="${pfx}-scim-token" type="password" value="" placeholder="Token from app admin → Provisioning" autocomplete="off">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Deprovision action</label>
-          <select class="form-select" id="${pfx}-scim-deprov">
-            <option value="DEACTIVATE">Deactivate user (recommended)</option>
-            <option value="DELETE">Delete user</option>
-          </select>
+      <div id="${pfx}-scim-fields" ${configured ? '' : 'hidden'}>
+        <div class="form-2col">
+          <div class="form-group span2">
+            <label class="form-label">SCIM Base URL</label>
+            <input class="form-input" id="${pfx}-scim-url" type="url" value="${esc(defaultBase)}" placeholder="https://api.slack.com/scim/v2">
+          </div>
+          <div class="form-group span2">
+            <label class="form-label">SCIM Bearer Token ${configured ? '<span class="muted" style="font-weight:400">(leave blank to keep existing)</span>' : '<span style="color:var(--danger)">*</span>'}</label>
+            <input class="form-input" id="${pfx}-scim-token" type="password" value="" placeholder="Token from app admin → Provisioning" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Deprovision action</label>
+            <select class="form-select" id="${pfx}-scim-deprov">
+              <option value="DEACTIVATE">Deactivate user (recommended)</option>
+              <option value="DELETE">Delete user</option>
+            </select>
+          </div>
         </div>
       </div>
     </div>`;
 }
 
+function bindSamlScimToggle(bd, pfx) {
+  const enabled = bd.querySelector(`#${pfx}-scim-enabled`);
+  const fields = bd.querySelector(`#${pfx}-scim-fields`);
+  enabled?.addEventListener('change', () => {
+    if (fields) fields.hidden = !enabled.checked;
+  });
+}
+
 function collectSamlScimConfig(bd, pfx, isEdit, sp) {
+  const enabled = !!bd.querySelector(`#${pfx}-scim-enabled`)?.checked;
+  if (!enabled) return null;
+
   const baseUrl = bd.querySelector(`#${pfx}-scim-url`)?.value?.trim().replace(/\/+$/, '');
   const token = bd.querySelector(`#${pfx}-scim-token`)?.value?.trim();
   const deprovisionMode = bd.querySelector(`#${pfx}-scim-deprov`)?.value || 'DEACTIVATE';
-  if (!baseUrl && !token) return null;
-  if (!baseUrl) return { error: 'SCIM base URL is required when saving SCIM config.' };
+  if (!baseUrl) return { error: 'SCIM base URL is required when SCIM provisioning is enabled.' };
   const configured = !!(sp?.scim_configured || sp?.provisioning);
   if (!token && (!isEdit || !configured)) {
-    return { error: 'SCIM bearer token is required.' };
+    return { error: 'SCIM bearer token is required when SCIM provisioning is enabled.' };
   }
   const payload = { baseUrl, deprovisionMode };
   if (token) payload.bearerToken = token;
@@ -767,6 +782,7 @@ export async function viewIgaApps(content, opts = {}) {
 
     bindSpMetadataUpload(bd, 'csp', { errId: 'csp-err', nameId: 'csp-name', slugId: 'csp-slug', isEdit });
     bindSamlAttrEditor(bd, 'csp');
+    if (isEdit) bindSamlScimToggle(bd, 'csp');
     bd.querySelector('#csp-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#csp-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#csp-save');
@@ -1152,6 +1168,7 @@ export async function viewSamlApps(me, content, opts = {}) {
 
     bindSpMetadataUpload(bd, 'sp', { errId: 'sp-err', nameId: 'sp-name', slugId: 'sp-slug', isEdit });
     bindSamlAttrEditor(bd, 'sp');
+    if (isEdit) bindSamlScimToggle(bd, 'sp');
     bd.querySelector('#sp-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#sp-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#sp-save');
