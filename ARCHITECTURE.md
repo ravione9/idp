@@ -1129,7 +1129,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-09 — AD INBOUND: sync users into portal without disabling AD accounts
+### 899d411 — 2026-09-09 — AD INBOUND: sync users into portal without disabling AD accounts
 
 **Why** — Production AD connector is inbound-only for now: portal should import users from AD but must not disable, enable, provision, or delete AD accounts when admins suspend users or sync runs outbound reconciliation.
 
