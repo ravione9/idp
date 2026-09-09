@@ -15,7 +15,12 @@ import { appendAuditLog } from '../utils/audit-log.js';
 import { EmployeeStateMachine } from '../fsm/employee-state-machine.js';
 import { ILGState, TransitionActor, TransitionOrigin, isPortalAccessible, isValidTransition } from '../fsm/states.js';
 import { emitPlatformEvent } from './event-dispatcher.js';
-import { propagatePortalDisableToAd, propagatePortalEnableToAd } from './connector-adapters.js';
+import {
+  isAdOutboundLifecycleOp,
+  isAdInboundOnlyConnector,
+  propagatePortalDisableToAd,
+  propagatePortalEnableToAd,
+} from './connector-adapters.js';
 import { revokeAllUserAppAccess } from './app-access-policy.js';
 import logger from '../utils/logger.js';
 
@@ -24,6 +29,20 @@ const fsm = new EmployeeStateMachine();
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+async function filterInboundAdOutboundOps<T extends { system: string; op: string }>(
+  ops: T[],
+): Promise<T[]> {
+  if (!(await isAdInboundOnlyConnector())) return ops;
+  const filtered = ops.filter((o) => !isAdOutboundLifecycleOp(o.system, o.op));
+  if (filtered.length < ops.length) {
+    logger.info(
+      { skipped: ops.length - filtered.length },
+      'Lifecycle: skipped AD outbound ops — INBOUND only connector',
+    );
+  }
+  return filtered;
+}
 
 async function revokeAllSessions(empId: string): Promise<void> {
   const sessions = await query<{ session_id: string }>(
@@ -85,8 +104,7 @@ export async function suspendUser(empId: string, reason: string, initiatedBy: st
     const links = await getIdentityLinksForEmp(empId);
     const activeLinks = links.filter((l) => l.status === 'ACTIVE');
     if (activeLinks.length > 0) {
-      await enqueueOutboxOps(
-        empId,
+      const ops = await filterInboundAdOutboundOps(
         activeLinks.map((l) => ({
           system: l.system,
           op: 'DISABLE',
@@ -94,6 +112,9 @@ export async function suspendUser(empId: string, reason: string, initiatedBy: st
           priority: 'HIGH' as const,
         })),
       );
+      if (ops.length > 0) {
+        await enqueueOutboxOps(empId, ops);
+      }
     }
   }
 
@@ -159,8 +180,7 @@ export async function unsuspendUser(empId: string, reason: string, initiatedBy: 
   const links = await getIdentityLinksForEmp(empId);
 
   if (links.length > 0) {
-    await enqueueOutboxOps(
-      empId,
+    const ops = await filterInboundAdOutboundOps(
       links.map((l) => ({
         system:   l.system,
         op:       'ENABLE',
@@ -168,6 +188,9 @@ export async function unsuspendUser(empId: string, reason: string, initiatedBy: 
         priority: 'HIGH' as const,
       })),
     );
+    if (ops.length > 0) {
+      await enqueueOutboxOps(empId, ops);
+    }
   }
 
   await propagatePortalEnableToAd(empId).catch((err) =>
@@ -236,12 +259,16 @@ export async function terminateUser(empId: string, reason: string, initiatedBy: 
   const activeLinks = links.filter((l) => l.status === 'ACTIVE');
 
   if (activeLinks.length > 0) {
-    const outboxOps = activeLinks.flatMap((l) => [
-      { system: l.system, op: 'DISABLE',         payload: { externalId: l.external_id }, priority: 'HIGH' as const },
-      { system: l.system, op: 'REVOKE_TOKENS',   payload: { externalId: l.external_id }, priority: 'HIGH' as const },
-      { system: l.system, op: 'REVOKE_BINDINGS', payload: { externalId: l.external_id }, priority: 'HIGH' as const },
-    ]);
-    await enqueueOutboxOps(empId, outboxOps);
+    const outboxOps = await filterInboundAdOutboundOps(
+      activeLinks.flatMap((l) => [
+        { system: l.system, op: 'DISABLE',         payload: { externalId: l.external_id }, priority: 'HIGH' as const },
+        { system: l.system, op: 'REVOKE_TOKENS',   payload: { externalId: l.external_id }, priority: 'HIGH' as const },
+        { system: l.system, op: 'REVOKE_BINDINGS', payload: { externalId: l.external_id }, priority: 'HIGH' as const },
+      ]),
+    );
+    if (outboxOps.length > 0) {
+      await enqueueOutboxOps(empId, outboxOps);
+    }
   }
 
   await propagatePortalDisableToAd(empId).catch((err) =>
