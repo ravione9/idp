@@ -13,8 +13,75 @@ import {
   createAdAdapterFromConfig,
   parseAndNormalizeAdConnectorConfig,
 } from './ad-ldap-connect.js';
+import {
+  normalizeConnectorDirection,
+  type ConnectorSyncDirection,
+} from './google-directory-config.js';
+
+const AD_LDAP_CONNECTOR_TYPES = ['AD', 'LDAP'];
+
+const AD_OUTBOUND_LIFECYCLE_OPS = new Set(['DISABLE', 'ENABLE', 'DELETE', 'CREATE_USER']);
+
+export type ActiveAdConnector = {
+  id: string;
+  cfg: Record<string, unknown>;
+  direction: ConnectorSyncDirection;
+};
+
+export async function loadActiveAdConnector(): Promise<ActiveAdConnector | null> {
+  const placeholders = AD_LDAP_CONNECTOR_TYPES.map(() => '?').join(',');
+  const row = await queryOne<{
+    id: string;
+    config_json: string | Record<string, unknown>;
+    direction: string;
+  }>(
+    `SELECT id, config_json, direction FROM connectors
+      WHERE connector_type IN (${placeholders})
+        AND status IN ('ACTIVE', 'CONNECTED', 'CONFIGURED')
+      ORDER BY
+        CASE status
+          WHEN 'ACTIVE' THEN 0
+          WHEN 'CONNECTED' THEN 1
+          ELSE 2
+        END,
+        last_sync_at DESC,
+        updated_at DESC
+      LIMIT 1`,
+    AD_LDAP_CONNECTOR_TYPES,
+  );
+  if (!row) return null;
+  return {
+    id: row.id,
+    cfg: parseAndNormalizeAdConnectorConfig(row.config_json),
+    direction: normalizeConnectorDirection(row.direction),
+  };
+}
+
+export function adConnectorAllowsOutboundWrites(direction: ConnectorSyncDirection): boolean {
+  return direction === 'OUTBOUND' || direction === 'BIDIRECTIONAL';
+}
+
+export async function isAdInboundOnlyConnector(): Promise<boolean> {
+  const conn = await loadActiveAdConnector();
+  return conn !== null && conn.direction === 'INBOUND';
+}
+
+export function isAdOutboundLifecycleOp(system: string, op: string): boolean {
+  const sys = system.toUpperCase();
+  return (sys === 'AD' || sys === 'LDAP') && AD_OUTBOUND_LIFECYCLE_OPS.has(op);
+}
+
+export async function shouldSkipAdOutboundOp(system: string, op: string): Promise<boolean> {
+  if (!isAdOutboundLifecycleOp(system, op)) return false;
+  return await isAdInboundOnlyConnector();
+}
 
 export async function loadActiveConnectorConfig(types: string[]): Promise<Record<string, unknown> | null> {
+  if (types.some((t) => t === 'AD' || t === 'LDAP')) {
+    const conn = await loadActiveAdConnector();
+    return conn?.cfg ?? null;
+  }
+
   const placeholders = types.map(() => '?').join(',');
   const row = await queryOne<{ config_json: string | Record<string, unknown> }>(
     `SELECT config_json FROM connectors
@@ -72,11 +139,20 @@ export async function propagatePortalDisableToAd(empId: string): Promise<void> {
   const adLink = links.find((l) => l.system === 'AD' && l.status === 'ACTIVE');
   if (!adLink?.external_id) return;
 
-  const cfg = await loadActiveConnectorConfig(['AD', 'LDAP']);
-  if (!cfg) {
+  const conn = await loadActiveAdConnector();
+  if (!conn) {
     logger.warn({ empId }, 'Portal disable: no AD connector config — outbox only');
     return;
   }
+  if (!adConnectorAllowsOutboundWrites(conn.direction)) {
+    logger.info(
+      { empId, direction: conn.direction },
+      'Portal disable: skipped AD — connector is INBOUND only',
+    );
+    return;
+  }
+
+  const cfg = conn.cfg;
 
   const adapter = createAdAdapterFromConnectorConfig(cfg);
   try {
@@ -106,8 +182,17 @@ export async function propagatePortalEnableToAd(empId: string): Promise<void> {
   const adLink = links.find((l) => l.system === 'AD' && l.status === 'DISABLED');
   if (!adLink?.external_id) return;
 
-  const cfg = await loadActiveConnectorConfig(['AD', 'LDAP']);
-  if (!cfg) return;
+  const conn = await loadActiveAdConnector();
+  if (!conn) return;
+  if (!adConnectorAllowsOutboundWrites(conn.direction)) {
+    logger.info(
+      { empId, direction: conn.direction },
+      'Portal unsuspend: skipped AD — connector is INBOUND only',
+    );
+    return;
+  }
+
+  const cfg = conn.cfg;
 
   const adapter = createAdAdapterFromConnectorConfig(cfg);
   try {
