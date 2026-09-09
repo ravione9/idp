@@ -1129,6 +1129,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-09 — Plain LDAP: enforce ldap://:389 only (no TLS, no :636 probe)
+
+**Why** — Packet capture on plain-LDAP connectors still showed TLS ClientHello (`16 03 01`) on :389; duplicate adapter builders also defaulted `useSsl` from `AD_URL` env when connector flags were missing.
+
+**What changed:**
+
+- **`src/services/ad-ldap-connect.ts`** — `resolveAdLdapConnectionParams()`, `isPlainLdapConnector()`, `parseAndNormalizeAdConnectorConfig()`; plain LDAP forces `ldap://host:389` with no StartTLS/LDAPS fallback on test, sync, login, or outbox paths.
+- **`src/adapters/ad-adapter.ts`** — omit `tlsOptions` on `ldap://` (ldapts treats any tlsOptions as immediate TLS).
+- **`connector-adapters.ts`**, **`ad-auth.ts`**, **`password-writeback.ts`**, **`entitlement-*.ts`**, **`ad-sync.ts`** — use shared LDAP connect helpers (no per-file TLS defaults).
+
 ### (pending) — 2026-09-09 — Plain LDAP: stop ldapts from sending TLS ClientHello on port 389
 
 **Why** — Packet capture on plain LDAP showed first payload `16 03 01` (TLS ClientHello) on :389; DC reset the session. `ldapts` treats any `tlsOptions` on the Client as immediate TLS, even for `ldap://` URLs.

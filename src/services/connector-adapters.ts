@@ -5,18 +5,14 @@
 
 import { queryOne, execute } from '../db/connection.js';
 import { redis } from '../auth/session-store.js';
-import { config } from '../config.js';
 import { ADAdapter } from '../adapters/ad-adapter.js';
 import type { BaseAdapter } from '../adapters/base-adapter.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import { getIdentityLinksForEmp } from '../utils/outbox.js';
 import logger from '../utils/logger.js';
-
-function parseConnectorConfig(raw: string | Record<string, unknown>): Record<string, unknown> {
-  return typeof raw === 'string'
-    ? JSON.parse(raw || '{}') as Record<string, unknown>
-    : (raw ?? {});
-}
+import {
+  createAdAdapterFromConfig,
+  parseAndNormalizeAdConnectorConfig,
+} from './ad-ldap-connect.js';
 
 export async function loadActiveConnectorConfig(types: string[]): Promise<Record<string, unknown> | null> {
   const placeholders = types.map(() => '?').join(',');
@@ -36,22 +32,12 @@ export async function loadActiveConnectorConfig(types: string[]): Promise<Record
     types,
   );
   if (!row) return null;
-  return parseConnectorConfig(row.config_json);
+  return parseAndNormalizeAdConnectorConfig(row.config_json);
 }
 
 export function createAdAdapterFromConnectorConfig(cfg: Record<string, unknown>): ADAdapter {
-  const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
-  const useSsl = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls = parseConnectorBoolean(cfg['startTls'], false);
-  const port = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
-  const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
-  const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
-  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
   const disabledOu = (cfg['disabledOu'] as string | undefined)?.trim() || 'OU=Disabled,';
-  const adUrl = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-
-  return new ADAdapter(redis, adUrl, bindDn, bindPass, baseDn, disabledOu, startTls, targetOuRaw);
+  return createAdAdapterFromConfig(redis, cfg, { label: 'configured' }, disabledOu);
 }
 
 const connectorAdapterCache = new Map<string, BaseAdapter>();

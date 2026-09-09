@@ -3,31 +3,22 @@
  * AD-synced employees may not have a local_accounts row until first login or admin reset.
  */
 
-import { ADAdapter, getLdapAttr } from '../adapters/ad-adapter.js';
+import { getLdapAttr } from '../adapters/ad-adapter.js';
 import { config } from '../config.js';
 import { queryOne, execute } from '../db/connection.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import { hashPassword } from './local-admin.js';
 import { backfillAdIdentityLinkIfMissing } from './ad-sync.js';
 import { isPortalAccessible } from '../fsm/states.js';
+import {
+  createAdAdapterFromConfig,
+  isPlainLdapConnector,
+  listAdLdapConnectionAttempts,
+  parseAndNormalizeAdConnectorConfig,
+} from './ad-ldap-connect.js';
 
 const VALID_ROLES = new Set(['USER', 'MANAGER', 'HRBP', 'ADMIN', 'SUPER_ADMIN']);
-
-type ConnectionAttempt = { useSsl?: boolean; startTls?: boolean; port?: number; label: string };
-
-const CONNECTION_ATTEMPTS: ConnectionAttempt[] = [
-  { label: 'configured' },
-  { label: 'starttls', startTls: true },
-  { label: 'ldaps', useSsl: true, port: 636 },
-];
-
-function parseConnectorConfig(raw: string | Record<string, unknown>): Record<string, unknown> {
-  return typeof raw === 'string'
-    ? JSON.parse(raw || '{}') as Record<string, unknown>
-    : (raw ?? {});
-}
 
 function resolveBindPassword(cfg: Record<string, unknown>): string {
   const raw = String(cfg['bindPassword'] ?? '').trim();
@@ -50,31 +41,7 @@ async function loadActiveAdConnectorConfig(): Promise<Record<string, unknown> | 
     [],
   );
   if (!row) return null;
-  return parseConnectorConfig(row.config_json);
-}
-
-function createAdAdapterFromConfig(
-  cfg: Record<string, unknown>,
-  overrides: ConnectionAttempt = { label: 'configured' },
-): ADAdapter {
-  const useSsl = overrides.useSsl !== undefined
-    ? overrides.useSsl
-    : parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls = overrides.startTls !== undefined
-    ? overrides.startTls
-    : parseConnectorBoolean(cfg['startTls'], false);
-  const host = (cfg['host'] as string | undefined)?.trim()
-    || (config.ad.url ? new URL(config.ad.url).hostname : '');
-  if (!host) {
-    throw new Error('AD host not configured — set connector host in portal or AD_URL in env/Vault');
-  }
-  const port = overrides.port ?? parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
-  const bindPass = resolveBindPassword(cfg);
-  const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
-  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-  const adUrl = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-  return new ADAdapter(redis, adUrl, bindDn, bindPass, baseDn, undefined, startTls, targetOuRaw);
+  return parseAndNormalizeAdConnectorConfig(row.config_json);
 }
 
 export interface AdLoginAccount {
@@ -108,8 +75,9 @@ async function verifyAdLoginPassword(
 ): Promise<{ ok: boolean; error?: string }> {
   const errors: string[] = [];
 
-  for (const attempt of CONNECTION_ATTEMPTS) {
-    const adapter = createAdAdapterFromConfig(cfg, attempt);
+  const allowFallback = !isPlainLdapConnector(cfg);
+  for (const attempt of listAdLdapConnectionAttempts(cfg, allowFallback)) {
+    const adapter = createAdAdapterFromConfig(redis, { ...cfg, bindPassword: resolveBindPassword(cfg) }, attempt);
     try {
       await adapter.resetCircuitBreaker();
 
@@ -215,7 +183,7 @@ export async function authenticateAdCorporateUser(
   }
 
   if (!adLink?.external_id) {
-    const adapter = createAdAdapterFromConfig(cfg);
+    const adapter = createAdAdapterFromConfig(redis, { ...cfg, bindPassword: resolveBindPassword(cfg) });
     try {
       await adapter.resetCircuitBreaker();
       await adapter.connect();

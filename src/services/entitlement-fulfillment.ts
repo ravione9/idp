@@ -8,10 +8,8 @@
 
 import { google } from 'googleapis';
 import { queryOne, execute } from '../db/connection.js';
-import { ADAdapter } from '../adapters/ad-adapter.js';
 import { redis } from '../auth/session-store.js';
-import { config } from '../config.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
+import { createAdAdapterFromConfig, parseAndNormalizeAdConnectorConfig } from './ad-ldap-connect.js';
 import { buildGoogleJwtAuth } from './google-directory-config.js';
 import logger from '../utils/logger.js';
 
@@ -66,17 +64,8 @@ async function logProvision(
   }
 }
 
-function createAdAdapter(cfg: Record<string, unknown>): ADAdapter {
-  const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
-  const useSsl = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls = parseConnectorBoolean(cfg['startTls'], false);
-  const port = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
-  const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
-  const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
-  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-  const adUrl = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-  return new ADAdapter(redis, adUrl, bindDn, bindPass, baseDn, undefined, startTls, targetOuRaw);
+function createAdAdapter(cfg: Record<string, unknown>) {
+  return createAdAdapterFromConfig(redis, parseAndNormalizeAdConnectorConfig(cfg));
 }
 
 async function resolveAdSam(empId: string): Promise<string | null> {

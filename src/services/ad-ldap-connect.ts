@@ -1,10 +1,11 @@
 /**
- * Shared AD/LDAP connection helpers — normalize TLS settings and retry modes.
+ * Shared AD/LDAP connection helpers — normalize TLS settings and connection modes.
  */
 
 import type { Redis } from 'ioredis';
 import { ADAdapter } from '../adapters/ad-adapter.js';
 import { config } from '../config.js';
+import logger from '../utils/logger.js';
 import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 
 export interface AdLdapModeOverride {
@@ -12,6 +13,15 @@ export interface AdLdapModeOverride {
   useSsl?: boolean;
   startTls?: boolean;
   port?: number;
+}
+
+export interface AdLdapConnectionParams {
+  host: string;
+  useSsl: boolean;
+  startTls: boolean;
+  port: number;
+  url: string;
+  protocol: 'LDAP' | 'LDAP+StartTLS' | 'LDAPS';
 }
 
 export function normalizeAdConnectorTls(cfg: Record<string, unknown>): {
@@ -34,6 +44,12 @@ export function normalizeAdConnectorTls(cfg: Record<string, unknown>): {
   return { useSsl, startTls, port };
 }
 
+/** True when connector is plain LDAP on port 389 — no SSL, TLS, or StartTLS. */
+export function isPlainLdapConnector(cfg: Record<string, unknown>): boolean {
+  const { useSsl, startTls } = normalizeAdConnectorTls(cfg);
+  return !useSsl && !startTls;
+}
+
 /** Normalize connector JSON so protocol and port stay consistent after save/load. */
 export function normalizeAdConnectorConfig(cfg: Record<string, unknown>): Record<string, unknown> {
   const next = { ...cfg };
@@ -44,14 +60,53 @@ export function normalizeAdConnectorConfig(cfg: Record<string, unknown>): Record
   return next;
 }
 
+export function parseAndNormalizeAdConnectorConfig(
+  raw: string | Record<string, unknown>,
+): Record<string, unknown> {
+  const cfg: Record<string, unknown> = typeof raw === 'string'
+    ? JSON.parse(raw || '{}') as Record<string, unknown>
+    : (raw ?? {});
+  return cfg['host'] ? normalizeAdConnectorConfig(cfg) : cfg;
+}
+
 function modeKey(useSsl: boolean, startTls: boolean, port: number): string {
   return `${useSsl}-${startTls}-${port}`;
 }
 
 /**
+ * Resolved LDAP URL and flags for one connection attempt.
+ * Plain LDAP always yields ldap://host:389 with useSsl=false and startTls=false.
+ */
+export function resolveAdLdapConnectionParams(
+  cfg: Record<string, unknown>,
+  override: AdLdapModeOverride = { label: 'configured' },
+): AdLdapConnectionParams {
+  const host = resolveAdConnectorHost(cfg);
+  const normalized = normalizeAdConnectorTls(cfg);
+  let useSsl = override.useSsl ?? normalized.useSsl;
+  let startTls = override.startTls ?? normalized.startTls;
+  let port = override.port ?? normalized.port;
+
+  if (useSsl) {
+    startTls = false;
+    if (port === 389) port = 636;
+  } else if (startTls) {
+    useSsl = false;
+    if (port === 636) port = 389;
+  } else {
+    useSsl = false;
+    startTls = false;
+    port = 389;
+  }
+
+  const url = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
+  const protocol = useSsl ? 'LDAPS' : startTls ? 'LDAP+StartTLS' : 'LDAP';
+  return { host, useSsl, startTls, port, url, protocol };
+}
+
+/**
  * LDAP connection modes for a connector.
- * @param includeProtocolFallbacks When true, also try StartTLS :389 and LDAPS :636 after the
- *   saved protocol (password writeback only). Tests and sync use the saved protocol only.
+ * Plain-LDAP connectors never fall back to StartTLS or LDAPS (no :636 probe).
  */
 export function listAdLdapConnectionAttempts(
   cfg: Record<string, unknown>,
@@ -61,7 +116,7 @@ export function listAdLdapConnectionAttempts(
   const modes: AdLdapModeOverride[] = [
     { label: 'configured', ...normalized },
   ];
-  if (!includeProtocolFallbacks) return modes;
+  if (!includeProtocolFallbacks || isPlainLdapConnector(cfg)) return modes;
 
   const seen = new Set([modeKey(normalized.useSsl, normalized.startTls, normalized.port)]);
 
@@ -89,26 +144,22 @@ export function createAdAdapterFromConfig(
   redis: Redis,
   cfg: Record<string, unknown>,
   override: AdLdapModeOverride = { label: 'configured' },
+  disabledOu = 'OU=Disabled,',
 ): ADAdapter {
-  const host = resolveAdConnectorHost(cfg);
-  const normalized = normalizeAdConnectorTls(cfg);
-  const useSsl = override.useSsl ?? normalized.useSsl;
-  const startTls = override.startTls ?? normalized.startTls;
-  const port = override.port ?? normalized.port;
+  const params = resolveAdLdapConnectionParams(cfg, override);
   const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
   const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
   const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
   const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-  const adUrl = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
 
   return new ADAdapter(
     redis,
-    adUrl,
+    params.url,
     bindDn,
     bindPass,
     baseDn,
-    undefined,
-    startTls,
+    disabledOu,
+    params.startTls,
     targetOuRaw,
   );
 }
@@ -117,14 +168,8 @@ export function describeAdLdapMode(
   override: AdLdapModeOverride,
   cfg: Record<string, unknown>,
 ): { url: string; protocol: string } {
-  const host = resolveAdConnectorHost(cfg);
-  const normalized = normalizeAdConnectorTls(cfg);
-  const useSsl = override.useSsl ?? normalized.useSsl;
-  const startTls = override.startTls ?? normalized.startTls;
-  const port = override.port ?? normalized.port;
-  const url = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-  const protocol = useSsl ? 'LDAPS' : startTls ? 'LDAP+StartTLS' : 'LDAP';
-  return { url, protocol };
+  const params = resolveAdLdapConnectionParams(cfg, override);
+  return { url: params.url, protocol: params.protocol };
 }
 
 /** Connect using the connector's saved protocol only (test, sync, group sync). */
@@ -133,19 +178,28 @@ export async function connectAdAdapter(
   cfg: Record<string, unknown>,
 ): Promise<{ adapter: ADAdapter; mode: AdLdapModeOverride }> {
   const mode = listAdLdapConnectionAttempts(cfg, false)[0]!;
+  const params = resolveAdLdapConnectionParams(cfg, mode);
+  logger.info(
+    { url: params.url, protocol: params.protocol, port: params.port, useSsl: params.useSsl, startTls: params.startTls },
+    'AD LDAP connect (saved protocol only)',
+  );
   const adapter = createAdAdapterFromConfig(redis, cfg, mode);
   await adapter.resetCircuitBreaker();
   await adapter.connect();
   return { adapter, mode };
 }
 
-/** Escalate StartTLS / LDAPS when the saved mode cannot write passwords (writeback only). */
+/**
+ * Escalate StartTLS / LDAPS when the saved mode cannot write passwords.
+ * Skipped entirely for plain-LDAP connectors (no :636 probe).
+ */
 export async function connectAdAdapterWithFallback(
   redis: Redis,
   cfg: Record<string, unknown>,
 ): Promise<{ adapter: ADAdapter; mode: AdLdapModeOverride; errors: string[] }> {
   const errors: string[] = [];
-  for (const mode of listAdLdapConnectionAttempts(cfg, true)) {
+  const allowFallback = !isPlainLdapConnector(cfg);
+  for (const mode of listAdLdapConnectionAttempts(cfg, allowFallback)) {
     const adapter = createAdAdapterFromConfig(redis, cfg, mode);
     try {
       await adapter.resetCircuitBreaker();
@@ -157,7 +211,8 @@ export async function connectAdAdapterWithFallback(
       await adapter.disconnect().catch(() => undefined);
     }
   }
-  throw new Error(
-    `AD/LDAP connection failed across all modes (configured, StartTLS :389, LDAPS :636). ${errors.join(' | ')}`,
-  );
+  const suffix = allowFallback
+    ? ' (configured, StartTLS :389, LDAPS :636)'
+    : ' (plain LDAP :389 only — no TLS/LDAPS fallback)';
+  throw new Error(`AD/LDAP connection failed across all modes${suffix}. ${errors.join(' | ')}`);
 }
