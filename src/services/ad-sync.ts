@@ -18,7 +18,7 @@ import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
 import logger from '../utils/logger.js';
 import {
-  connectAdAdapterWithFallback,
+  connectAdAdapter,
   createAdAdapterFromConfig as buildAdAdapterFromConfig,
   describeAdLdapMode,
 } from './ad-ldap-connect.js';
@@ -1477,15 +1477,13 @@ export async function runAdSync(connectorId: string): Promise<SyncResult> {
   await reportProgress('connecting', `Connecting to ${host}`);
 
   let adapter: ADAdapter;
-  const connectErrors: string[] = [];
 
   try {
-    const connected = await connectAdAdapterWithFallback(redis, cfg);
+    const connected = await connectAdAdapter(redis, cfg);
     adapter = connected.adapter;
-    connectErrors.push(...connected.errors);
     const { url, protocol } = describeAdLdapMode(connected.mode, cfg);
     logger.info(
-      { connectorId, url, protocol, mode: connected.mode.label, priorAttempts: connectErrors.length },
+      { connectorId, url, protocol, mode: connected.mode.label },
       'AD sync: LDAP connected',
     );
   } catch (err) {
