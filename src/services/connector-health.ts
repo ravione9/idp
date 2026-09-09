@@ -16,8 +16,8 @@ import { parseConnectorPort } from '../utils/connector-config.js';
 import {
   connectAdAdapter,
   describeAdLdapMode,
-  normalizeAdConnectorConfig,
   normalizeAdConnectorTls,
+  parseAndNormalizeAdConnectorConfig,
 } from './ad-ldap-connect.js';
 import {
   buildGoogleJwtAuth,
@@ -101,7 +101,7 @@ export async function runConnectorConnectivityTest(connectorId: string): Promise
     ? JSON.parse(row.config_json || '{}') as Record<string, unknown>
     : (row.config_json ?? {});
   const cfg = (type === 'AD' || type === 'LDAP') && rawCfg['host']
-    ? normalizeAdConnectorConfig(rawCfg)
+    ? parseAndNormalizeAdConnectorConfig(rawCfg)
     : rawCfg;
 
   try {
