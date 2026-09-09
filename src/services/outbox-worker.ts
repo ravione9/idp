@@ -20,7 +20,7 @@ import { ZohoAdapter }    from '../adapters/zoho-adapter.js';
 import { ADAdapter }      from '../adapters/ad-adapter.js';
 import { BaseAdapter } from '../adapters/base-adapter.js';
 import type { AdapterResult } from '../adapters/base-adapter.js';
-import { resolveDirectoryAdapter } from './connector-adapters.js';
+import { resolveDirectoryAdapter, shouldSkipAdOutboundOp } from './connector-adapters.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -127,7 +127,17 @@ async function releaseSemaphore(system: string): Promise<void> {
 // ---------------------------------------------------------------------------
 // Dispatch a single outbox row to the correct adapter
 // ---------------------------------------------------------------------------
-async function dispatch(row: OutboxRow): Promise<void> {
+type DispatchResult = { skipped: boolean };
+
+async function dispatch(row: OutboxRow): Promise<DispatchResult> {
+  if (await shouldSkipAdOutboundOp(row.system, row.op)) {
+    logger.info(
+      { id: row.id, system: row.system, op: row.op, empId: row.emp_id },
+      'Outbox: skipped AD write — connector is INBOUND only',
+    );
+    return { skipped: true };
+  }
+
   const adapter = await resolveDirectoryAdapter(row.system, adapterRegistry);
   if (!adapter) {
     throw new Error(`No adapter for system: ${row.system} (check connector config or env credentials)`);
@@ -175,6 +185,8 @@ async function dispatch(row: OutboxRow): Promise<void> {
     (error as unknown as Record<string, boolean>)['retryable'] = retryable;
     throw error;
   }
+
+  return { skipped: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -224,9 +236,9 @@ async function drainBatch(): Promise<void> {
     }
 
     try {
-      await dispatch(row);
+      const outcome = await dispatch(row);
 
-      if (row.op === 'DISABLE' || row.op === 'ENABLE') {
+      if ((row.op === 'DISABLE' || row.op === 'ENABLE') && !outcome.skipped) {
         const linkStatus = row.op === 'DISABLE' ? 'DISABLED' : 'ACTIVE';
         const externalId = (row.payload['externalId'] as string | undefined) ?? '';
         if (externalId) {

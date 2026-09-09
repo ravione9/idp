@@ -10,10 +10,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { google } from 'googleapis';
 import { query, queryOne, execute } from '../db/connection.js';
-import { ADAdapter } from '../adapters/ad-adapter.js';
 import { redis } from '../auth/session-store.js';
-import { config } from '../config.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
+import { createAdAdapterFromConfig, parseAndNormalizeAdConnectorConfig } from './ad-ldap-connect.js';
 import { buildGoogleJwtAuth, normalizeConnectorDirection, resolveGoogleSyncScope, isGoogleGroupSyncAll } from './google-directory-config.js';
 import { isConnectorSyncEligible } from './connector-health.js';
 import logger from '../utils/logger.js';
@@ -54,17 +52,8 @@ function slugify(input: string, prefix: string): string {
   return `${prefix}-${base || uuidv4().slice(0, 8)}`;
 }
 
-function createAdAdapter(cfg: Record<string, unknown>): ADAdapter {
-  const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
-  const useSsl = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls = parseConnectorBoolean(cfg['startTls'], false);
-  const port = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
-  const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
-  const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
-  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-  const adUrl = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-  return new ADAdapter(redis, adUrl, bindDn, bindPass, baseDn, undefined, startTls, targetOuRaw);
+function createAdAdapter(cfg: Record<string, unknown>) {
+  return createAdAdapterFromConfig(redis, parseAndNormalizeAdConnectorConfig(cfg));
 }
 
 interface HarvestedEnt {

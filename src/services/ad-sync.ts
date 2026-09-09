@@ -21,6 +21,7 @@ import {
   connectAdAdapter,
   createAdAdapterFromConfig as buildAdAdapterFromConfig,
   describeAdLdapMode,
+  parseAndNormalizeAdConnectorConfig,
 } from './ad-ldap-connect.js';
 import { applyDirectorySourceDisabled, applyDirectorySourceEnabled, preserveIlgStateOnDirectoryImport } from './user-lifecycle.js';
 import { updateConnectorRunProgress } from './connector-run-lifecycle.js';
@@ -1282,9 +1283,7 @@ function loadConnectorConfig(connectorId: string): Promise<Record<string, unknow
     [connectorId],
   ).then((connRow) =>
     connRow
-      ? typeof connRow.config_json === 'string'
-        ? JSON.parse(connRow.config_json || '{}') as Record<string, unknown>
-        : (connRow.config_json ?? {})
+      ? parseAndNormalizeAdConnectorConfig(connRow.config_json)
       : {},
   );
 }

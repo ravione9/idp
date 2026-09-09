@@ -5,20 +5,83 @@
 
 import { queryOne, execute } from '../db/connection.js';
 import { redis } from '../auth/session-store.js';
-import { config } from '../config.js';
 import { ADAdapter } from '../adapters/ad-adapter.js';
 import type { BaseAdapter } from '../adapters/base-adapter.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
 import { getIdentityLinksForEmp } from '../utils/outbox.js';
 import logger from '../utils/logger.js';
+import {
+  createAdAdapterFromConfig,
+  parseAndNormalizeAdConnectorConfig,
+} from './ad-ldap-connect.js';
+import {
+  normalizeConnectorDirection,
+  type ConnectorSyncDirection,
+} from './google-directory-config.js';
 
-function parseConnectorConfig(raw: string | Record<string, unknown>): Record<string, unknown> {
-  return typeof raw === 'string'
-    ? JSON.parse(raw || '{}') as Record<string, unknown>
-    : (raw ?? {});
+const AD_LDAP_CONNECTOR_TYPES = ['AD', 'LDAP'];
+
+const AD_OUTBOUND_LIFECYCLE_OPS = new Set(['DISABLE', 'ENABLE', 'DELETE', 'CREATE_USER']);
+
+export type ActiveAdConnector = {
+  id: string;
+  cfg: Record<string, unknown>;
+  direction: ConnectorSyncDirection;
+};
+
+export async function loadActiveAdConnector(): Promise<ActiveAdConnector | null> {
+  const placeholders = AD_LDAP_CONNECTOR_TYPES.map(() => '?').join(',');
+  const row = await queryOne<{
+    id: string;
+    config_json: string | Record<string, unknown>;
+    direction: string;
+  }>(
+    `SELECT id, config_json, direction FROM connectors
+      WHERE connector_type IN (${placeholders})
+        AND status IN ('ACTIVE', 'CONNECTED', 'CONFIGURED')
+      ORDER BY
+        CASE status
+          WHEN 'ACTIVE' THEN 0
+          WHEN 'CONNECTED' THEN 1
+          ELSE 2
+        END,
+        last_sync_at DESC,
+        updated_at DESC
+      LIMIT 1`,
+    AD_LDAP_CONNECTOR_TYPES,
+  );
+  if (!row) return null;
+  return {
+    id: row.id,
+    cfg: parseAndNormalizeAdConnectorConfig(row.config_json),
+    direction: normalizeConnectorDirection(row.direction),
+  };
+}
+
+export function adConnectorAllowsOutboundWrites(direction: ConnectorSyncDirection): boolean {
+  return direction === 'OUTBOUND' || direction === 'BIDIRECTIONAL';
+}
+
+export async function isAdInboundOnlyConnector(): Promise<boolean> {
+  const conn = await loadActiveAdConnector();
+  return conn !== null && conn.direction === 'INBOUND';
+}
+
+export function isAdOutboundLifecycleOp(system: string, op: string): boolean {
+  const sys = system.toUpperCase();
+  return (sys === 'AD' || sys === 'LDAP') && AD_OUTBOUND_LIFECYCLE_OPS.has(op);
+}
+
+export async function shouldSkipAdOutboundOp(system: string, op: string): Promise<boolean> {
+  if (!isAdOutboundLifecycleOp(system, op)) return false;
+  return await isAdInboundOnlyConnector();
 }
 
 export async function loadActiveConnectorConfig(types: string[]): Promise<Record<string, unknown> | null> {
+  if (types.some((t) => t === 'AD' || t === 'LDAP')) {
+    const conn = await loadActiveAdConnector();
+    return conn?.cfg ?? null;
+  }
+
   const placeholders = types.map(() => '?').join(',');
   const row = await queryOne<{ config_json: string | Record<string, unknown> }>(
     `SELECT config_json FROM connectors
@@ -36,22 +99,12 @@ export async function loadActiveConnectorConfig(types: string[]): Promise<Record
     types,
   );
   if (!row) return null;
-  return parseConnectorConfig(row.config_json);
+  return parseAndNormalizeAdConnectorConfig(row.config_json);
 }
 
 export function createAdAdapterFromConnectorConfig(cfg: Record<string, unknown>): ADAdapter {
-  const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
-  const useSsl = parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls = parseConnectorBoolean(cfg['startTls'], false);
-  const port = parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
-  const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
-  const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
-  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
   const disabledOu = (cfg['disabledOu'] as string | undefined)?.trim() || 'OU=Disabled,';
-  const adUrl = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-
-  return new ADAdapter(redis, adUrl, bindDn, bindPass, baseDn, disabledOu, startTls, targetOuRaw);
+  return createAdAdapterFromConfig(redis, cfg, { label: 'configured' }, disabledOu);
 }
 
 const connectorAdapterCache = new Map<string, BaseAdapter>();
@@ -86,11 +139,20 @@ export async function propagatePortalDisableToAd(empId: string): Promise<void> {
   const adLink = links.find((l) => l.system === 'AD' && l.status === 'ACTIVE');
   if (!adLink?.external_id) return;
 
-  const cfg = await loadActiveConnectorConfig(['AD', 'LDAP']);
-  if (!cfg) {
+  const conn = await loadActiveAdConnector();
+  if (!conn) {
     logger.warn({ empId }, 'Portal disable: no AD connector config — outbox only');
     return;
   }
+  if (!adConnectorAllowsOutboundWrites(conn.direction)) {
+    logger.info(
+      { empId, direction: conn.direction },
+      'Portal disable: skipped AD — connector is INBOUND only',
+    );
+    return;
+  }
+
+  const cfg = conn.cfg;
 
   const adapter = createAdAdapterFromConnectorConfig(cfg);
   try {
@@ -120,8 +182,17 @@ export async function propagatePortalEnableToAd(empId: string): Promise<void> {
   const adLink = links.find((l) => l.system === 'AD' && l.status === 'DISABLED');
   if (!adLink?.external_id) return;
 
-  const cfg = await loadActiveConnectorConfig(['AD', 'LDAP']);
-  if (!cfg) return;
+  const conn = await loadActiveAdConnector();
+  if (!conn) return;
+  if (!adConnectorAllowsOutboundWrites(conn.direction)) {
+    logger.info(
+      { empId, direction: conn.direction },
+      'Portal unsuspend: skipped AD — connector is INBOUND only',
+    );
+    return;
+  }
+
+  const cfg = conn.cfg;
 
   const adapter = createAdAdapterFromConnectorConfig(cfg);
   try {

@@ -9,10 +9,13 @@ import { google } from 'googleapis';
 import { query, queryOne } from '../db/connection.js';
 import { config } from '../config.js';
 import { redis } from '../auth/session-store.js';
-import { ADAdapter } from '../adapters/ad-adapter.js';
 import logger from '../utils/logger.js';
 import { getIdentityLinksForEmp } from '../utils/outbox.js';
-import { parseConnectorBoolean, parseConnectorPort } from '../utils/connector-config.js';
+import {
+  connectAdAdapterWithFallback,
+  isPlainLdapConnector,
+  parseAndNormalizeAdConnectorConfig,
+} from './ad-ldap-connect.js';
 import { backfillAdIdentityLinkIfMissing } from './ad-sync.js';
 import { backfillGoogleIdentityLinkIfMissing } from './google-sync.js';
 import {
@@ -33,12 +36,6 @@ export interface WritebackResult {
 // ---------------------------------------------------------------------------
 // Connector config helpers
 // ---------------------------------------------------------------------------
-function parseConnectorConfig(raw: string | Record<string, unknown>): Record<string, unknown> {
-  return typeof raw === 'string'
-    ? JSON.parse(raw || '{}') as Record<string, unknown>
-    : (raw ?? {});
-}
-
 async function loadConnectorConfig(
   types: string[],
 ): Promise<Record<string, unknown> | null> {
@@ -57,27 +54,7 @@ async function loadConnectorConfig(
     types,
   );
   if (!row) return null;
-  return parseConnectorConfig(row.config_json);
-}
-
-function createAdAdapterFromConfig(
-  cfg: Record<string, unknown>,
-  overrides: { useSsl?: boolean; startTls?: boolean; port?: number } = {},
-): ADAdapter {
-  const useSsl = overrides.useSsl !== undefined
-    ? overrides.useSsl
-    : parseConnectorBoolean(cfg['useSsl'], config.ad.url.startsWith('ldaps'));
-  const startTls = overrides.startTls !== undefined
-    ? overrides.startTls
-    : parseConnectorBoolean(cfg['startTls'], false);
-  const host = (cfg['host'] as string | undefined)?.trim() || new URL(config.ad.url).hostname;
-  const port = overrides.port ?? parseConnectorPort(cfg['port'], useSsl ? 636 : 389);
-  const bindDn = (cfg['bindDn'] as string | undefined) || config.ad.bindDn;
-  const bindPass = (cfg['bindPassword'] as string | undefined) || config.ad.bindPassword;
-  const baseDn = (cfg['baseDn'] as string | undefined) || config.ad.baseDn;
-  const targetOuRaw = (cfg['targetOu'] as string | undefined)?.trim() ?? '';
-  const adUrl = `${useSsl ? 'ldaps' : 'ldap'}://${host}:${port}`;
-  return new ADAdapter(redis, adUrl, bindDn, bindPass, baseDn, undefined, startTls, targetOuRaw);
+  return parseAndNormalizeAdConnectorConfig(row.config_json);
 }
 
 async function writebackToGoogle(
@@ -127,44 +104,25 @@ async function writebackToAD(
     throw new Error('No active Active Directory connector configured');
   }
 
-  // Try three connection modes in order: as-configured → StartTLS on 389 → LDAPS on 636.
-  // AD refuses unicodePwd changes over plain LDAP, so we escalate automatically.
-  // Each attempt is fully independent (fresh adapter + circuit breaker reset).
-  const attempts: Array<{ useSsl?: boolean; startTls?: boolean; port?: number; label: string }> = [
-    { label: 'configured' },
-    { label: 'starttls', startTls: true },
-    { label: 'ldaps', useSsl: true, port: 636 },
-  ];
-
-  const errors: string[] = [];
-
-  for (const attempt of attempts) {
-    const adapter = createAdAdapterFromConfig(cfg, attempt);
-    try {
-      await adapter.resetCircuitBreaker();
-      await adapter.connect();
-      if (!adapter.connectionIsSecure()) {
-        errors.push(`[${attempt.label}] plain LDAP cannot write unicodePwd`);
-        continue;
-      }
-      const result = await adapter.setUserPassword(externalId, newPassword);
-      if (result.success) {
-        logger.info({ externalId, attempt: attempt.label }, 'AD password writeback succeeded');
-        return;
-      }
-      errors.push(`[${attempt.label}] ${result.error ?? 'setUserPassword failed'}`);
-    } catch (err) {
-      errors.push(`[${attempt.label}] ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      await adapter.disconnect().catch(() => undefined);
-    }
+  if (isPlainLdapConnector(cfg)) {
+    throw new Error(
+      'AD password writeback requires LDAPS or LDAP+StartTLS — plain LDAP (port 389) cannot write unicodePwd.',
+    );
   }
 
-  throw new Error(
-    `AD password writeback failed across all connection modes. ` +
-    `Ensure the AD connector is set to LDAPS (port 636) or StartTLS. ` +
-    `Details: ${errors.join(' | ')}`,
-  );
+  let adapter;
+  try {
+    const connected = await connectAdAdapterWithFallback(redis, cfg);
+    adapter = connected.adapter;
+    const result = await adapter.setUserPassword(externalId, newPassword);
+    if (result.success) {
+      logger.info({ externalId, mode: connected.mode.label }, 'AD password writeback succeeded');
+      return;
+    }
+    throw new Error(result.error ?? 'setUserPassword failed');
+  } finally {
+    await adapter?.disconnect().catch(() => undefined);
+  }
 }
 
 export async function ensureWritebackIdentityLinks(empId: string): Promise<string> {

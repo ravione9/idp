@@ -1053,7 +1053,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Birthright entitlement engine** — `src/services/birthright.ts` evaluates `birthright_rule` JSON (dept / employment type / role / group / exclude) and assigns/revokes on workflow JOINER/LEAVER + admin Dry Run / Run Now; optional connector kick for outbound AD/Google provision
 - ✅ **Connector dispatcher** — `src/services/connector-dispatcher.ts` routes `POST /api/iga/connectors/:id/sync` to the right sync service (AD or Google)
 - ✅ **Entitlement harvest** — `src/services/entitlement-harvest.ts` + fulfill (`entitlement-fulfillment.ts`): AD/Google groups → `entitlements` catalog; grant/request pushes group membership on target
-- ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable); inbound import **skips disabled AD accounts** (does not create new portal users); existing linked users disabled in AD are marked `SUSPENDED_AUTO` and hidden from the Universal Directory; tracks runs in `connector_runs`; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncUsers`, `includeSubOrgUnits`, `syncGroups`) — blank **Sync OUs** imports all users under **Base DN**; **New User OU** is outbound-only; multiple OUs are merged and deduplicated by objectGUID/DN; **UPN suffixes** (`upnDomain`, one per line) cover multi-domain forests — inbound uses AD `userPrincipalName` as-is; outbound provisioning picks the suffix matching `email_corp`
+- ✅ **AD Directory Sync** — `src/services/ad-sync.ts` reconciles HRMS employees → Active Directory (provision, update, disable) when connector direction is `OUTBOUND` or `BIDIRECTIONAL`; **`INBOUND`** imports AD users into the portal only (no AD provision/disable/enable from sync, lifecycle, or outbox); inbound import **skips disabled AD accounts** (does not create new portal users); existing linked users disabled in AD are marked `SUSPENDED_AUTO` and hidden from the Universal Directory; tracks runs in `connector_runs`; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncUsers`, `includeSubOrgUnits`, `syncGroups`) — blank **Sync OUs** imports all users under **Base DN**; **New User OU** is outbound-only; multiple OUs are merged and deduplicated by objectGUID/DN; **UPN suffixes** (`upnDomain`, one per line) cover multi-domain forests — inbound uses AD `userPrincipalName` as-is; outbound provisioning picks the suffix matching `email_corp`
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import **skips suspended Google accounts** (same rules as AD); outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank OU/user scope syncs the full directory; non-empty filters combine with AND logic; blank/`*` **Sync Groups** auto-mirrors all Workspace groups into `groups` / `group_members` (paginated Admin SDK; requires `admin.directory.group.readonly` domain-wide delegation)
 - ✅ **Connector sync scheduler** — `src/services/connector-sync-scheduler.ts` ticks every 60s (Redis `withSchedLock('connector-sync', …)`); reads each connector's `sync_schedule` (`every:15m`, `every:1h`, custom interval, or 5-field cron) and triggers `POST`-equivalent sync when due for `CONNECTED`/`ACTIVE` connectors; Directory Sync UI exposes presets + custom interval/cron
 - ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; AD writeback auto-retries StartTLS/LDAPS when the connector uses plain LDAP; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
@@ -1126,6 +1126,44 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### 899d411 — 2026-09-09 — AD INBOUND: sync users into portal without disabling AD accounts
+
+**Why** — Production AD connector is inbound-only for now: portal should import users from AD but must not disable, enable, provision, or delete AD accounts when admins suspend users or sync runs outbound reconciliation.
+
+**What changed:**
+
+- **`src/services/connector-adapters.ts`** — `loadActiveAdConnector()`, `isAdInboundOnlyConnector()`, `shouldSkipAdOutboundOp()`; portal suspend/unsuspend skips immediate AD disable/enable when direction is `INBOUND`.
+- **`src/services/outbox-worker.ts`** — skips AD/LDAP `DISABLE`, `ENABLE`, `DELETE`, `CREATE_USER` for inbound-only connectors (does not update `identity_links` on skip).
+- **`src/services/user-lifecycle.ts`** — does not enqueue AD outbound lifecycle ops when connector is `INBOUND`. Password writeback unchanged.
+
+### (pending) — 2026-09-09 — AD test: explain signing/Kerberos policy vs simple bind
+
+**Why** — On-prem PowerShell succeeds with SASL/Negotiate + signing on :389, but EKS IdP uses LDAP simple bind; operators need Test Connection to explain AD Agent vs LDAPS instead of generic errors.
+
+**What changed:**
+
+- **`src/services/connector-health.ts`** — `formatAdLdapTestError()` returns `AD_AUTH_POLICY` / `AD_PLAIN_BIND_REJECTED` with guidance for LDAPS :636, StartTLS, or on-prem AD Agent.
+
+### (pending) — 2026-09-09 — Plain LDAP: enforce ldap://:389 only (no TLS, no :636 probe)
+
+**Why** — Packet capture on plain-LDAP connectors still showed TLS ClientHello (`16 03 01`) on :389; duplicate adapter builders also defaulted `useSsl` from `AD_URL` env when connector flags were missing.
+
+**What changed:**
+
+- **`src/services/ad-ldap-connect.ts`** — `resolveAdLdapConnectionParams()`, `isPlainLdapConnector()`, `parseAndNormalizeAdConnectorConfig()`; plain LDAP forces `ldap://host:389` with no StartTLS/LDAPS fallback on test, sync, login, or outbox paths.
+- **`src/adapters/ad-adapter.ts`** — omit `tlsOptions` on `ldap://` (ldapts treats any tlsOptions as immediate TLS).
+- **`connector-adapters.ts`**, **`ad-auth.ts`**, **`password-writeback.ts`**, **`entitlement-*.ts`**, **`ad-sync.ts`** — use shared LDAP connect helpers (no per-file TLS defaults).
+
+### (pending) — 2026-09-09 — Plain LDAP: stop ldapts from sending TLS ClientHello on port 389
+
+**Why** — Packet capture on plain LDAP showed first payload `16 03 01` (TLS ClientHello) on :389; DC reset the session. `ldapts` treats any `tlsOptions` on the Client as immediate TLS, even for `ldap://` URLs.
+
+**What changed:**
+
+- **`src/adapters/ad-adapter.ts`** — pass `tlsOptions` only for `ldaps://`; StartTLS still passes opts to `startTLS()`, plain LDAP omits them on connect.
+- **`connectors/ad-agent/src/ad-ldap.ts`** — same fix for on-prem agent.
+- **`src/services/connector-health.ts`** — normalize AD connector config before connectivity test.
 
 ### (pending) — 2026-09-09 — AD connector test/sync use saved protocol only (no TLS fallback)
 
