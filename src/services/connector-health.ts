@@ -14,9 +14,8 @@ import logger from '../utils/logger.js';
 import { withSchedLock } from '../utils/sched-lock.js';
 import { parseConnectorPort } from '../utils/connector-config.js';
 import {
-  connectAdAdapterWithFallback,
+  connectAdAdapter,
   describeAdLdapMode,
-  listAdLdapConnectionAttempts,
   normalizeAdConnectorTls,
 } from './ad-ldap-connect.js';
 import {
@@ -233,16 +232,11 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
   let suggestions: string[] = [];
 
   try {
-    const { adapter, mode, errors: attemptErrors } = await connectAdAdapterWithFallback(sessionRedis, cfg);
+    const { adapter, mode } = await connectAdAdapter(sessionRedis, cfg);
     const { url, protocol } = describeAdLdapMode(mode, cfg);
     const normalized = normalizeAdConnectorTls(cfg);
 
-    if (mode.label !== 'configured') {
-      infos.push(
-        `Connected using ${protocol} (${mode.label} fallback)` +
-        (attemptErrors.length ? ` — prior attempt(s): ${attemptErrors.join('; ')}` : ''),
-      );
-    } else if (
+    if (
       normalized.startTls && normalized.port === 389
       && parseConnectorPort(cfg['port'], 389) === 636
     ) {
@@ -263,7 +257,7 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
       }
     }
 
-    if (!normalized.useSsl && !normalized.startTls && mode.label === 'ldap') {
+    if (!normalized.useSsl && !normalized.startTls) {
       warnings.push('Protocol is plain LDAP — user provisioning requires LDAPS or LDAP+StartTLS');
     }
 
@@ -297,7 +291,7 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
       ...(suggestions.length ? { ouSuggestions: suggestions } : {}),
     };
   } catch (ldapErr) {
-    const attempts = listAdLdapConnectionAttempts(cfg);
+    const configured = describeAdLdapMode({ label: 'configured' }, cfg);
     const raw = ldapErr instanceof Error ? ldapErr.message : String(ldapErr);
     const code = (ldapErr as Record<string, unknown>)['code'];
     let friendly: string;
@@ -308,21 +302,19 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
     } else if (typeof code === 'number' && code === 32) {
       friendly = `No Such Object (LDAP error 32) — bindDn not found. DN used: ${bindDn}`;
     } else if (raw.includes('ECONNREFUSED')) {
-      friendly = `Connection refused — IdP cannot reach ${host} on port 389/636. Open firewall from IdP to the domain controller, or use the on-prem AD Agent connector.`;
+      friendly = `Connection refused — IdP cannot reach ${configured.url}. Open firewall from IdP to the domain controller, or use the on-prem AD Agent connector.`;
     } else if (raw.includes('ECONNRESET') || raw.includes('ECONNABORTED') || raw.includes('EPIPE')) {
       friendly =
-        `Connection reset by ${host} — LDAP sessions from this IdP host are being dropped ` +
+        `Connection reset by ${host} using ${configured.protocol} (${configured.url}) — LDAP sessions from this IdP host are being dropped ` +
         `(common when IdP runs in cloud/EKS and AD is on-prem). ` +
         `Use the on-prem AD Agent connector (Directory Sync → download agent package) on a domain-joined Windows server, ` +
-        `or ask network/firewall to allow outbound LDAP/LDAPS from IdP pods to the DC on ports 389 and 636.`;
+        `or ask network/firewall to allow outbound LDAP from IdP pods to the DC on the configured port.`;
     } else if (raw.includes('ETIMEDOUT') || raw.includes('connectTimeout')) {
-      friendly = `Connection timed out reaching ${host} on port 389/636 — check network/firewall routes from IdP to AD.`;
+      friendly = `Connection timed out reaching ${configured.url} — check network/firewall routes from IdP to AD.`;
     } else if (raw.includes('ENOTFOUND') || raw.includes('getaddrinfo')) {
       friendly = `DNS resolution failed for host "${host}".`;
-    } else if (attempts.length > 1) {
-      friendly = raw;
     } else {
-      friendly = `LDAP error (${typeof code !== 'undefined' ? `code ${code}` : 'unknown'}): ${raw}`;
+      friendly = `LDAP error (${typeof code !== 'undefined' ? `code ${code}` : 'unknown'}) on ${configured.url}: ${raw}`;
     }
     return {
       success: false,

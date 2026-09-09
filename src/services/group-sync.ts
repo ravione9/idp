@@ -8,7 +8,7 @@ import type { admin_directory_v1 } from 'googleapis';
 import { query, queryOne, execute } from '../db/connection.js';
 import { ADAdapter } from '../adapters/ad-adapter.js';
 import { redis } from '../auth/session-store.js';
-import { connectAdAdapterWithFallback } from './ad-ldap-connect.js';
+import { connectAdAdapter } from './ad-ldap-connect.js';
 import {
   buildGoogleJwtAuth,
   normalizeConnectorDirection,
@@ -379,7 +379,7 @@ export async function syncAdDirectoryGroups(
 
   try {
     if (!adapter) {
-      const connected = await connectAdAdapterWithFallback(redis, cfg);
+      const connected = await connectAdAdapter(redis, cfg);
       adapter = connected.adapter;
     } else {
       await adapter.refreshConnection();

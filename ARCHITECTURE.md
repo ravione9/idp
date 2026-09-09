@@ -1129,6 +1129,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-09 — AD connector test/sync use saved protocol only (no TLS fallback)
+
+**Why** — Packet capture showed TLS ClientHello on port 389 while the UI was set to plain LDAP; Test Connection auto-retried StartTLS and LDAPS, confusing network triage and violating the saved connector protocol.
+
+**What changed:**
+
+- **`src/services/ad-ldap-connect.ts`** — `connectAdAdapter()` uses the saved protocol only; `connectAdAdapterWithFallback()` (StartTLS/LDAPS escalation) remains for password writeback only.
+- **`src/services/connector-health.ts`**, **`ad-sync.ts`**, **`group-sync.ts`** — test and sync call `connectAdAdapter()`; errors reference the configured URL/port only.
+
 ### (pending) — 2026-09-08 — Clearer AD ECONNRESET hint for cloud IdP → on-prem AD
 
 **Why** — Test Connection on EKS prod showed raw `read ECONNRESET` with no guidance; direct LDAP from cloud to on-prem AD usually requires AD Agent or firewall rules.
@@ -1261,7 +1270,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 **What changed:**
 
 - **`src/adapters/ad-adapter.ts`** — longer LDAP op timeout (120s), `refreshConnection()`, retry paged/search on `ECONNRESET`, non-fatal disconnect when socket already closed.
-- **`src/services/group-sync.ts`** — reuse inbound LDAP session (no second bind), `connectAdAdapterWithFallback`, group sync errors are non-fatal.
+- **`src/services/group-sync.ts`** — reuse inbound LDAP session (no second bind), `connectAdAdapter` (saved protocol), group sync errors are non-fatal.
 - **`src/services/ad-sync.ts`** — refresh LDAP before group sync; disconnect errors no longer fail the run; PARTIAL when non-fatal group-sync warnings exist.
 
 ### 8277fda — 2026-08-25 — Pre-built Slack connector: SAML SSO + SCIM provisioning
