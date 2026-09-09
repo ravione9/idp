@@ -27,6 +27,8 @@ export function normalizeAdConnectorTls(cfg: Record<string, unknown>): {
     if (port === 389) port = 636;
   } else if (startTls) {
     if (port === 636) port = 389;
+  } else if (port === 636) {
+    port = 389;
   }
 
   return { useSsl, startTls, port };
@@ -37,7 +39,7 @@ export function normalizeAdConnectorConfig(cfg: Record<string, unknown>): Record
   const next = { ...cfg };
   const { useSsl, startTls, port } = normalizeAdConnectorTls(cfg);
   next['useSsl'] = useSsl;
-  next['startTls'] = startTls;
+  next['startTls'] = useSsl ? false : startTls;
   next['port'] = String(port);
   return next;
 }
@@ -46,12 +48,21 @@ function modeKey(useSsl: boolean, startTls: boolean, port: number): string {
   return `${useSsl}-${startTls}-${port}`;
 }
 
-/** Connection attempts: configured first, then StartTLS :389, LDAPS :636. */
-export function listAdLdapConnectionAttempts(cfg: Record<string, unknown>): AdLdapModeOverride[] {
+/**
+ * LDAP connection modes for a connector.
+ * @param includeProtocolFallbacks When true, also try StartTLS :389 and LDAPS :636 after the
+ *   saved protocol (password writeback only). Tests and sync use the saved protocol only.
+ */
+export function listAdLdapConnectionAttempts(
+  cfg: Record<string, unknown>,
+  includeProtocolFallbacks = false,
+): AdLdapModeOverride[] {
   const normalized = normalizeAdConnectorTls(cfg);
   const modes: AdLdapModeOverride[] = [
     { label: 'configured', ...normalized },
   ];
+  if (!includeProtocolFallbacks) return modes;
+
   const seen = new Set([modeKey(normalized.useSsl, normalized.startTls, normalized.port)]);
 
   const add = (mode: AdLdapModeOverride & { useSsl: boolean; startTls: boolean; port: number }) => {
@@ -116,12 +127,25 @@ export function describeAdLdapMode(
   return { url, protocol };
 }
 
+/** Connect using the connector's saved protocol only (test, sync, group sync). */
+export async function connectAdAdapter(
+  redis: Redis,
+  cfg: Record<string, unknown>,
+): Promise<{ adapter: ADAdapter; mode: AdLdapModeOverride }> {
+  const mode = listAdLdapConnectionAttempts(cfg, false)[0]!;
+  const adapter = createAdAdapterFromConfig(redis, cfg, mode);
+  await adapter.resetCircuitBreaker();
+  await adapter.connect();
+  return { adapter, mode };
+}
+
+/** Escalate StartTLS / LDAPS when the saved mode cannot write passwords (writeback only). */
 export async function connectAdAdapterWithFallback(
   redis: Redis,
   cfg: Record<string, unknown>,
 ): Promise<{ adapter: ADAdapter; mode: AdLdapModeOverride; errors: string[] }> {
   const errors: string[] = [];
-  for (const mode of listAdLdapConnectionAttempts(cfg)) {
+  for (const mode of listAdLdapConnectionAttempts(cfg, true)) {
     const adapter = createAdAdapterFromConfig(redis, cfg, mode);
     try {
       await adapter.resetCircuitBreaker();
