@@ -16,6 +16,7 @@ import { parseConnectorPort } from '../utils/connector-config.js';
 import {
   connectAdAdapter,
   describeAdLdapMode,
+  normalizeAdConnectorConfig,
   normalizeAdConnectorTls,
 } from './ad-ldap-connect.js';
 import {
@@ -96,9 +97,12 @@ export async function runConnectorConnectivityTest(connectorId: string): Promise
   }
 
   const type = row.connector_type;
-  const cfg: Record<string, unknown> = typeof row.config_json === 'string'
+  const rawCfg: Record<string, unknown> = typeof row.config_json === 'string'
     ? JSON.parse(row.config_json || '{}') as Record<string, unknown>
     : (row.config_json ?? {});
+  const cfg = (type === 'AD' || type === 'LDAP') && rawCfg['host']
+    ? normalizeAdConnectorConfig(rawCfg)
+    : rawCfg;
 
   try {
     if (type === 'AD' || type === 'LDAP') {

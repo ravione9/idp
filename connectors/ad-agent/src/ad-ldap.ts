@@ -221,12 +221,15 @@ export class AdLdapClient {
   }
 
   private createClient(): Client {
-    return new Client({
+    const opts = {
       url: this.url,
       connectTimeout: 10_000,
       timeout: 30_000,
-      tlsOptions: this.tlsOpts,
-    });
+    };
+    if (this.url.startsWith('ldaps://')) {
+      return new Client({ ...opts, tlsOptions: this.tlsOpts });
+    }
+    return new Client(opts);
   }
 
   async testConnection(): Promise<{ ok: boolean; message: string }> {

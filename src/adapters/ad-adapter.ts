@@ -99,12 +99,17 @@ export class ADAdapter extends BaseAdapter {
   private static readonly LDAP_OP_TIMEOUT_MS = 120_000;
 
   private createClient(): Client {
-    return new Client({
-      url:              this.url,
-      connectTimeout:   ADAdapter.LDAP_CONNECT_TIMEOUT_MS,
-      timeout:          ADAdapter.LDAP_OP_TIMEOUT_MS,
-      tlsOptions:       this.tlsOpts,
-    });
+    // ldapts treats any non-empty tlsOptions as "secure" and sends TLS ClientHello on connect,
+    // even for ldap:// — plain LDAP must omit tlsOptions; StartTLS passes opts to startTLS() only.
+    const opts = {
+      url:            this.url,
+      connectTimeout: ADAdapter.LDAP_CONNECT_TIMEOUT_MS,
+      timeout:        ADAdapter.LDAP_OP_TIMEOUT_MS,
+    };
+    if (this.url.startsWith('ldaps://')) {
+      return new Client({ ...opts, tlsOptions: this.tlsOpts });
+    }
+    return new Client(opts);
   }
 
   /** Drop a stale socket and bind again — use after long DB-only phases. */
