@@ -1129,6 +1129,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-09 — Plain LDAP: stop ldapts from sending TLS ClientHello on port 389
+
+**Why** — Packet capture on plain LDAP showed first payload `16 03 01` (TLS ClientHello) on :389; DC reset the session. `ldapts` treats any `tlsOptions` on the Client as immediate TLS, even for `ldap://` URLs.
+
+**What changed:**
+
+- **`src/adapters/ad-adapter.ts`** — pass `tlsOptions` only for `ldaps://`; StartTLS still passes opts to `startTLS()`, plain LDAP omits them on connect.
+- **`connectors/ad-agent/src/ad-ldap.ts`** — same fix for on-prem agent.
+- **`src/services/connector-health.ts`** — normalize AD connector config before connectivity test.
+
 ### (pending) — 2026-09-09 — AD connector test/sync use saved protocol only (no TLS fallback)
 
 **Why** — Packet capture showed TLS ClientHello on port 389 while the UI was set to plain LDAP; Test Connection auto-retried StartTLS and LDAPS, confusing network triage and violating the saved connector protocol.
