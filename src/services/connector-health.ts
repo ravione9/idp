@@ -16,6 +16,7 @@ import { parseConnectorPort } from '../utils/connector-config.js';
 import {
   connectAdAdapter,
   describeAdLdapMode,
+  isPlainLdapConnector,
   normalizeAdConnectorTls,
   parseAndNormalizeAdConnectorConfig,
 } from './ad-ldap-connect.js';
@@ -202,6 +203,97 @@ async function testAdAgent(connectorId: string, cfg: Record<string, unknown>): P
   };
 }
 
+function formatAdLdapTestError(
+  cfg: Record<string, unknown>,
+  configured: { url: string; protocol: string },
+  host: string,
+  bindDn: string,
+  raw: string,
+  code: unknown,
+): { message: string; code: string } {
+  const plain = isPlainLdapConnector(cfg);
+  const ldapCode = typeof code === 'number' ? code : undefined;
+
+  if (ldapCode === 49) {
+    return {
+      code: 'LDAP_49',
+      message: `Invalid credentials (LDAP error 49) — check bindDn and bindPassword. DN used: ${bindDn}`,
+    };
+  }
+
+  const signingPolicy =
+    ldapCode === 8
+    || ldapCode === 19
+    || /Strong(er)? authentication required/i.test(raw)
+    || /ldap signing|signing required|integrity|confidentiality required/i.test(raw)
+    || /SASL|GSSAPI|Negotiate|Kerberos/i.test(raw);
+
+  if (signingPolicy) {
+    const lead = plain
+      ? 'Active Directory rejected plain LDAP simple bind on port 389.'
+      : `Strong authentication required on ${configured.url} (LDAP error ${ldapCode ?? 8}).`;
+    return {
+      code: 'AD_AUTH_POLICY',
+      message:
+        `${lead} This DC expects SASL/Kerberos (Negotiate) with LDAP signing/sealing, or an encrypted LDAP session. ` +
+        `The IdP connector uses bind DN + password (simple bind) from EKS — not Windows Negotiate. ` +
+        `Options: (1) switch to LDAPS on port 636 after installing an LDAPS certificate on the DC, ` +
+        `(2) use LDAP+StartTLS on 389 if your network allows it, or ` +
+        `(3) use the on-prem AD Agent (Directory Sync → download agent package) on a domain-joined Windows server — ` +
+        `it authenticates to AD the same way as a successful PowerShell Negotiate test.`,
+    };
+  }
+
+  if (ldapCode === 32) {
+    return {
+      code: 'LDAP_32',
+      message: `No Such Object (LDAP error 32) — bindDn not found. DN used: ${bindDn}`,
+    };
+  }
+
+  if (raw.includes('ECONNREFUSED')) {
+    return {
+      code: 'ECONNREFUSED',
+      message:
+        `Connection refused — IdP cannot reach ${configured.url}. Open firewall from IdP to the domain controller, ` +
+        `or use the on-prem AD Agent connector.`,
+    };
+  }
+
+  if (raw.includes('ECONNRESET') || raw.includes('ECONNABORTED') || raw.includes('EPIPE')) {
+    const policyHint = plain
+      ? ' If TCP to port 389 already works, AD may be resetting unsigned simple bind — use LDAPS :636 or the on-prem AD Agent.'
+      : '';
+    return {
+      code: plain ? 'AD_PLAIN_BIND_REJECTED' : 'ECONNRESET',
+      message:
+        `Connection reset by ${host} using ${configured.protocol} (${configured.url}) — LDAP session dropped from this IdP host ` +
+        `(common for cloud/EKS → on-prem AD).${policyHint} ` +
+        `Otherwise open firewall for outbound LDAP on the configured port, or use the on-prem AD Agent ` +
+        `(Directory Sync → download agent package) on a domain-joined Windows server.`,
+    };
+  }
+
+  if (raw.includes('ETIMEDOUT') || raw.includes('connectTimeout')) {
+    return {
+      code: 'ETIMEDOUT',
+      message: `Connection timed out reaching ${configured.url} — check network/firewall routes from IdP to AD.`,
+    };
+  }
+
+  if (raw.includes('ENOTFOUND') || raw.includes('getaddrinfo')) {
+    return {
+      code: 'ENOTFOUND',
+      message: `DNS resolution failed for host "${host}".`,
+    };
+  }
+
+  return {
+    code: `LDAP_${ldapCode ?? 'ERROR'}`,
+    message: `LDAP error (${ldapCode !== undefined ? `code ${ldapCode}` : 'unknown'}) on ${configured.url}: ${raw}`,
+  };
+}
+
 async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorTestResult, 'connectorStatus'>> {
   const host = (cfg['host'] as string | undefined)?.trim();
   const bindDn = (cfg['bindDn'] as string | undefined)?.trim();
@@ -298,33 +390,12 @@ async function testAdLdap(cfg: Record<string, unknown>): Promise<Omit<ConnectorT
     const configured = describeAdLdapMode({ label: 'configured' }, cfg);
     const raw = ldapErr instanceof Error ? ldapErr.message : String(ldapErr);
     const code = (ldapErr as Record<string, unknown>)['code'];
-    let friendly: string;
-    if (typeof code === 'number' && code === 49) {
-      friendly = `Invalid credentials (LDAP error 49) — check bindDn and bindPassword. DN used: ${bindDn}`;
-    } else if ((typeof code === 'number' && code === 8) || /Strong(er)? authentication required/i.test(raw)) {
-      friendly = 'Strong authentication required (LDAP error 8) — use LDAP+StartTLS on port 389 or LDAPS on port 636.';
-    } else if (typeof code === 'number' && code === 32) {
-      friendly = `No Such Object (LDAP error 32) — bindDn not found. DN used: ${bindDn}`;
-    } else if (raw.includes('ECONNREFUSED')) {
-      friendly = `Connection refused — IdP cannot reach ${configured.url}. Open firewall from IdP to the domain controller, or use the on-prem AD Agent connector.`;
-    } else if (raw.includes('ECONNRESET') || raw.includes('ECONNABORTED') || raw.includes('EPIPE')) {
-      friendly =
-        `Connection reset by ${host} using ${configured.protocol} (${configured.url}) — LDAP sessions from this IdP host are being dropped ` +
-        `(common when IdP runs in cloud/EKS and AD is on-prem). ` +
-        `Use the on-prem AD Agent connector (Directory Sync → download agent package) on a domain-joined Windows server, ` +
-        `or ask network/firewall to allow outbound LDAP from IdP pods to the DC on the configured port.`;
-    } else if (raw.includes('ETIMEDOUT') || raw.includes('connectTimeout')) {
-      friendly = `Connection timed out reaching ${configured.url} — check network/firewall routes from IdP to AD.`;
-    } else if (raw.includes('ENOTFOUND') || raw.includes('getaddrinfo')) {
-      friendly = `DNS resolution failed for host "${host}".`;
-    } else {
-      friendly = `LDAP error (${typeof code !== 'undefined' ? `code ${code}` : 'unknown'}) on ${configured.url}: ${raw}`;
-    }
+    const formatted = formatAdLdapTestError(cfg, configured, host!, bindDn!, raw, code);
     return {
       success: false,
       statusCode: 422,
-      code: `LDAP_${code ?? 'ERROR'}`,
-      message: friendly,
+      code: formatted.code,
+      message: formatted.message,
       detail: raw,
     };
   }

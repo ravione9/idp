@@ -1129,6 +1129,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-09 — AD test: explain signing/Kerberos policy vs simple bind
+
+**Why** — On-prem PowerShell succeeds with SASL/Negotiate + signing on :389, but EKS IdP uses LDAP simple bind; operators need Test Connection to explain AD Agent vs LDAPS instead of generic errors.
+
+**What changed:**
+
+- **`src/services/connector-health.ts`** — `formatAdLdapTestError()` returns `AD_AUTH_POLICY` / `AD_PLAIN_BIND_REJECTED` with guidance for LDAPS :636, StartTLS, or on-prem AD Agent.
+
 ### (pending) — 2026-09-09 — Plain LDAP: enforce ldap://:389 only (no TLS, no :636 probe)
 
 **Why** — Packet capture on plain-LDAP connectors still showed TLS ClientHello (`16 03 01`) on :389; duplicate adapter builders also defaulted `useSsl` from `AD_URL` env when connector flags were missing.
