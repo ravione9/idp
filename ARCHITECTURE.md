@@ -612,7 +612,7 @@ To add a new migration:
 | `GET`/`POST`/`DELETE` | `/api/admin/local-users[/:id]` | Local admin CRUD (**SUPER_ADMIN** session; includes `/status`) |
 | `GET` | `/auth/local/bootstrap-status` | Public boolean `{ bootstrapEnabled }` only (no admin count) |
 | `POST` | `/auth/local/bootstrap` | First SUPER_ADMIN via `LOCAL_BOOTSTRAP_TOKEN` (rate-limited) |
-| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; `POST` accepts optional `provisioning` + `scimConfig` for outbound SCIM; list includes `request_access` JIT flag and `scim_configured`; `PUT /:id/scim-config` updates SCIM token on existing apps) |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; `POST` accepts optional `provisioning` + `scimConfig` for outbound SCIM; list includes `request_access` JIT flag, `scim_configured`, `scim_token_stored`, `scim_base_url`; `PUT /:id/scim-config` updates SCIM token on existing apps; `DELETE /:id/scim-config` disables SCIM) |
 | `POST` | `/api/admin/saml-apps/:id/enable-request-access` | Enable IGA JIT for one SAML SP (mirror + default workflow + `requestable`) |
 | `POST` | `/api/admin/saml-apps/enable-request-access-all` | Enable IGA JIT for every active SAML SP |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/api/admin/app-discovery[/:id]` | App Discovery inventory (`discovered_apps`) |
@@ -1129,6 +1129,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-09-12 — Persist SCIM disable on SAML app edit
+
+**Why** — Unchecking **Enable SCIM provisioning** and saving left SCIM on: the UI returned `null` and skipped the API call, so the checkbox reappeared checked on reopen.
+
+**What changed:**
+
+- **`DELETE /api/admin/saml-apps/:id/scim-config`** — disables outbound SCIM (`applications.provisioning = 0`, SCIM protocol `active = 0`; sealed token kept for re-enable).
+- **`src/services/app-protocol-config.ts`** — `disableAppScimProvisioning`.
+- **`web/js/views-admin.js`** / **`api-admin.js`** — uncheck + save calls DELETE; list exposes `scim_base_url` / `scim_token_stored` for re-enable without re-entering the token.
+- **`PUT .../scim-config`** — reuses inactive sealed token (open then re-seal) when bearer token left blank.
 
 ### (pending) — 2026-09-12 — Fix user-activation UNION collation mismatch
 

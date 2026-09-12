@@ -104,7 +104,9 @@ function samlSigningHtml(pfx, sp) {
 
 function samlScimConfigHtml(pfx, sp) {
   const configured = !!(sp?.scim_configured || sp?.provisioning);
-  const defaultBase = configured && sp?.scim_base_url ? String(sp.scim_base_url) : '';
+  const defaultBase = (configured || sp?.scim_token_stored) && sp?.scim_base_url
+    ? String(sp.scim_base_url)
+    : '';
   return `
     <div class="form-group span2" style="margin-top:0.25rem;padding-top:1rem;border-top:1px solid var(--border)">
       <label class="mfa-toggle-row" style="display:flex;gap:0.55rem;align-items:flex-start;cursor:pointer;margin:0 0 0.75rem">
@@ -124,7 +126,7 @@ function samlScimConfigHtml(pfx, sp) {
             <input class="form-input" id="${pfx}-scim-url" type="url" value="${esc(defaultBase)}" placeholder="https://api.slack.com/scim/v2">
           </div>
           <div class="form-group span2">
-            <label class="form-label">SCIM Bearer Token ${configured ? '<span class="muted" style="font-weight:400">(leave blank to keep existing)</span>' : '<span style="color:var(--danger)">*</span>'}</label>
+            <label class="form-label">SCIM Bearer Token ${configured || sp?.scim_token_stored ? '<span class="muted" style="font-weight:400">(leave blank to keep existing)</span>' : '<span style="color:var(--danger)">*</span>'}</label>
             <input class="form-input" id="${pfx}-scim-token" type="password" value="" placeholder="Token from app admin → Provisioning" autocomplete="off">
           </div>
           <div class="form-group">
@@ -149,14 +151,17 @@ function bindSamlScimToggle(bd, pfx) {
 
 function collectSamlScimConfig(bd, pfx, isEdit, sp) {
   const enabled = !!bd.querySelector(`#${pfx}-scim-enabled`)?.checked;
-  if (!enabled) return null;
+  if (!enabled) {
+    const wasConfigured = !!(sp?.scim_configured || sp?.provisioning);
+    return wasConfigured ? { disabled: true } : null;
+  }
 
   const baseUrl = bd.querySelector(`#${pfx}-scim-url`)?.value?.trim().replace(/\/+$/, '');
   const token = bd.querySelector(`#${pfx}-scim-token`)?.value?.trim();
   const deprovisionMode = bd.querySelector(`#${pfx}-scim-deprov`)?.value || 'DEACTIVATE';
   if (!baseUrl) return { error: 'SCIM base URL is required when SCIM provisioning is enabled.' };
-  const configured = !!(sp?.scim_configured || sp?.provisioning);
-  if (!token && (!isEdit || !configured)) {
+  const hasStoredToken = !!(sp?.scim_configured || sp?.scim_token_stored || sp?.provisioning);
+  if (!token && (!isEdit || !hasStoredToken)) {
     return { error: 'SCIM bearer token is required when SCIM provisioning is enabled.' };
   }
   const payload = { baseUrl, deprovisionMode };
@@ -818,7 +823,8 @@ export async function viewIgaApps(content, opts = {}) {
       try {
         if (isEdit) {
           await api.updateSamlApp(sp.id, data);
-          if (scimCfg) await api.updateSamlScimConfig(sp.id, scimCfg);
+          if (scimCfg?.disabled) await api.deleteSamlScimConfig(sp.id);
+          else if (scimCfg) await api.updateSamlScimConfig(sp.id, scimCfg);
         } else {
           await api.createSamlApp(data);
         }
@@ -1204,7 +1210,8 @@ export async function viewSamlApps(me, content, opts = {}) {
       try {
         if (isEdit) {
           await api.updateSamlApp(sp.id, data);
-          if (scimCfg) await api.updateSamlScimConfig(sp.id, scimCfg);
+          if (scimCfg?.disabled) await api.deleteSamlScimConfig(sp.id);
+          else if (scimCfg) await api.updateSamlScimConfig(sp.id, scimCfg);
         } else {
           await api.createSamlApp(data);
         }
