@@ -36,6 +36,7 @@ Object.assign(api, {
   auditIntegrity:   (limit = 1000) => f(`/api/admin/audit/integrity?limit=${limit}`),
   auditSummary:     (params = {}) => f(`/api/admin/audit/summary?${new URLSearchParams(params)}`),
   appProvisionAudit:(params = {}) => f(`/api/admin/audit/app-provisioning?${new URLSearchParams(params)}`),
+  userActivationAudit:(params = {}) => f(`/api/admin/audit/user-activation?${new URLSearchParams(params)}`),
   auditExportUrl:   (kind, params = {}) => {
     const q = new URLSearchParams({ ...params, export: 'csv' });
     return `/api/admin/audit/${kind}?${q}`;

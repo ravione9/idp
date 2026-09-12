@@ -11,6 +11,7 @@ import { verifyChain } from '../utils/audit-log.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { redis } from '../auth/session-store.js';
 import { SESSION_REDIS_PREFIX } from '../auth/session.js';
+import { ensureAppProvisionLogTable } from '../services/app-provision-log.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
@@ -482,6 +483,10 @@ router.get('/summary', asyncHandler(async (req: Request, res: Response) => {
 // GET /app-provisioning — application user provision / deprovision log
 // ---------------------------------------------------------------------------
 router.get('/app-provisioning', asyncHandler(async (req: Request, res: Response) => {
+  await ensureAppProvisionLogTable().catch((err) => {
+    logger.warn({ err }, 'ensureAppProvisionLogTable failed');
+  });
+
   const limit = parseLimit(req.query['limit']);
   const offset = parseOffset(req.query['offset']);
   const q = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
@@ -506,46 +511,57 @@ router.get('/app-provisioning', asyncHandler(async (req: Request, res: Response)
     params.push(status);
   }
   if (app) {
-    where.push('(a.name LIKE ? OR a.slug LIKE ?)');
-    params.push(`%${app}%`, `%${app}%`);
+    where.push('(a.name LIKE ? OR a.slug LIKE ? OR l.endpoint LIKE ? OR l.detail LIKE ?)');
+    params.push(`%${app}%`, `%${app}%`, `%${app}%`, `%${app}%`);
   }
   if (q) {
     where.push(
-      '(e.full_name LIKE ? OR e.email_corp LIKE ? OR l.emp_id LIKE ? OR l.endpoint LIKE ? OR l.detail LIKE ?)',
+      '(e.full_name LIKE ? OR e.email_corp LIKE ? OR l.emp_id LIKE ? OR l.endpoint LIKE ? OR l.detail LIKE ? OR l.source LIKE ?)',
     );
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   }
 
   const whereSql = where.join(' AND ');
 
-  const totalRow = await queryOne<{ n: number }>(
-    `SELECT COUNT(*) AS n
-       FROM app_provision_log l
-       LEFT JOIN applications a ON a.id = l.app_id
-       LEFT JOIN employees e ON e.emp_id = l.emp_id
-      WHERE ${whereSql}`,
-    params,
-  ).catch(() => ({ n: 0 }));
+  let totalRow: { n: number } | null;
+  let rows: Record<string, unknown>[];
+  try {
+    totalRow = await queryOne<{ n: number }>(
+      `SELECT COUNT(*) AS n
+         FROM app_provision_log l
+         LEFT JOIN applications a ON a.id = l.app_id
+         LEFT JOIN employees e ON e.emp_id = l.emp_id
+        WHERE ${whereSql}`,
+      params,
+    );
 
-  const fetchLimit = exportCsv ? MAX_EXPORT : limit;
-  const fetchOffset = exportCsv ? 0 : offset;
+    const fetchLimit = exportCsv ? MAX_EXPORT : limit;
+    const fetchOffset = exportCsv ? 0 : offset;
 
-  const rows = await query<Record<string, unknown>>(
-    `SELECT l.id, l.created_at, l.action, l.source, l.http_method, l.endpoint,
-            l.status, l.status_code, l.detail, l.request_body, l.response_body,
-            l.emp_id, l.actor_emp_id, l.request_id,
-            a.name AS app_name, a.slug AS app_slug,
-            e.full_name AS emp_name, e.email_corp AS emp_email,
-            act.full_name AS actor_name
-       FROM app_provision_log l
-       LEFT JOIN applications a ON a.id = l.app_id
-       LEFT JOIN employees e ON e.emp_id = l.emp_id
-       LEFT JOIN employees act ON act.emp_id = l.actor_emp_id
-      WHERE ${whereSql}
-      ORDER BY l.created_at DESC
-      LIMIT ? OFFSET ?`,
-    [...params, fetchLimit, fetchOffset],
-  ).catch(() => []);
+    rows = await query<Record<string, unknown>>(
+      `SELECT l.id, l.created_at, l.action, l.source, l.http_method, l.endpoint,
+              l.status, l.status_code, l.detail, l.request_body, l.response_body,
+              l.emp_id, l.actor_emp_id, l.request_id,
+              a.name AS app_name, a.slug AS app_slug,
+              e.full_name AS emp_name, e.email_corp AS emp_email,
+              act.full_name AS actor_name
+         FROM app_provision_log l
+         LEFT JOIN applications a ON a.id = l.app_id
+         LEFT JOIN employees e ON e.emp_id = l.emp_id
+         LEFT JOIN employees act ON act.emp_id = l.actor_emp_id
+        WHERE ${whereSql}
+        ORDER BY l.created_at DESC
+        LIMIT ? OFFSET ?`,
+      [...params, fetchLimit, fetchOffset],
+    );
+  } catch (err) {
+    logger.error({ err }, 'app-provisioning query failed');
+    res.status(500).json({
+      error: 'APP_PROVISION_LOG_QUERY_FAILED',
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
 
   if (exportCsv) {
     sendCsv(
@@ -564,6 +580,169 @@ router.get('/app-provisioning', asyncHandler(async (req: Request, res: Response)
         typeof r['request_body'] === 'string' ? r['request_body'] : JSON.stringify(r['request_body'] ?? ''),
         typeof r['response_body'] === 'string' ? r['response_body'] : JSON.stringify(r['response_body'] ?? ''),
         r['request_id'],
+      ]),
+    );
+    return;
+  }
+
+  res.json({
+    data: rows,
+    meta: {
+      total: Number(totalRow?.n ?? 0),
+      limit,
+      offset,
+      from: from ?? null,
+      to: to ?? null,
+    },
+  });
+}));
+
+// ---------------------------------------------------------------------------
+// GET /user-activation — portal user activate / deactivate evidence
+// Combines lifecycle_events + FSM state_transitions (directory / Attendance IGA)
+// ---------------------------------------------------------------------------
+const ACTIVATION_EVENTS = new Set(['SUSPEND', 'UNSUSPEND', 'TERMINATE', 'REHIRE']);
+
+router.get('/user-activation', asyncHandler(async (req: Request, res: Response) => {
+  const limit = parseLimit(req.query['limit']);
+  const offset = parseOffset(req.query['offset']);
+  const q = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
+  const eventType = typeof req.query['eventType'] === 'string' ? req.query['eventType'].trim().toUpperCase() : '';
+  const kind = typeof req.query['kind'] === 'string' ? req.query['kind'].trim().toLowerCase() : '';
+  const from = parseDateBound(req.query['from'], false);
+  const to = parseDateBound(req.query['to'], true);
+  const exportCsv = String(req.query['export'] || '') === 'csv';
+
+  const leWhere: string[] = [`le.event_type IN ('SUSPEND','UNSUSPEND','TERMINATE','REHIRE')`];
+  const stWhere: string[] = [`(
+    CASE
+      WHEN st.to_state LIKE 'SUSPENDED%' THEN 'SUSPEND'
+      WHEN st.to_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'TERMINATE'
+      WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%' THEN 'UNSUSPEND'
+      WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'REHIRE'
+      ELSE NULL
+    END
+  ) IS NOT NULL`];
+  const leParams: unknown[] = [];
+  const stParams: unknown[] = [];
+
+  if (from) {
+    leWhere.push('le.ts >= ?');
+    stWhere.push('st.ts >= ?');
+    leParams.push(from);
+    stParams.push(from);
+  }
+  if (to) {
+    leWhere.push('le.ts <= ?');
+    stWhere.push('st.ts <= ?');
+    leParams.push(to);
+    stParams.push(to);
+  }
+
+  let eventFilter = eventType;
+  if (!eventFilter && kind === 'activation') eventFilter = 'ACTIVATION';
+  if (!eventFilter && kind === 'deactivation') eventFilter = 'DEACTIVATION';
+
+  if (eventFilter === 'ACTIVATION') {
+    leWhere.push(`le.event_type IN ('UNSUSPEND','REHIRE')`);
+    stWhere.push(`(
+      CASE
+        WHEN st.to_state LIKE 'SUSPENDED%' THEN 'SUSPEND'
+        WHEN st.to_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'TERMINATE'
+        WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%' THEN 'UNSUSPEND'
+        WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'REHIRE'
+        ELSE NULL
+      END
+    ) IN ('UNSUSPEND','REHIRE')`);
+  } else if (eventFilter === 'DEACTIVATION') {
+    leWhere.push(`le.event_type IN ('SUSPEND','TERMINATE')`);
+    stWhere.push(`(
+      CASE
+        WHEN st.to_state LIKE 'SUSPENDED%' THEN 'SUSPEND'
+        WHEN st.to_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'TERMINATE'
+        WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%' THEN 'UNSUSPEND'
+        WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'REHIRE'
+        ELSE NULL
+      END
+    ) IN ('SUSPEND','TERMINATE')`);
+  } else if (ACTIVATION_EVENTS.has(eventFilter)) {
+    leWhere.push('le.event_type = ?');
+    leParams.push(eventFilter);
+    stWhere.push(`(
+      CASE
+        WHEN st.to_state LIKE 'SUSPENDED%' THEN 'SUSPEND'
+        WHEN st.to_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'TERMINATE'
+        WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%' THEN 'UNSUSPEND'
+        WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'REHIRE'
+        ELSE NULL
+      END
+    ) = ?`);
+    stParams.push(eventFilter);
+  }
+
+  if (q) {
+    leWhere.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR le.emp_id LIKE ? OR le.initiated_by LIKE ? OR le.reason LIKE ?)');
+    leParams.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    stWhere.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR st.emp_id LIKE ? OR st.actor_id LIKE ? OR st.reason_code LIKE ?)');
+    stParams.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+  }
+
+  const unionSql = `
+    SELECT CONCAT('L', le.id) AS id, le.emp_id, e.full_name, e.email_corp, le.event_type,
+           le.old_state, le.new_state, le.reason, le.initiated_by, le.ts, 'admin' AS source,
+           CASE WHEN le.event_type IN ('UNSUSPEND','REHIRE') THEN 'ACTIVATION' ELSE 'DEACTIVATION' END AS kind
+      FROM lifecycle_events le
+      LEFT JOIN employees e ON e.emp_id = le.emp_id
+     WHERE ${leWhere.join(' AND ')}
+    UNION ALL
+    SELECT CONCAT('S', st.id) AS id, st.emp_id, e.full_name, e.email_corp,
+           CASE
+             WHEN st.to_state LIKE 'SUSPENDED%' THEN 'SUSPEND'
+             WHEN st.to_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'TERMINATE'
+             WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%' THEN 'UNSUSPEND'
+             WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'REHIRE'
+             ELSE 'MOVER'
+           END AS event_type,
+           st.from_state AS old_state, st.to_state AS new_state,
+           st.reason_code AS reason, st.actor_id AS initiated_by, st.ts, 'fsm' AS source,
+           CASE
+             WHEN st.to_state IN ('ACTIVE', 'REACTIVATED')
+                  AND (st.from_state LIKE 'SUSPENDED%' OR st.from_state IN ('DEPROVISIONED', 'DEPARTED'))
+               THEN 'ACTIVATION'
+             ELSE 'DEACTIVATION'
+           END AS kind
+      FROM state_transitions st
+      LEFT JOIN employees e ON e.emp_id = st.emp_id
+     WHERE ${stWhere.join(' AND ')}
+  `;
+
+  const totalRow = await queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM (${unionSql}) u`,
+    [...leParams, ...stParams],
+  );
+
+  const fetchLimit = exportCsv ? MAX_EXPORT : limit;
+  const fetchOffset = exportCsv ? 0 : offset;
+
+  const rows = await query<{
+    id: string; emp_id: string; full_name: string | null; email_corp: string | null;
+    event_type: string; old_state: string | null; new_state: string | null;
+    reason: string | null; initiated_by: string; ts: string; source: string; kind: string;
+  }>(
+    `SELECT * FROM (${unionSql}) u
+     ORDER BY u.ts DESC
+     LIMIT ? OFFSET ?`,
+    [...leParams, ...stParams, fetchLimit, fetchOffset],
+  );
+
+  if (exportCsv) {
+    sendCsv(
+      res,
+      `user-activation-${new Date().toISOString().slice(0, 10)}.csv`,
+      ['ID', 'Kind', 'Emp ID', 'Name', 'Email', 'Event', 'Old State', 'New State', 'Reason', 'Initiated By', 'Source', 'Timestamp'],
+      rows.map((r) => [
+        r.id, r.kind, r.emp_id, r.full_name, r.email_corp, r.event_type,
+        r.old_state, r.new_state, r.reason, r.initiated_by, r.source, r.ts,
       ]),
     );
     return;
