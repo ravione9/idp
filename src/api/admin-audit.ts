@@ -599,9 +599,50 @@ router.get('/app-provisioning', asyncHandler(async (req: Request, res: Response)
 
 // ---------------------------------------------------------------------------
 // GET /user-activation — portal user activate / deactivate evidence
-// Combines lifecycle_events + FSM state_transitions (directory / Attendance IGA)
+// Combines lifecycle_events + FSM state_transitions (when present) + audit_log
 // ---------------------------------------------------------------------------
 const ACTIVATION_EVENTS = new Set(['SUSPEND', 'UNSUSPEND', 'TERMINATE', 'REHIRE']);
+
+const ENSURE_STATE_TRANSITIONS_SQL = `
+CREATE TABLE IF NOT EXISTS state_transitions (
+  id              BIGINT          NOT NULL AUTO_INCREMENT,
+  emp_id          VARCHAR(20)     NOT NULL,
+  from_state      VARCHAR(30)     NOT NULL,
+  to_state        VARCHAR(30)     NOT NULL,
+  reason_code     VARCHAR(50)     NOT NULL,
+  evidence        JSON            DEFAULT NULL,
+  actor           ENUM('SYSTEM','MANAGER','HRBP','ADMIN','SUPER_ADMIN') NOT NULL,
+  actor_id        VARCHAR(20)     NOT NULL,
+  origin          ENUM('HRMS_SYNC','LILG','EXTERNAL') NOT NULL,
+  ts              DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  workflow_run_id VARCHAR(36)     DEFAULT NULL,
+  PRIMARY KEY (id),
+  INDEX idx_emp_ts (emp_id, ts DESC),
+  INDEX idx_actor_ts (actor_id, ts)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`;
+
+let stateTransitionsReady: Promise<boolean> | null = null;
+
+async function ensureStateTransitionsTable(): Promise<boolean> {
+  if (!stateTransitionsReady) {
+    stateTransitionsReady = (async () => {
+      try {
+        await execute(ENSURE_STATE_TRANSITIONS_SQL, []);
+        return true;
+      } catch (err) {
+        logger.warn({ err }, 'ensureStateTransitionsTable failed');
+        stateTransitionsReady = null;
+        const row = await queryOne<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM information_schema.tables
+            WHERE table_schema = DATABASE() AND table_name = 'state_transitions'`,
+          [],
+        ).catch(() => null);
+        return Number(row?.n ?? 0) > 0;
+      }
+    })();
+  }
+  return stateTransitionsReady;
+}
 
 function mapActivationKind(eventType: string): 'ACTIVATION' | 'DEACTIVATION' {
   return eventType === 'UNSUSPEND' || eventType === 'REHIRE' ? 'ACTIVATION' : 'DEACTIVATION';
@@ -617,7 +658,8 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
   const to = parseDateBound(req.query['to'], true);
   const exportCsv = String(req.query['export'] || '') === 'csv';
 
-  // Same shape as GET /api/admin/reports/lifecycle (known-good on prod MySQL).
+  const hasStateTransitions = await ensureStateTransitionsTable();
+
   const leWhere: string[] = [`le.event_type IN ('SUSPEND','UNSUSPEND','TERMINATE','REHIRE')`];
   const stWhere: string[] = [`(
     st.to_state LIKE 'SUSPENDED%'
@@ -625,20 +667,28 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
     OR (st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%')
     OR (st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED'))
   )`];
+  const alWhere: string[] = [`al.action IN (
+    'USER_SUSPEND','USER_UNSUSPEND','USER_TERMINATE','USER_DEPROVISION'
+  )`];
   const leParams: unknown[] = [];
   const stParams: unknown[] = [];
+  const alParams: unknown[] = [];
 
   if (from) {
     leWhere.push('le.ts >= ?');
     stWhere.push('st.ts >= ?');
+    alWhere.push('al.ts >= ?');
     leParams.push(from);
     stParams.push(from);
+    alParams.push(from);
   }
   if (to) {
     leWhere.push('le.ts <= ?');
     stWhere.push('st.ts <= ?');
+    alWhere.push('al.ts <= ?');
     leParams.push(to);
     stParams.push(to);
+    alParams.push(to);
   }
 
   let eventFilter = eventType;
@@ -651,23 +701,29 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
       (st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%')
       OR (st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED'))
     )`);
+    alWhere.push(`al.action = 'USER_UNSUSPEND'`);
   } else if (eventFilter === 'DEACTIVATION') {
     leWhere.push(`le.event_type IN ('SUSPEND','TERMINATE')`);
     stWhere.push(`(
       st.to_state LIKE 'SUSPENDED%'
       OR st.to_state IN ('DEPROVISIONED', 'DEPARTED')
     )`);
+    alWhere.push(`al.action IN ('USER_SUSPEND','USER_TERMINATE','USER_DEPROVISION')`);
   } else if (ACTIVATION_EVENTS.has(eventFilter)) {
     leWhere.push('le.event_type = ?');
     leParams.push(eventFilter);
     if (eventFilter === 'SUSPEND') {
       stWhere.push(`st.to_state LIKE 'SUSPENDED%'`);
+      alWhere.push(`al.action = 'USER_SUSPEND'`);
     } else if (eventFilter === 'TERMINATE') {
       stWhere.push(`st.to_state IN ('DEPROVISIONED', 'DEPARTED')`);
+      alWhere.push(`al.action IN ('USER_TERMINATE','USER_DEPROVISION')`);
     } else if (eventFilter === 'UNSUSPEND') {
       stWhere.push(`(st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%')`);
+      alWhere.push(`al.action = 'USER_UNSUSPEND'`);
     } else if (eventFilter === 'REHIRE') {
       stWhere.push(`(st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED'))`);
+      alWhere.push('1=0');
     }
   }
 
@@ -676,9 +732,11 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
     leParams.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
     stWhere.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR st.emp_id LIKE ? OR st.actor_id LIKE ? OR st.reason_code LIKE ?)');
     stParams.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    alWhere.push('(e.full_name LIKE ? OR e.email_corp LIKE ? OR al.actor LIKE ? OR al.target LIKE ? OR CAST(al.payload AS CHAR) LIKE ?)');
+    alParams.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   }
 
-  const unionSql = `
+  const lifecycleSql = `
     SELECT CONCAT('L', le.id) AS id, le.emp_id, e.full_name, e.email_corp,
            CAST(le.event_type AS CHAR) AS event_type,
            le.old_state, le.new_state, CAST(le.reason AS CHAR) AS reason,
@@ -686,7 +744,9 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
       FROM lifecycle_events le
       LEFT JOIN employees e ON e.emp_id = le.emp_id
      WHERE ${leWhere.join(' AND ')}
-    UNION ALL
+  `;
+
+  const fsmSql = `
     SELECT CONCAT('S', st.id) AS id, st.emp_id, e.full_name, e.email_corp,
            CASE
              WHEN st.to_state LIKE 'SUSPENDED%' THEN 'SUSPEND'
@@ -703,6 +763,41 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
      WHERE ${stWhere.join(' AND ')}
   `;
 
+  const auditSql = `
+    SELECT CONCAT('A', al.id) AS id,
+           CASE
+             WHEN al.target LIKE 'employee:%' THEN SUBSTRING(al.target, 10)
+             ELSE al.target
+           END AS emp_id,
+           e.full_name, e.email_corp,
+           CASE
+             WHEN al.action = 'USER_UNSUSPEND' THEN 'UNSUSPEND'
+             WHEN al.action IN ('USER_TERMINATE', 'USER_DEPROVISION') THEN 'TERMINATE'
+             ELSE 'SUSPEND'
+           END AS event_type,
+           CAST(NULL AS CHAR) AS old_state,
+           CAST(NULL AS CHAR) AS new_state,
+           CAST(al.payload AS CHAR) AS reason,
+           al.actor AS initiated_by,
+           al.ts,
+           'audit' AS source
+      FROM audit_log al
+      LEFT JOIN employees e
+        ON e.emp_id = CASE
+             WHEN al.target LIKE 'employee:%' THEN SUBSTRING(al.target, 10)
+             ELSE al.target
+           END
+     WHERE ${alWhere.join(' AND ')}
+  `;
+
+  const parts: string[] = [lifecycleSql, auditSql];
+  const params: unknown[] = [...leParams, ...alParams];
+  if (hasStateTransitions) {
+    parts.splice(1, 0, fsmSql);
+    params.splice(leParams.length, 0, ...stParams);
+  }
+  const unionSql = parts.join('\n    UNION ALL\n');
+
   let totalRow: { n: number } | null;
   let rows: Array<{
     id: string; emp_id: string; full_name: string | null; email_corp: string | null;
@@ -713,7 +808,7 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
   try {
     totalRow = await queryOne<{ n: number }>(
       `SELECT COUNT(*) AS n FROM (${unionSql}) AS u`,
-      [...leParams, ...stParams],
+      params,
     );
 
     const fetchLimit = exportCsv ? MAX_EXPORT : limit;
@@ -725,7 +820,7 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
          FROM (${unionSql}) AS u
         ORDER BY u.ts DESC
         LIMIT ? OFFSET ?`,
-      [...leParams, ...stParams, fetchLimit, fetchOffset],
+      [...params, fetchLimit, fetchOffset],
     );
   } catch (err) {
     logger.error({ err }, 'user-activation query failed');
@@ -762,6 +857,9 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
       offset,
       from: from ?? null,
       to: to ?? null,
+      sources: hasStateTransitions
+        ? ['lifecycle_events', 'state_transitions', 'audit_log']
+        : ['lifecycle_events', 'audit_log'],
     },
   });
 }));
