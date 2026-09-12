@@ -1130,7 +1130,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-12 — Persist SCIM disable on SAML app edit
+### b7e2e16 — 2026-09-12 — Persist SCIM disable on SAML app edit
 
 **Why** — Unchecking **Enable SCIM provisioning** and saving left SCIM on: the UI returned `null` and skipped the API call, so the checkbox reappeared checked on reopen.
 
