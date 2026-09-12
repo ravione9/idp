@@ -1130,6 +1130,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-12 — Fix user-activation UNION collation mismatch
+
+**Why** — Audit → User activation failed with `Illegal mix of collations for operation 'UNION'` because `lifecycle_events`, `state_transitions`, `audit_log`, and `employees` use mixed utf8mb4 collations in prod.
+
+**What changed:** **`src/api/admin-audit.ts`** — coerce all UNION string columns with `CONVERT(... USING utf8mb4) COLLATE utf8mb4_unicode_ci`.
+
 ### (pending) — 2026-09-12 — Create missing state_transitions table for activation audit
 
 **Why** — Prod DB `idp` had no `state_transitions` table (only defined in `schema.sql`, never shipped as a migration), so Audit → User activation & deactivation failed with `Table 'idp.state_transitions' doesn't exist`.

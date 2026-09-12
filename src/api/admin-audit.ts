@@ -736,51 +736,68 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
     alParams.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   }
 
+  // Prod tables differ in collation (utf8mb4_general_ci vs unicode_ci); force one for UNION.
+  const uc = (expr: string) => `CONVERT(${expr} USING utf8mb4) COLLATE utf8mb4_unicode_ci`;
+
   const lifecycleSql = `
-    SELECT CONCAT('L', le.id) AS id, le.emp_id, e.full_name, e.email_corp,
-           CAST(le.event_type AS CHAR) AS event_type,
-           le.old_state, le.new_state, CAST(le.reason AS CHAR) AS reason,
-           le.initiated_by, le.ts, 'admin' AS source
+    SELECT ${uc(`CONCAT('L', le.id)`)} AS id,
+           ${uc('le.emp_id')} AS emp_id,
+           ${uc('e.full_name')} AS full_name,
+           ${uc('e.email_corp')} AS email_corp,
+           ${uc('CAST(le.event_type AS CHAR)')} AS event_type,
+           ${uc('le.old_state')} AS old_state,
+           ${uc('le.new_state')} AS new_state,
+           ${uc('CAST(le.reason AS CHAR)')} AS reason,
+           ${uc('le.initiated_by')} AS initiated_by,
+           le.ts,
+           ${uc(`'admin'`)} AS source
       FROM lifecycle_events le
       LEFT JOIN employees e ON e.emp_id = le.emp_id
      WHERE ${leWhere.join(' AND ')}
   `;
 
   const fsmSql = `
-    SELECT CONCAT('S', st.id) AS id, st.emp_id, e.full_name, e.email_corp,
-           CASE
+    SELECT ${uc(`CONCAT('S', st.id)`)} AS id,
+           ${uc('st.emp_id')} AS emp_id,
+           ${uc('e.full_name')} AS full_name,
+           ${uc('e.email_corp')} AS email_corp,
+           ${uc(`CASE
              WHEN st.to_state LIKE 'SUSPENDED%' THEN 'SUSPEND'
              WHEN st.to_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'TERMINATE'
              WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state LIKE 'SUSPENDED%' THEN 'UNSUSPEND'
              WHEN st.to_state IN ('ACTIVE', 'REACTIVATED') AND st.from_state IN ('DEPROVISIONED', 'DEPARTED') THEN 'REHIRE'
              ELSE 'MOVER'
-           END AS event_type,
-           st.from_state AS old_state, st.to_state AS new_state,
-           CAST(st.reason_code AS CHAR) AS reason, st.actor_id AS initiated_by, st.ts,
-           'fsm' AS source
+           END`)} AS event_type,
+           ${uc('st.from_state')} AS old_state,
+           ${uc('st.to_state')} AS new_state,
+           ${uc('CAST(st.reason_code AS CHAR)')} AS reason,
+           ${uc('st.actor_id')} AS initiated_by,
+           st.ts,
+           ${uc(`'fsm'`)} AS source
       FROM state_transitions st
       LEFT JOIN employees e ON e.emp_id = st.emp_id
      WHERE ${stWhere.join(' AND ')}
   `;
 
   const auditSql = `
-    SELECT CONCAT('A', al.id) AS id,
-           CASE
+    SELECT ${uc(`CONCAT('A', al.id)`)} AS id,
+           ${uc(`CASE
              WHEN al.target LIKE 'employee:%' THEN SUBSTRING(al.target, 10)
              ELSE al.target
-           END AS emp_id,
-           e.full_name, e.email_corp,
-           CASE
+           END`)} AS emp_id,
+           ${uc('e.full_name')} AS full_name,
+           ${uc('e.email_corp')} AS email_corp,
+           ${uc(`CASE
              WHEN al.action = 'USER_UNSUSPEND' THEN 'UNSUSPEND'
              WHEN al.action IN ('USER_TERMINATE', 'USER_DEPROVISION') THEN 'TERMINATE'
              ELSE 'SUSPEND'
-           END AS event_type,
-           CAST(NULL AS CHAR) AS old_state,
-           CAST(NULL AS CHAR) AS new_state,
-           CAST(al.payload AS CHAR) AS reason,
-           al.actor AS initiated_by,
+           END`)} AS event_type,
+           ${uc('CAST(NULL AS CHAR)')} AS old_state,
+           ${uc('CAST(NULL AS CHAR)')} AS new_state,
+           ${uc('CAST(al.payload AS CHAR)')} AS reason,
+           ${uc('al.actor')} AS initiated_by,
            al.ts,
-           'audit' AS source
+           ${uc(`'audit'`)} AS source
       FROM audit_log al
       LEFT JOIN employees e
         ON e.emp_id = CASE
