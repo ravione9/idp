@@ -1130,7 +1130,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-12 — Audit: user activation log tab + fix empty app provisioning log
+### 430e693 — 2026-09-12 — Audit: user activation log tab + fix empty app provisioning log
 
 **Why** — Operators needed a dedicated Audit tab for portal activate/deactivate evidence, and App provisioning log often appeared empty when migration `064` was missing or historical SAML assertions were never copied into `app_provision_log`.
 
