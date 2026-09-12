@@ -1130,6 +1130,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-12 — Fix User activation audit tab Internal server error
+
+**Why** — `GET /api/admin/audit/user-activation` returned HTTP 500 on prod; the UNION query mixed ENUM/TEXT types and used fragile CASE…NULL filters unlike the known-good lifecycle report.
+
+**What changed:** **`src/api/admin-audit.ts`** — align filters with lifecycle report SQL, CAST ENUM/TEXT columns for UNION safety, compute activation kind in JS, return SQL error message to the UI.
+
 ### 430e693 — 2026-09-12 — Audit: user activation log tab + fix empty app provisioning log
 
 **Why** — Operators needed a dedicated Audit tab for portal activate/deactivate evidence, and App provisioning log often appeared empty when migration `064` was missing or historical SAML assertions were never copied into `app_provision_log`.
