@@ -1987,7 +1987,7 @@ async function downloadAuditCsv(url, filename) {
 }
 
 export async function viewAudit(content, initialTab = 'saml') {
-  const tabs = ['saml', 'system', 'auth', 'sessions', 'sso', 'provisioning'];
+  const tabs = ['saml', 'system', 'auth', 'sessions', 'sso', 'provisioning', 'activation'];
   const validTab = tabs.includes(initialTab) ? initialTab : 'saml';
   const wrap = el(`<div class="ent-page">${header('Audit & SSO Reports', 'Low-level audit trails, login forensics, session history, and SSO analytics for compliance')}
     <div class="inline-tabs" id="audit-tabs" style="margin-bottom:1rem">
@@ -1996,7 +1996,8 @@ export async function viewAudit(content, initialTab = 'saml') {
       <button type="button" class="inline-tab${validTab === 'auth' ? ' active' : ''}" data-tab="auth">Auth attempts</button>
       <button type="button" class="inline-tab${validTab === 'sessions' ? ' active' : ''}" data-tab="sessions">Sessions</button>
       <button type="button" class="inline-tab${validTab === 'sso' ? ' active' : ''}" data-tab="sso">SSO analytics</button>
-      <button type="button" class="inline-tab${validTab === 'provisioning' ? ' active' : ''}" data-tab="provisioning">User provisioning log</button>
+      <button type="button" class="inline-tab${validTab === 'provisioning' ? ' active' : ''}" data-tab="provisioning">App provisioning log</button>
+      <button type="button" class="inline-tab${validTab === 'activation' ? ' active' : ''}" data-tab="activation">User activation &amp; deactivation</button>
     </div>
     <div id="aud-summary" class="stat-grid audit-summary-grid" style="margin-bottom:1rem"></div>
     <div id="aud-saml" ${validTab !== 'saml' ? 'hidden' : ''}><div class="loading-row"><span class="spinner"></span></div></div>
@@ -2005,6 +2006,7 @@ export async function viewAudit(content, initialTab = 'saml') {
     <div id="aud-sessions" ${validTab !== 'sessions' ? 'hidden' : ''}></div>
     <div id="aud-sso" ${validTab !== 'sso' ? 'hidden' : ''}></div>
     <div id="aud-provisioning" ${validTab !== 'provisioning' ? 'hidden' : ''}></div>
+    <div id="aud-activation" ${validTab !== 'activation' ? 'hidden' : ''}></div>
   </div>`);
   content.replaceChildren(wrap);
   const panels = {
@@ -2014,6 +2016,7 @@ export async function viewAudit(content, initialTab = 'saml') {
     sessions: wrap.querySelector('#aud-sessions'),
     sso: wrap.querySelector('#aud-sso'),
     provisioning: wrap.querySelector('#aud-provisioning'),
+    activation: wrap.querySelector('#aud-activation'),
   };
   const state = {
     saml: { from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', binding: '', offset: 0, limit: 50 },
@@ -2021,6 +2024,7 @@ export async function viewAudit(content, initialTab = 'saml') {
     auth: { from: isoDateDaysAgo(30), to: todayIso(), q: '', ip: '', success: '', reason: '', offset: 0, limit: 50 },
     sessions: { from: isoDateDaysAgo(30), to: todayIso(), q: '', ip: '', status: '', iss: '', offset: 0, limit: 50 },
     provisioning: { from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', action: '', status: '', offset: 0, limit: 50 },
+    activation: { from: isoDateDaysAgo(90), to: todayIso(), q: '', eventType: '', kind: '', offset: 0, limit: 50 },
   };
 
   async function refreshSummary(from, to) {
@@ -2065,6 +2069,10 @@ export async function viewAudit(content, initialTab = 'saml') {
       state.provisioning.app = panel.querySelector('.audit-app')?.value.trim() || '';
       state.provisioning.action = panel.querySelector('.audit-action')?.value || '';
       state.provisioning.status = panel.querySelector('.audit-status')?.value || '';
+    } else if (kind === 'activation') {
+      state.activation.q = panel.querySelector('.audit-q')?.value.trim() || '';
+      state.activation.kind = panel.querySelector('.audit-kind')?.value || '';
+      state.activation.eventType = panel.querySelector('.audit-event')?.value || '';
     }
     return state[kind];
   }
@@ -2086,8 +2094,8 @@ export async function viewAudit(content, initialTab = 'saml') {
     panel.querySelector('.audit-reset')?.addEventListener('click', () => {
       state[kind] = {
         ...state[kind],
-        from: isoDateDaysAgo(30), to: todayIso(), q: '', app: '', binding: '', actor: '', action: '', ip: '',
-        success: '', reason: '', status: '', iss: '', offset: 0,
+        from: isoDateDaysAgo(kind === 'activation' ? 90 : 30), to: todayIso(), q: '', app: '', binding: '', actor: '', action: '', ip: '',
+        success: '', reason: '', status: '', iss: '', eventType: '', kind: '', offset: 0,
       };
       void reload(true);
     });
@@ -2112,6 +2120,10 @@ export async function viewAudit(content, initialTab = 'saml') {
         if (f.app) params.app = f.app;
         if (f.action) params.action = f.action;
         if (f.status) params.status = f.status;
+      } else if (kind === 'activation') {
+        if (f.q) params.q = f.q;
+        if (f.kind) params.kind = f.kind;
+        if (f.eventType) params.eventType = f.eventType;
       } else {
         if (f.q) params.q = f.q;
         if (f.ip) params.ip = f.ip;
@@ -2122,6 +2134,7 @@ export async function viewAudit(content, initialTab = 'saml') {
         : kind === 'system' ? 'system'
         : kind === 'sessions' ? 'sessions'
         : kind === 'provisioning' ? 'app-provisioning'
+        : kind === 'activation' ? 'user-activation'
         : 'saml';
       try {
         await downloadAuditCsv(api.auditExportUrl(pathKind, params), `${pathKind}-${f.from}-${f.to}.csv`);
@@ -2488,7 +2501,7 @@ export async function viewAudit(content, initialTab = 'saml') {
             <option value="FAILED" ${state.provisioning.status === 'FAILED' ? 'selected' : ''}>Failed</option>
             <option value="SKIPPED" ${state.provisioning.status === 'SKIPPED' ? 'selected' : ''}>Skipped</option>
           </select></div>`)}
-        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">For <strong>SAML apps</strong> (e.g. Slack): access grant/revoke is logged with the SP ACS URL; each SSO login logs a <code>SAML_ASSERTION</code> row when the assertion is POSTed to the application. SCIM apps log outbound API calls when SCIM provisioning is enabled.</p>
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">Application-level provisioning (SCIM outbound + SAML access grants). Each SSO login also logs a <code>SAML_ASSERTION</code> row when the assertion is POSTed to the app ACS. For portal suspend/unsuspend, use the <strong>User activation &amp; deactivation</strong> tab.</p>
         <div class="audit-table-area"><div class="loading-row"><span class="spinner"></span></div></div>`;
       wireFilterChrome(t, 'provisioning', (rb) => loadProvisioning(!!rb));
     }
@@ -2520,7 +2533,10 @@ export async function viewAudit(content, initialTab = 'saml') {
               <td class="muted" style="font-size:0.78rem">${esc(row.detail || '—')}</td>
               <td>${formatJsonCell(row.response_body)}</td>
             </tr>`).join('')}</tbody></table></div>${pagerHtml(meta, f.offset, f.limit)}`
-        : `<div class="card empty-state"><span class="empty-icon">⌖</span>No provisioning events for this filter</div>`;
+        : `<div class="card empty-state"><span class="empty-icon">⌖</span>
+            <p>No app provisioning events for this filter.</p>
+            <p class="muted" style="margin-top:0.5rem;font-size:0.85rem">Events appear after SSO into a SAML app, SCIM provision/deprovision, or app access grant/revoke. Try expanding the date range (default last 30 days).</p>
+          </div>`;
       area.querySelector('.audit-prev')?.addEventListener('click', () => {
         state.provisioning.offset = Math.max(0, state.provisioning.offset - state.provisioning.limit);
         void loadProvisioning();
@@ -2528,6 +2544,77 @@ export async function viewAudit(content, initialTab = 'saml') {
       area.querySelector('.audit-next')?.addEventListener('click', () => {
         state.provisioning.offset += state.provisioning.limit;
         void loadProvisioning();
+      });
+    } catch (err) {
+      area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
+    }
+  }
+
+  function activationKindBadge(kind, eventType) {
+    if (kind === 'ACTIVATION' || eventType === 'UNSUSPEND' || eventType === 'REHIRE') {
+      return '<span class="badge badge-success">Activation</span>';
+    }
+    return '<span class="badge badge-danger">Deactivation</span>';
+  }
+
+  async function loadActivation(rebuild = false) {
+    const t = panels.activation;
+    if (rebuild || !t.querySelector('.audit-filter-panel')) {
+      t.innerHTML = `${auditFilterBar(`
+        <div class="form-group"><label class="form-label">User / email</label>
+          <input class="form-input audit-q" placeholder="name, email, actor" value="${esc(state.activation.q)}"></div>
+        <div class="form-group"><label class="form-label">Kind</label>
+          <select class="form-select audit-kind">
+            <option value="">All</option>
+            <option value="activation" ${state.activation.kind === 'activation' ? 'selected' : ''}>Activation</option>
+            <option value="deactivation" ${state.activation.kind === 'deactivation' ? 'selected' : ''}>Deactivation</option>
+          </select></div>
+        <div class="form-group"><label class="form-label">Event</label>
+          <select class="form-select audit-event">
+            <option value="">All</option>
+            ${['SUSPEND', 'UNSUSPEND', 'TERMINATE', 'REHIRE'].map((e) =>
+              `<option value="${e}" ${state.activation.eventType === e ? 'selected' : ''}>${e}</option>`).join('')}
+          </select></div>`)}
+        <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">Portal user activate/deactivate evidence from admin lifecycle actions and FSM transitions (directory sync, Attendance IGA). Separate from application SCIM provisioning.</p>
+        <div class="audit-table-area"><div class="loading-row"><span class="spinner"></span></div></div>`;
+      wireFilterChrome(t, 'activation', (rb) => loadActivation(!!rb));
+    }
+    const area = t.querySelector('.audit-table-area');
+    area.innerHTML = `<div class="loading-row"><span class="spinner"></span></div>`;
+    try {
+      const f = readFilters(t, 'activation');
+      await refreshSummary(f.from, f.to);
+      const params = { from: f.from, to: f.to, limit: String(f.limit), offset: String(f.offset) };
+      if (f.q) params.q = f.q;
+      if (f.kind) params.kind = f.kind;
+      if (f.eventType) params.eventType = f.eventType;
+      const r = await api.userActivationAudit(params);
+      const rows = r.data || [];
+      const meta = r.meta || {};
+      t.querySelector('.audit-meta-count').textContent = `${meta.total ?? rows.length} activation events`;
+      area.innerHTML = rows.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>Time</th><th>Kind</th><th>User</th><th>Event</th><th>State change</th><th>Initiated by</th><th>Reason</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr>
+              <td class="muted">${fmtDate(row.ts)}</td>
+              <td>${activationKindBadge(row.kind, row.event_type)}</td>
+              <td class="cell-strong">${esc(row.full_name || row.emp_id)}<br><span class="muted" style="font-size:0.75rem">${esc(row.email_corp || '')}</span></td>
+              <td><span class="badge badge-info">${esc(row.event_type)}</span>${row.source === 'fsm' ? ' <span class="badge badge-neutral">FSM</span>' : ''}</td>
+              <td class="muted">${esc(row.old_state || '—')} → ${esc(row.new_state || '—')}</td>
+              <td class="muted">${esc(row.initiated_by || '—')}</td>
+              <td class="muted truncate" title="${esc(row.reason || '')}">${esc(row.reason || '—')}</td>
+            </tr>`).join('')}</tbody></table></div>${pagerHtml(meta, f.offset, f.limit)}`
+        : `<div class="card empty-state"><span class="empty-icon">↻</span>
+            <p>No activation / deactivation events in this range.</p>
+            <p class="muted" style="margin-top:0.5rem;font-size:0.85rem">Generated by Users → Suspend / Unsuspend / Terminate, directory-driven disables, or Attendance IGA. Default range is last 90 days.</p>
+          </div>`;
+      area.querySelector('.audit-prev')?.addEventListener('click', () => {
+        state.activation.offset = Math.max(0, state.activation.offset - state.activation.limit);
+        void loadActivation();
+      });
+      area.querySelector('.audit-next')?.addEventListener('click', () => {
+        state.activation.offset += state.activation.limit;
+        void loadActivation();
       });
     } catch (err) {
       area.innerHTML = `<div class="alert alert-error">${esc(err.message)}</div>`;
@@ -2547,6 +2634,7 @@ export async function viewAudit(content, initialTab = 'saml') {
       await viewSsoReports(panels.sso, { embed: true });
     }
     else if (name === 'provisioning') await loadProvisioning(true);
+    else if (name === 'activation') await loadActivation(true);
   }
   wrap.querySelector('#audit-tabs').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-tab]');
@@ -2913,6 +3001,8 @@ const REPORT_CATALOG = [
   { key: 'audit',      tab: 'auth',       icon: 'lock',        title: 'Auth attempts',        desc: 'Login forensics and failure reasons', cat: 'Auth & SSO' },
   { key: 'audit',      tab: 'sessions',   icon: 'activity',    title: 'Sessions',             desc: 'Portal session history and force-logout', cat: 'Auth & SSO' },
   { key: 'audit',      tab: 'sso',        icon: 'dashboard',   title: 'SSO analytics',        desc: 'Adoption, dormant users, failed logins', cat: 'Auth & SSO' },
+  { key: 'audit',      tab: 'provisioning', icon: 'users',     title: 'App provisioning log', desc: 'SCIM / SAML grant and SSO assertion delivery', cat: 'Auth & SSO' },
+  { key: 'audit',      tab: 'activation', icon: 'refresh',     title: 'User activation log',  desc: 'Suspend, unsuspend, terminate, rehire evidence', cat: 'Auth & SSO' },
   { key: 'reports',    tab: '',           icon: 'certificate', title: 'Compliance evidence',  desc: 'SOX / GDPR / HIPAA / PCI JSON snapshots', cat: 'Compliance' },
 ];
 

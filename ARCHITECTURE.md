@@ -639,6 +639,7 @@ To add a new migration:
 | `GET` | `/api/admin/audit/integrity` | Verify `audit_log` hash chain |
 | `GET` | `/api/admin/audit/summary` | Compliance counters for a date window (includes sessions created / active) |
 | `GET` | `/api/admin/audit/app-provisioning` | Application user provision/deprovision log (`from`/`to`/`q`/`app`/`action`/`status`; `export=csv`) |
+| `GET` | `/api/admin/audit/user-activation` | Portal user activation/deactivation log from `lifecycle_events` + FSM (`from`/`to`/`q`/`kind`/`eventType`; `export=csv`) |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/radius/clients[/:id]` | RADIUS NAS clients (shared secret sealed at rest) |
 | `POST` | `/api/admin/radius/clients/:id/reveal-secret` | Reveal shared secret for FreeRADIUS config |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/radius/policies[/:id]` | RADIUS auth policies (groups, MFA, reply attrs) |
@@ -806,7 +807,7 @@ Layout: a fixed dark **top primary nav** (workspace) + a **left sidebar** that s
 | **Privileged Access** | Privileged Resources · Privileged Sessions · Credential Vault · System Users — **SUPER_ADMIN only** (PAM AES-GCM vault; no session broker yet). End-user personal vault is under workspace **Vault**, not here. |
 | **Identity Governance** | Certifications · Segregation of Duties · Risk · **Attendance IGA** |
 | **Workflows** | Workflows (tabs: Definitions · Event Triggers · Run History) · Notifications |
-| **Reports** | **Overview** (executive KPIs, trends, report catalog) · **Identity & Access** (access inventory · MFA coverage · lifecycle · access requests · certifications · SoD · app access changes) · Audit & SSO Reports (SSO assertions · System audit · Auth attempts · Sessions · SSO analytics · **User provisioning log**) · Compliance Reports (evidence snapshots) — all with filters + CSV where applicable |
+| **Reports** | **Overview** (executive KPIs, trends, report catalog) · **Identity & Access** (access inventory · MFA coverage · lifecycle · access requests · certifications · SoD · app access changes) · Audit & SSO Reports (SSO assertions · System audit · Auth attempts · Sessions · SSO analytics · **App provisioning log** · **User activation & deactivation**) · Compliance Reports (evidence snapshots) — all with filters + CSV where applicable |
 | **Settings** | General · Branding & Login · License · Tickets · System Health |
 
 **Merged / redirected routes** (bookmarks still work): `loginCustomization`→`branding`, `connectors`→`directorySync`, `eventTriggers`→`workflowLibrary?tab=triggers`, `appDiscovery`→`applications?tab=discovery`, `ssoReports`→`audit?tab=sso`. Groups also exposes Tag Groups under `/?v=groups&tab=tags`.
@@ -1129,6 +1130,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-12 — Audit: user activation log tab + fix empty app provisioning log
+
+**Why** — Operators needed a dedicated Audit tab for portal activate/deactivate evidence, and App provisioning log often appeared empty when migration `064` was missing or historical SAML assertions were never copied into `app_provision_log`.
+
+**What changed:**
+
+- **`migrations/065_app_provision_log_heal.sql`** — ensure `app_provision_log` exists; backfill rows from `saml_assertion_log`.
+- **`src/services/app-provision-log.ts`** — `ensureAppProvisionLogTable()` heal on write when table is missing.
+- **`src/api/admin-audit.ts`** — surface provisioning query errors (no silent empty); `GET /api/admin/audit/user-activation` for suspend/unsuspend/terminate/rehire.
+- **`web/js/views-admin.js`** — Audit tabs: **App provisioning log** + **User activation & deactivation**; report catalog links.
+
 ### 899d411 — 2026-09-09 — AD INBOUND: sync users into portal without disabling AD accounts
 
 **Why** — Production AD connector is inbound-only for now: portal should import users from AD but must not disable, enable, provision, or delete AD accounts when admins suspend users or sync runs outbound reconciliation.
@@ -1344,7 +1356,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/services/app-provision-log.ts`**, **`src/services/app-scim-provision.ts`** — write log rows; SCIM POST/PATCH/DELETE when `applications.provisioning = 1` and `app_protocol_configs` has SCIM `baseUrl` + bearer token.
 - **`src/services/app-access-policy.ts`** — trigger provision on USER grant, deprovision on revoke.
 - **`src/api/admin-audit.ts`** — `GET /api/admin/audit/app-provisioning` (filters + CSV export).
-- **`web/js/views-admin.js`** — Audit & SSO Reports → **User provisioning log** tab.
+- **`web/js/views-admin.js`** — Audit & SSO Reports → **App provisioning log** tab.
 
 **SCIM config** (optional, per app): `{ "baseUrl": "…", "bearerToken": "…" }` in `app_protocol_configs` protocol `SCIM` when outbound SCIM is required.
 
