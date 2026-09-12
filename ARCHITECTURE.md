@@ -1130,7 +1130,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-12 — Fix User activation audit tab Internal server error
+### (pending) — 2026-09-12 — Create missing state_transitions table for activation audit
+
+**Why** — Prod DB `idp` had no `state_transitions` table (only defined in `schema.sql`, never shipped as a migration), so Audit → User activation & deactivation failed with `Table 'idp.state_transitions' doesn't exist`.
+
+**What changed:**
+
+- **`migrations/066_state_transitions.sql`** — create FSM transition history table.
+- **`src/api/admin-audit.ts`** — runtime `CREATE TABLE IF NOT EXISTS` heal; fall back to `lifecycle_events` + `audit_log` if FSM table still unavailable.
+
+### d621432 — 2026-09-12 — Fix User activation audit tab Internal server error
 
 **Why** — `GET /api/admin/audit/user-activation` returned HTTP 500 on prod; the UNION query mixed ENUM/TEXT types and used fragile CASE…NULL filters unlike the known-good lifecycle report.
 
