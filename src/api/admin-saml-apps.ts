@@ -17,7 +17,8 @@ import {
   SAML_MAPPABLE_FIELD_SET,
 } from '../saml/types.js';
 import { enableSamlAppRequestAccess, ensureSamlAppMirrored, enableRequestAccessForAllSamlApps } from '../services/app-access-policy.js';
-import { configureAppScimProvisioning, syncSamlProtocolConfigFromSp } from '../services/app-protocol-config.js';
+import { configureAppScimProvisioning, disableAppScimProvisioning, syncSamlProtocolConfigFromSp } from '../services/app-protocol-config.js';
+import { openSecret } from '../utils/secret-box.js';
 
 const router = Router();
 
@@ -135,6 +136,8 @@ function mapAdminRow(row: Record<string, unknown>) {
     require_mfa:       Number(row['app_require_mfa'] ?? 0) === 1,
     provisioning:      Number(row['app_provisioning'] ?? 0) === 1,
     scim_configured:   Number(row['scim_configured'] ?? 0) === 1,
+    scim_token_stored: Number(row['scim_token_stored'] ?? 0) === 1,
+    scim_base_url:     (row['scim_base_url'] as string | null) ?? null,
   };
 }
 
@@ -193,6 +196,17 @@ router.get('/', async (_req: Request, res: Response): Promise<void> => {
               SELECT 1 FROM app_protocol_configs c
                WHERE c.app_id = a.id AND c.protocol = 'SCIM' AND c.active = 1
             ) AS scim_configured,
+            EXISTS (
+              SELECT 1 FROM app_protocol_configs c
+               WHERE c.app_id = a.id AND c.protocol = 'SCIM'
+            ) AS scim_token_stored,
+            (
+              SELECT JSON_UNQUOTE(JSON_EXTRACT(c.config, '$.baseUrl'))
+                FROM app_protocol_configs c
+               WHERE c.app_id = a.id AND c.protocol = 'SCIM'
+               ORDER BY c.active DESC
+               LIMIT 1
+            ) AS scim_base_url,
             EXISTS (
               SELECT 1 FROM app_group_access_workflows w
                WHERE w.app_id = a.id AND w.active = 1
@@ -488,10 +502,12 @@ router.put('/:id/scim-config', async (req: Request, res: Response): Promise<void
     return;
   }
 
+  // Prefer active config; fall back to inactive so re-enable can keep the sealed token.
   const existing = await queryOne<{ config: unknown }>(
     `SELECT c.config FROM app_protocol_configs c
       INNER JOIN applications a ON a.id = c.app_id
-     WHERE a.slug = ? AND c.protocol = 'SCIM' AND c.active = 1
+     WHERE a.slug = ? AND c.protocol = 'SCIM'
+     ORDER BY c.active DESC
      LIMIT 1`,
     [sp.slug],
   );
@@ -501,7 +517,14 @@ router.put('/:id/scim-config', async (req: Request, res: Response): Promise<void
     const cfg = typeof existing.config === 'string'
       ? JSON.parse(existing.config) as Record<string, unknown>
       : existing.config as Record<string, unknown>;
-    bearerToken = String(cfg['bearerToken'] ?? '').trim();
+    const stored = String(cfg['bearerToken'] ?? '').trim();
+    if (stored) {
+      try {
+        bearerToken = openSecret(stored);
+      } catch {
+        bearerToken = stored;
+      }
+    }
   }
   if (!bearerToken) {
     res.status(400).json({ error: 'bearerToken is required when SCIM is not yet configured' });
@@ -526,6 +549,33 @@ router.put('/:id/scim-config', async (req: Request, res: Response): Promise<void
     res.json({ success: true, slug: sp.slug, provisioning: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Failed to save SCIM config';
+    res.status(400).json({ error: msg });
+  }
+});
+
+// DELETE /:id/scim-config — disable outbound SCIM provisioning (keeps sealed token for re-enable)
+router.delete('/:id/scim-config', async (req: Request, res: Response): Promise<void> => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing application id' });
+    return;
+  }
+
+  const sp = await queryOne<{ slug: string }>(
+    'SELECT slug FROM saml_service_providers WHERE id = ? LIMIT 1',
+    [id],
+  );
+  if (!sp) {
+    res.status(404).json({ error: 'Application not found' });
+    return;
+  }
+
+  try {
+    await disableAppScimProvisioning(sp.slug);
+    logger.info({ id, slug: sp.slug }, 'SCIM provisioning disabled for SAML app');
+    res.json({ success: true, slug: sp.slug, provisioning: false });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to disable SCIM';
     res.status(400).json({ error: msg });
   }
 });

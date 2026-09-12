@@ -111,3 +111,15 @@ export async function configureAppScimProvisioning(
   await setApplicationProvisioning(slug, true);
   logger.info({ slug, baseUrl: scim.baseUrl }, 'SCIM protocol config saved for application');
 }
+
+/** Turn off outbound SCIM (keeps sealed token for optional re-enable). */
+export async function disableAppScimProvisioning(slug: string): Promise<void> {
+  const appId = await getApplicationIdBySlug(slug);
+  if (!appId) throw new Error(`Application catalog row missing for slug ${slug}`);
+  await execute(
+    `UPDATE app_protocol_configs SET active = 0 WHERE app_id = ? AND protocol = 'SCIM'`,
+    [appId],
+  );
+  await setApplicationProvisioning(slug, false);
+  logger.info({ slug }, 'SCIM provisioning disabled for application');
+}
