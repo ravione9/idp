@@ -266,14 +266,15 @@ async function importGoogleDirectoryUsers(
 
       const attrs = await extractGoogleAttrs(gUser, attrMaps, syncSettings);
       const fullName = attrs.full_name || email.split('@')[0] || email;
-      const suspended = gUser.suspended === true;
+      // Only trust an explicit boolean. Missing/undefined must not flip ACTIVE ↔ SUSPENDED_AUTO.
+      const suspendedFlag = gUser.suspended;
 
       const existingLink = await queryOne<{ id: number; emp_id: string }>(
         `SELECT id, emp_id FROM identity_links WHERE \`system\` = 'GOOGLE' AND external_id = ?`,
         [googleId],
       );
 
-      if (suspended) {
+      if (suspendedFlag === true) {
         const targetEmpId = existingLink?.emp_id
           ?? (await queryOne<{ emp_id: string }>(`SELECT emp_id FROM employees WHERE email_corp = ?`, [email]))?.emp_id;
         if (targetEmpId) {
@@ -283,13 +284,31 @@ async function importGoogleDirectoryUsers(
             [fullName, targetEmpId],
           );
           await applyAttrsToEmployee(targetEmpId, attrs, { syncSettings });
-          await applyDirectorySourceDisabled(targetEmpId, 'GOOGLE', 'google_account_suspended');
+          const didSuspend = await applyDirectorySourceDisabled(targetEmpId, 'GOOGLE', 'google_account_suspended');
           linked++;
-          disabled++;
-          recordGoogleInboundUser(userResults, email, fullName, attrs, targetEmpId, 'disabled');
+          if (didSuspend) {
+            disabled++;
+            recordGoogleInboundUser(userResults, email, fullName, attrs, targetEmpId, 'disabled');
+          } else {
+            recordGoogleInboundUser(userResults, email, fullName, attrs, targetEmpId, 'already_disabled');
+          }
         }
         skipped++;
         succeeded++;
+        continue;
+      }
+
+      // Unknown suspended status: refresh attrs only — never change ilg_state / enable / disable.
+      if (suspendedFlag !== false) {
+        if (existingLink?.emp_id) {
+          await applyAttrsToEmployee(existingLink.emp_id, attrs, { syncSettings });
+          linked++;
+          succeeded++;
+          recordGoogleInboundUser(userResults, email, fullName, attrs, existingLink.emp_id, 'linked');
+        } else {
+          skipped++;
+          succeeded++;
+        }
         continue;
       }
 
@@ -299,13 +318,16 @@ async function importGoogleDirectoryUsers(
           [existingLink.emp_id],
         ))?.ilg_state;
 
-        if (currentState === ILGState.SUSPENDED_AUTO) {
-          await applyDirectorySourceEnabled(existingLink.emp_id, 'GOOGLE');
-        }
-
-        const ilgState = currentState
+        let ilgState = currentState
           ? preserveIlgStateOnDirectoryImport(currentState)
           : ILGState.ACTIVE;
+
+        // Google explicitly reports active — unsuspend directory-auto suspends only.
+        if (currentState === ILGState.SUSPENDED_AUTO) {
+          const didEnable = await applyDirectorySourceEnabled(existingLink.emp_id, 'GOOGLE');
+          if (didEnable) ilgState = ILGState.ACTIVE;
+          else ilgState = ILGState.SUSPENDED_AUTO;
+        }
 
         await upsertGoogleIdentityLink(existingLink.emp_id, googleId, 'ACTIVE');
         await execute(
@@ -450,14 +472,16 @@ async function importGoogleDirectoryUsers(
              WHERE emp_id = ?`,
           [row.emp_id],
         );
-        await applyDirectorySourceDisabled(row.emp_id, 'GOOGLE', 'missing_from_google_directory');
-        disabled++;
-        await writeDirectoryUserAudit({
-          empId: row.emp_id,
-          action: 'GOOGLE_SYNC_DISABLE',
-          source: 'GOOGLE',
-          detail: { reason: 'missing_from_google_directory' },
-        });
+        const didSuspend = await applyDirectorySourceDisabled(row.emp_id, 'GOOGLE', 'missing_from_google_directory');
+        if (didSuspend) {
+          disabled++;
+          await writeDirectoryUserAudit({
+            empId: row.emp_id,
+            action: 'GOOGLE_SYNC_DISABLE',
+            source: 'GOOGLE',
+            detail: { reason: 'missing_from_google_directory' },
+          });
+        }
       } catch (err) {
         failed++;
         errors.push(`${row.emp_id}: disable failed — ${err instanceof Error ? err.message : String(err)}`);

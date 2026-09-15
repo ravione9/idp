@@ -1128,6 +1128,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### 3e536e4 — 2026-09-15 — Stop Google sync re-suspending already disabled users
+
+**Why** — Audit → User activation showed ~190k `ACTIVE → SUSPENDED_AUTO` / `DIRECTORY_DISABLED:GOOGLE` rows on each Google sync for store accounts that were already deactivated. Inbound treated a missing `suspended` flag as “active”, reactivated `SUSPENDED_AUTO` users, then re-suspended them when Google reported `suspended: true`.
+
+**What changed:**
+
+- **`src/services/google-sync.ts`** — only flip ILG state when Google sends an explicit `suspended` boolean; skip FSM disable when already non-accessible; count `disabled` only on real transitions.
+- **`src/services/user-lifecycle.ts`** — `applyDirectorySourceDisabled` / `Enabled` return whether a transition was applied.
+
 ### b7e2e16 — 2026-09-12 — Persist SCIM disable on SAML app edit
 
 **Why** — Unchecking **Enable SCIM provisioning** and saving left SCIM on: the UI returned `null` and skipped the API call, so the checkbox reappeared checked on reopen.

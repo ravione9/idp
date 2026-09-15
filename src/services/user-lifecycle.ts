@@ -299,21 +299,22 @@ export async function terminateUser(empId: string, reason: string, initiatedBy: 
 // Directory sync — propagate disable/enable from AD / Google within sync cycle
 // ---------------------------------------------------------------------------
 
-/** Suspend portal access when AD or Google marks a user disabled (sets ilg_state_since for 24h cleanup). */
+/** Suspend portal access when AD or Google marks a user disabled (sets ilg_state_since for 24h cleanup).
+ *  @returns true when an FSM suspend was applied; false when skipped (already non-accessible). */
 export async function applyDirectorySourceDisabled(
   empId: string,
   source: 'AD' | 'GOOGLE',
   reason: string,
-): Promise<void> {
+): Promise<boolean> {
   const emp = await queryOne<{ emp_id: string; ilg_state: string }>(
     'SELECT emp_id, ilg_state FROM employees WHERE emp_id = ?',
     [empId],
   );
-  if (!emp) return;
+  if (!emp) return false;
 
   if (!isPortalAccessible(emp.ilg_state)) {
     logger.debug({ empId, source, ilg_state: emp.ilg_state }, 'Directory disable: already suspended, skipping side effects');
-    return;
+    return false;
   }
 
   await fsm.transition({
@@ -336,18 +337,20 @@ export async function applyDirectorySourceDisabled(
   }).catch((err) => logger.warn({ empId, source, err }, 'Directory disable: app access revoke failed'));
 
   logger.info({ empId, source, ilg_state: emp.ilg_state }, 'Directory source disabled — portal and app access revoked');
+  return true;
 }
 
-/** Re-enable portal access when directory source reports user active again (does not override admin suspend). */
+/** Re-enable portal access when directory source reports user active again (does not override admin suspend).
+ *  @returns true when an FSM unsuspend was applied. */
 export async function applyDirectorySourceEnabled(
   empId: string,
   source: 'AD' | 'GOOGLE',
-): Promise<void> {
+): Promise<boolean> {
   const emp = await queryOne<{ emp_id: string; ilg_state: string }>(
     'SELECT emp_id, ilg_state FROM employees WHERE emp_id = ?',
     [empId],
   );
-  if (!emp || emp.ilg_state !== ILGState.SUSPENDED_AUTO) return;
+  if (!emp || emp.ilg_state !== ILGState.SUSPENDED_AUTO) return false;
 
   await fsm.transition({
     empId,
@@ -360,6 +363,7 @@ export async function applyDirectorySourceEnabled(
   });
 
   logger.info({ empId, source }, 'Directory source enabled — employee reactivated');
+  return true;
 }
 
 /** Whether inbound sync should preserve a non-active admin/terminal state. */
