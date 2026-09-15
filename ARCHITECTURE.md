@@ -1128,7 +1128,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-15 — Stop Google sync re-suspending already disabled users
+### da3d4b3 — 2026-09-15 — Stop Google sync re-suspending already disabled users
 
 **Why** — Audit → User activation showed ~190k `ACTIVE → SUSPENDED_AUTO` / `DIRECTORY_DISABLED:GOOGLE` rows on each Google sync for store accounts that were already deactivated. Inbound treated a missing `suspended` flag as “active”, reactivated `SUSPENDED_AUTO` users, then re-suspended them when Google reported `suspended: true`.
 
