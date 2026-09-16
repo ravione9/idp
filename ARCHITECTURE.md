@@ -1128,7 +1128,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-16 — Prevent AD outbound from creating duplicate users when email already exists
+### cb2d753 — 2026-09-16 — Prevent AD outbound from creating duplicate users when email already exists
 
 **Why** — Outbound AD provision searched only the connector Base DN / Sync OUs (e.g. `OU=IT`). Existing accounts in other OUs (e.g. `OU=Offline` with the same `mail`) were missed, so sync created a second user in IT with a generated sAMAccountName (e.g. `kapilavai.shankar`) while reusing the same email.
 
