@@ -390,39 +390,53 @@ export class ADAdapter extends BaseAdapter {
   }
 
   /**
-   * Find an AD user by their corporate email (mail attribute).
-   * Used for reconciliation when employeeID is not yet set on existing accounts.
+   * Find an AD user by their corporate email (mail or UPN).
+   * Searches the full domain root so accounts in Offline/other OUs are found
+   * before outbound provision creates a duplicate in the New User OU.
    */
   async getUserByEmail(email: string): Promise<AdapterResult<UserInfo>> {
     return this.safe(async () => {
-      const entries = await this.search(
-        `(&(objectClass=user)(|(mail=${ldapEscape(email)})(userPrincipalName=${ldapEscape(email)})))`,
-        ['*'],
-      );
-
+      const entries = await this.searchUsersByEmailDomainWide(email);
       if (entries.length === 0) {
         throw new ADNotFoundError(`AD user not found for mail=${email}`);
       }
-
-      const samName = String(entries[0].sAMAccountName ?? '');
-      return this.buildUserInfo(samName, entries[0]);
+      const entry = pickBestAdUserForEmail(entries, email);
+      const samName = getLdapAttr(entry, 'sAMAccountName');
+      return this.buildUserInfo(samName, entry);
     }, (err) => err instanceof ADNotFoundError);
   }
 
   /** Full LDAP entry by corporate email (all attributes) — used for emp_id resolution. */
   async getDirectoryEntryByEmail(email: string): Promise<AdapterResult<ADUser>> {
     return this.safe(async () => {
-      const entries = await this.search(
-        `(&(objectClass=user)(|(mail=${ldapEscape(email)})(userPrincipalName=${ldapEscape(email)})))`,
-        ['*'],
-      );
-
+      const entries = await this.searchUsersByEmailDomainWide(email);
       if (entries.length === 0) {
         throw new ADNotFoundError(`AD user not found for mail=${email}`);
       }
-
-      return entries[0];
+      return pickBestAdUserForEmail(entries, email);
     }, (err) => err instanceof ADNotFoundError);
+  }
+
+  /** Domain-wide mail/UPN lookup (not limited to connector Base DN / Sync OUs). */
+  private async searchUsersByEmailDomainWide(email: string): Promise<ADUser[]> {
+    const esc = ldapEscape(email.trim().toLowerCase());
+    const filter = `(&(objectClass=user)(|(mail=${esc})(userPrincipalName=${esc})))`;
+    const attrs = [
+      'dn', 'sAMAccountName', 'mail', 'userPrincipalName', 'displayName',
+      'userAccountControl', 'employeeID',
+    ];
+    const atRoot = await this.searchAt(this.dir.domainRoot, filter, attrs);
+    if (atRoot.length > 0) {
+      if (atRoot.length > 1) {
+        logger.warn(
+          { email, count: atRoot.length, dns: atRoot.map((e) => getLdapAttr(e, 'dn')).slice(0, 5) },
+          'AD: multiple users share the same mail/UPN — linking the best match',
+        );
+      }
+      return atRoot;
+    }
+    // Fallback if domain-root search is denied by ACL — try connector base.
+    return this.search(filter, attrs);
   }
 
   /** Full LDAP entry by sAMAccountName — used when IdP email_corp is stale vs AD UPN. */
@@ -979,6 +993,26 @@ export class ADAdapter extends BaseAdapter {
         throw new Error(`sAMAccountName '${sam}' already exists in AD (${existing[0].dn})`);
       }
 
+      const emailNorm = params.emailCorp.trim().toLowerCase();
+      const mailClash = await this.searchUsersByEmailDomainWide(emailNorm);
+      if (mailClash.length > 0) {
+        const hit = pickBestAdUserForEmail(mailClash, emailNorm);
+        throw new Error(
+          `AD user already exists for email ${emailNorm} (${getLdapAttr(hit, 'dn')}, ` +
+          `sAMAccountName=${getLdapAttr(hit, 'sAMAccountName')}) — link existing account instead of creating a duplicate in ${ou}`,
+        );
+      }
+      const upnClash = await this.searchAt(
+        this.dir.domainRoot,
+        `(&(objectClass=user)(userPrincipalName=${ldapEscape(userPrincipalName)}))`,
+        ['dn', 'sAMAccountName'],
+      );
+      if (upnClash.length > 0) {
+        throw new Error(
+          `userPrincipalName '${userPrincipalName}' already exists in AD (${getLdapAttr(upnClash[0], 'dn')})`,
+        );
+      }
+
       const nameParts = params.fullName.trim().split(/\s+/).filter(Boolean);
       const givenName = sanitizeAdString(nameParts[0] ?? sam, 64);
       const sn = sanitizeAdString(nameParts.length > 1 ? nameParts.slice(1).join(' ') : givenName, 64);
@@ -1072,6 +1106,28 @@ export function getLdapAttr(entry: Record<string, unknown>, name: string): strin
   if (Array.isArray(val)) return val[0] != null ? String(val[0]) : '';
   if (Buffer.isBuffer(val)) return val.toString('utf8');
   return val != null ? String(val) : '';
+}
+
+/**
+ * When several AD accounts share mail/UPN (e.g. Offline + IT duplicates), prefer:
+ * 1) exact UPN match to the email, 2) enabled accounts, 3) not Offline/disabled OUs.
+ */
+export function pickBestAdUserForEmail(entries: ADUser[], email: string): ADUser {
+  if (entries.length === 1) return entries[0]!;
+  const emailNorm = email.trim().toLowerCase();
+  const scored = entries.map((entry) => {
+    const upn = getLdapAttr(entry, 'userPrincipalName').trim().toLowerCase();
+    const dn = getLdapAttr(entry, 'dn').toLowerCase();
+    const uac = parseInt(getLdapAttr(entry, 'userAccountControl') || '512', 10);
+    const disabled = (uac & UAC_ACCOUNTDISABLE) !== 0;
+    let score = 0;
+    if (upn === emailNorm) score += 100;
+    if (!disabled) score += 40;
+    if (!/(?:^|,)ou=(?:offline|disabled|delete|deprovision)/i.test(dn)) score += 20;
+    return { entry, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]!.entry;
 }
 
 /** Convert AD objectGUID (binary or pre-formatted string) to canonical UUID text. */
