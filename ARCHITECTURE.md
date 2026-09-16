@@ -1128,6 +1128,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### 33a13e2 — 2026-09-16 — Prevent AD outbound from creating duplicate users when email already exists
+
+**Why** — Outbound AD provision searched only the connector Base DN / Sync OUs (e.g. `OU=IT`). Existing accounts in other OUs (e.g. `OU=Offline` with the same `mail`) were missed, so sync created a second user in IT with a generated sAMAccountName (e.g. `kapilavai.shankar`) while reusing the same email.
+
+**What changed:**
+
+- **`src/adapters/ad-adapter.ts`** — email/UPN lookup for reconcile + create runs against the **domain root**; refuse `createUser` when mail/UPN already exists; pick best match when duplicates already exist.
+- **`connectors/ad-agent/src/ad-ldap.ts`** — same domain-wide find-by-email + create guard for on-prem agent provisioning.
+
 ### 8e4ed24 — 2026-09-16 — Stop AD sync mass re-activation and duplicate Slack DEPROVISION logs
 
 **Why** — AD inbound sync treated every enabled AD account as a reason to unsuspend `SUSPENDED_AUTO` (`DIRECTORY_ENABLED:AD`), waking users suspended by Google/Attendance/IGA. Each real suspend also called SCIM twice (`DIRECTORY_DISABLE` + `FSM:SUSPENDED_AUTO`), flooding App provisioning with SKIPPED “user not found in Slack” rows.

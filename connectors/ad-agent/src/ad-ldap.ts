@@ -324,13 +324,31 @@ export class AdLdapClient {
   }
 
   async findByEmail(email: string): Promise<Record<string, unknown> | null> {
-    const esc = ldapEscape(email);
-    const entries = await this.search(
-      this.ad.baseDn,
-      `(&(objectClass=user)(|(mail=${esc})(userPrincipalName=${esc})))`,
-      ['sAMAccountName', 'dn', 'mail'],
-    );
-    return entries[0] ?? null;
+    const esc = ldapEscape(email.trim().toLowerCase());
+    const filter = `(&(objectClass=user)(|(mail=${esc})(userPrincipalName=${esc})))`;
+    const attrs = ['sAMAccountName', 'dn', 'mail', 'userPrincipalName', 'userAccountControl'];
+    const domainRoot = domainRootFromBaseDn(this.ad.baseDn) || this.ad.baseDn;
+    let entries = await this.search(domainRoot, filter, attrs);
+    if (!entries.length && domainRoot.toLowerCase() !== this.ad.baseDn.trim().toLowerCase()) {
+      entries = await this.search(this.ad.baseDn, filter, attrs);
+    }
+    if (!entries.length) return null;
+    if (entries.length === 1) return entries[0]!;
+    const emailNorm = email.trim().toLowerCase();
+    const ranked = [...entries].sort((a, b) => {
+      const score = (e: Record<string, unknown>) => {
+        const upn = getAttr(e, 'userPrincipalName').toLowerCase();
+        const dn = getAttr(e, 'dn').toLowerCase();
+        const uac = parseInt(getAttr(e, 'userAccountControl') || '512', 10);
+        let s = 0;
+        if (upn === emailNorm) s += 100;
+        if ((uac & UAC_DISABLE) === 0) s += 40;
+        if (!/(?:^|,)ou=(?:offline|disabled|delete|deprovision)/i.test(dn)) s += 20;
+        return s;
+      };
+      return score(b) - score(a);
+    });
+    return ranked[0]!;
   }
 
   async createUser(params: {
@@ -349,20 +367,39 @@ export class AdLdapClient {
 
     await this.connect();
     const sam = params.sAMAccountName.slice(0, 20).replace(/[^a-zA-Z0-9._-]/g, '');
+    const domainRoot = domainRootFromBaseDn(this.ad.baseDn) || this.ad.baseDn;
     const ouRdn = params.targetOuRdn?.trim()
       || (this.ad.targetOu?.includes('=') ? this.ad.targetOu : `OU=${this.ad.targetOu ?? 'Users'}`);
-    const dn = `CN=${sam},${ouRdn},${this.ad.baseDn}`;
+    const dn = `CN=${sam},${ouRdn},${domainRoot}`;
     const configuredDomains = parseUpnDomains(this.ad.upnDomain, this.ad.baseDn);
     const upnDomain = params.upnDomain?.trim()
       || resolveUpnSuffixForProvision(params.emailCorp, configuredDomains, this.ad.baseDn);
+    const emailNorm = params.emailCorp.trim().toLowerCase();
+    const upn = `${sam}@${upnDomain}`.toLowerCase();
+
+    const existingByEmail = await this.findByEmail(emailNorm);
+    if (existingByEmail) {
+      throw new Error(
+        `AD user already exists for email ${emailNorm} (${getAttr(existingByEmail, 'dn')}) — link instead of creating duplicate`,
+      );
+    }
+    const existingSam = await this.search(
+      domainRoot,
+      `(&(objectClass=user)(sAMAccountName=${ldapEscape(sam)}))`,
+      ['dn'],
+    );
+    if (existingSam.length) {
+      throw new Error(`sAMAccountName '${sam}' already exists (${getAttr(existingSam[0]!, 'dn')})`);
+    }
+
     const tempPassword = crypto.randomBytes(12).toString('base64url').slice(0, 16) + 'Aa1!';
 
     const entry: Record<string, string | string[]> = {
       objectClass: ['top', 'person', 'organizationalPerson', 'user'],
       cn: sam,
       sAMAccountName: sam,
-      userPrincipalName: `${sam}@${upnDomain}`.toLowerCase(),
-      mail: params.emailCorp.toLowerCase(),
+      userPrincipalName: upn,
+      mail: emailNorm,
       displayName: params.fullName.slice(0, 256),
       givenName: params.fullName.split(/\s+/)[0]?.slice(0, 64) ?? sam,
       sn: params.fullName.split(/\s+/).slice(1).join(' ').slice(0, 64) || sam,
