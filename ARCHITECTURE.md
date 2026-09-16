@@ -1128,7 +1128,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-16 — Stop AD sync mass re-activation and duplicate Slack DEPROVISION logs
+### 8e4ed24 — 2026-09-16 — Stop AD sync mass re-activation and duplicate Slack DEPROVISION logs
 
 **Why** — AD inbound sync treated every enabled AD account as a reason to unsuspend `SUSPENDED_AUTO` (`DIRECTORY_ENABLED:AD`), waking users suspended by Google/Attendance/IGA. Each real suspend also called SCIM twice (`DIRECTORY_DISABLE` + `FSM:SUSPENDED_AUTO`), flooding App provisioning with SKIPPED “user not found in Slack” rows.
 
