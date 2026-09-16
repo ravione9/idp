@@ -1092,19 +1092,22 @@ export async function processInboundAdUsers(
       const existingState = cached?.ilg_state;
       const wasSuspendedAuto = existingState === ILGState.SUSPENDED_AUTO;
 
+      let didEnable = false;
       if (wasSuspendedAuto) {
-        await applyDirectorySourceEnabled(targetEmpId, 'AD');
+        didEnable = await applyDirectorySourceEnabled(targetEmpId, 'AD');
       }
 
       const linkStatus = 'ACTIVE';
-      const ilgState = existingState
-        ? preserveIlgStateOnDirectoryImport(existingState)
-        : ILGState.ACTIVE;
+      const ilgState = didEnable
+        ? ILGState.ACTIVE
+        : (existingState
+          ? preserveIlgStateOnDirectoryImport(existingState)
+          : ILGState.ACTIVE);
 
       if (cached) {
         if (!employeeProfileChanged(cached, {
           fullName, emailCorp, department, title, adObjectGuid, ilgState,
-        }) && !wasSuspendedAuto) {
+        }) && !didEnable) {
           cache.empByAdSam.set(sam.toLowerCase(), targetEmpId);
           linked++;
           succeeded++;

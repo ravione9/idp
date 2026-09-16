@@ -329,18 +329,14 @@ export async function applyDirectorySourceDisabled(
 
   await revokeAllSessions(empId);
 
-  await revokeAllUserAppAccess({
-    empId,
-    revokedBy: 'directory-sync',
-    source: 'DIRECTORY_DISABLE',
-    reason: `${source}:${reason}`,
-  }).catch((err) => logger.warn({ empId, source, err }, 'Directory disable: app access revoke failed'));
+  // App/SCIM revoke is handled once by the FSM transition to SUSPENDED_* (avoid duplicate SKIPPED rows).
 
-  logger.info({ empId, source, ilg_state: emp.ilg_state }, 'Directory source disabled — portal and app access revoked');
+  logger.info({ empId, source, ilg_state: emp.ilg_state }, 'Directory source disabled — portal access revoked');
   return true;
 }
 
 /** Re-enable portal access when directory source reports user active again (does not override admin suspend).
+ *  Only unsuspends if the latest auto-suspend was from the same directory source (AD/Google).
  *  @returns true when an FSM unsuspend was applied. */
 export async function applyDirectorySourceEnabled(
   empId: string,
@@ -351,6 +347,34 @@ export async function applyDirectorySourceEnabled(
     [empId],
   );
   if (!emp || emp.ilg_state !== ILGState.SUSPENDED_AUTO) return false;
+
+  // Do not wake users suspended by Attendance IGA, Google, or the other directory.
+  let lastSuspend: { reason_code: string } | null = null;
+  try {
+    lastSuspend = await queryOne<{ reason_code: string }>(
+      `SELECT reason_code FROM state_transitions
+        WHERE emp_id = ? AND to_state = ?
+        ORDER BY ts DESC
+        LIMIT 1`,
+      [empId, ILGState.SUSPENDED_AUTO],
+    );
+  } catch (err) {
+    logger.warn({ empId, source, err }, 'Directory enable: could not read state_transitions — leaving suspended');
+    return false;
+  }
+  const expectedReason = `DIRECTORY_DISABLED:${source}`;
+  if (!lastSuspend || lastSuspend.reason_code !== expectedReason) {
+    logger.debug(
+      {
+        empId,
+        source,
+        lastReason: lastSuspend?.reason_code ?? null,
+        expectedReason,
+      },
+      'Directory enable: SUSPENDED_AUTO not from this source — leaving suspended',
+    );
+    return false;
+  }
 
   await fsm.transition({
     empId,
@@ -366,10 +390,11 @@ export async function applyDirectorySourceEnabled(
   return true;
 }
 
-/** Whether inbound sync should preserve a non-active admin/terminal state. */
+/** Whether inbound sync should preserve a non-active admin/terminal/auto-suspend state. */
 export function preserveIlgStateOnDirectoryImport(currentState: string): string {
   if (
-    currentState === ILGState.SUSPENDED_HR
+    currentState === ILGState.SUSPENDED_AUTO
+    || currentState === ILGState.SUSPENDED_HR
     || currentState === ILGState.DEPARTED
     || currentState === ILGState.DEPROVISIONED
     || currentState === ILGState.PENDING_MGR

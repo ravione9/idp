@@ -529,6 +529,15 @@ export async function deprovisionAppUser(params: AppProvisionParams): Promise<vo
   const lookup = await findScimUserByEmail(ctx.scim, email);
   const existing = lookup.user;
   if (!existing?.id) {
+    // Already absent from the SaaS app — quiet for automated lifecycle sweeps to avoid log floods.
+    const quietAuto = /^(DIRECTORY_|FSM:|LIFECYCLE)/i.test(String(params.source ?? ''));
+    if (quietAuto) {
+      logger.debug(
+        { empId: params.empId, appId: ctx.app.id, source: params.source, email },
+        'SCIM deprovision: user already absent — skipping audit row',
+      );
+      return;
+    }
     const slack = isSlackScimEndpoint(ctx.scim.baseUrl);
     await logAppProvision({
       ...baseLog,
