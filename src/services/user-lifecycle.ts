@@ -305,6 +305,7 @@ export async function applyDirectorySourceDisabled(
   empId: string,
   source: 'AD' | 'GOOGLE',
   reason: string,
+  evidenceExtra?: Record<string, unknown>,
 ): Promise<boolean> {
   const emp = await queryOne<{ emp_id: string; ilg_state: string }>(
     'SELECT emp_id, ilg_state FROM employees WHERE emp_id = ?',
@@ -317,6 +318,10 @@ export async function applyDirectorySourceDisabled(
     return false;
   }
 
+  const detail = typeof evidenceExtra?.['detail'] === 'string'
+    ? String(evidenceExtra['detail'])
+    : `${source} account disabled (${reason})`;
+
   await fsm.transition({
     empId,
     toState: ILGState.SUSPENDED_AUTO,
@@ -324,14 +329,14 @@ export async function applyDirectorySourceDisabled(
     actorId: 'directory-sync',
     origin: TransitionOrigin.EXTERNAL,
     reasonCode: `DIRECTORY_DISABLED:${source}`,
-    evidence: { source, reason },
+    evidence: { source, reason, detail, ...evidenceExtra },
   });
 
   await revokeAllSessions(empId);
 
   // App/SCIM revoke is handled once by the FSM transition to SUSPENDED_* (avoid duplicate SKIPPED rows).
 
-  logger.info({ empId, source, ilg_state: emp.ilg_state }, 'Directory source disabled — portal access revoked');
+  logger.info({ empId, source, ilg_state: emp.ilg_state, detail }, 'Directory source disabled — portal access revoked');
   return true;
 }
 
@@ -341,6 +346,7 @@ export async function applyDirectorySourceDisabled(
 export async function applyDirectorySourceEnabled(
   empId: string,
   source: 'AD' | 'GOOGLE',
+  evidenceExtra?: Record<string, unknown>,
 ): Promise<boolean> {
   const emp = await queryOne<{ emp_id: string; ilg_state: string }>(
     'SELECT emp_id, ilg_state FROM employees WHERE emp_id = ?',
@@ -362,19 +368,23 @@ export async function applyDirectorySourceEnabled(
     logger.warn({ empId, source, err }, 'Directory enable: could not read state_transitions — leaving suspended');
     return false;
   }
-  const expectedReason = `DIRECTORY_DISABLED:${source}`;
-  if (!lastSuspend || lastSuspend.reason_code !== expectedReason) {
+  const expectedPrefix = `DIRECTORY_DISABLED:${source}`;
+  if (!lastSuspend || !lastSuspend.reason_code.startsWith(expectedPrefix)) {
     logger.debug(
       {
         empId,
         source,
         lastReason: lastSuspend?.reason_code ?? null,
-        expectedReason,
+        expectedPrefix,
       },
       'Directory enable: SUSPENDED_AUTO not from this source — leaving suspended',
     );
     return false;
   }
+
+  const detail = typeof evidenceExtra?.['detail'] === 'string'
+    ? String(evidenceExtra['detail'])
+    : `${source} account enabled`;
 
   await fsm.transition({
     empId,
@@ -383,10 +393,10 @@ export async function applyDirectorySourceEnabled(
     actorId: 'directory-sync',
     origin: TransitionOrigin.EXTERNAL,
     reasonCode: `DIRECTORY_ENABLED:${source}`,
-    evidence: { source },
+    evidence: { source, detail, ...evidenceExtra },
   });
 
-  logger.info({ empId, source }, 'Directory source enabled — employee reactivated');
+  logger.info({ empId, source, detail }, 'Directory source enabled — employee reactivated');
   return true;
 }
 

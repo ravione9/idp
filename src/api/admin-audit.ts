@@ -770,7 +770,10 @@ router.get('/user-activation', asyncHandler(async (req: Request, res: Response) 
            END`)} AS event_type,
            ${uc('st.from_state')} AS old_state,
            ${uc('st.to_state')} AS new_state,
-           ${uc('CAST(st.reason_code AS CHAR)')} AS reason,
+           ${uc(`COALESCE(
+             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(st.evidence, '$.detail')), ''),
+             CAST(st.reason_code AS CHAR)
+           )`)} AS reason,
            ${uc('st.actor_id')} AS initiated_by,
            st.ts,
            ${uc(`'fsm'`)} AS source

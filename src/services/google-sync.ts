@@ -284,7 +284,11 @@ async function importGoogleDirectoryUsers(
             [fullName, targetEmpId],
           );
           await applyAttrsToEmployee(targetEmpId, attrs, { syncSettings });
-          const didSuspend = await applyDirectorySourceDisabled(targetEmpId, 'GOOGLE', 'google_account_suspended');
+          const didSuspend = await applyDirectorySourceDisabled(targetEmpId, 'GOOGLE', 'google_account_suspended', {
+            detail: `Google Workspace account is suspended`,
+            email,
+            googleId,
+          });
           linked++;
           if (didSuspend) {
             disabled++;
@@ -324,7 +328,11 @@ async function importGoogleDirectoryUsers(
 
         // Google explicitly reports active — unsuspend directory-auto suspends only.
         if (currentState === ILGState.SUSPENDED_AUTO) {
-          const didEnable = await applyDirectorySourceEnabled(existingLink.emp_id, 'GOOGLE');
+          const didEnable = await applyDirectorySourceEnabled(existingLink.emp_id, 'GOOGLE', {
+            detail: `Google Workspace account is active`,
+            email,
+            googleId,
+          });
           if (didEnable) ilgState = ILGState.ACTIVE;
           else ilgState = ILGState.SUSPENDED_AUTO;
         }
@@ -472,7 +480,10 @@ async function importGoogleDirectoryUsers(
              WHERE emp_id = ?`,
           [row.emp_id],
         );
-        const didSuspend = await applyDirectorySourceDisabled(row.emp_id, 'GOOGLE', 'missing_from_google_directory');
+        const didSuspend = await applyDirectorySourceDisabled(row.emp_id, 'GOOGLE', 'missing_from_google_directory', {
+          detail: `Google user missing from sync scope (external_id=${row.external_id})`,
+          googleId: row.external_id,
+        });
         if (didSuspend) {
           disabled++;
           await writeDirectoryUserAudit({
