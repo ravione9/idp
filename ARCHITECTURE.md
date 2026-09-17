@@ -1128,7 +1128,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-17 — Stop AD multi-account suspend/unsuspend flip-flop + clearer reasons
+### 7e6861b — 2026-09-17 — Stop AD multi-account suspend/unsuspend flip-flop + clearer reasons
 
 **Why** — Users like `vivocity@lenskart.sg` (LKST1061) stayed `SUSPENDED_AUTO` while Identity Links showed Google+AD **ACTIVE**, and Audit flipped every few minutes (`DIRECTORY_ENABLED:AD` → `DIRECTORY_DISABLED:AD`). A second AD account sharing the same email/employeeID was driving disable/enable independently of the linked `sAMAccountName`.
 
