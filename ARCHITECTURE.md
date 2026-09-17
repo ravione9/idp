@@ -1128,6 +1128,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-17 — Stop AD multi-account suspend/unsuspend flip-flop + clearer reasons
+
+**Why** — Users like `vivocity@lenskart.sg` (LKST1061) stayed `SUSPENDED_AUTO` while Identity Links showed Google+AD **ACTIVE**, and Audit flipped every few minutes (`DIRECTORY_ENABLED:AD` → `DIRECTORY_DISABLED:AD`). A second AD account sharing the same email/employeeID was driving disable/enable independently of the linked `sAMAccountName`.
+
+**What changed:**
+
+- **`src/services/ad-sync.ts`** — collect one lifecycle intent per employee after inbound; only the **linked / emp_id-matching** AD account may set enable/disable (ignore secondary accounts).
+- **`src/services/user-lifecycle.ts`** — store human-readable `evidence.detail` (which SAM/DN); enable match uses reason prefix.
+- **`src/api/admin-audit.ts`** — User activation Reason column prefers `evidence.detail`.
+- **`src/services/google-sync.ts`** — richer Google suspend/enable detail text.
+
 ### 33a13e2 — 2026-09-16 — Prevent AD outbound from creating duplicate users when email already exists
 
 **Why** — Outbound AD provision searched only the connector Base DN / Sync OUs (e.g. `OU=IT`). Existing accounts in other OUs (e.g. `OU=Offline` with the same `mail`) were missed, so sync created a second user in IT with a generated sAMAccountName (e.g. `kapilavai.shankar`) while reusing the same email.

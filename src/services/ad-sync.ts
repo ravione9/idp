@@ -952,6 +952,61 @@ export async function processInboundAdUsers(
     if (s) adUsersBySam.set(s, u as Record<string, unknown>);
   }
 
+  /** Final enable/disable per employee — applied once after the loop (avoids multi-account flip-flop). */
+  const lifecycleIntent = new Map<string, {
+    disabled: boolean;
+    sam: string;
+    dn: string;
+    uac: number;
+    email: string;
+  }>();
+
+  const linkedSamsForEmp = (empId: string): string[] => {
+    const out: string[] = [];
+    for (const [samKey, id] of cache.empByAdSam) {
+      if (id === empId) out.push(samKey);
+    }
+    return out;
+  };
+
+  const recordLifecycleIntent = (
+    empId: string,
+    disabled: boolean,
+    samName: string,
+    dnValue: string,
+    uacValue: number,
+    emailValue: string,
+  ): void => {
+    const samKey = samName.toLowerCase();
+    const linked = linkedSamsForEmp(empId);
+    const isLinked = linked.includes(samKey);
+    const isEmpIdSam = samKey === empId.toLowerCase();
+
+    // Secondary AD accounts that share email/employeeID must not drive portal suspend/unsuspend.
+    if (linked.length > 0 && !isLinked && !isEmpIdSam) {
+      logger.info(
+        { empId, sam: samName, linked },
+        'AD sync: ignoring lifecycle from secondary AD account',
+      );
+      return;
+    }
+
+    const prev = lifecycleIntent.get(empId);
+    if (!prev) {
+      lifecycleIntent.set(empId, {
+        disabled, sam: samName, dn: dnValue, uac: uacValue, email: emailValue,
+      });
+      return;
+    }
+
+    // Canonical account (linked SAM or emp_id match) always wins over a provisional intent.
+    if (isLinked || isEmpIdSam) {
+      lifecycleIntent.set(empId, {
+        disabled, sam: samName, dn: dnValue, uac: uacValue, email: emailValue,
+      });
+    }
+  };
+
   for (const adUser of adUsers) {
     processed++;
     if (options?.onProgress && (processed === 1 || processed % 1000 === 0 || processed === adUsers.length)) {
@@ -1013,7 +1068,7 @@ export async function processInboundAdUsers(
                 [targetEmpId],
               );
               await upsertAdIdentityLink(targetEmpId, sam, 'DISABLED');
-              await applyDirectorySourceDisabled(targetEmpId, 'AD', 'ad_account_disabled');
+              recordLifecycleIntent(targetEmpId, true, sam, dn, uac, emailCorp);
             }
             linked++;
             succeeded++;
@@ -1028,12 +1083,13 @@ export async function processInboundAdUsers(
             [fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, targetEmpId],
           );
           await upsertAdIdentityLink(targetEmpId, sam, 'DISABLED');
+          cache.empByAdSam.set(sam.toLowerCase(), targetEmpId);
           if (needsDisableSideEffects) {
-            await applyDirectorySourceDisabled(targetEmpId, 'AD', 'ad_account_disabled');
+            recordLifecycleIntent(targetEmpId, true, sam, dn, uac, emailCorp);
           }
           rememberCachedEmployee(cache, {
             emp_id: targetEmpId,
-            ilg_state: needsDisableSideEffects ? disabledState : cached.ilg_state,
+            ilg_state: cached.ilg_state,
             email_corp: emailCorp,
             sync_status: 'DISABLED',
             full_name: fullName,
@@ -1052,6 +1108,8 @@ export async function processInboundAdUsers(
               [targetEmpId, fullName, firstName, lastName, emailCorp, department, title, adObjectGuid, disabledState],
             );
             await upsertAdIdentityLink(targetEmpId, sam, 'DISABLED');
+            cache.empByAdSam.set(sam.toLowerCase(), targetEmpId);
+            recordLifecycleIntent(targetEmpId, true, sam, dn, uac, emailCorp);
             disabledImported++;
             imported++;
           } catch (err) {
@@ -1072,9 +1130,10 @@ export async function processInboundAdUsers(
                   [fullName, firstName, lastName, department, title, adObjectGuid, targetEmpId],
                 );
                 await upsertAdIdentityLink(targetEmpId, sam, 'DISABLED');
+                cache.empByAdSam.set(sam.toLowerCase(), targetEmpId);
                 const dupCached = cache.empById.get(targetEmpId);
                 if (!dupCached || isPortalAccessible(dupCached.ilg_state)) {
-                  await applyDirectorySourceDisabled(targetEmpId, 'AD', 'ad_account_disabled');
+                  recordLifecycleIntent(targetEmpId, true, sam, dn, uac, emailCorp);
                 }
                 linked++;
               } else {
@@ -1090,24 +1149,18 @@ export async function processInboundAdUsers(
       }
 
       const existingState = cached?.ilg_state;
-      const wasSuspendedAuto = existingState === ILGState.SUSPENDED_AUTO;
-
-      let didEnable = false;
-      if (wasSuspendedAuto) {
-        didEnable = await applyDirectorySourceEnabled(targetEmpId, 'AD');
-      }
+      // Defer enable/disable to end of inbound — one decision per employee.
+      recordLifecycleIntent(targetEmpId, false, sam, dn, uac, emailCorp);
 
       const linkStatus = 'ACTIVE';
-      const ilgState = didEnable
-        ? ILGState.ACTIVE
-        : (existingState
-          ? preserveIlgStateOnDirectoryImport(existingState)
-          : ILGState.ACTIVE);
+      const ilgState = existingState
+        ? preserveIlgStateOnDirectoryImport(existingState)
+        : ILGState.ACTIVE;
 
       if (cached) {
         if (!employeeProfileChanged(cached, {
           fullName, emailCorp, department, title, adObjectGuid, ilgState,
-        }) && !didEnable) {
+        })) {
           cache.empByAdSam.set(sam.toLowerCase(), targetEmpId);
           linked++;
           succeeded++;
@@ -1172,6 +1225,7 @@ export async function processInboundAdUsers(
 
       // Always attach link to the resolved employee (moves link if it was on wrong emp_id)
       await upsertAdIdentityLink(targetEmpId, sam, linkStatus);
+      cache.empByAdSam.set(sam.toLowerCase(), targetEmpId);
       if (dn) empIdByDn.set(dn.toLowerCase(), targetEmpId);
       succeeded++;
     } catch (err) {
@@ -1179,6 +1233,34 @@ export async function processInboundAdUsers(
       const msg = `${sam || dn}: ${err instanceof Error ? err.message : String(err)}`;
       errors.push(msg);
       logger.error({ sam, dn, err }, 'AD sync inbound: user import failed');
+    }
+  }
+
+  // Apply one enable/disable decision per employee (after all AD accounts are seen).
+  for (const [empId, intent] of lifecycleIntent) {
+    try {
+      if (intent.disabled) {
+        await applyDirectorySourceDisabled(empId, 'AD', 'ad_account_disabled', {
+          detail: `AD account ${intent.sam} is disabled in Active Directory`,
+          sAMAccountName: intent.sam,
+          dn: intent.dn,
+          uac: intent.uac,
+          email: intent.email,
+        });
+      } else {
+        await applyDirectorySourceEnabled(empId, 'AD', {
+          detail: `AD account ${intent.sam} is enabled in Active Directory`,
+          sAMAccountName: intent.sam,
+          dn: intent.dn,
+          email: intent.email,
+        });
+      }
+    } catch (err) {
+      failed++;
+      errors.push(
+        `${empId} lifecycle: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      logger.error({ empId, intent, err }, 'AD sync inbound: lifecycle apply failed');
     }
   }
 
