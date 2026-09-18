@@ -1131,7 +1131,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-18 — SAML / OIDC application icon upload
+### 397d407 — 2026-09-18 — SAML / OIDC application icon upload
 
 **Why** — Admins could only paste an external Icon URL for portal tiles. Air-gapped and brand-controlled deployments need an upload path like branding logos.
 
