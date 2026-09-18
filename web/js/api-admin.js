@@ -116,6 +116,26 @@ Object.assign(api, {
   saveBranding:   (data) => f('/api/admin/branding', { method: 'PUT', body: JSON.stringify(data) }),
   uploadBrandingLogo: (data) => f('/api/admin/branding/logo', { method: 'POST', body: JSON.stringify(data) }),
   deleteBrandingLogo: () => f('/api/admin/branding/logo', { method: 'DELETE' }),
+  uploadSamlAppIcon: (id, data) => f(`/api/admin/saml-apps/${encodeURIComponent(id)}/icon`, { method: 'POST', body: JSON.stringify(data) }),
+  deleteSamlAppIcon: (id) => f(`/api/admin/saml-apps/${encodeURIComponent(id)}/icon`, { method: 'DELETE' }),
+  uploadOidcClientIcon: (id, data) => f(`/api/admin/oidc-clients/${encodeURIComponent(id)}/icon`, { method: 'POST', body: JSON.stringify(data) }),
+  deleteOidcClientIcon: (id) => f(`/api/admin/oidc-clients/${encodeURIComponent(id)}/icon`, { method: 'DELETE' }),
+  uploadAppIcon: (data) => {
+    const { imageBase64, mimeType, fileName, appId, slug, samlAppId, oidcClientId } = data || {};
+    const body = JSON.stringify({ imageBase64, mimeType, fileName });
+    if (samlAppId) return f(`/api/admin/saml-apps/${encodeURIComponent(samlAppId)}/icon`, { method: 'POST', body });
+    if (oidcClientId) return f(`/api/admin/oidc-clients/${encodeURIComponent(oidcClientId)}/icon`, { method: 'POST', body });
+    const ref = appId || slug;
+    if (ref) return f(`/api/iga/applications/${encodeURIComponent(ref)}/icon`, { method: 'POST', body });
+    return Promise.reject(new Error('Specify samlAppId, oidcClientId, or appId for icon upload'));
+  },
+  deleteAppIcon: (data) => {
+    if (data?.samlAppId) return f(`/api/admin/saml-apps/${encodeURIComponent(data.samlAppId)}/icon`, { method: 'DELETE' });
+    if (data?.oidcClientId) return f(`/api/admin/oidc-clients/${encodeURIComponent(data.oidcClientId)}/icon`, { method: 'DELETE' });
+    const ref = data?.appId || data?.slug;
+    if (ref) return f(`/api/iga/applications/${encodeURIComponent(ref)}/icon`, { method: 'DELETE' });
+    return Promise.reject(new Error('Specify samlAppId, oidcClientId, or appId for icon delete'));
+  },
 
   // General Settings,
   getGeneralSettings:  () => f('/api/admin/general-settings'),
