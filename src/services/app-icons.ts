@@ -39,7 +39,8 @@ export const iconUrlSchema = z
   });
 
 export const uploadAppIconBodySchema = z.object({
-  imageBase64: z.string().min(32).max(800_000),
+  // data:image/...;base64,... for a 400 KB file is ~550k chars; keep headroom
+  imageBase64: z.string().min(32).max(1_200_000),
   mimeType: z.string().max(64).optional(),
   fileName: z.string().max(255).optional(),
 });
@@ -97,6 +98,52 @@ async function syncIconUrlToSamlBySlug(slug: string, iconUrl: string | null): Pr
   );
 }
 
+let iconColumnsReady: Promise<void> | null = null;
+
+/** Ensure applications.icon_data / icon_mime exist (migration 067 or schema repair). */
+export async function ensureAppIconColumns(): Promise<void> {
+  if (!iconColumnsReady) {
+    iconColumnsReady = (async () => {
+      const dataCol = await queryOne<{ c: number }>(
+        `SELECT COUNT(*) AS c FROM information_schema.columns
+          WHERE table_schema = DATABASE() AND table_name = 'applications' AND column_name = 'icon_data'`,
+        [],
+      );
+      if (Number(dataCol?.c ?? 0) === 0) {
+        await execute(
+          `ALTER TABLE applications
+             ADD COLUMN icon_data MEDIUMBLOB NULL COMMENT 'Uploaded app icon bytes (png/jpeg/webp/gif)'`,
+          [],
+        );
+        logger.warn('Added missing applications.icon_data for app icon upload');
+      }
+      const mimeCol = await queryOne<{ c: number }>(
+        `SELECT COUNT(*) AS c FROM information_schema.columns
+          WHERE table_schema = DATABASE() AND table_name = 'applications' AND column_name = 'icon_mime'`,
+        [],
+      );
+      if (Number(mimeCol?.c ?? 0) === 0) {
+        await execute(
+          `ALTER TABLE applications
+             ADD COLUMN icon_mime VARCHAR(64) NULL COMMENT 'MIME type of icon_data'`,
+          [],
+        );
+        logger.warn('Added missing applications.icon_mime for app icon upload');
+      }
+    })().catch((err) => {
+      iconColumnsReady = null;
+      throw err;
+    });
+  }
+  await iconColumnsReady;
+}
+
+function isMissingIconColumnError(err: unknown): boolean {
+  const code = (err as { code?: string })?.code ?? '';
+  const msg = err instanceof Error ? err.message : String(err);
+  return code === 'ER_BAD_FIELD_ERROR' || /Unknown column ['`]?icon_(?:data|mime)/i.test(msg);
+}
+
 /** Persist icon bytes on applications and keep SAML SP icon_url in sync when present. */
 export async function storeApplicationIcon(params: {
   appId: string;
@@ -108,12 +155,29 @@ export async function storeApplicationIcon(params: {
   const publicUrl = appIconPublicUrl(appId, Date.now());
   const storedPath = appIconPublicPath(appId);
 
-  await execute(
-    `UPDATE applications
-        SET icon_data = ?, icon_mime = ?, icon_url = ?, updated_at = UTC_TIMESTAMP()
-      WHERE id = ?`,
-    [buf, mime, storedPath, appId],
-  );
+  await ensureAppIconColumns();
+
+  try {
+    await execute(
+      `UPDATE applications
+          SET icon_data = ?, icon_mime = ?, icon_url = ?, updated_at = UTC_TIMESTAMP()
+        WHERE id = ?`,
+      [buf, mime, storedPath, appId],
+    );
+  } catch (err) {
+    if (isMissingIconColumnError(err)) {
+      iconColumnsReady = null;
+      await ensureAppIconColumns();
+      await execute(
+        `UPDATE applications
+            SET icon_data = ?, icon_mime = ?, icon_url = ?, updated_at = UTC_TIMESTAMP()
+          WHERE id = ?`,
+        [buf, mime, storedPath, appId],
+      );
+    } else {
+      throw err;
+    }
+  }
 
   const app = await queryOne<{ slug: string }>(
     `SELECT slug FROM applications WHERE id = ? LIMIT 1`,
@@ -138,6 +202,8 @@ export async function clearApplicationIcon(params: {
   appId: string;
   updatedBy?: string | null;
 }): Promise<{ icon_url: string | null }> {
+  await ensureAppIconColumns();
+
   const row = await queryOne<{ icon_url: string | null; slug: string }>(
     `SELECT icon_url, slug FROM applications WHERE id = ? LIMIT 1`,
     [params.appId],
