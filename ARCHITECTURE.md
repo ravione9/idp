@@ -353,7 +353,7 @@ Each SAML application is registered in `saml_service_providers`:
 
 | Condition | Who may launch |
 |---|---|
-| **`allow_all_users = 1`** on `applications` | **Any** user who passes ILG (`ACTIVE` / `REACTIVATED`). Set under **Application Access Policy → Allow all users**. IP allowlist still enforced at SSO launch. |
+| **`allow_all_users = 1`** on `applications` | **Any** user who passes ILG (`ACTIVE` / `REACTIVATED`). Set via **Assign Access → Assignment Type: All users**. IP allowlist still enforced at SSO launch. |
 | **Active SAML SP** (any slug in `saml_service_providers`) | **Only** users with an explicit Application Access Policy grant (USER / GROUP / TAG_GROUP), unless `allow_all_users` is on. Birthright via `entitlement_rule.all_active` is **not** enough. On check, the SP is auto-mirrored into `applications` as `RESTRICTED` if missing. |
 | **Active OIDC client** (linked to `applications` via `oidc_clients.app_id`) | **Only** users with an explicit Application Access Policy grant, unless `allow_all_users` is on. On check, the client is auto-mirrored into `applications` as `RESTRICTED` if missing (`ensureOidcAppMirrored`). |
 | Non-SAML catalog app with `visibility = RESTRICTED` **or** any active assignment | Explicit grant only (or `allow_all_users`) |
@@ -367,7 +367,7 @@ Policy-check errors **deny** access (fail closed). New SAML apps default to `ent
 | Path | Behavior |
 |---|---|
 | **Admin assigns** (Access Policy → USER / GROUP / TAG_GROUP) | User sees the app under **All Applications** and launches SSO. **No Request Access** — assigned apps are excluded from the JIT catalog and submit is rejected. |
-| **Allow all users** (Access Policy toggle) | Every ACTIVE user sees and launches the app; no per-user/group assignment. Excluded from JIT catalog (treated like assigned). |
+| **Allow all users** (Assign Access → All users) | Every ACTIVE user sees and launches the app; no per-user/group assignment. Shown in Active Assignments as `ALL_USERS`; Restrict turns it off. Excluded from JIT catalog (treated like assigned). |
 | **Self-service JIT** | On register, SP is mirrored, default workflow (MANAGER → ADMIN) is created, `requestable = 1`. User requests once → approval → `fulfillAppAccessRequest` grant → same as assigned. Pending requests also hide the app from the catalog (no re-request). |
 | **Existing apps** | **Enable Request Access** / **Enable all** on Applications → SAML, or `POST …/enable-request-access[-all]`. |
 
@@ -1143,7 +1143,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - Migration **`068_app_allow_all_users.sql`** — `applications.allow_all_users` + audit action `ALLOW_ALL`.
 - **`evaluateAppLaunch` / `hasPolicyAppAccess`** — when enabled, any ILG-active user may launch; IP allowlist still enforced at SSO.
 - **`PUT /api/admin/app-access-policy/applications/:id/allow-all-users`** — admin toggle.
-- **Application Access Policy → Assignment** — “Allow all users” table with per-app enable/disable.
+- **Application Access Policy → Assign Access** — Assignment Type **All users** in the grant modal; Active Assignments lists `ALL_USERS` rows with Restrict.
 
 ### (pending) — 2026-09-19 — Harden app icon upload when icon_data columns missing
 
