@@ -353,10 +353,11 @@ Each SAML application is registered in `saml_service_providers`:
 
 | Condition | Who may launch |
 |---|---|
-| **Active SAML SP** (any slug in `saml_service_providers`) | **Only** users with an explicit Application Access Policy grant (USER / GROUP / TAG_GROUP). Birthright via `entitlement_rule.all_active` is **not** enough. On check, the SP is auto-mirrored into `applications` as `RESTRICTED` if missing. |
-| **Active OIDC client** (linked to `applications` via `oidc_clients.app_id`) | **Only** users with an explicit Application Access Policy grant. On check, the client is auto-mirrored into `applications` as `RESTRICTED` if missing (`ensureOidcAppMirrored`). |
-| Non-SAML catalog app with `visibility = RESTRICTED` **or** any active assignment | Explicit grant only |
-| Other non-SAML catalog apps | Grant **or** `entitlement_rule` birthright |
+| **`allow_all_users = 1`** on `applications` | **Any** user who passes ILG (`ACTIVE` / `REACTIVATED`). Set under **Application Access Policy → Allow all users**. IP allowlist still enforced at SSO launch. |
+| **Active SAML SP** (any slug in `saml_service_providers`) | **Only** users with an explicit Application Access Policy grant (USER / GROUP / TAG_GROUP), unless `allow_all_users` is on. Birthright via `entitlement_rule.all_active` is **not** enough. On check, the SP is auto-mirrored into `applications` as `RESTRICTED` if missing. |
+| **Active OIDC client** (linked to `applications` via `oidc_clients.app_id`) | **Only** users with an explicit Application Access Policy grant, unless `allow_all_users` is on. On check, the client is auto-mirrored into `applications` as `RESTRICTED` if missing (`ensureOidcAppMirrored`). |
+| Non-SAML catalog app with `visibility = RESTRICTED` **or** any active assignment | Explicit grant only (or `allow_all_users`) |
+| Other non-SAML catalog apps | Grant **or** `entitlement_rule` birthright (or `allow_all_users`) |
 | **IP allowlist** (`applications.allowed_cidrs`, migration `043`) | When non-empty, verified **at SSO launch** (not catalog listing). Client IP (`CF-Connecting-IP` / `X-Forwarded-For`) must match a CIDR, exact IP, or trailing-dot prefix. Empty/null = unrestricted. Denied launches show an HTML page: “Unrestricted IP — application access denied.” |
 
 Policy-check errors **deny** access (fail closed). New SAML apps default to `entitlement_rule.all_active = false` and are mirrored as `RESTRICTED` on create (migration `040` backfills existing rows).
@@ -366,6 +367,7 @@ Policy-check errors **deny** access (fail closed). New SAML apps default to `ent
 | Path | Behavior |
 |---|---|
 | **Admin assigns** (Access Policy → USER / GROUP / TAG_GROUP) | User sees the app under **All Applications** and launches SSO. **No Request Access** — assigned apps are excluded from the JIT catalog and submit is rejected. |
+| **Allow all users** (Access Policy toggle) | Every ACTIVE user sees and launches the app; no per-user/group assignment. Excluded from JIT catalog (treated like assigned). |
 | **Self-service JIT** | On register, SP is mirrored, default workflow (MANAGER → ADMIN) is created, `requestable = 1`. User requests once → approval → `fulfillAppAccessRequest` grant → same as assigned. Pending requests also hide the app from the catalog (no re-request). |
 | **Existing apps** | **Enable Request Access** / **Enable all** on Applications → SAML, or `POST …/enable-request-access[-all]`. |
 
@@ -682,6 +684,7 @@ To add a new migration:
 | `GET` | `/api/admin/app-access-policy/summary` | Assignment / workflow / audit counts |
 | `GET` | `/api/admin/app-access-policy/applications` | Assignable apps (IGA catalog + auto-mirrored SAML SPs; includes `allowed_cidrs`) |
 | `PUT` | `/api/admin/app-access-policy/applications/:id/ip-policy` | Set per-app IP/CIDR allowlist (`allowedCidrs`) |
+| `PUT` | `/api/admin/app-access-policy/applications/:id/allow-all-users` | Toggle open access for all ACTIVE users (`allowAllUsers`) |
 | `GET`/`POST` | `/api/admin/app-access-policy/tag-groups[/:id]` | Tag group CRUD |
 | `POST`/`DELETE` | `/api/admin/app-access-policy/tag-groups/:id/members[/:empId]` | Tag group membership |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/groups[/:id]` | Identity directory groups (local + synced) |
@@ -1130,6 +1133,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-09-19 — Application Access Policy: allow all users
+
+**Why** — Operators need to open selected SAML/OIDC apps to every active employee without creating USER or GROUP assignments for each person.
+
+**What changed:**
+
+- Migration **`068_app_allow_all_users.sql`** — `applications.allow_all_users` + audit action `ALLOW_ALL`.
+- **`evaluateAppLaunch` / `hasPolicyAppAccess`** — when enabled, any ILG-active user may launch; IP allowlist still enforced at SSO.
+- **`PUT /api/admin/app-access-policy/applications/:id/allow-all-users`** — admin toggle.
+- **Application Access Policy → Assignment** — “Allow all users” table with per-app enable/disable.
 
 ### (pending) — 2026-09-19 — Harden app icon upload when icon_data columns missing
 

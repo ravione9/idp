@@ -14,7 +14,8 @@ import { provisionAppUser, deprovisionAppUser, runApplicationDeprovisionForUser 
 export type AssignmentType = 'USER' | 'TAG_GROUP' | 'GROUP';
 export type AuditAction =
   | 'ASSIGN_USER' | 'ASSIGN_GROUP' | 'REVOKE'
-  | 'REQUEST' | 'APPROVE' | 'REJECT' | 'PROVISION';
+  | 'REQUEST' | 'APPROVE' | 'REJECT' | 'PROVISION'
+  | 'ALLOW_ALL';
 
 export interface ApprovalLevel {
   level: number;
@@ -122,6 +123,7 @@ export async function listAssignableApplications(): Promise<Record<string, unkno
   }
   const rows = await query<Record<string, unknown>>(
     `SELECT a.id, a.slug, a.name, a.icon_url, a.category, a.active, a.allowed_cidrs,
+            COALESCE(a.allow_all_users, 0) AS allow_all_users,
             EXISTS (
               SELECT 1 FROM saml_service_providers sp WHERE sp.slug = a.slug AND sp.active = 1
             ) AS has_saml,
@@ -136,8 +138,57 @@ export async function listAssignableApplications(): Promise<Record<string, unkno
   );
   return rows.map((r) => ({
     ...r,
+    allow_all_users: Number(r['allow_all_users'] ?? 0) === 1,
     allowed_cidrs: parseCidrList(r['allowed_cidrs']),
   }));
+}
+
+export async function setApplicationAllowAllUsers(
+  appId: string,
+  allowAll: boolean,
+  actorEmpId?: string | null,
+): Promise<void> {
+  const app = await queryOne<{ id: string; slug: string; name: string }>(
+    `SELECT id, slug, name FROM applications WHERE id = ? LIMIT 1`,
+    [appId],
+  );
+  if (!app) throw new Error('Application not found');
+
+  await execute(
+    `UPDATE applications SET allow_all_users = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?`,
+    [allowAll ? 1 : 0, appId],
+  );
+
+  await logAppAccessAudit({
+    appId,
+    action: 'ALLOW_ALL',
+    actorEmpId: actorEmpId ?? null,
+    details: { allow_all_users: allowAll, slug: app.slug, name: app.name },
+  });
+
+  logger.info(
+    { appId, slug: app.slug, allowAll, by: actorEmpId ?? null },
+    'Updated application allow_all_users',
+  );
+}
+
+/** True when the app is open to every ACTIVE/REACTIVATED identity (still ILG-gated). */
+export async function appAllowsAllUsers(appSlug: string): Promise<boolean> {
+  const row = await queryOne<{ allow_all_users: number }>(
+    `SELECT COALESCE(allow_all_users, 0) AS allow_all_users
+       FROM applications WHERE slug = ? AND active = 1 LIMIT 1`,
+    [appSlug],
+  );
+  return Number(row?.allow_all_users ?? 0) === 1;
+}
+
+export async function appAllowsAllUsersById(appId: string): Promise<boolean> {
+  const row = await queryOne<{ allow_all_users: number }>(
+    `SELECT COALESCE(allow_all_users, 0) AS allow_all_users
+       FROM applications WHERE id = ? AND active = 1 LIMIT 1`,
+    [appId],
+  );
+  return Number(row?.allow_all_users ?? 0) === 1;
 }
 
 export async function setApplicationAllowedCidrs(
@@ -278,6 +329,24 @@ export async function evaluateAppLaunch(
   }
 
   try {
+    // Open to all active users — still requires ILG ACTIVE/REACTIVATED above.
+    const allowAll = opts?.appId
+      ? await appAllowsAllUsersById(opts.appId)
+      : await appAllowsAllUsers(slug);
+    if (allowAll) {
+      if (opts?.enforceIp) {
+        const ipOk = await isClientIpAllowedForApp(slug, opts.clientIp);
+        if (!ipOk) {
+          logger.info(
+            { empId: emp.emp_id, slug, ip: opts.clientIp ?? null },
+            'SSO denied — client IP not in application allowlist',
+          );
+          return { allowed: false, reason: 'IP_DENIED' };
+        }
+      }
+      return { allowed: true };
+    }
+
     const requiresGrant = await appRequiresExplicitGrant(slug);
     const policyAccess = opts?.appId
       ? await hasPolicyAppAccessByAppId(emp.emp_id, opts.appId)
@@ -329,6 +398,8 @@ export async function canUserLaunchApp(
 }
 
 export async function hasPolicyAppAccess(empId: string, appSlug: string): Promise<boolean> {
+  if (await appAllowsAllUsers(appSlug)) return true;
+
   const row = await queryOne<{ ok: number }>(
     `SELECT 1 AS ok
        FROM applications a
@@ -366,6 +437,8 @@ export async function hasPolicyAppAccess(empId: string, appSlug: string): Promis
 
 /** Same as hasPolicyAppAccess but keyed by catalog application id (avoids slug mismatches). */
 export async function hasPolicyAppAccessByAppId(empId: string, appId: string): Promise<boolean> {
+  if (await appAllowsAllUsersById(appId)) return true;
+
   const row = await queryOne<{ ok: number }>(
     `SELECT 1 AS ok
        FROM applications a
@@ -536,7 +609,8 @@ export async function getPolicyGrantedAppSlugs(empId: string): Promise<string[]>
        FROM applications a
       WHERE a.active = 1
         AND (
-          EXISTS (
+          COALESCE(a.allow_all_users, 0) = 1
+          OR EXISTS (
             SELECT 1 FROM app_access_assignments x
              WHERE x.app_id = a.id AND x.active = 1
                AND x.assignment_type = 'USER' AND x.target_id = ?
