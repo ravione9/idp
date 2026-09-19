@@ -1217,6 +1217,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`web/js/views-admin.js`** / **`api-admin.js`** — uncheck + save calls DELETE; list exposes `scim_base_url` / `scim_token_stored` for re-enable without re-entering the token.
 - **`PUT .../scim-config`** — reuses inactive sealed token (open then re-seal) when bearer token left blank.
 
+### (pending) — 2026-09-19 — Google sync: stop false stale-timeout failures + fix department updates
+
+**Why** — Google Workspace sync of ~11k users was marked **FAILED / Reclaimed: stale timeout** every 3 hours even with 0 user failures (inbound finished, then group sync had no heartbeats). Departments often stayed blank because OU/custom-schema fallbacks were weak and `sync_department` TINYINT flags were not coerced safely.
+
+**What changed:**
+
+- **`src/services/connector-run-lifecycle.ts`** — stale reclaim requires a missing/old `progressAtMs` heartbeat; age ceiling raised to 12h.
+- **`src/services/group-sync.ts`** + **`google-sync.ts`** — group-phase progress heartbeats so long membership syncs are not reclaimed.
+- **`src/services/google-attr-map.ts`** — stronger department extraction (primary org, custom schemas, OU); `isGoogleSyncFlagOn()` for sync_* flags.
+- **`migrations/067_employees_dept_role_widen.sql`** — widen `employees.dept_id` / `role` to VARCHAR(255).
+
 ### (pending) — 2026-09-12 — Fix user-activation UNION collation mismatch
 
 **Why** — Audit → User activation failed with `Illegal mix of collations for operation 'UNION'` because `lifecycle_events`, `state_transitions`, `audit_log`, and `employees` use mixed utf8mb4 collations in prod.

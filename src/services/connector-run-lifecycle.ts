@@ -4,13 +4,31 @@
 import { execute, queryOne } from '../db/connection.js';
 import logger from '../utils/logger.js';
 
-/** Any unfinished run older than this is marked FAILED (scheduler + boot). */
-export const CONNECTOR_RUN_STALE_HOURS = 3;
+/**
+ * Absolute age ceiling for a sync run. Large Google/AD directories (10k+ users) plus
+ * group membership sync routinely exceed 3 hours — reclaim only when also stale
+ * on heartbeat (see CONNECTOR_RUN_HEARTBEAT_STALE_MINUTES).
+ */
+export const CONNECTOR_RUN_STALE_HOURS = 12;
 
 /** Runs that never incremented items_processed are reclaimed sooner (auth/config crash). */
 export const CONNECTOR_RUN_ZERO_PROGRESS_MINUTES = 30;
 
+/**
+ * Do not reclaim a long-running sync that is still heartbeating via
+ * updateConnectorRunProgress (progressAtMs). Matches the zero-progress grace.
+ */
+export const CONNECTOR_RUN_HEARTBEAT_STALE_MINUTES = 45;
+
 const ACTIVE_STATUSES_SQL = "('RUNNING', 'PENDING_AGENT')";
+
+/** True when payload.progressAtMs is missing or older than graceMinutes. */
+const STALE_HEARTBEAT_SQL = `(
+  payload IS NULL
+  OR JSON_EXTRACT(payload, '$.progressAtMs') IS NULL
+  OR CAST(JSON_EXTRACT(payload, '$.progressAtMs') AS UNSIGNED)
+     < (UNIX_TIMESTAMP(UTC_TIMESTAMP()) - ? * 60) * 1000
+)`;
 
 export async function reclaimStaleConnectorRuns(connectorId?: string): Promise<number> {
   let reclaimed = 0;
@@ -20,22 +38,19 @@ export async function reclaimStaleConnectorRuns(connectorId?: string): Promise<n
        AND ended_at IS NULL
        AND items_processed = 0
        AND started_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? MINUTE)
-       AND (
-         payload IS NULL
-         OR JSON_EXTRACT(payload, '$.progressAtMs') IS NULL
-         OR CAST(JSON_EXTRACT(payload, '$.progressAtMs') AS UNSIGNED)
-            < (UNIX_TIMESTAMP(UTC_TIMESTAMP()) - ? * 60) * 1000
-       )`,
+       AND ${STALE_HEARTBEAT_SQL}`,
     [CONNECTOR_RUN_ZERO_PROGRESS_MINUTES, CONNECTOR_RUN_ZERO_PROGRESS_MINUTES],
     connectorId,
     'zero-progress timeout',
   );
 
+  // Age + no recent progress — never kill a sync that is still reporting heartbeats.
   reclaimed += await reclaimRunsWhere(
     `status IN ${ACTIVE_STATUSES_SQL}
        AND ended_at IS NULL
-       AND started_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? HOUR)`,
-    [CONNECTOR_RUN_STALE_HOURS],
+       AND started_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? HOUR)
+       AND ${STALE_HEARTBEAT_SQL}`,
+    [CONNECTOR_RUN_STALE_HOURS, CONNECTOR_RUN_HEARTBEAT_STALE_MINUTES],
     connectorId,
     'stale timeout',
   );

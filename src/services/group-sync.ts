@@ -221,6 +221,9 @@ export async function syncGoogleDirectoryGroups(
   directory: admin_directory_v1.Admin,
   scope: GoogleSyncScope,
   cfg?: Record<string, unknown>,
+  opts: {
+    onProgress?: (p: { groupsDone: number; groupsTotal: number; membersSynced: number; current?: string }) => void | Promise<void>;
+  } = {},
 ): Promise<GroupSyncSummary & { autoAll: boolean }> {
   const summary: GroupSyncSummary & { autoAll: boolean } = {
     groupsSynced: 0,
@@ -236,9 +239,19 @@ export async function syncGoogleDirectoryGroups(
   if (!groupKeys.length) return summary;
 
   const syncMembers = scope.syncGroupMemberships !== false;
+  const groupsTotal = groupKeys.length;
 
-  for (const groupEmail of groupKeys) {
+  for (let i = 0; i < groupKeys.length; i++) {
+    const groupEmail = groupKeys[i]!;
     try {
+      if (opts.onProgress && (i === 0 || (i + 1) % 5 === 0 || i + 1 === groupsTotal)) {
+        await opts.onProgress({
+          groupsDone: i,
+          groupsTotal,
+          membersSynced: summary.membersSynced,
+          current: groupEmail,
+        });
+      }
       const gRes = await directory.groups.get({ groupKey: groupEmail });
       const g = gRes.data;
       const externalId = (g.email ?? groupEmail).toLowerCase();
@@ -287,6 +300,14 @@ export async function syncGoogleDirectoryGroups(
       summary.errors.push(`${groupEmail}: ${err instanceof Error ? err.message : String(err)}`);
       logger.warn({ groupEmail, err }, 'Google group sync failed');
     }
+  }
+
+  if (opts.onProgress) {
+    await opts.onProgress({
+      groupsDone: groupsTotal,
+      groupsTotal,
+      membersSynced: summary.membersSynced,
+    });
   }
 
   return summary;
