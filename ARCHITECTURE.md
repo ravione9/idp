@@ -1131,6 +1131,16 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-19 — Harden app icon upload when icon_data columns missing
+
+**Why** — Icon upload returned generic **Internal server error** when migration 067 had not created `applications.icon_data` / `icon_mime`.
+
+**What changed:**
+
+- Migration **`067_app_icon_upload.sql`** — information_schema-based ALTER (idempotent heal).
+- **`src/db/schema-repair.ts`** + **`ensureAppIconColumns()`** — create missing columns on boot / first upload.
+- Clearer API errors for SAML/OIDC icon upload; UI clears stuck “Uploading…” state.
+
 ### 397d407 — 2026-09-18 — SAML / OIDC application icon upload
 
 **Why** — Admins could only paste an external Icon URL for portal tiles. Air-gapped and brand-controlled deployments need an upload path like branding logos.

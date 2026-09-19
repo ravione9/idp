@@ -407,18 +407,30 @@ router.post('/:id/icon', asyncHandler(async (req: Request, res: Response) => {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid icon upload' });
     return;
   }
-  const appId = await ensureAppIdForOidcClient(id);
-  if (!appId) {
-    res.status(404).json({ error: 'OIDC client or catalog application not found' });
-    return;
+  try {
+    const appId = await ensureAppIdForOidcClient(id);
+    if (!appId) {
+      res.status(404).json({ error: 'OIDC client or catalog application not found' });
+      return;
+    }
+    const result = await storeApplicationIcon({
+      appId,
+      buf: parsed.buf,
+      mime: parsed.mime,
+      updatedBy: req.user?.empId ?? null,
+    });
+    res.json({ success: true, ...result, has_icon_upload: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Icon upload failed';
+    logger.error({ err, id }, 'OIDC client icon upload failed');
+    if (/Unknown column|ER_BAD_FIELD_ERROR/i.test(msg)) {
+      res.status(503).json({
+        error: 'App icon storage is not ready (missing icon_data columns). Restart the API so migration 067 / schema repair can run, then retry.',
+      });
+      return;
+    }
+    res.status(500).json({ error: msg });
   }
-  const result = await storeApplicationIcon({
-    appId,
-    buf: parsed.buf,
-    mime: parsed.mime,
-    updatedBy: req.user?.empId ?? null,
-  });
-  res.json({ success: true, ...result, has_icon_upload: true });
 }));
 
 // DELETE /:id/icon
@@ -428,13 +440,19 @@ router.delete('/:id/icon', asyncHandler(async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Missing client id' });
     return;
   }
-  const appId = await ensureAppIdForOidcClient(id);
-  if (!appId) {
-    res.status(404).json({ error: 'OIDC client or catalog application not found' });
-    return;
+  try {
+    const appId = await ensureAppIdForOidcClient(id);
+    if (!appId) {
+      res.status(404).json({ error: 'OIDC client or catalog application not found' });
+      return;
+    }
+    const result = await clearApplicationIcon({ appId, updatedBy: req.user?.empId ?? null });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Icon delete failed';
+    logger.error({ err, id }, 'OIDC client icon delete failed');
+    res.status(500).json({ error: msg });
   }
-  const result = await clearApplicationIcon({ appId, updatedBy: req.user?.empId ?? null });
-  res.json({ success: true, ...result });
 }));
 
 // POST /:id/rotate-secret

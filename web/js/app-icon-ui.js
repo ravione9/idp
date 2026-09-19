@@ -148,6 +148,7 @@ export function bindAppIconField(root, opts) {
         setStatus('Will upload when you save');
       }
     } catch (err) {
+      setStatus('');
       const msg = err?.message || 'Upload failed';
       if (opts.onError) opts.onError(msg);
       else setStatus(msg);

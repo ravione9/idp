@@ -27,4 +27,24 @@ export async function repairSchemaDrift(): Promise<void> {
     );
     logger.info('Schema repair: saml_service_providers.default_relay_state added');
   }
+
+  if (!(await columnExists('applications', 'icon_data'))) {
+    logger.warn('Schema repair: adding applications.icon_data');
+    await execute(
+      `ALTER TABLE applications
+         ADD COLUMN icon_data MEDIUMBLOB NULL COMMENT 'Uploaded app icon bytes (png/jpeg/webp/gif)'`,
+      [],
+    );
+    logger.info('Schema repair: applications.icon_data added');
+  }
+
+  if (!(await columnExists('applications', 'icon_mime'))) {
+    logger.warn('Schema repair: adding applications.icon_mime');
+    await execute(
+      `ALTER TABLE applications
+         ADD COLUMN icon_mime VARCHAR(64) NULL COMMENT 'MIME type of icon_data'`,
+      [],
+    );
+    logger.info('Schema repair: applications.icon_mime added');
+  }
 }
