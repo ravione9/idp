@@ -88,6 +88,16 @@ const SETTINGS_TO_LOCAL: Record<string, keyof GoogleSyncSettings> = {
   office_address: 'sync_office_address',
 };
 
+/** MySQL TINYINT / string / Buffer-safe truthiness for sync_* flags. */
+export function isGoogleSyncFlagOn(value: unknown): boolean {
+  if (value === true || value === 1 || value === '1') return true;
+  if (value === false || value === 0 || value === '0' || value == null) return false;
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(value)) {
+    return value.length > 0 && value[0] !== 0;
+  }
+  return Boolean(value);
+}
+
 export async function getGoogleSyncSettings(): Promise<GoogleSyncSettings> {
   const row = await queryOne<GoogleSyncSettings>(
     `SELECT * FROM directory_sync_settings WHERE source_system = 'GOOGLE' LIMIT 1`,
@@ -204,17 +214,39 @@ function primaryOrg(gUser: admin_directory_v1.Schema$User): admin_directory_v1.S
   return orgs.find((o: admin_directory_v1.Schema$UserOrganization) => o.primary) ?? orgs[0];
 }
 
-/** Best-effort department from Google org data or OU path. */
+/** Best-effort department from Google org data, custom schemas, or OU path. */
 function extractDepartment(gUser: admin_directory_v1.Schema$User): string | undefined {
+  const primary = primaryOrg(gUser);
+  if (primary?.department?.trim()) return primary.department.trim();
+
   const orgs = gUser.organizations ?? [];
   for (const o of orgs) {
     const d = o.department?.trim();
     if (d) return d;
   }
+
+  // Custom schema fallback: Department / Dept / Cost_Center-style keys
+  const schemas = gUser.customSchemas ?? {};
+  for (const schema of Object.values(schemas)) {
+    if (!schema || typeof schema !== 'object') continue;
+    for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+      if (!/^(department|dept|org.?unit|business.?unit)$/i.test(k) && !/department/i.test(k)) continue;
+      if (typeof v === 'string' && v.trim()) return v.trim();
+      if (v && typeof v === 'object' && 'value' in (v as object)) {
+        const val = String((v as { value?: unknown }).value ?? '').trim();
+        if (val) return val;
+      }
+    }
+  }
+
   const ou = (gUser.orgUnitPath || '').replace(/^\/+/, '').trim();
   if (!ou || ou === '/') return undefined;
   // Prefer leaf OU as department (e.g. "/Lenskart/Retail/Store Ops" → "Store Ops")
-  const leaf = ou.split('/').filter(Boolean).pop();
+  const parts = ou.split('/').filter(Boolean);
+  const leaf = parts[parts.length - 1];
+  // Skip generic container OUs that are not real departments
+  if (leaf && !/^(users|people|employees|all users)$/i.test(leaf)) return leaf;
+  if (parts.length >= 2) return parts[parts.length - 1];
   return leaf || ou;
 }
 
@@ -324,7 +356,7 @@ export async function extractGoogleAttrs(
     if (!map.enabled) continue;
     const local = map.local_attr as LocalAttrKey;
     const settingKey = SETTINGS_TO_LOCAL[local];
-    if (settingKey && !syncSettings[settingKey]) continue;
+    if (settingKey && !isGoogleSyncFlagOn(syncSettings[settingKey])) continue;
 
     const raw = extractSourceValue(gUser, map.source_attr);
     if (!raw) continue;
@@ -334,6 +366,13 @@ export async function extractGoogleAttrs(
       continue;
     }
     (out as Record<string, string>)[local] = raw;
+  }
+
+  // Ensure department is filled even when attr maps omit organizations.department
+  // or only orgUnitPath is populated in Workspace.
+  if (!out.dept_id && isGoogleSyncFlagOn(syncSettings.sync_department)) {
+    const dept = extractDepartment(gUser);
+    if (dept) out.dept_id = dept;
   }
 
   // Always keep a display name
@@ -386,7 +425,7 @@ export async function applyAttrsToEmployee(
   if (!current) return { updated: false, changes: {} };
 
   let managerEmpId: string | null | undefined;
-  if (opts.resolveManager !== false && attrs.manager_email && settings.sync_manager) {
+  if (opts.resolveManager !== false && attrs.manager_email && isGoogleSyncFlagOn(settings.sync_manager)) {
     managerEmpId = await resolveManagerEmpId(attrs.manager_email);
   }
 
@@ -394,15 +433,15 @@ export async function applyAttrsToEmployee(
   if (attrs.full_name) candidates.push(['full_name', attrs.full_name]);
   if (attrs.first_name) candidates.push(['first_name', attrs.first_name]);
   if (attrs.last_name) candidates.push(['last_name', attrs.last_name]);
-  if (attrs.employee_number && settings.sync_employee_id) candidates.push(['employee_number', attrs.employee_number]);
-  if (attrs.dept_id && settings.sync_department) candidates.push(['dept_id', attrs.dept_id]);
-  if (attrs.role && settings.sync_designation) candidates.push(['role', attrs.role]);
-  if (attrs.cost_center && settings.sync_cost_center) candidates.push(['cost_center', attrs.cost_center]);
-  if (attrs.location && settings.sync_location) candidates.push(['location', attrs.location]);
-  if (attrs.mobile && settings.sync_mobile) candidates.push(['mobile', attrs.mobile]);
-  if (attrs.office_address && settings.sync_office_address) candidates.push(['office_address', attrs.office_address]);
-  if (attrs.photo_url && settings.sync_profile_photo) candidates.push(['photo_url', attrs.photo_url]);
-  if (managerEmpId !== undefined && settings.sync_manager) {
+  if (attrs.employee_number && isGoogleSyncFlagOn(settings.sync_employee_id)) candidates.push(['employee_number', attrs.employee_number]);
+  if (attrs.dept_id && isGoogleSyncFlagOn(settings.sync_department)) candidates.push(['dept_id', attrs.dept_id]);
+  if (attrs.role && isGoogleSyncFlagOn(settings.sync_designation)) candidates.push(['role', attrs.role]);
+  if (attrs.cost_center && isGoogleSyncFlagOn(settings.sync_cost_center)) candidates.push(['cost_center', attrs.cost_center]);
+  if (attrs.location && isGoogleSyncFlagOn(settings.sync_location)) candidates.push(['location', attrs.location]);
+  if (attrs.mobile && isGoogleSyncFlagOn(settings.sync_mobile)) candidates.push(['mobile', attrs.mobile]);
+  if (attrs.office_address && isGoogleSyncFlagOn(settings.sync_office_address)) candidates.push(['office_address', attrs.office_address]);
+  if (attrs.photo_url && isGoogleSyncFlagOn(settings.sync_profile_photo)) candidates.push(['photo_url', attrs.photo_url]);
+  if (managerEmpId !== undefined && isGoogleSyncFlagOn(settings.sync_manager)) {
     candidates.push(['manager_emp_id', managerEmpId]);
   }
 

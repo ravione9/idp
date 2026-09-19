@@ -734,7 +734,16 @@ export async function runGoogleSync(
       let groupSummary = '';
       try {
         await reportProgress('groups', 'Syncing Google groups and memberships');
-        const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope, cfg);
+        const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope, cfg, {
+          onProgress: async (p) => {
+            await reportProgress(
+              'groups',
+              `groups ${p.groupsDone}/${p.groupsTotal}`
+                + (p.current ? ` (${p.current})` : '')
+                + `, ${p.membersSynced} members`,
+            );
+          },
+        });
         const mode = gs.autoAll ? ' (auto-all)' : '';
         groupSummary =
           ` | Groups: ${gs.groupsSynced} synced, ${gs.membersSynced} members` +
