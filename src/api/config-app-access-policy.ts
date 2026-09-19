@@ -19,6 +19,7 @@ import {
   listAssignableApplications,
   setApplicationRequestable,
   setApplicationAllowedCidrs,
+  setApplicationAllowAllUsers,
   syncSamlAppsToCatalog,
   type ApprovalLevel,
 } from '../services/app-access-policy.js';
@@ -329,6 +330,34 @@ router.put('/applications/:id/ip-policy', asyncHandler(async (req: Request, res:
     const cidrs = parseCidrList(parsed.data.allowedCidrs);
     await setApplicationAllowedCidrs(req.params['id']!, cidrs);
     res.json({ success: true, allowedCidrs: cidrs });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('not found')) {
+      res.status(404).json({ error: msg });
+      return;
+    }
+    throw err;
+  }
+}));
+
+// PUT /applications/:id/allow-all-users — open app to every ACTIVE identity
+const allowAllSchema = z.object({
+  allowAllUsers: z.boolean(),
+});
+
+router.put('/applications/:id/allow-all-users', asyncHandler(async (req: Request, res: Response) => {
+  const parsed = allowAllSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+  try {
+    await setApplicationAllowAllUsers(
+      req.params['id']!,
+      parsed.data.allowAllUsers,
+      actorEmpId(req),
+    );
+    res.json({ success: true, allowAllUsers: parsed.data.allowAllUsers });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('not found')) {

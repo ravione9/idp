@@ -7874,6 +7874,29 @@ export async function viewAppAccessPolicy(content) {
         </div>
         ${appsLoadError ? `<div class="alert alert-error" style="margin-bottom:1rem">${esc(appsLoadError)}</div>` : ''}
         ${!appsCache.length && !appsLoadError ? '<div class="alert alert-info" style="margin-bottom:1rem">No assignable applications yet. Register under <strong>Applications → OIDC / OAuth</strong>, then click <strong>Sync catalog</strong>.</div>' : ''}
+        <h3 class="section-title">Allow all users</h3>
+        <p class="subtitle" style="margin-top:0">When enabled, every <strong>ACTIVE</strong> user can see and launch the app — no USER / GROUP assignment needed. IP restrictions still apply at SSO launch.</p>
+        <div id="aap-allow-all-msg" style="margin-bottom:0.75rem"></div>
+        <div class="table-wrap aap-table" style="margin-bottom:1.5rem"><table>
+          <thead><tr><th>Application</th><th>Slug</th><th>Access</th><th></th></tr></thead>
+          <tbody>${appsCache.length ? appsCache.map((a) => {
+            const on = !!a.allow_all_users;
+            return `<tr>
+              <td class="cell-strong">${esc(a.name)}</td>
+              <td class="muted"><code style="font-size:0.78rem">${esc(a.slug)}</code></td>
+              <td>${on
+                ? '<span class="badge badge-success">All users</span>'
+                : '<span class="badge badge-neutral">Assigned only</span>'}</td>
+              <td>
+                <button class="btn btn-sm ${on ? 'btn-warning' : 'btn-primary'} toggle-allow-all"
+                  data-id="${esc(String(a.id))}" data-name="${esc(a.name)}" data-on="${on ? '1' : '0'}">
+                  ${on ? 'Restrict to assignments' : 'Allow all users'}
+                </button>
+              </td>
+            </tr>`;
+          }).join('') : `<tr><td colspan="4"><div class="empty-state"><p>No applications yet.</p></div></td></tr>`}
+          </tbody>
+        </table></div>
         <h3 class="section-title">Active Assignments</h3>
         <div class="table-wrap aap-table"><table>
           <thead><tr><th>Application</th><th>Type</th><th>Target</th><th>Granted</th><th></th></tr></thead>
@@ -7888,6 +7911,31 @@ export async function viewAppAccessPolicy(content) {
       area.querySelector('#aap-assign-btn').addEventListener('click', () => openAssignModal());
       area.querySelector('#aap-sync-btn')?.addEventListener('click', () => syncCatalogAndReload());
       area.querySelector('#aap-tg-btn').addEventListener('click', openTagGroupModal);
+      area.querySelectorAll('.toggle-allow-all').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const appId = btn.dataset.id;
+          const name = btn.dataset.name || 'application';
+          const currentlyOn = btn.dataset.on === '1';
+          const next = !currentlyOn;
+          const msg = next
+            ? `Allow ALL active users to launch "${name}"?\n\nNo USER / GROUP assignment will be required. You can turn this off later.`
+            : `Restrict "${name}" to assigned users / groups only?`;
+          if (!confirm(msg)) return;
+          btn.disabled = true;
+          try {
+            await api.updateAppAllowAllUsers(appId, next);
+            const msgEl = area.querySelector('#aap-allow-all-msg');
+            if (msgEl) {
+              msgEl.innerHTML = `<div class="alert alert-success">${esc(name)}: ${next ? 'open to all users' : 'restricted to assignments'}.</div>`;
+            }
+            await loadAssignTab();
+            await loadStats();
+          } catch (e) {
+            alert(e.message);
+            btn.disabled = false;
+          }
+        });
+      });
       area.querySelectorAll('.edit-assign').forEach(btn => {
         btn.addEventListener('click', () => openAssignModal({
           id: btn.dataset.id,

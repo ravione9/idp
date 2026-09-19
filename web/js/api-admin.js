@@ -338,6 +338,11 @@ Object.assign(api, {
       method: 'PUT',
       body: JSON.stringify({ allowedCidrs }),
     }),
+  updateAppAllowAllUsers: (appId, allowAllUsers) =>
+    f(`/api/admin/app-access-policy/applications/${encodeURIComponent(appId)}/allow-all-users`, {
+      method: 'PUT',
+      body: JSON.stringify({ allowAllUsers: !!allowAllUsers }),
+    }),
   listTagGroups:        (activeOnly = true) =>
     f(`/api/admin/app-access-policy/tag-groups${activeOnly ? '' : '?activeOnly=0'}`),
   getTagGroup:          (id) => f(`/api/admin/app-access-policy/tag-groups/${id}`),

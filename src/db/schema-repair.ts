@@ -47,4 +47,15 @@ export async function repairSchemaDrift(): Promise<void> {
     );
     logger.info('Schema repair: applications.icon_mime added');
   }
+
+  if (!(await columnExists('applications', 'allow_all_users'))) {
+    logger.warn('Schema repair: adding applications.allow_all_users');
+    await execute(
+      `ALTER TABLE applications
+         ADD COLUMN allow_all_users TINYINT(1) NOT NULL DEFAULT 0
+           COMMENT '1 = any ACTIVE/REACTIVATED user may launch (Access Policy)'`,
+      [],
+    );
+    logger.info('Schema repair: applications.allow_all_users added');
+  }
 }
