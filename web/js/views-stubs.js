@@ -7830,7 +7830,18 @@ export async function viewAppAccessPolicy(content) {
     try {
       await loadAppsAndGroups();
       const assignments = norm(await api.listAppAssignments());
-      const assignRows = assignments.length ? assignments.map(a => `
+      const allowAllRows = appsCache.filter((a) => !!a.allow_all_users).map((a) => `
+        <tr>
+          <td class="cell-strong">${esc(a.name)}</td>
+          <td><span class="badge badge-warning">ALL_USERS</span></td>
+          <td>Every ACTIVE user</td>
+          <td class="muted">—</td>
+          <td class="actions">
+            <button class="btn btn-sm btn-warning revoke-allow-all"
+              data-id="${esc(String(a.id))}" data-name="${esc(a.name)}">Restrict</button>
+          </td>
+        </tr>`).join('');
+      const assignRows = assignments.map(a => `
         <tr>
           <td class="cell-strong">${esc(a.app_name || '—')}</td>
           <td><span class="badge ${a.assignment_type === 'USER' ? 'badge-info' : 'badge-success'}">${esc(a.assignment_type)}</span></td>
@@ -7844,7 +7855,9 @@ export async function viewAppAccessPolicy(content) {
               data-target="${esc(String(a.target_id))}">Edit</button>
             <button class="btn btn-sm btn-danger revoke-assign" data-id="${esc(String(a.id))}">Revoke</button>
           </td>
-        </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No active assignments.</p></div></td></tr>`;
+        </tr>`).join('');
+      const allAssignRows = (allowAllRows + assignRows)
+        || `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">◎</div><p>No active assignments.</p></div></td></tr>`;
 
       const tgRows = tagGroupsCache.length ? tagGroupsCache.map(g => {
         let tags = '—';
@@ -7864,7 +7877,7 @@ export async function viewAppAccessPolicy(content) {
         <div class="aap-actions">
           <div>
             <h3 class="section-title">Application Assignment</h3>
-            <p class="subtitle">Grant direct or group-based app access. Tag groups can also be managed under Identity → Groups → Tag Groups.</p>
+            <p class="subtitle">Grant user, group, or all-users access. Tag groups can also be managed under Identity → Groups → Tag Groups.</p>
           </div>
           <div class="aap-actions-btns">
             <button class="btn btn-primary" id="aap-assign-btn">+ Assign Access</button>
@@ -7874,33 +7887,10 @@ export async function viewAppAccessPolicy(content) {
         </div>
         ${appsLoadError ? `<div class="alert alert-error" style="margin-bottom:1rem">${esc(appsLoadError)}</div>` : ''}
         ${!appsCache.length && !appsLoadError ? '<div class="alert alert-info" style="margin-bottom:1rem">No assignable applications yet. Register under <strong>Applications → OIDC / OAuth</strong>, then click <strong>Sync catalog</strong>.</div>' : ''}
-        <h3 class="section-title">Allow all users</h3>
-        <p class="subtitle" style="margin-top:0">When enabled, every <strong>ACTIVE</strong> user can see and launch the app — no USER / GROUP assignment needed. IP restrictions still apply at SSO launch.</p>
-        <div id="aap-allow-all-msg" style="margin-bottom:0.75rem"></div>
-        <div class="table-wrap aap-table" style="margin-bottom:1.5rem"><table>
-          <thead><tr><th>Application</th><th>Slug</th><th>Access</th><th></th></tr></thead>
-          <tbody>${appsCache.length ? appsCache.map((a) => {
-            const on = !!a.allow_all_users;
-            return `<tr>
-              <td class="cell-strong">${esc(a.name)}</td>
-              <td class="muted"><code style="font-size:0.78rem">${esc(a.slug)}</code></td>
-              <td>${on
-                ? '<span class="badge badge-success">All users</span>'
-                : '<span class="badge badge-neutral">Assigned only</span>'}</td>
-              <td>
-                <button class="btn btn-sm ${on ? 'btn-warning' : 'btn-primary'} toggle-allow-all"
-                  data-id="${esc(String(a.id))}" data-name="${esc(a.name)}" data-on="${on ? '1' : '0'}">
-                  ${on ? 'Restrict to assignments' : 'Allow all users'}
-                </button>
-              </td>
-            </tr>`;
-          }).join('') : `<tr><td colspan="4"><div class="empty-state"><p>No applications yet.</p></div></td></tr>`}
-          </tbody>
-        </table></div>
         <h3 class="section-title">Active Assignments</h3>
         <div class="table-wrap aap-table"><table>
           <thead><tr><th>Application</th><th>Type</th><th>Target</th><th>Granted</th><th></th></tr></thead>
-          <tbody>${assignRows}</tbody>
+          <tbody>${allAssignRows}</tbody>
         </table></div>
         <h3 class="section-title">Tag Groups</h3>
         <div class="table-wrap"><table>
@@ -7911,23 +7901,13 @@ export async function viewAppAccessPolicy(content) {
       area.querySelector('#aap-assign-btn').addEventListener('click', () => openAssignModal());
       area.querySelector('#aap-sync-btn')?.addEventListener('click', () => syncCatalogAndReload());
       area.querySelector('#aap-tg-btn').addEventListener('click', openTagGroupModal);
-      area.querySelectorAll('.toggle-allow-all').forEach((btn) => {
+      area.querySelectorAll('.revoke-allow-all').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          const appId = btn.dataset.id;
           const name = btn.dataset.name || 'application';
-          const currentlyOn = btn.dataset.on === '1';
-          const next = !currentlyOn;
-          const msg = next
-            ? `Allow ALL active users to launch "${name}"?\n\nNo USER / GROUP assignment will be required. You can turn this off later.`
-            : `Restrict "${name}" to assigned users / groups only?`;
-          if (!confirm(msg)) return;
+          if (!confirm(`Restrict "${name}" to assigned users / groups only?`)) return;
           btn.disabled = true;
           try {
-            await api.updateAppAllowAllUsers(appId, next);
-            const msgEl = area.querySelector('#aap-allow-all-msg');
-            if (msgEl) {
-              msgEl.innerHTML = `<div class="alert alert-success">${esc(name)}: ${next ? 'open to all users' : 'restricted to assignments'}.</div>`;
-            }
+            await api.updateAppAllowAllUsers(btn.dataset.id, false);
             await loadAssignTab();
             await loadStats();
           } catch (e) {
@@ -7985,10 +7965,13 @@ export async function viewAppAccessPolicy(content) {
       ? identityOpts + tagOpts
       : '<option value="" disabled>No groups — create one under Identity → Groups or + Tag Group</option>';
 
-    const startAsUser = isEdit ? existing.assignmentType === 'USER' : true;
-    const typeUserSel = startAsUser ? ' selected' : '';
-    const typeGroupSel = !startAsUser ? ' selected' : '';
+    const startType = isEdit
+      ? (existing.assignmentType === 'USER' ? 'USER' : 'GROUP')
+      : 'USER';
+    const typeUserSel = startType === 'USER' ? ' selected' : '';
+    const typeGroupSel = startType === 'GROUP' ? ' selected' : '';
     const empVal = isEdit && existing.assignmentType === 'USER' ? esc(existing.targetId || '') : '';
+    const allUsersOpt = isEdit ? '' : '<option value="ALL_USERS">All users</option>';
 
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>${isEdit ? 'Edit Application Access' : 'Assign Application Access'}</h2></div><div class="modal-body">
       ${!appsCache.length ? '<div class="alert alert-info" style="margin-bottom:1rem;font-size:0.85rem">No applications in the assignable catalog yet. Register under <strong>Applications → SAML</strong> or <strong>OIDC / OAuth</strong> (auto-synced here), or add one in the IGA catalog with a valid slug (e.g. <code>ppm-eks</code>).</div>' : ''}
@@ -7996,8 +7979,8 @@ export async function viewAppAccessPolicy(content) {
       <div class="form-group"><label class="form-label">Application</label>
         <select class="form-select" id="aa-app"><option value="">— Select —</option>${appOpts}</select></div>
       <div class="form-group"><label class="form-label">Assignment Type</label>
-        <select class="form-select" id="aa-type"><option value="USER"${typeUserSel}>User-based</option><option value="GROUP"${typeGroupSel}>Group-based</option></select></div>
-      <div class="form-group" id="aa-user-wrap" style="${startAsUser ? '' : 'display:none'}">
+        <select class="form-select" id="aa-type"><option value="USER"${typeUserSel}>User-based</option><option value="GROUP"${typeGroupSel}>Group-based</option>${allUsersOpt}</select></div>
+      <div class="form-group" id="aa-user-wrap" style="${startType === 'USER' ? '' : 'display:none'}">
         <label class="form-label">User (search name, email, or emp ID)</label>
         <input class="form-input" id="aa-emp-search" placeholder="Type to search…" autocomplete="off">
         <input type="hidden" id="aa-emp" value="${empVal}">
@@ -8006,19 +7989,26 @@ export async function viewAppAccessPolicy(content) {
         <label class="form-label" style="margin-top:0.75rem">Or enter emp_id / employee number / email</label>
         <input class="form-input" id="aa-emp-manual" placeholder="e.g. E12345 or user@lenskart.com" value="${empVal}">
       </div>
-      <div class="form-group" id="aa-tg-wrap" style="${startAsUser ? 'display:none' : ''}"><label class="form-label">Group</label>
+      <div class="form-group" id="aa-tg-wrap" style="${startType === 'GROUP' ? '' : 'display:none'}"><label class="form-label">Group</label>
         <select class="form-select" id="aa-tg"><option value="">— Select —</option>${tgOpts}</select></div>
+      <div class="form-group" id="aa-all-wrap" style="display:none">
+        <p class="muted" style="font-size:0.88rem;margin:0">Every <strong>ACTIVE</strong> user can see and launch this app — no per-user or group assignment. IP restrictions still apply at SSO launch. Turn off later from Active Assignments → Restrict.</p>
+      </div>
       <div id="aa-err"></div>
     </div><div class="modal-footer">
       <button class="btn btn-primary" id="aa-save">${isEdit ? 'Save Changes' : 'Grant Access'}</button>
       <button class="btn btn-secondary" id="aa-cancel">Cancel</button>
     </div></div>`);
     const typeSel = bd.querySelector('#aa-type');
-    typeSel.addEventListener('change', () => {
-      const isUser = typeSel.value === 'USER';
-      bd.querySelector('#aa-user-wrap').style.display = isUser ? '' : 'none';
-      bd.querySelector('#aa-tg-wrap').style.display = isUser ? 'none' : '';
-    });
+    const syncTypePanels = () => {
+      const v = typeSel.value;
+      bd.querySelector('#aa-user-wrap').style.display = v === 'USER' ? '' : 'none';
+      bd.querySelector('#aa-tg-wrap').style.display = v === 'GROUP' ? '' : 'none';
+      bd.querySelector('#aa-all-wrap').style.display = v === 'ALL_USERS' ? '' : 'none';
+      const saveBtn = bd.querySelector('#aa-save');
+      if (saveBtn && !isEdit) saveBtn.textContent = v === 'ALL_USERS' ? 'Allow All Users' : 'Grant Access';
+    };
+    typeSel.addEventListener('change', syncTypePanels);
     let searchTimer = null;
     bd.querySelector('#aa-emp-search')?.addEventListener('input', () => {
       clearTimeout(searchTimer);
@@ -8057,6 +8047,17 @@ export async function viewAppAccessPolicy(content) {
     bd.querySelector('#aa-save').addEventListener('click', async () => {
       const appId = bd.querySelector('#aa-app').value;
       let assignmentType = typeSel.value;
+      if (!appId) { bd.querySelector('#aa-err').innerHTML = errHtml('Application is required'); return; }
+      if (assignmentType === 'ALL_USERS') {
+        const app = appsCache.find((a) => String(a.id) === String(appId));
+        const name = app?.name || 'this application';
+        if (!confirm(`Allow ALL active users to launch "${name}"?\n\nNo USER / GROUP assignment will be required. You can restrict later from Active Assignments.`)) return;
+        try {
+          await api.updateAppAllowAllUsers(appId, true);
+          bd.remove(); await loadAssignTab(); await loadStats();
+        } catch (e) { bd.querySelector('#aa-err').innerHTML = errHtml(e.message); }
+        return;
+      }
       let targetId = '';
       if (assignmentType === 'USER') {
         targetId = (bd.querySelector('#aa-emp').value || bd.querySelector('#aa-emp-manual').value || '').trim();
@@ -8066,7 +8067,7 @@ export async function viewAppAccessPolicy(content) {
         targetId = tgSel.value;
         assignmentType = selected?.dataset.type || 'GROUP';
       }
-      if (!appId || !targetId) { bd.querySelector('#aa-err').innerHTML = errHtml('Application and target are required'); return; }
+      if (!targetId) { bd.querySelector('#aa-err').innerHTML = errHtml('Application and target are required'); return; }
       try {
         if (isEdit) {
           await api.updateAppAssignment(existing.id, { appId, assignmentType, targetId });
