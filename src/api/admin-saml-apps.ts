@@ -19,6 +19,15 @@ import {
 import { enableSamlAppRequestAccess, ensureSamlAppMirrored, enableRequestAccessForAllSamlApps } from '../services/app-access-policy.js';
 import { configureAppScimProvisioning, disableAppScimProvisioning, syncSamlProtocolConfigFromSp } from '../services/app-protocol-config.js';
 import { openSecret } from '../utils/secret-box.js';
+import { asyncHandler } from '../utils/async-handler.js';
+import {
+  clearApplicationIcon,
+  iconUrlSchema,
+  parseUploadedIconBuffer,
+  reconcileApplicationIconUrl,
+  resolveAppIdFromSamlSpId,
+  storeApplicationIcon,
+} from '../services/app-icons.js';
 
 const router = Router();
 
@@ -39,7 +48,7 @@ const registerSpSchema = z.object({
   signAssertions:  z.boolean().optional(),
   signResponse:    z.boolean().optional(),
   mergeDefaultAttrs: z.boolean().optional(),
-  iconUrl:         z.string().url().optional().nullable(),
+  iconUrl:         iconUrlSchema,
   sortOrder:       z.number().int().optional(),
   /** Critical app — require fresh MFA at SSO launch (when MFA policy critical_app_mfa is on). */
   requireMfa:      z.boolean().optional(),
@@ -73,10 +82,20 @@ const updateSpSchema = z.object({
   signAssertions:  z.boolean().optional(),
   signResponse:    z.boolean().optional(),
   mergeDefaultAttrs: z.boolean().optional(),
-  iconUrl:         z.string().url().optional().nullable(),
+  iconUrl:         iconUrlSchema,
   active:          z.boolean().optional(),
   requireMfa:      z.boolean().optional(),
 });
+
+async function ensureAppIdForSamlSp(samlSpId: string): Promise<string | null> {
+  const sp = await queryOne<{ slug: string }>(
+    `SELECT slug FROM saml_service_providers WHERE id = ? LIMIT 1`,
+    [samlSpId],
+  );
+  if (!sp?.slug) return null;
+  await ensureSamlAppMirrored(sp.slug);
+  return resolveAppIdFromSamlSpId(samlSpId);
+}
 
 function validateAttributeMap(map: Record<string, string> | null | undefined): string | null {
   if (!map) return null;
@@ -432,6 +451,15 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
       }
     }
 
+    if (d.iconUrl !== undefined) {
+      const appId = await ensureAppIdForSamlSp(id);
+      if (appId) {
+        await reconcileApplicationIconUrl(appId, d.iconUrl ?? null).catch((err) =>
+          logger.warn({ err, id, appId }, 'Failed to sync SAML icon_url to applications'),
+        );
+      }
+    }
+
     logger.info({ id }, 'SAML SP updated via Admin Central');
     res.json({ success: true });
   } catch (err) {
@@ -579,6 +607,51 @@ router.delete('/:id/scim-config', async (req: Request, res: Response): Promise<v
     res.status(400).json({ error: msg });
   }
 });
+
+// POST /:id/icon — upload portal tile icon (stored on applications)
+router.post('/:id/icon', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing application id' });
+    return;
+  }
+  let parsed;
+  try {
+    parsed = parseUploadedIconBuffer(req.body);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid icon upload' });
+    return;
+  }
+  const appId = await ensureAppIdForSamlSp(id);
+  if (!appId) {
+    res.status(404).json({ error: 'Application not found' });
+    return;
+  }
+  const empId = req.user?.empId ?? null;
+  const result = await storeApplicationIcon({
+    appId,
+    buf: parsed.buf,
+    mime: parsed.mime,
+    updatedBy: empId,
+  });
+  res.json({ success: true, ...result, has_icon_upload: true });
+}));
+
+// DELETE /:id/icon — remove uploaded icon
+router.delete('/:id/icon', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing application id' });
+    return;
+  }
+  const appId = await ensureAppIdForSamlSp(id);
+  if (!appId) {
+    res.status(404).json({ error: 'Application not found' });
+    return;
+  }
+  const result = await clearApplicationIcon({ appId, updatedBy: req.user?.empId ?? null });
+  res.json({ success: true, ...result });
+}));
 
 // PUT /:id/activate — re-activate application
 router.put('/:id/activate', async (req: Request, res: Response): Promise<void> => {

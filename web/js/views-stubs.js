@@ -1,6 +1,7 @@
 import { api } from './api-admin.js';
 import { el, esc, escAttrJson, fmtDate, persistSearch, syncAppUrl } from './ui.js';
 import { icon as svgIcon } from './icons.js';
+import { appIconFieldHtml, bindAppIconField, uploadPendingAppIcon } from './app-icon-ui.js';
 
 function header(title, subtitle, action = '') {
   return `<div class="page-header page-header--compact">
@@ -3273,10 +3274,19 @@ function openSamlWizard(app) {
               <input class="form-input" id="w-slug" value="${esc(d.slug)}" pattern="[a-z0-9-]+">
               <p class="muted" style="font-size:0.72rem;margin-top:0.25rem">Used in launch URLs (<code>/saml/launch/${esc(d.slug)}</code>). Lower-case letters, digits, hyphens only.</p>
             </div>
+            ${appIconFieldHtml({ prefix: 'w', iconUrl: d.iconUrl || '' })}
           </div>
         `,
         bind: (body, d) => {
           body.querySelector('#w-nid').value = d.nameidFormat;
+          bindAppIconField(body, {
+            prefix: 'w',
+            resolveTarget: () => null,
+            onError: (msg) => {
+              const errEl = body.closest('.modal-body')?.querySelector('#wiz-err') || body.querySelector('#wiz-err');
+              if (errEl) errEl.textContent = msg;
+            },
+          });
           const errEl = body.closest('.modal-body')?.querySelector('#wiz-err') || body.querySelector('#wiz-err');
           async function applyMeta(data) {
             if (data.entityId) body.querySelector('#w-eid').value = data.entityId;
@@ -3330,6 +3340,8 @@ function openSamlWizard(app) {
           d.sloUrl       = body.querySelector('#w-slo').value.trim();
           d.defaultRelayState = body.querySelector('#w-relay').value.trim();
           d.nameidFormat = body.querySelector('#w-nid').value;
+          d.iconUrl      = body.querySelector('#w-icon')?.value.trim() || '';
+          d.iconPending  = body.querySelector('#w-icon-pending')?.value || '';
         },
       },
   ];
@@ -3418,6 +3430,7 @@ function openSamlWizard(app) {
         sloUrl:       d.sloUrl || undefined,
         defaultRelayState: d.defaultRelayState || undefined,
         nameidFormat: d.nameidFormat,
+        iconUrl:      d.iconUrl || undefined,
       };
       if (withScim) {
         payload.provisioning = true;
@@ -3427,7 +3440,10 @@ function openSamlWizard(app) {
           deprovisionMode: d.scimDeprovisionMode || 'DEACTIVATE',
         };
       }
-      await api.createSamlApp(payload);
+      const created = await api.createSamlApp(payload);
+      if (d.iconPending && created?.id) {
+        await uploadPendingAppIcon('w', { pending: d.iconPending }, { samlAppId: created.id });
+      }
       bd.querySelector('.wizard-stepper').style.display = 'none';
       bd.querySelector('#wiz-body').innerHTML = `
         <div class="wizard-success">
@@ -3490,6 +3506,8 @@ function openOidcWizard(app, opts = {}) {
     category:       app.cat,
     redirectsRaw:   '',
     portalLaunchUrl: '',
+    iconUrl: '',
+    iconPending: '',
     grants:         (app.grants || ['authorization_code', 'refresh_token']).filter((g) => allowedGrants.has(g)),
     scopes:         (app.scopes || ['openid', 'email', 'profile']).filter((s) => allowedScopes.has(s)),
     response_types: ['code'],
@@ -3583,8 +3601,17 @@ function openOidcWizard(app, opts = {}) {
               <strong>Sign in with SSO</strong> button (often <code>…/login/generic_oauth</code>, sometimes under <code>/graph</code>).
             </p>
           </div>
+          ${appIconFieldHtml({ prefix: 'oidc', iconUrl: d.iconUrl || '' })}
         `,
         bind: (body, d) => {
+          bindAppIconField(body, {
+            prefix: 'oidc',
+            resolveTarget: () => null,
+            onError: (msg) => {
+              const errEl = body.closest('.modal-body')?.querySelector('#wiz-err');
+              if (errEl) errEl.textContent = msg;
+            },
+          });
           const launchInput = body.querySelector('#w-portal-launch');
           const urisInput = body.querySelector('#w-uris');
           const syncLaunch = () => {
@@ -3611,6 +3638,8 @@ function openOidcWizard(app, opts = {}) {
           d.name = body.querySelector('#w-name').value.trim();
           d.redirectsRaw = body.querySelector('#w-uris').value;
           d.portalLaunchUrl = body.querySelector('#w-portal-launch').value.trim();
+          d.iconUrl = body.querySelector('#oidc-icon')?.value.trim() || '';
+          d.iconPending = body.querySelector('#oidc-icon-pending')?.value || '';
         },
       },
       {
@@ -3701,6 +3730,9 @@ function openOidcWizard(app, opts = {}) {
         category:       d.category,
         portal_launch_url: d.portalLaunchUrl || undefined,
       });
+      if (d.iconPending && result?.id) {
+        await uploadPendingAppIcon('oidc', { pending: d.iconPending }, { oidcClientId: result.id });
+      }
       bd.querySelector('.wizard-stepper').style.display = 'none';
       bd.querySelector('#wiz-body').innerHTML = `
         <div class="wizard-success">
@@ -3852,6 +3884,7 @@ export async function viewOidcApps(content, opts = {}) {
           <label class="form-check-row"><input type="checkbox" id="e-g-code" ${grants.includes('authorization_code') ? 'checked' : ''}> authorization_code</label>
           <label class="form-check-row"><input type="checkbox" id="e-g-refresh" ${grants.includes('refresh_token') ? 'checked' : ''}> refresh_token</label>
         </div>
+        ${appIconFieldHtml({ prefix: 'e', iconUrl: c.icon_url || '' })}
         <div class="form-group"><label class="form-label">Status</label>
           <select class="form-select" id="e-active">
             <option value="1" ${c.active ? 'selected' : ''}>Active</option>
@@ -3864,6 +3897,11 @@ export async function viewOidcApps(content, opts = {}) {
         <button class="btn btn-primary" id="e-save">Save</button>
       </div>
     </div>`);
+    bindAppIconField(bd, {
+      prefix: 'e',
+      resolveTarget: () => ({ oidcClientId: c.id }),
+      onError: (msg) => { bd.querySelector('#e-err').innerHTML = `<div class="alert alert-error">${esc(msg)}</div>`; },
+    });
     bd.querySelector('#e-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#e-save').addEventListener('click', async () => {
       const errEl = bd.querySelector('#e-err');

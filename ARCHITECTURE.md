@@ -531,6 +531,7 @@ To add a new migration:
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/api/public/branding` | Login branding (org name, logo, favicon, accent, hero copy, optional bg / custom CSS) — no auth |
 | `GET` | `/api/public/branding/logo` | Uploaded logo image bytes (404 if none) — no auth |
+| `GET` | `/api/public/apps/:appId/icon` | Uploaded application icon bytes (404 if none) — no auth |
 
 ### 8.2 Auth
 
@@ -612,6 +613,7 @@ To add a new migration:
 | `GET` | `/auth/local/bootstrap-status` | Public boolean `{ bootstrapEnabled }` only (no admin count) |
 | `POST` | `/auth/local/bootstrap` | First SUPER_ADMIN via `LOCAL_BOOTSTRAP_TOKEN` (rate-limited) |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/saml-apps[/:id]` | SAML SP registry (incl. attribute_map, NameID field, signing toggles; `POST` accepts optional `provisioning` + `scimConfig` for outbound SCIM; list includes `request_access` JIT flag, `scim_configured`, `scim_token_stored`, `scim_base_url`; `PUT /:id/scim-config` updates SCIM token on existing apps; `DELETE /:id/scim-config` disables SCIM) |
+| `POST`/`DELETE` | `/api/admin/saml-apps/:id/icon` | Upload / remove portal tile icon (PNG/JPEG/WebP/GIF ≤400 KB; stored on linked `applications` row) |
 | `POST` | `/api/admin/saml-apps/:id/enable-request-access` | Enable IGA JIT for one SAML SP (mirror + default workflow + `requestable`) |
 | `POST` | `/api/admin/saml-apps/enable-request-access-all` | Enable IGA JIT for every active SAML SP |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/api/admin/app-discovery[/:id]` | App Discovery inventory (`discovered_apps`) |
@@ -625,6 +627,7 @@ To add a new migration:
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
 | `GET`/`PUT` | `/api/admin/general-settings/google-oidc` | Read/update Google inbound OIDC credentials (SUPER_ADMIN) |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/oidc-clients[/:id]` | OIDC RP client registry (redirect URIs, scopes, grants, rotate secret) |
+| `POST`/`DELETE` | `/api/admin/oidc-clients/:id/icon` | Upload / remove portal tile icon for the linked catalog app |
 | `GET` | `/.well-known/openid-configuration` | OIDC discovery (public) |
 | `GET` | `/.well-known/jwks.json` | OIDC JWKS (public) |
 | `GET` | `/oauth/authorize` `/oauth/resume/:id` | OIDC authorize + login resume |
@@ -1127,6 +1130,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### 397d407 — 2026-09-18 — SAML / OIDC application icon upload
+
+**Why** — Admins could only paste an external Icon URL for portal tiles. Air-gapped and brand-controlled deployments need an upload path like branding logos.
+
+**What changed:**
+
+- Migration **`067_app_icon_upload.sql`** — `applications.icon_data` / `icon_mime` (DB-backed for multi-replica).
+- **`src/services/app-icons.ts`** — shared upload/serve helpers; syncs `icon_url` to matching SAML SP by slug.
+- **`POST/DELETE /api/admin/saml-apps/:id/icon`**, **`POST/DELETE /api/admin/oidc-clients/:id/icon`**, **`POST/DELETE /api/iga/applications/:id/icon`**, **`GET /api/public/apps/:appId/icon`**.
+- Admin UI — upload / preview / remove on SAML register+edit, OIDC wizard+edit, and catalog app forms (`web/js/app-icon-ui.js`).
+- `iconUrl` validation accepts site-relative paths (uploaded icons) as well as http(s) URLs.
 
 ### 7e6861b — 2026-09-17 — Stop AD multi-account suspend/unsuspend flip-flop + clearer reasons
 

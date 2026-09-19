@@ -15,6 +15,12 @@ import logger from '../utils/logger.js';
 import { resolveOrCreateOidcCatalogApp, ensureOidcAppMirrored, syncOidcAppsToCatalog } from '../oidc/portal-apps.js';
 import { ensureOidcProtocolLaunchConfig } from '../oidc/portal-launch.js';
 import { expandOidcRedirectUris } from '../oidc/redirect-uris.js';
+import {
+  clearApplicationIcon,
+  parseUploadedIconBuffer,
+  resolveAppIdFromOidcClientId,
+  storeApplicationIcon,
+} from '../services/app-icons.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -23,6 +29,11 @@ router.use(requireRole('ADMIN', 'SUPER_ADMIN'), requireAnyPortalModule('applicat
 
 function genSecret(len = 32): string {
   return crypto.randomBytes(len).toString('base64url');
+}
+
+async function ensureAppIdForOidcClient(oidcClientId: string): Promise<string | null> {
+  await ensureOidcAppMirrored(oidcClientId);
+  return resolveAppIdFromOidcClientId(oidcClientId);
 }
 
 async function oidcColumns(): Promise<Set<string>> {
@@ -79,13 +90,27 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   const pkceCol = cols.has('require_pkce') ? 'require_pkce' : '1 AS require_pkce';
 
   const appCol = cols.has('app_id') ? ', app_id' : '';
-  const rows = await query(
+  const rows = await query<Record<string, unknown>>(
     `SELECT id, client_id, ${nameCol}, redirect_uris, scopes, grant_types, response_types,
             ${authCol}, ${typeCol}, ${pkceCol}, active, created_at${appCol}
      FROM oidc_clients ORDER BY ${cols.has('name') ? 'name' : 'client_id'}`,
     [],
   );
-  res.json({ data: rows });
+  const enriched = await Promise.all(rows.map(async (row) => {
+    const appId = cols.has('app_id') ? (row['app_id'] as string | null) : null;
+    if (!appId) return { ...row, icon_url: null, has_icon_upload: 0 };
+    const icon = await queryOne<{ icon_url: string | null; has_icon_upload: number }>(
+      `SELECT icon_url, CASE WHEN icon_data IS NOT NULL THEN 1 ELSE 0 END AS has_icon_upload
+         FROM applications WHERE id = ? LIMIT 1`,
+      [appId],
+    );
+    return {
+      ...row,
+      icon_url: icon?.icon_url ?? null,
+      has_icon_upload: Number(icon?.has_icon_upload ?? 0),
+    };
+  }));
+  res.json({ data: enriched });
 }));
 
 // GET /:id
@@ -101,7 +126,7 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   const pkceCol = cols.has('require_pkce') ? 'require_pkce' : '1 AS require_pkce';
 
   const appCol = cols.has('app_id') ? ', app_id' : '';
-  const row = await queryOne(
+  const row = await queryOne<Record<string, unknown>>(
     `SELECT id, client_id, ${nameCol}, redirect_uris, scopes, grant_types, response_types,
             ${authCol}, ${typeCol}, ${pkceCol}, active, created_at${appCol}
      FROM oidc_clients WHERE id = ?`,
@@ -110,6 +135,19 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   if (!row) {
     res.status(404).json({ error: 'OIDC client not found' });
     return;
+  }
+  const appId = cols.has('app_id') ? (row['app_id'] as string | null) : null;
+  if (appId) {
+    const icon = await queryOne<{ icon_url: string | null; has_icon_upload: number }>(
+      `SELECT icon_url, CASE WHEN icon_data IS NOT NULL THEN 1 ELSE 0 END AS has_icon_upload
+         FROM applications WHERE id = ? LIMIT 1`,
+      [appId],
+    );
+    row['icon_url'] = icon?.icon_url ?? null;
+    row['has_icon_upload'] = Number(icon?.has_icon_upload ?? 0);
+  } else {
+    row['icon_url'] = null;
+    row['has_icon_upload'] = 0;
   }
   res.json(row);
 }));
@@ -353,6 +391,50 @@ router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
   }
 
   res.json({ success: true });
+}));
+
+// POST /:id/icon — upload portal tile icon (stored on linked applications row)
+router.post('/:id/icon', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing client id' });
+    return;
+  }
+  let parsed;
+  try {
+    parsed = parseUploadedIconBuffer(req.body);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid icon upload' });
+    return;
+  }
+  const appId = await ensureAppIdForOidcClient(id);
+  if (!appId) {
+    res.status(404).json({ error: 'OIDC client or catalog application not found' });
+    return;
+  }
+  const result = await storeApplicationIcon({
+    appId,
+    buf: parsed.buf,
+    mime: parsed.mime,
+    updatedBy: req.user?.empId ?? null,
+  });
+  res.json({ success: true, ...result, has_icon_upload: true });
+}));
+
+// DELETE /:id/icon
+router.delete('/:id/icon', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing client id' });
+    return;
+  }
+  const appId = await ensureAppIdForOidcClient(id);
+  if (!appId) {
+    res.status(404).json({ error: 'OIDC client or catalog application not found' });
+    return;
+  }
+  const result = await clearApplicationIcon({ appId, updatedBy: req.user?.empId ?? null });
+  res.json({ success: true, ...result });
 }));
 
 // POST /:id/rotate-secret

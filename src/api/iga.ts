@@ -28,6 +28,7 @@ import { normalizeAdConnectorConfig } from '../services/ad-ldap-connect.js';
 import { submitAccessRequest, processDecision, repairAccessRequestFulfillment } from '../services/access-request-workflow.js';
 import { isValidSyncSchedule } from '../utils/sync-schedule.js';
 import { jsonSafeRow, jsonSafeString } from '../utils/json-safe.js';
+import { iconUrlSchema } from '../services/app-icons.js';
 import { generateAgentToken, hashAgentToken } from '../utils/agent-token.js';
 import {
   buildAdAgentPackageZip,
@@ -68,7 +69,7 @@ const appSchema = z.object({
   ),
   name:        z.string().min(1).max(150),
   description: z.string().max(2000).optional(),
-  iconUrl:     z.union([z.string().url(), z.literal('')]).optional().transform((v) => (v ? v : undefined)),
+  iconUrl:     iconUrlSchema,
   category:    z.string().max(50).optional(),
   ownerEmpId:  z.string().max(20).optional(),
   visibility:  z.enum(['PUBLIC', 'RESTRICTED']).default('PUBLIC'),
@@ -195,8 +196,64 @@ router.put(
     setClauses.push('updated_at = UTC_TIMESTAMP()');
     values.push(app.id);
     await execute(`UPDATE applications SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    if (d.iconUrl !== undefined) {
+      const { reconcileApplicationIconUrl } = await import('../services/app-icons.js');
+      await reconcileApplicationIconUrl(app.id, d.iconUrl ?? null).catch(() => undefined);
+    }
     logger.info({ id: app.id }, 'Application updated');
     res.json({ updated: true });
+  }),
+);
+
+// POST /applications/:id/icon — upload portal tile icon
+router.post(
+  '/applications/:id/icon',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('applications'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const app = await queryOne<{ id: string }>(
+      `SELECT id FROM applications WHERE id = ? OR slug = ?`,
+      [req.params['id'], req.params['id']],
+    );
+    if (!app) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+    const { parseUploadedIconBuffer, storeApplicationIcon } = await import('../services/app-icons.js');
+    let parsed;
+    try {
+      parsed = parseUploadedIconBuffer(req.body);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid icon upload' });
+      return;
+    }
+    const result = await storeApplicationIcon({
+      appId: app.id,
+      buf: parsed.buf,
+      mime: parsed.mime,
+      updatedBy: req.user?.empId ?? null,
+    });
+    res.json({ success: true, ...result, has_icon_upload: true });
+  }),
+);
+
+// DELETE /applications/:id/icon
+router.delete(
+  '/applications/:id/icon',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  requirePortalModule('applications'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const app = await queryOne<{ id: string }>(
+      `SELECT id FROM applications WHERE id = ? OR slug = ?`,
+      [req.params['id'], req.params['id']],
+    );
+    if (!app) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+    const { clearApplicationIcon } = await import('../services/app-icons.js');
+    const result = await clearApplicationIcon({ appId: app.id, updatedBy: req.user?.empId ?? null });
+    res.json({ success: true, ...result });
   }),
 );
 

@@ -4,6 +4,7 @@ import { api } from './api-admin.js';
 import { el, esc, fmtDate, fmtShortDate, ilgBadge, initials, build30DaySeries, renderLineChart, renderDonut, persistSearch, syncAppUrl, isPortalSuperAdmin } from './ui.js';
 import { icon as svgIcon } from './icons.js';
 import { viewOidcApps, viewPrebuiltApps, viewAppDiscovery, viewSsoReports } from './views-stubs.js';
+import { appIconFieldHtml, bindAppIconField, uploadPendingAppIcon } from './app-icon-ui.js';
 
 // Shared helpers (mirrors views-stubs.js — not yet in a shared module)
 function openModal(html) {
@@ -783,10 +784,7 @@ export async function viewIgaApps(content, opts = {}) {
           </div>
           ${samlAttrMapEditorHtml('csp', attrRows, fields)}
           ${samlSigningHtml('csp', sp)}
-          <div class="form-group span2">
-            <label class="form-label">Icon URL <span class="muted" style="font-weight:400">(optional)</span></label>
-            <input class="form-input" id="csp-icon" type="url" value="${esc(sp?.icon_url||'')}" placeholder="https://…/logo.png">
-          </div>
+          ${appIconFieldHtml({ prefix: 'csp', iconUrl: sp?.icon_url || '' })}
           <div class="form-group span2">
             <label class="mfa-toggle-row" style="display:flex;gap:0.55rem;align-items:flex-start;cursor:pointer;margin:0">
               <input type="checkbox" id="csp-require-mfa" ${sp?.require_mfa ? 'checked' : ''} style="margin-top:0.2rem">
@@ -809,6 +807,11 @@ export async function viewIgaApps(content, opts = {}) {
     bindSpMetadataUpload(bd, 'csp', { errId: 'csp-err', nameId: 'csp-name', slugId: 'csp-slug', isEdit });
     bindSamlAttrEditor(bd, 'csp');
     if (isEdit) bindSamlScimToggle(bd, 'csp');
+    bindAppIconField(bd, {
+      prefix: 'csp',
+      resolveTarget: () => (isEdit && sp?.id ? { samlAppId: sp.id } : null),
+      onError: (msg) => { bd.querySelector('#csp-err').innerHTML = errHtml(msg); },
+    });
     bd.querySelector('#csp-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#csp-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#csp-save');
@@ -847,7 +850,11 @@ export async function viewIgaApps(content, opts = {}) {
           if (scimCfg?.disabled) await api.deleteSamlScimConfig(sp.id);
           else if (scimCfg) await api.updateSamlScimConfig(sp.id, scimCfg);
         } else {
-          await api.createSamlApp(data);
+          const created = await api.createSamlApp(data);
+          const pending = bd.querySelector('#csp-icon-pending')?.value;
+          if (pending && created?.id) {
+            await uploadPendingAppIcon('csp', bd, { samlAppId: created.id });
+          }
         }
         bd.remove();
         await loadApps();
@@ -1021,10 +1028,7 @@ export async function viewIgaApps(content, opts = {}) {
               <option value="RESTRICTED"  ${(app?.visibility)==='RESTRICTED'           ?'selected':''}>Restricted</option>
             </select>
           </div>
-          <div class="form-group span2">
-            <label class="form-label">Icon URL <span class="muted" style="font-weight:400">(optional)</span></label>
-            <input class="form-input" id="ac-icon" value="${esc(app?.icon_url||'')}" type="url" placeholder="https://…/logo.png">
-          </div>
+          ${appIconFieldHtml({ prefix: 'ac', iconUrl: app?.icon_url || '' })}
           <div class="form-group">
             <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
               <input type="checkbox" id="ac-sso" ${app?.sso_enabled||(!isEdit)?'checked':''}> SSO Enabled
@@ -1045,6 +1049,12 @@ export async function viewIgaApps(content, opts = {}) {
     </div>`);
 
     bd.querySelector('#ac-cancel').addEventListener('click', () => bd.remove());
+
+    bindAppIconField(bd, {
+      prefix: 'ac',
+      resolveTarget: () => (isEdit && app?.id ? { appId: app.id } : null),
+      onError: (msg) => { bd.querySelector('#ac-err').innerHTML = errHtml(msg); },
+    });
 
     if (!isEdit) {
       const nameInput = bd.querySelector('#ac-name');
@@ -1083,7 +1093,12 @@ export async function viewIgaApps(content, opts = {}) {
 
       try {
         if (isEdit) await api.updateIgaApp(app.id, data);
-        else        await api.createIgaApp(data);
+        else {
+          const created = await api.createIgaApp(data);
+          if (bd.querySelector('#ac-icon-pending')?.value && created?.id) {
+            await uploadPendingAppIcon('ac', bd, { appId: created.id });
+          }
+        }
         bd.remove();
         await loadApps();
       } catch(e) {
@@ -1188,10 +1203,7 @@ export async function viewSamlApps(me, content, opts = {}) {
           </div>
           ${samlAttrMapEditorHtml('sp', attrRows, fields)}
           ${samlSigningHtml('sp', sp)}
-          <div class="form-group span2">
-            <label class="form-label">Icon URL <span class="muted" style="font-weight:400">(optional)</span></label>
-            <input class="form-input" id="sp-icon" type="url" value="${esc(sp?.icon_url||'')}" placeholder="https://…/logo.png">
-          </div>
+          ${appIconFieldHtml({ prefix: 'sp', iconUrl: sp?.icon_url || '' })}
           <div class="form-group span2">
             <label class="mfa-toggle-row" style="display:flex;gap:0.55rem;align-items:flex-start;cursor:pointer;margin:0">
               <input type="checkbox" id="sp-require-mfa" ${sp?.require_mfa ? 'checked' : ''} style="margin-top:0.2rem">
@@ -1214,6 +1226,11 @@ export async function viewSamlApps(me, content, opts = {}) {
     bindSpMetadataUpload(bd, 'sp', { errId: 'sp-err', nameId: 'sp-name', slugId: 'sp-slug', isEdit });
     bindSamlAttrEditor(bd, 'sp');
     if (isEdit) bindSamlScimToggle(bd, 'sp');
+    bindAppIconField(bd, {
+      prefix: 'sp',
+      resolveTarget: () => (isEdit && sp?.id ? { samlAppId: sp.id } : null),
+      onError: (msg) => { bd.querySelector('#sp-err').innerHTML = errHtml(msg); },
+    });
     bd.querySelector('#sp-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#sp-save').addEventListener('click', async () => {
       const saveBtn = bd.querySelector('#sp-save');
@@ -1252,7 +1269,10 @@ export async function viewSamlApps(me, content, opts = {}) {
           if (scimCfg?.disabled) await api.deleteSamlScimConfig(sp.id);
           else if (scimCfg) await api.updateSamlScimConfig(sp.id, scimCfg);
         } else {
-          await api.createSamlApp(data);
+          const created = await api.createSamlApp(data);
+          if (bd.querySelector('#sp-icon-pending')?.value && created?.id) {
+            await uploadPendingAppIcon('sp', bd, { samlAppId: created.id });
+          }
         }
         bd.remove();
         viewSamlApps(me, content, opts);
