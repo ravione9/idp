@@ -1217,6 +1217,12 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`web/js/views-admin.js`** / **`api-admin.js`** — uncheck + save calls DELETE; list exposes `scim_base_url` / `scim_token_stored` for re-enable without re-entering the token.
 - **`PUT .../scim-config`** — reuses inactive sealed token (open then re-seal) when bearer token left blank.
 
+### (pending) — 2026-09-20 — Google incremental sync: skip auto-all group membership refresh
+
+**Why** — With Sync Groups blank/`*` (auto-all), every incremental run re-synced ~1445 Workspace groups after 11k users, so hourly schedules never reached SUCCESS and older runs looked “FAILED” from reclaim.
+
+**What changed:** **`src/services/google-sync.ts`** — on `INCREMENTAL` + auto-all groups, skip group membership sync (users/attrs still update); full group refresh only on **Full Sync** or when Sync Groups is an explicit list.
+
 ### (pending) — 2026-09-19 — Google sync: stop false stale-timeout failures + fix department updates
 
 **Why** — Google Workspace sync of ~11k users was marked **FAILED / Reclaimed: stale timeout** every 3 hours even with 0 user failures (inbound finished, then group sync had no heartbeats). Departments often stayed blank because OU/custom-schema fallbacks were weak and `sync_department` TINYINT flags were not coerced safely.
