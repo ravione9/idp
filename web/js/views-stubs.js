@@ -5084,7 +5084,7 @@ function initSourcesTab(panel) {
         ${isGoogle ? `<div id="cfg-pane-auth" class="cfg-pane ds-cfg-pane" style="display:none">${googleAuthFields}</div>` : ''}
         <div id="cfg-pane-scope" class="cfg-pane ds-cfg-pane" style="display:none">
           <p class="ds-cfg-pane-intro">${isGoogle
-            ? 'Choose which OUs and users to import. Leave blank to sync the entire directory. <strong>Sync Groups</strong> mirrors Workspace groups into Identity → Groups.'
+            ? 'Choose which OUs and users to import. Leave blank to sync the entire directory. <strong>Sync Groups</strong> mirrors Workspace groups into Identity → Groups. Blank/*/ALL auto-all groups run only on <strong>Full Sync</strong> (skipped on hourly incremental to finish in time).'
             : 'Choose which OUs and users to import from AD. Leave <strong>Sync OUs</strong> blank to sync all users under Base DN. <strong>New User OU</strong> (Connection tab) is for outbound provisioning only. <strong>Sync Groups</strong> mirrors AD groups into Identity → Groups.'}</p>
           <div class="ds-form-grid">${isGoogle ? googleScopeFields : adScopeFields}</div>
         </div>` : `

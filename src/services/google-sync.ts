@@ -17,6 +17,7 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   buildGoogleJwtAuth,
   employeeEligibleForGoogleOutbound,
+  isGoogleGroupSyncAll,
   listScopedGoogleUsers,
   normalizeConnectorDirection,
   resolveGoogleSyncScope,
@@ -733,27 +734,37 @@ export async function runGoogleSync(
       usersDisabled = inbound.disabled;
       let groupSummary = '';
       try {
-        await reportProgress('groups', 'Syncing Google groups and memberships');
-        const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope, cfg, {
-          onProgress: async (p) => {
-            await reportProgress(
-              'groups',
-              `groups ${p.groupsDone}/${p.groupsTotal}`
-                + (p.current ? ` (${p.current})` : '')
-                + `, ${p.membersSynced} members`,
-            );
-          },
-        });
-        const mode = gs.autoAll ? ' (auto-all)' : '';
-        groupSummary =
-          ` | Groups: ${gs.groupsSynced} synced, ${gs.membersSynced} members` +
-          mode +
-          (gs.errors.length
-            ? ` (${gs.errors.length} errors: ${gs.errors.slice(0, 2).join('; ')}${gs.errors.length > 2 ? '…' : ''})`
-            : gs.groupsSynced === 0
-              ? ' (none matched — add group emails in Sync Groups, or use * / blank for auto-all)'
-              : '');
-        errors.push(...gs.errors);
+        const autoAllGroups = isGoogleGroupSyncAll(cfg);
+        // Hourly incremental + auto-all (~1400 groups) never finishes before the next day.
+        // Refresh full group memberships only on FULL_SYNC (or when Sync Groups is an explicit list).
+        if (runType === 'INCREMENTAL' && autoAllGroups) {
+          groupSummary =
+            ' | Groups: skipped on incremental (auto-all) — run Full Sync to refresh all Workspace group memberships';
+          await reportProgress('groups-skipped', 'Skipped auto-all group sync on incremental');
+          logger.info({ connectorId, runId }, 'Google sync: skipped auto-all group sync on INCREMENTAL');
+        } else {
+          await reportProgress('groups', 'Syncing Google groups and memberships');
+          const gs = await syncGoogleDirectoryGroups(connectorId, directory, scope, cfg, {
+            onProgress: async (p) => {
+              await reportProgress(
+                'groups',
+                `groups ${p.groupsDone}/${p.groupsTotal}`
+                  + (p.current ? ` (${p.current})` : '')
+                  + `, ${p.membersSynced} members`,
+              );
+            },
+          });
+          const mode = gs.autoAll ? ' (auto-all)' : '';
+          groupSummary =
+            ` | Groups: ${gs.groupsSynced} synced, ${gs.membersSynced} members` +
+            mode +
+            (gs.errors.length
+              ? ` (${gs.errors.length} errors: ${gs.errors.slice(0, 2).join('; ')}${gs.errors.length > 2 ? '…' : ''})`
+              : gs.groupsSynced === 0
+                ? ' (none matched — add group emails in Sync Groups, or use * / blank for auto-all)'
+                : '');
+          errors.push(...gs.errors);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         groupSummary = ` | Groups: failed (${msg})`;
