@@ -3,7 +3,6 @@
  * API Server Entry Point
  */
 
-import './tracing.js';
 import path from 'path';
 import https from 'node:https';
 import express, { Request, Response, NextFunction } from 'express';
@@ -49,7 +48,6 @@ import configIdentityProfilesRouter from './api/config-identity-profiles.js';
 import configAdaptiveAuthRouter from './api/config-adaptive-auth.js';
 import configPasswordPoliciesRouter from './api/config-password-policies.js';
 import configBrandingRouter, { publicBrandingRouter } from './api/config-branding.js';
-import { publicAppIconsRouter } from './api/app-icons.js';
 import configGeneralSettingsRouter from './api/config-general-settings.js';
 import configOidcClientsRouter from './api/config-oidc-clients.js';
 import oidcRouter from './oidc/router.js';
@@ -70,7 +68,7 @@ import configAttendanceIgaRouter from './api/config-attendance-iga.js';
 import configRadiusRouter from './api/config-radius.js';
 import internalRadiusRouter from './api/internal-radius.js';
 import internalAdConnectorRouter from './api/internal-ad-connector.js';
-import { startRadiusUdpServer } from './services/radius-udp.js';
+import { startRadiusUdpServer, stopRadiusUdpServer } from './services/radius-udp.js';
 
 // Auth
 import {
@@ -237,7 +235,6 @@ app.use('/api/admin/adaptive-auth', configAdaptiveAuthRouter);
 app.use('/api/admin/password-policies', configPasswordPoliciesRouter);
 app.use('/api/admin/branding', configBrandingRouter);
 app.use('/api/public/branding', publicBrandingRouter);
-app.use('/api/public/apps', publicAppIconsRouter);
 app.use('/api/admin/general-settings', configGeneralSettingsRouter);
 app.use('/api/admin/oidc-clients', configOidcClientsRouter);
 app.use('/api/admin/pam', configPamRouter);
@@ -398,20 +395,6 @@ async function main(): Promise<void> {
   startDynamicGroupScheduler();
   startRadiusUdpServer();
 
-  try {
-    const { syncSamlAppsToCatalog } = await import('./services/app-access-policy.js');
-    const { syncOidcAppsToCatalog } = await import('./oidc/portal-apps.js');
-    const [samlSynced, oidcSynced] = await Promise.all([
-      syncSamlAppsToCatalog(),
-      syncOidcAppsToCatalog(),
-    ]);
-    if (samlSynced > 0 || oidcSynced > 0) {
-      logger.info({ samlSynced, oidcSynced }, 'Boot: synced protocol apps into applications catalog');
-    }
-  } catch (err) {
-    logger.warn({ err }, 'Boot: application catalog sync failed (Access Policy may be missing apps until retried)');
-  }
-
   const server = app.listen(config.app.port, () => {
     logger.info({ port: config.app.port, env: config.app.nodeEnv }, 'IDP API server started');
   });
@@ -459,17 +442,27 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
 
+    // Drop UDP listener immediately (not tied to HTTP server.close).
+    stopRadiusUdpServer();
+
     // Close HTTPS server first if running
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const httpsServer = (globalThis as any).__httpsServer as https.Server | undefined;
-    if (httpsServer) httpsServer.close(() => logger.info('HTTPS server closed'));
+    if (httpsServer) {
+      // Node 18.2+: drop keep-alives so close() is not stalled by idle sockets
+      if (typeof httpsServer.closeAllConnections === 'function') {
+        httpsServer.closeAllConnections();
+      }
+      httpsServer.close(() => logger.info('HTTPS server closed'));
+    }
+    if (typeof server.closeAllConnections === 'function') {
+      server.closeAllConnections();
+    }
 
     server.close(async () => {
       logger.info('HTTP server closed');
       await sessionRedis.quit();
       await closePool();
-      const { shutdownTracing } = await import('./tracing.js');
-      await shutdownTracing();
       logger.info('Shutdown complete');
       process.exit(0);
     });

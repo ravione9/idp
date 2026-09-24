@@ -47,7 +47,7 @@ function googleLogoSvg(size = 28) {
 function googleSsoButtonHtml(returnTo) {
   return `<a href="${esc(googleLoginHref(returnTo))}" class="btn btn-secondary btn-block auth-sso-btn auth-sso-btn--google">
     ${googleLogoSvg(28)}
-    <span class="auth-sso-btn__label">Login from Lenskart Gmail account</span>
+    <span class="auth-sso-btn__label">Login with <strong>Lenskart Gmail</strong> account</span>
   </a>`;
 }
 
@@ -130,10 +130,10 @@ export function renderLogin() {
   }
 
   function authLeadText() {
-    if (ssoResume) return loginBranding.login_hero_sub || 'Continue to your application with your work account.';
+    if (ssoResume) return loginBranding.login_hero_sub || 'Continue to your application.';
     return loginBranding.login_hero_sub
       || loginBranding.login_hero_title
-      || 'Sign in with your work account to continue.';
+      || 'Sign in to your Lenskart account.';
   }
 
   function applyLoginBranding(root) {
@@ -251,8 +251,8 @@ export function renderLogin() {
           <div id="login-error"></div>
           <form id="email-form">
             <div class="field">
-              <label for="email">Email</label>
-              <input id="email" name="email" type="email" required autocomplete="username" placeholder="Enter your business email" />
+              <label for="email">Lenskart AD Email</label>
+              <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@lenskart.com" />
             </div>
             <button type="submit" class="btn btn-primary btn-block btn-lg auth-continue">Continue</button>
           </form>
@@ -568,8 +568,8 @@ export function renderLogin() {
         <div id="login-error"></div>
         <form id="email-form">
           <div class="field">
-            <label for="email">Email</label>
-            <input id="email" name="email" type="email" required autocomplete="username" placeholder="Enter your business email" />
+            <label for="email">Lenskart AD Email</label>
+            <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@lenskart.com" />
           </div>
           <button type="submit" class="btn btn-primary btn-block btn-lg auth-continue">Continue</button>
         </form>
