@@ -130,10 +130,10 @@ export function renderLogin() {
   }
 
   function authLeadText() {
-    if (ssoResume) return loginBranding.login_hero_sub || 'Continue to your application with your work account.';
+    if (ssoResume) return loginBranding.login_hero_sub || 'Continue to your application with your Lenskart AD credentials.';
     return loginBranding.login_hero_sub
       || loginBranding.login_hero_title
-      || 'Sign in with your work account to continue.';
+      || 'Sign in with your Lenskart AD credentials.';
   }
 
   function applyLoginBranding(root) {
@@ -251,8 +251,9 @@ export function renderLogin() {
           <div id="login-error"></div>
           <form id="email-form">
             <div class="field">
-              <label for="email">Email</label>
-              <input id="email" name="email" type="email" required autocomplete="username" placeholder="Enter your business email" />
+              <label for="email">Lenskart AD email</label>
+              <input id="email" name="email" type="email" required autocomplete="username" placeholder="Enter your Lenskart AD email" />
+              <p class="hint">For Lenskart Active Directory credentials</p>
             </div>
             <button type="submit" class="btn btn-primary btn-block btn-lg auth-continue">Continue</button>
           </form>
@@ -516,8 +517,8 @@ export function renderLogin() {
         <div id="pw-error"></div>
         <form id="password-form">
           <div class="field">
-            <label for="password">Password</label>
-            <input id="password" name="password" type="password" required autocomplete="current-password" />
+            <label for="password">Lenskart AD password</label>
+            <input id="password" name="password" type="password" required autocomplete="current-password" placeholder="Enter your Lenskart AD password" />
           </div>
           <button type="submit" class="btn btn-primary btn-block btn-lg auth-continue">Sign in</button>
         </form>
@@ -568,8 +569,9 @@ export function renderLogin() {
         <div id="login-error"></div>
         <form id="email-form">
           <div class="field">
-            <label for="email">Email</label>
-            <input id="email" name="email" type="email" required autocomplete="username" placeholder="Enter your business email" />
+            <label for="email">Lenskart AD email</label>
+            <input id="email" name="email" type="email" required autocomplete="username" placeholder="Enter your Lenskart AD email" />
+            <p class="hint">For Lenskart Active Directory credentials</p>
           </div>
           <button type="submit" class="btn btn-primary btn-block btn-lg auth-continue">Continue</button>
         </form>
