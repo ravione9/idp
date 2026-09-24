@@ -1135,7 +1135,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `80ad33c` — 2026-09-24 — Unblock pam-2 deploy hang on stale API container remove
+### `f59df45` — 2026-09-24 — Unblock pam-2 deploy hang on stale API container remove
 
 **Why** — `deploy.sh` / `restart-api.sh` could hang forever at `Removing stale API containers` / `Going to remove idp-api` when a long Google/AD sync blocked the Node event loop (SIGTERM + 30s force-exit never ran) and `compose stop` / `rm -s` waited indefinitely.
 
