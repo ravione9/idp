@@ -1135,7 +1135,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-24 — Login AD/Gmail polish + pam-2 deploy hang fix
+### `96e41a1` — 2026-09-24 — Login AD/Gmail polish + pam-2 deploy hang fix
 
 **Why** — Login copy needed clearer **Lenskart AD Email** labeling and Google button text; pam-2 `deploy.sh` could hang forever removing `idp-api` during long syncs.
 
