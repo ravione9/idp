@@ -47,7 +47,7 @@ function googleLogoSvg(size = 28) {
 function googleSsoButtonHtml(returnTo) {
   return `<a href="${esc(googleLoginHref(returnTo))}" class="btn btn-secondary btn-block auth-sso-btn auth-sso-btn--google">
     ${googleLogoSvg(28)}
-    <span class="auth-sso-btn__label">Continue with Google</span>
+    <span class="auth-sso-btn__label">Login with lenskart gmail account</span>
   </a>`;
 }
 
