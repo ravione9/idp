@@ -606,6 +606,37 @@ button { font-family: inherit; cursor: pointer; }
   color: var(--login-accent);
 }
 
+.auth-sso-btn--google {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  min-height: 3.1rem;
+  padding: 0.7rem 1rem;
+  font-size: 0.98rem;
+  font-weight: 600;
+  line-height: 1.25;
+  text-decoration: none;
+}
+
+.auth-sso-btn--google .auth-google-logo {
+  flex-shrink: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.auth-sso-btn--google .auth-sso-btn__label {
+  text-align: left;
+}
+
+.auth-card--light .auth-sso-btn--google.btn-secondary:hover {
+  color: #1e293b;
+}
+
+.auth-card--light .auth-sso-btn--google.btn-secondary:hover .auth-sso-btn__label {
+  color: var(--login-accent);
+}
+
 .auth-card--light .btn-link {
   color: var(--login-accent);
 }
