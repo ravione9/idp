@@ -68,7 +68,7 @@ import configAttendanceIgaRouter from './api/config-attendance-iga.js';
 import configRadiusRouter from './api/config-radius.js';
 import internalRadiusRouter from './api/internal-radius.js';
 import internalAdConnectorRouter from './api/internal-ad-connector.js';
-import { startRadiusUdpServer } from './services/radius-udp.js';
+import { startRadiusUdpServer, stopRadiusUdpServer } from './services/radius-udp.js';
 
 // Auth
 import {
@@ -442,10 +442,22 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
 
+    // Drop UDP listener immediately (not tied to HTTP server.close).
+    stopRadiusUdpServer();
+
     // Close HTTPS server first if running
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const httpsServer = (globalThis as any).__httpsServer as https.Server | undefined;
-    if (httpsServer) httpsServer.close(() => logger.info('HTTPS server closed'));
+    if (httpsServer) {
+      // Node 18.2+: drop keep-alives so close() is not stalled by idle sockets
+      if (typeof httpsServer.closeAllConnections === 'function') {
+        httpsServer.closeAllConnections();
+      }
+      httpsServer.close(() => logger.info('HTTPS server closed'));
+    }
+    if (typeof server.closeAllConnections === 'function') {
+      server.closeAllConnections();
+    }
 
     server.close(async () => {
       logger.info('HTTP server closed');
