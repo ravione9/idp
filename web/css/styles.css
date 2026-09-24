@@ -526,9 +526,9 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 .auth-card--light {
-  max-width: 380px;
-  padding: 2.35rem 2rem 2rem;
-  border-radius: 16px;
+  max-width: 340px;
+  padding: 1.75rem 1.5rem 1.5rem;
+  border-radius: 14px;
   background: #ffffff;
   border: 1px solid #dce3ec;
   box-shadow:
@@ -543,10 +543,29 @@ button { font-family: inherit; cursor: pointer; }
   color: var(--login-muted) !important;
 }
 
+.auth-card--light .auth-lead {
+  font-size: 0.82rem !important;
+  margin-bottom: 1rem !important;
+  text-align: center;
+}
+
+.auth-card--light #email-form,
+.auth-card--light #password-form {
+  width: 100%;
+  max-width: 280px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.auth-card--light .field {
+  margin-bottom: 0.75rem;
+}
+
 .auth-card--light .field label {
   color: #334155;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 600;
+  margin-bottom: 0.3rem;
 }
 
 .auth-card--light .form-input,
@@ -558,6 +577,10 @@ button { font-family: inherit; cursor: pointer; }
   border: 1px solid #cbd5e1;
   color: var(--login-text);
   border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  min-height: 2.35rem;
+  box-sizing: border-box;
 }
 
 .auth-card--light .form-input::placeholder,
@@ -580,8 +603,11 @@ button { font-family: inherit; cursor: pointer; }
   border-color: var(--login-accent);
   color: #fff;
   font-weight: 600;
+  font-size: 0.875rem;
   border-radius: 8px;
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--login-accent) 28%, transparent);
+  min-height: 2.35rem;
+  padding: 0.5rem 1rem;
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--login-accent) 24%, transparent);
 }
 
 .auth-card--light .auth-continue.btn-primary:hover,
@@ -607,26 +633,36 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 .auth-sso-btn--google {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.75rem;
-  min-height: 3.1rem;
-  padding: 0.7rem 1rem;
-  font-size: 0.98rem;
+  gap: 0.55rem;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.875rem;
   font-weight: 600;
   line-height: 1.25;
   text-decoration: none;
+  max-width: 280px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
 }
 
 .auth-sso-btn--google .auth-google-logo {
   flex-shrink: 0;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 1.35rem;
+  height: 1.35rem;
 }
 
 .auth-sso-btn--google .auth-sso-btn__label {
   text-align: left;
+}
+
+.auth-card--light .auth-divider {
+  max-width: 280px;
+  margin: 0.85rem auto;
 }
 
 .auth-card--light .auth-sso-btn--google.btn-secondary:hover {
