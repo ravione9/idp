@@ -658,6 +658,12 @@ button { font-family: inherit; cursor: pointer; }
 
 .auth-sso-btn--google .auth-sso-btn__label {
   text-align: left;
+  font-weight: 500;
+}
+
+.auth-sso-btn--google .auth-sso-btn__label strong {
+  font-weight: 700;
+  color: inherit;
 }
 
 .auth-card--light .auth-divider {
