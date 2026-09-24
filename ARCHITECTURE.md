@@ -908,7 +908,7 @@ sudo bash scripts/fix-and-start.sh
 
 **Do not** run raw `docker-compose up --build` — use `./dev-up.sh` or `restart-api.sh` (ContainerConfig workaround).
 
-`./dev-up.sh` and `scripts/compose.sh` auto-remove stale `idp-api` / `lilg-api` containers before any `up --build`. **Permanent fix:** install Compose v2 once: `sudo bash scripts/install-compose-v2.sh`.
+`./dev-up.sh` and `scripts/compose.sh` auto-remove stale `idp-api` / `lilg-api` containers before any `up --build` via `idp_rm_stale_api` (**`docker kill` + timed `docker rm -f`**, not graceful `compose stop` — long syncs can block SIGTERM). **Permanent fix:** install Compose v2 once: `sudo bash scripts/install-compose-v2.sh`.
 
 `fix-and-start.sh` handles:
 1. `.env` bootstrap from `env.dev.example` if missing.
@@ -1012,6 +1012,7 @@ docker exec -i idp-mysql mysql -ulilg_app -ps3cr3t_change_me lilg < migrations/<
 |---|---|---|
 | `git pull` — "local changes would be overwritten" | Tracked files edited on pam-2 (manual script fixes) | **`bash scripts/sync-repo.sh`** or **`bash scripts/deploy.sh`** — never commit on pam-2; use `.env` for config |
 | `KeyError: 'ContainerConfig'` on `up -d --build` | docker-compose **v1.29** tries to recreate an existing container after image rebuild | **`bash scripts/deploy.sh`** or **`bash scripts/restart-api.sh`**. Permanent fix: `sudo bash scripts/install-compose-v2.sh` |
+| Deploy hangs at `Removing stale API containers` / `Going to remove idp-api` | Old `compose stop` / `rm -s` waited on graceful SIGTERM; Node event loop blocked by long Google/AD sync so stop never finished | Ctrl+C, then `docker kill idp-api; docker rm -f idp-api` (or `systemctl restart docker`). Re-run **`bash scripts/deploy.sh`** (cleanup now kills first with timeouts) |
 | Browser login appears to fail (no redirect) | `Secure` cookie flag rejected over HTTP | `COOKIE_SECURE=false` in `.env` |
 | `Table 'lilg.lilg_sessions' doesn't exist` | Pre-migration MySQL volume | Restart API — migrations apply automatically |
 | `getaddrinfo EAI_AGAIN mysql` / API crash-loop, container named `lilg-api` while DB is `idp-mysql` | API started with root `docker-compose.yml` instead of `docker-compose.dev.yml` — `lilg-api` lands on a different network and cannot resolve hostname `mysql` | `docker rm -f lilg-api` then `./dev-up.sh up -d --build lilg-api` or `bash scripts/restart-api.sh` (never use bare `docker-compose up` on pam-2) |
@@ -1133,6 +1134,18 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-09-24 — Login AD/Gmail polish + pam-2 deploy hang fix
+
+**Why** — Login copy needed clearer **Lenskart AD Email** labeling and Google button text; pam-2 `deploy.sh` could hang forever removing `idp-api` during long syncs.
+
+**What changed:**
+
+- **`web/js/views-end-user.js`** — label **Lenskart AD Email**; Google button **Login with Lenskart Gmail account** (bold brand words); compact form layout.
+- **`web/css/styles.css`** / **`web/index.html`** — tighter login card alignment + cache bust.
+- **`scripts/compose-lib.sh`** — `idp_rm_stale_api` uses timed `docker kill` + `docker rm -f` first (no graceful `compose stop`).
+- **`src/index.ts`** — shutdown closes RADIUS UDP and `closeAllConnections()`.
+- **§11 / §12.2** — document kill-first cleanup and hang recovery.
 
 ### (pending) — 2026-09-19 — Application Access Policy: allow all users
 

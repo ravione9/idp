@@ -41,20 +41,38 @@ idp_ensure_compose_v2() {
   return 0
 }
 
+# Kill + remove with a hard deadline. Graceful `compose stop` / `rm -s` can hang
+# forever when Node is stuck in a long Google/AD sync (event loop blocked →
+# SIGTERM handler + 30s force-exit never run) or Docker is wedged on stop.
+_idp_docker_kill_rm() {
+  local id="$1"
+  [[ -n "$id" ]] || return 0
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 15 docker kill "$id" 2>/dev/null || true
+    timeout 30 docker rm -f "$id" 2>/dev/null || true
+  else
+    docker kill "$id" 2>/dev/null || true
+    docker rm -f "$id" 2>/dev/null || true
+  fi
+}
+
 idp_rm_stale_api() {
   echo "==> Removing stale API containers (ContainerConfig workaround)..."
-  "${IDP_COMPOSE[@]}" stop lilg-api 2>/dev/null || true
-  # Remove from compose project (clears ghost names like 504b9cb60f54_idp-api)
-  "${IDP_COMPOSE[@]}" rm -f -s lilg-api 2>/dev/null || true
-  docker rm -f idp-api lilg-api 2>/dev/null || true
-  # Any container whose name contains idp-api or lilg-api (compose v1 debris)
+  # Kill first — do not use compose stop / rm -s (those wait on graceful SIGTERM).
   local id
   while read -r id; do
-    [[ -n "$id" ]] && docker rm -f "$id" 2>/dev/null || true
-  done < <(docker ps -aq --filter "name=idp-api" 2>/dev/null || true)
-  while read -r id; do
-    [[ -n "$id" ]] && docker rm -f "$id" 2>/dev/null || true
-  done < <(docker ps -aq --filter "name=lilg-api" 2>/dev/null || true)
+    _idp_docker_kill_rm "$id"
+  done < <(
+    { docker ps -aq --filter "name=idp-api" 2>/dev/null || true
+      docker ps -aq --filter "name=lilg-api" 2>/dev/null || true
+    } | sort -u
+  )
+  # Best-effort compose project bookkeeping (no -s = no stop wait). Cap wait.
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 20 "${IDP_COMPOSE[@]}" rm -f lilg-api 2>/dev/null || true
+  else
+    "${IDP_COMPOSE[@]}" rm -f lilg-api 2>/dev/null || true
+  fi
 }
 
 # Ensure MySQL, Redis, and LocalStack are up before API (fixes EAI_AGAIN mysql on fresh servers).
