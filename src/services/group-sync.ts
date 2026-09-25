@@ -216,16 +216,53 @@ async function resolveGoogleGroupKeys(
   return { keys: listed.emails, errors: [], autoAll: true };
 }
 
+/** Default groups per incremental run when Sync Groups is blank / * / ALL (~1445 total). */
+export const GOOGLE_GROUP_PROGRESSIVE_LIMIT = 50;
+
+/**
+ * Prefer never-synced / new Workspace groups, then oldest last_synced_at.
+ * Listing all group emails is cheap; full members.list per group is the bottleneck.
+ */
+async function pickProgressiveGoogleGroupKeys(
+  connectorId: string,
+  allEmails: string[],
+  limit: number,
+): Promise<string[]> {
+  if (limit <= 0 || !allEmails.length) return [];
+  const existing = await query<{ external_id: string; last_synced_at: Date | string | null }>(
+    `SELECT external_id, last_synced_at FROM \`groups\`
+      WHERE connector_id = ? AND source_system = 'GOOGLE' AND active = 1`,
+    [connectorId],
+  );
+  const known = new Map(
+    existing.map((r) => [String(r.external_id).trim().toLowerCase(), r.last_synced_at]),
+  );
+  const listed = new Set(allEmails.map((e) => e.toLowerCase()));
+  const newOnes = allEmails.filter((e) => !known.has(e));
+  const stale = [...known.entries()]
+    .filter(([email]) => listed.has(email))
+    .sort((a, b) => {
+      const ta = a[1] ? new Date(a[1]).getTime() : 0;
+      const tb = b[1] ? new Date(b[1]).getTime() : 0;
+      return (Number.isFinite(ta) ? ta : 0) - (Number.isFinite(tb) ? tb : 0);
+    })
+    .map(([email]) => email);
+  return [...new Set([...newOnes, ...stale])].slice(0, limit);
+}
+
 export async function syncGoogleDirectoryGroups(
   connectorId: string,
   directory: admin_directory_v1.Admin,
   scope: GoogleSyncScope,
   cfg?: Record<string, unknown>,
   opts: {
+    /** When true with auto-all, only refresh a batch of groups (for hourly INCREMENTAL). */
+    progressive?: boolean;
+    progressiveLimit?: number;
     onProgress?: (p: { groupsDone: number; groupsTotal: number; membersSynced: number; current?: string }) => void | Promise<void>;
   } = {},
-): Promise<GroupSyncSummary & { autoAll: boolean }> {
-  const summary: GroupSyncSummary & { autoAll: boolean } = {
+): Promise<GroupSyncSummary & { autoAll: boolean; progressive?: boolean; catalogSize?: number }> {
+  const summary: GroupSyncSummary & { autoAll: boolean; progressive?: boolean; catalogSize?: number } = {
     groupsSynced: 0,
     membersSynced: 0,
     errors: [],
@@ -235,8 +272,16 @@ export async function syncGoogleDirectoryGroups(
   const resolved = await resolveGoogleGroupKeys(directory, scope, cfg);
   summary.autoAll = resolved.autoAll;
   summary.errors.push(...resolved.errors);
-  const groupKeys = resolved.keys;
+  let groupKeys = resolved.keys;
   if (!groupKeys.length) return summary;
+
+  if (opts.progressive && resolved.autoAll) {
+    const limit = Math.max(1, opts.progressiveLimit ?? GOOGLE_GROUP_PROGRESSIVE_LIMIT);
+    summary.progressive = true;
+    summary.catalogSize = groupKeys.length;
+    groupKeys = await pickProgressiveGoogleGroupKeys(connectorId, groupKeys, limit);
+    if (!groupKeys.length) return summary;
+  }
 
   const syncMembers = scope.syncGroupMemberships !== false;
   const groupsTotal = groupKeys.length;

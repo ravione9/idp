@@ -1135,6 +1135,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-25 — Google incremental group refresh + MFA grace harden
+
+**Why** — Scheduled Google sync always runs `INCREMENTAL` and previously **skipped** auto-all group membership refresh, so Identity → Groups stayed stale unless someone clicked Full Sync. Separately, Google portal sign-in could fail with `auth_failed` if `employees.mfa_grace_started_at` was missing (migration 069) because `ensureMfaGraceStarted` threw into the OAuth callback.
+
+**What changed:**
+
+- **`src/services/group-sync.ts`** / **`google-sync.ts`** — incremental + auto-all now syncs a progressive batch (~50 oldest/new groups per run) instead of skipping; Full Sync still refreshes all.
+- **`src/auth/mfa-grace.ts`** / **`middleware.ts`** — grace start never throws into Google login.
+- **`src/db/schema-repair.ts`** — adds `mfa_grace_started_at` if migration lagged.
+- **`web/js/views-stubs.js`** — Sync Groups help text matches progressive incremental behavior.
+
 ### (pending) — 2026-09-25 — Fix directory users crash on identity_sources
 
 **Why** — Universal Directory → Users failed with `(u.identity_sources || "").split is not a function` because BLOB `typeCast` treated MySQL `GROUP_CONCAT` (text BLOB) as a binary Buffer.
@@ -1266,6 +1277,8 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 **Why** — With Sync Groups blank/`*` (auto-all), every incremental run re-synced ~1445 Workspace groups after 11k users, so hourly schedules never reached SUCCESS and older runs looked “FAILED” from reclaim.
 
 **What changed:** **`src/services/google-sync.ts`** — on `INCREMENTAL` + auto-all groups, skip group membership sync (users/attrs still update); full group refresh only on **Full Sync** or when Sync Groups is an explicit list.
+
+**Superseded 2026-09-25** — progressive batch refresh on incremental (see entry above) instead of a full skip.
 
 ### (pending) — 2026-09-19 — Google sync: stop false stale-timeout failures + fix department updates
 

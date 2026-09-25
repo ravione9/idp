@@ -459,7 +459,9 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
           'EX',
           MFA_ENROLL_CHALLENGE_TTL_S,
         );
-        await ensureMfaGraceStarted(emp.emp_id, mfaRequirements.gracePeriodHours);
+        await ensureMfaGraceStarted(emp.emp_id, mfaRequirements.gracePeriodHours).catch((err) => {
+          logger.warn({ err, empId: emp.emp_id }, 'MFA grace start failed after Google login — continuing enroll');
+        });
         const graceRemainingMs = await getGraceRemainingMs(emp.emp_id, mfaRequirements.gracePeriodHours);
         const params = new URLSearchParams({
           enroll_challenge: enrollChallengeId,
