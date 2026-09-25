@@ -106,13 +106,14 @@ export async function ensureMfaGraceStarted(empId: string, gracePeriodHours: num
   const healedHistory = await healFromAuthHistory(empId);
   if (healedHistory != null) return;
 
+  // Never throw into Google/local login — missing migration must not block sign-in.
   await execute(
     `UPDATE employees
         SET mfa_grace_started_at = UTC_TIMESTAMP()
       WHERE emp_id = ?
         AND mfa_grace_started_at IS NULL`,
     [empId],
-  );
+  ).catch(() => undefined);
 }
 
 export async function getGraceRemainingMs(empId: string, gracePeriodHours: number): Promise<number> {

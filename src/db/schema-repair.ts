@@ -58,4 +58,15 @@ export async function repairSchemaDrift(): Promise<void> {
     );
     logger.info('Schema repair: applications.allow_all_users added');
   }
+
+  if (!(await columnExists('employees', 'mfa_grace_started_at'))) {
+    logger.warn('Schema repair: adding employees.mfa_grace_started_at');
+    await execute(
+      `ALTER TABLE employees
+         ADD COLUMN mfa_grace_started_at DATETIME DEFAULT NULL
+           COMMENT 'UTC when MFA enrollment grace first started; NULL = not started'`,
+      [],
+    );
+    logger.info('Schema repair: employees.mfa_grace_started_at added');
+  }
 }
