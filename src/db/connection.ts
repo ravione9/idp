@@ -32,6 +32,14 @@ export const pool: Pool = mysql.createPool({
   // Reconnect on gone-away / lost connection errors
   multipleStatements: false,
   connectTimeout:    10_000,
+  // Keep BLOB columns as Buffer (utf8mb4 charset must not re-decode them).
+  typeCast(field, next) {
+    const t = String(field.type);
+    if (t.includes('BLOB')) {
+      return field.buffer();
+    }
+    return next();
+  },
 });
 
 // ---------------------------------------------------------------------------

@@ -108,23 +108,26 @@ async function ensureBrandingRow(): Promise<void> {
 export const publicBrandingRouter = Router();
 
 publicBrandingRouter.get('/logo', asyncHandler(async (_req: Request, res: Response) => {
-  const row = await queryOne<{ logo_data: Buffer | null; logo_mime: string | null; updated_at: Date | null }>(
+  const row = await queryOne<{ logo_data: unknown; logo_mime: string | null; updated_at: Date | null }>(
     `SELECT logo_data, logo_mime, updated_at FROM branding_settings WHERE id = 1`,
     [],
   );
-  if (!row?.logo_data || !Buffer.isBuffer(row.logo_data) || row.logo_data.length === 0) {
+  const { coerceDbBinary } = await import('../services/app-icons.js');
+  const buf = coerceDbBinary(row?.logo_data);
+  if (!buf || buf.length === 0) {
     res.status(404).json({ error: 'No uploaded logo' });
     return;
   }
-  const mime = row.logo_mime && ALLOWED_LOGO_MIME.has(row.logo_mime)
+  const mime = row?.logo_mime && ALLOWED_LOGO_MIME.has(row.logo_mime)
     ? row.logo_mime
-    : (sniffLogoMime(row.logo_data) || 'application/octet-stream');
+    : (sniffLogoMime(buf) || 'application/octet-stream');
   res.setHeader('Content-Type', mime);
-  res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
-  if (row.updated_at) {
+  res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=604800');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (row?.updated_at) {
     res.setHeader('ETag', `"logo-${new Date(row.updated_at).getTime()}"`);
   }
-  res.send(row.logo_data);
+  res.end(buf);
 }));
 
 publicBrandingRouter.get('/', asyncHandler(async (_req: Request, res: Response) => {

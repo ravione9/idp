@@ -71,25 +71,35 @@ export function bindAppIconField(root, opts) {
   };
 
   const setPreview = (url) => {
-    if (!prevEl) return;
+    if (!prevEl && !root.querySelector(`#${prefix}-icon-prev`)) return;
+    const host = root.querySelector(`#${prefix}-icon-prev`) || prevEl;
+    if (!host) return;
     if (url) {
-      if (prevEl.tagName === 'IMG') {
-        prevEl.src = url;
-        prevEl.style.display = '';
+      if (host.tagName === 'IMG') {
+        host.onerror = () => {
+          host.style.display = 'none';
+          setStatus('Preview failed — re-upload the image');
+        };
+        host.src = url;
+        host.style.display = '';
       } else {
         const img = document.createElement('img');
         img.id = `${prefix}-icon-prev`;
         img.alt = '';
         img.src = url;
         img.style.cssText = 'width:40px;height:40px;border-radius:8px;object-fit:cover;border:1px solid var(--border)';
-        prevEl.replaceWith(img);
+        img.onerror = () => {
+          img.style.display = 'none';
+          setStatus('Preview failed — re-upload the image');
+        };
+        host.replaceWith(img);
       }
-    } else if (prevEl.tagName === 'IMG') {
+    } else if (host.tagName === 'IMG') {
       const ph = document.createElement('div');
       ph.id = `${prefix}-icon-prev`;
       ph.style.cssText = 'width:40px;height:40px;border-radius:8px;background:var(--surface-2,#f1f5f9);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:0.75rem;color:var(--muted)';
       ph.textContent = '—';
-      prevEl.replaceWith(ph);
+      host.replaceWith(ph);
     }
     if (clearBtn) clearBtn.disabled = !url;
   };
@@ -137,7 +147,12 @@ export function bindAppIconField(root, opts) {
             fileName: file.name,
           });
         }
-        if (urlInput) urlInput.value = r.icon_url || '';
+        if (urlInput) {
+          // Persist canonical site path (no host / cache-buster) so save won't wipe icon_data.
+          const raw = r.icon_url || '';
+          const pathOnly = raw.split('?')[0] || raw;
+          urlInput.value = pathOnly.startsWith('/') ? pathOnly : raw;
+        }
         if (pendingInput) pendingInput.value = '';
         setPreview(r.icon_url || '');
         setStatus('Uploaded');
