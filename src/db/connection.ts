@@ -32,10 +32,17 @@ export const pool: Pool = mysql.createPool({
   // Reconnect on gone-away / lost connection errors
   multipleStatements: false,
   connectTimeout:    10_000,
-  // Keep BLOB columns as Buffer (utf8mb4 charset must not re-decode them).
+  // Only force Buffer for *binary* BLOBs (charset 63). Text aggregations like
+  // GROUP_CONCAT are also typed BLOB and must stay UTF-8 strings.
   typeCast(field, next) {
     const t = String(field.type);
-    if (t.includes('BLOB')) {
+    const charset = Number(
+      // mysql2 exposes charsetNr on Field; older typings use charsetnr
+      (field as { charsetNr?: number; charsetnr?: number }).charsetNr
+        ?? (field as { charsetnr?: number }).charsetnr
+        ?? 0,
+    );
+    if (t.includes('BLOB') && charset === 63) {
       return field.buffer();
     }
     return next();
