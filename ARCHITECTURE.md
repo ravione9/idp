@@ -1131,7 +1131,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### (pending) — 2026-09-25 — Enforce MFA grace end (no endless skip)
+### `437a295` — 2026-09-25 — Enforce MFA grace end (no endless skip)
 
 **Why** — After the MFA setup grace period ended, users could still click skip / “Set up on next sign-in” and get a portal session. Redis grace keys used a TTL equal to the grace window, so once the key expired the next login started a **new** grace window (`SET NX`).
 
