@@ -1144,6 +1144,14 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`src/db/connection.ts`** — `typeCast` only forces Buffer for binary BLOBs (`charsetNr === 63`).
 - **`web/js/views-stubs.js`** — tolerate string, array, or Buffer-JSON for `identity_sources`.
 
+### (pending) — 2026-09-25 — Mount public app icon route
+
+**Why** — App icon upload stored `icon_data` and set `icon_url` to `/api/public/apps/:appId/icon`, but the preview always failed because `publicAppIconsRouter` was never mounted in `src/index.ts`.
+
+**What changed:**
+
+- **`src/index.ts`** — `app.use('/api/public/apps', publicAppIconsRouter)` (unauthenticated GET `/:appId/icon`).
+
 ### (pending) — 2026-09-25 — Fix app icon / branding logo corruption on serve
 
 **Why** — Uploaded app icons showed “Uploaded” but the preview was a broken image: MySQL BLOB bytes were sometimes not returned as `Buffer`, and saving the form with an absolute/`?v=` icon URL caused `reconcileApplicationIconUrl` to **wipe `icon_data`**.
