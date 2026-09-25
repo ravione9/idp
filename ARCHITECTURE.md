@@ -543,7 +543,7 @@ To add a new migration:
 | `POST` | `/auth/local/login/mfa-verify` | Submit TOTP / backup code |
 | `POST` | `/auth/local/login/mfa-enroll` | Start TOTP enrollment during login (QR + secret; no session) |
 | `POST` | `/auth/local/login/mfa-enroll/confirm` | Confirm TOTP during login → enable MFA + issue session |
-| `POST` | `/auth/local/login/mfa-enroll/defer` | Defer enrollment — issues session immediately (password/OIDC already verified); user completes MFA on a later sign-in |
+| `POST` | `/auth/local/login/mfa-enroll/defer` | Defer enrollment **only while grace remains** — issues session; after grace ends returns `403 MFA_GRACE_EXPIRED` (must enroll) |
 | `GET`  | `/auth/google` `/auth/google/callback` | Google Workspace OIDC |
 | `POST` | `/auth/logout` | End current session |
 | `GET`  | `/auth/zoho` `/auth/zoho/callback` | **Removed** — returns HTTP 410 Gone (Zoho Mail is now a SAML SP) |
@@ -1134,6 +1134,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-09-25 — Enforce MFA grace end (no endless skip)
+
+**Why** — After the MFA setup grace period ended, users could still click skip / “Set up on next sign-in” and get a portal session. Redis grace keys used a TTL equal to the grace window, so once the key expired the next login started a **new** grace window (`SET NX`).
+
+**What changed:**
+
+- Migration **`069_mfa_grace_started_at.sql`** — `employees.mfa_grace_started_at` (durable grace start).
+- **`src/auth/mfa-grace.ts`** — persist start in MySQL; heal legacy Redis + prior defer/enroll-pending `auth_attempts`; do not reset after expiry.
+- **`POST /auth/local/login/mfa-enroll/defer`** — returns `403 MFA_GRACE_EXPIRED` when grace remaining ≤ 0 (no session).
+- **`web/js/views-end-user.js`** — hide skip button when grace is inactive; show “cannot skip” message.
 
 ### `96e41a1` — 2026-09-24 — Login AD/Gmail polish + pam-2 deploy hang fix
 

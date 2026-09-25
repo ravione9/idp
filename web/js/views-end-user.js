@@ -301,10 +301,8 @@ export function renderLogin() {
   }
 
   function renderMfaEnrollStep(enrollChallengeId, email, { graceActive = false, gracePeriodHours = 24 } = {}) {
-    const deferLabel = graceActive ? 'Continue without MFA for now' : 'Set up on next sign-in';
-    const deferHint = graceActive
-      ? `MFA must be enabled within ${gracePeriodHours} hour${gracePeriodHours === 1 ? '' : 's'} of your first required sign-in.`
-      : 'You will be prompted to set up MFA the next time you sign in.';
+    const deferLabel = 'Continue without MFA for now';
+    const deferHint = `MFA must be enabled within ${gracePeriodHours} hour${gracePeriodHours === 1 ? '' : 's'} of your first required sign-in.`;
 
     persistEnrollChallengeInUrl(enrollChallengeId, email, { graceActive, gracePeriodHours });
 
@@ -326,6 +324,15 @@ export function renderLogin() {
       }
     }
 
+    const deferBlock = graceActive
+      ? `<div style="text-align:center;margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+          <button type="button" class="btn btn-link" id="enroll-defer">${esc(deferLabel)}</button>
+          <p class="hint" style="margin-top:0.35rem">${esc(deferHint)}</p>
+        </div>`
+      : `<div style="text-align:center;margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+          <p class="hint">Grace period has ended. Complete MFA setup to continue — you cannot skip.</p>
+        </div>`;
+
     const card = el(`
       <div class="auth-card auth-card--light">
         ${authBrandHtml()}
@@ -334,14 +341,11 @@ export function renderLogin() {
         <div id="enroll-error"></div>
         <div id="enroll-loading" class="muted">Loading setup…</div>
         <div id="enroll-body" hidden></div>
-        <div style="text-align:center;margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
-          <button type="button" class="btn btn-link" id="enroll-defer">${esc(deferLabel)}</button>
-          <p class="hint" style="margin-top:0.35rem">${esc(deferHint)}</p>
-        </div>
+        ${deferBlock}
       </div>
     `);
     wrapStep(card);
-    card.querySelector('#enroll-defer').addEventListener('click', () => { void deferEnrollment(); });
+    card.querySelector('#enroll-defer')?.addEventListener('click', () => { void deferEnrollment(); });
     const errEl = card.querySelector('#enroll-error');
     const bodyEl = card.querySelector('#enroll-body');
     const loadingEl = card.querySelector('#enroll-loading');
