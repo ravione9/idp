@@ -1135,6 +1135,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-25 — Fix directory users crash on identity_sources
+
+**Why** — Universal Directory → Users failed with `(u.identity_sources || "").split is not a function` because BLOB `typeCast` treated MySQL `GROUP_CONCAT` (text BLOB) as a binary Buffer.
+
+**What changed:**
+
+- **`src/db/connection.ts`** — `typeCast` only forces Buffer for binary BLOBs (`charsetNr === 63`).
+- **`web/js/views-stubs.js`** — tolerate string, array, or Buffer-JSON for `identity_sources`.
+
 ### (pending) — 2026-09-25 — Fix app icon / branding logo corruption on serve
 
 **Why** — Uploaded app icons showed “Uploaded” but the preview was a broken image: MySQL BLOB bytes were sometimes not returned as `Buffer`, and saving the form with an absolute/`?v=` icon URL caused `reconcileApplicationIconUrl` to **wipe `icon_data`**.
@@ -1143,7 +1152,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 - **`src/services/app-icons.ts`** — `coerceDbBinary`; normalize upload paths (host/`?v=`); reconcile keeps bytes for our upload URLs.
 - **`src/api/app-icons.ts`** / **`config-branding.ts`** — serve coerced buffers; sniff MIME; `res.end(buf)`.
-- **`src/db/connection.ts`** — `typeCast` returns Buffer for BLOB columns.
+- **`src/db/connection.ts`** — `typeCast` returns Buffer for **binary** BLOB columns only.
 - **`web/js/app-icon-ui.js`** — store canonical path after upload; preview `onerror` hint.
 
 ### (pending) — 2026-09-25 — Enforce MFA grace end (no endless skip)

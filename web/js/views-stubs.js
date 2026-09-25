@@ -5970,7 +5970,19 @@ function initUsersTab(panel, me = null) {
     }
 
     const rows = users.map(u => {
-      const sources = (u.identity_sources || '').split(',').filter(Boolean);
+      const rawSources = u.identity_sources;
+      let sources = [];
+      if (Array.isArray(rawSources)) {
+        sources = rawSources.map(String).filter(Boolean);
+      } else if (typeof rawSources === 'string') {
+        sources = rawSources.split(',').map((s) => s.trim()).filter(Boolean);
+      } else if (rawSources && typeof rawSources === 'object' && Array.isArray(rawSources.data)) {
+        // JSON-serialized Node Buffer from a bad BLOB typeCast
+        try {
+          sources = new TextDecoder().decode(Uint8Array.from(rawSources.data))
+            .split(',').map((s) => s.trim()).filter(Boolean);
+        } catch { sources = []; }
+      }
       const badges  = sources.length ? sources.map(srcBadge).join('') : srcBadge('LOCAL');
       const displayId = u.employee_number || u.emp_id;
       const init = (u.full_name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
