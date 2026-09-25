@@ -687,6 +687,22 @@ export async function localLoginMfaEnrollDeferHandler(req: Request, res: Respons
 
   const mfaRequirements = await getMfaRequirementContext(challenge.empId);
   const graceRemainingMs = await getGraceRemainingMs(challenge.empId, mfaRequirements.gracePeriodHours);
+
+  // Grace over (or grace_period_hours = 0): do not issue a session — user must enroll.
+  if (graceRemainingMs <= 0) {
+    await logAttempt(challenge.email, getClientIp(req), false, 'mfa-enroll-defer-denied-grace-ended');
+    logger.warn(
+      { empId: challenge.empId, email: challenge.email, gracePeriodHours: mfaRequirements.gracePeriodHours },
+      'MFA enroll defer rejected — grace period ended',
+    );
+    res.status(403).json({
+      error: 'MFA setup grace period has ended. Complete MFA enrollment to continue.',
+      code: 'MFA_GRACE_EXPIRED',
+      enrollRequired: true,
+    });
+    return;
+  }
+
   await redis.del(key);
 
   const iss = challenge.iss ?? 'local';
@@ -708,25 +724,13 @@ export async function localLoginMfaEnrollDeferHandler(req: Request, res: Respons
   setSessionCookie(res, sessionId, ttlHours);
 
   const redirect = challenge.returnTo || '/';
-  if (graceRemainingMs > 0) {
-    await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-deferred-grace');
-    logger.info({ empId: challenge.empId, email: challenge.email, iss }, 'Login with deferred MFA enrollment (grace)');
-    res.json({
-      success: true,
-      redirect,
-      deferredEnrollment: true,
-      graceRemainingHours: Math.ceil(graceRemainingMs / 3_600_000),
-    });
-    return;
-  }
-
-  await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-deferred');
-  logger.info({ empId: challenge.empId, email: challenge.email, iss }, 'Login with deferred MFA enrollment');
+  await logAttempt(challenge.email, getClientIp(req), true, 'mfa-enroll-deferred-grace');
+  logger.info({ empId: challenge.empId, email: challenge.email, iss }, 'Login with deferred MFA enrollment (grace)');
   res.json({
     success: true,
     redirect,
     deferredEnrollment: true,
-    enrollRequiredNextLogin: true,
+    graceRemainingHours: Math.ceil(graceRemainingMs / 3_600_000),
   });
 }
 
