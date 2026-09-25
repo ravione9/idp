@@ -6,6 +6,7 @@ import { asyncHandler } from '../utils/async-handler.js';
 import {
   ALLOWED_APP_ICON_MIME,
   getApplicationIconRow,
+  sniffImageMime,
 } from '../services/app-icons.js';
 
 export const publicAppIconsRouter = Router();
@@ -18,19 +19,22 @@ publicAppIconsRouter.get('/:appId/icon', asyncHandler(async (req: Request, res: 
   }
 
   const row = await getApplicationIconRow(appId);
-  if (!row?.icon_data || !Buffer.isBuffer(row.icon_data) || row.icon_data.length === 0) {
+  const buf = row?.icon_data ?? null;
+  if (!buf || buf.length === 0) {
     res.status(404).json({ error: 'No uploaded icon' });
     return;
   }
 
-  const mime = row.icon_mime && ALLOWED_APP_ICON_MIME.has(row.icon_mime)
-    ? row.icon_mime
-    : 'application/octet-stream';
+  const sniffed = sniffImageMime(buf);
+  const mime = (row?.icon_mime && ALLOWED_APP_ICON_MIME.has(row.icon_mime) && row.icon_mime)
+    || sniffed
+    || 'application/octet-stream';
 
   res.setHeader('Content-Type', mime);
-  res.setHeader('Cache-Control', 'public, max-age=86400');
-  if (row.updated_at) {
+  res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=86400');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (row?.updated_at) {
     res.setHeader('Last-Modified', new Date(row.updated_at).toUTCString());
   }
-  res.send(row.icon_data);
+  res.end(buf);
 }));

@@ -56,12 +56,54 @@ export function appIconPublicUrl(appId: string, cacheBust?: string | number | Da
   return `${path}?v=${encodeURIComponent(String(stamp))}`;
 }
 
+/** Strip host / query / hash so uploaded paths compare reliably. */
+export function normalizeAppIconPath(url: string | null | undefined): string | null {
+  if (url == null) return null;
+  let s = String(url).trim();
+  if (!s) return null;
+  s = (s.split('#')[0] ?? '').split('?')[0] ?? '';
+  if (/^https?:\/\//i.test(s)) {
+    try {
+      s = new URL(s).pathname;
+    } catch {
+      return null;
+    }
+  }
+  if (!s.startsWith('/')) return null;
+  try {
+    // Decode once so %2F-safe ids still match appIconPublicPath()
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 export function isUploadedAppIconUrl(url: string | null | undefined, appId?: string): boolean {
-  if (!url) return false;
-  const path = String(url).split('?')[0] ?? '';
-  if (!path.startsWith(UPLOADED_APP_ICON_PREFIX) || !path.endsWith('/icon')) return false;
-  if (appId) return path === appIconPublicPath(appId);
+  const path = normalizeAppIconPath(url);
+  if (!path || !path.startsWith(UPLOADED_APP_ICON_PREFIX) || !path.endsWith('/icon')) return false;
+  if (appId) {
+    const expected = normalizeAppIconPath(appIconPublicPath(appId));
+    return Boolean(expected && path === expected);
+  }
   return true;
+}
+
+/** mysql2 / proxies sometimes return BLOB as string or Uint8Array — never trust Buffer.isBuffer alone. */
+export function coerceDbBinary(data: unknown): Buffer | null {
+  if (data == null) return null;
+  if (Buffer.isBuffer(data)) return data.length > 0 ? data : null;
+  if (data instanceof Uint8Array) {
+    return data.length > 0 ? Buffer.from(data) : null;
+  }
+  if (typeof data === 'string') {
+    // Binary-as-latin1 string (charset mis-decode) — recover raw bytes
+    if (!data.length) return null;
+    return Buffer.from(data, 'latin1');
+  }
+  if (Array.isArray(data) && data.every((b) => typeof b === 'number')) {
+    return data.length > 0 ? Buffer.from(data) : null;
+  }
+  return null;
 }
 
 export function sniffImageMime(buf: Buffer): string | null {
@@ -235,9 +277,26 @@ export async function clearApplicationIcon(params: {
 /**
  * When admin sets an external icon URL (or clears it), drop stored upload bytes
  * if the URL no longer points at the uploaded path.
+ * Absolute URLs / ?v= cache-busters that still refer to our upload path keep bytes.
  */
 export async function reconcileApplicationIconUrl(appId: string, iconUrl: string | null): Promise<void> {
-  if (isUploadedAppIconUrl(iconUrl, appId)) return;
+  if (isUploadedAppIconUrl(iconUrl, appId)) {
+    const canonical = appIconPublicPath(appId);
+    await execute(
+      `UPDATE applications
+          SET icon_url = ?, updated_at = UTC_TIMESTAMP()
+        WHERE id = ?`,
+      [canonical, appId],
+    );
+    const app = await queryOne<{ slug: string }>(
+      `SELECT slug FROM applications WHERE id = ? LIMIT 1`,
+      [appId],
+    );
+    if (app?.slug) {
+      await syncIconUrlToSamlBySlug(app.slug, canonical);
+    }
+    return;
+  }
   await execute(
     `UPDATE applications
         SET icon_data = NULL, icon_mime = NULL, icon_url = ?, updated_at = UTC_TIMESTAMP()
@@ -279,14 +338,20 @@ export async function getApplicationIconRow(appId: string): Promise<{
   icon_mime: string | null;
   updated_at: Date | null;
 } | null> {
-  return queryOne<{
-    icon_data: Buffer | null;
+  const row = await queryOne<{
+    icon_data: unknown;
     icon_mime: string | null;
     updated_at: Date | null;
   }>(
     `SELECT icon_data, icon_mime, updated_at FROM applications WHERE id = ? LIMIT 1`,
     [appId],
   );
+  if (!row) return null;
+  return {
+    icon_data: coerceDbBinary(row.icon_data),
+    icon_mime: row.icon_mime,
+    updated_at: row.updated_at,
+  };
 }
 
 /** Parse + validate upload body; throws Error with user-facing message on failure. */

@@ -1135,6 +1135,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-25 — Fix app icon / branding logo corruption on serve
+
+**Why** — Uploaded app icons showed “Uploaded” but the preview was a broken image: MySQL BLOB bytes were sometimes not returned as `Buffer`, and saving the form with an absolute/`?v=` icon URL caused `reconcileApplicationIconUrl` to **wipe `icon_data`**.
+
+**What changed:**
+
+- **`src/services/app-icons.ts`** — `coerceDbBinary`; normalize upload paths (host/`?v=`); reconcile keeps bytes for our upload URLs.
+- **`src/api/app-icons.ts`** / **`config-branding.ts`** — serve coerced buffers; sniff MIME; `res.end(buf)`.
+- **`src/db/connection.ts`** — `typeCast` returns Buffer for BLOB columns.
+- **`web/js/app-icon-ui.js`** — store canonical path after upload; preview `onerror` hint.
+
 ### (pending) — 2026-09-25 — Enforce MFA grace end (no endless skip)
 
 **Why** — After the MFA setup grace period ended, users could still click skip / “Set up on next sign-in” and get a portal session. Redis grace keys used a TTL equal to the grace window, so once the key expired the next login started a **new** grace window (`SET NX`).
