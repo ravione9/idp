@@ -69,7 +69,7 @@ const AUTH_ERROR_MESSAGES = {
   email_not_verified:
     'Your Google email address is not verified.',
   no_employee_record:
-    'No active account was found for this email. Ask an administrator to sync your user from Google Workspace or create your account.',
+    'No active IdP account was found for this Google email. Ask an administrator to sync your user (check email_corp matches your Workspace address, including .com / .in).',
   adaptive_blocked:
     'Sign-in was blocked by the security policy. Contact an administrator if you believe this is a mistake.',
   auth_failed:
@@ -520,9 +520,10 @@ export function renderLogin() {
         <div id="pw-error"></div>
         <form id="password-form">
           <div class="field">
-            <label for="password">Password</label>
+            <label for="password">Lenskart AD Password</label>
             <input id="password" name="password" type="password" required autocomplete="current-password" />
           </div>
+          <p class="muted" style="font-size:0.75rem;margin:0 0 0.75rem">Use your Active Directory password — not your Gmail password. For Gmail, go back and choose <strong>Login with Lenskart Gmail</strong>.</p>
           <button type="submit" class="btn btn-primary btn-block btn-lg auth-continue">Sign in</button>
         </form>
       </div>

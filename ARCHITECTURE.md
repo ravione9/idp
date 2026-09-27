@@ -1135,6 +1135,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-27 — Google SSO employee match + AD no-such-account mislabel
+
+**Why** — Login Attempts showed `no-such-account` for users who believed they used Google. That reason is only written by the **AD password** path (Gmail password on the AD form fails). Separately, Google SSO only matched exact `email_corp`, so `@lenskart.in` vs `@lenskart.com` looked like “account does not exist”, and Google outcomes were not audited.
+
+**What changed:**
+
+- **`src/auth/google-employee-lookup.ts`** — resolve via email_corp / personal / local_accounts / Google identity link / unique local-part across hosted domains.
+- **`src/auth/middleware.ts`** + **`auth-attempts.ts`** — log `google-ok:*` / `google-no-employee` / etc. to Login Attempts.
+- **`src/services/ad-auth.ts`** / **`local-auth.ts`** / **`radius-auth.ts`** — AD LDAP outages → `ad-unavailable` (503), not `no-such-account`.
+- **`web/js/views-end-user.js`** — password step labeled AD password; clarify Gmail uses the Google button.
+
 ### (pending) — 2026-09-25 — Google incremental group refresh + MFA grace harden
 
 **Why** — Scheduled Google sync always runs `INCREMENTAL` and previously **skipped** auto-all group membership refresh, so Identity → Groups stayed stale unless someone clicked Full Sync. Separately, Google portal sign-in could fail with `auth_failed` if `employees.mfa_grace_started_at` was missing (migration 069) because `ensureMfaGraceStarted` threw into the OAuth callback.

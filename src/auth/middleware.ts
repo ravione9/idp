@@ -45,6 +45,8 @@ import {
 } from './mfa-device-trust.js';
 import { evaluateAdaptiveAuth } from '../services/adaptive-auth-engine.js';
 import { ensureMfaGraceStarted, getGraceRemainingMs } from './mfa-grace.js';
+import { logAuthAttempt } from './auth-attempts.js';
+import { resolveEmployeeForGoogleLogin } from './google-employee-lookup.js';
 import crypto from 'node:crypto';
 
 // ---------------------------------------------------------------------------
@@ -273,6 +275,12 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
   if (googleOAuthError) {
     const desc = String(req.query['error_description'] ?? googleOAuthError).slice(0, 80);
     logger.warn({ googleOAuthError, desc, returnTo }, 'Google OAuth returned error to callback');
+    await logAuthAttempt(
+      '(google)',
+      getClientIp(req),
+      false,
+      googleOAuthError === 'access_denied' ? 'google-access-denied' : `google-oauth-error:${googleOAuthError}`,
+    );
     redirectLoginAuthError(
       res,
       googleOAuthError === 'access_denied' ? 'google_access_denied' : 'google_oauth_error',
@@ -337,31 +345,42 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
 
     const hd = typeof payload['hd'] === 'string' ? payload['hd'].trim().toLowerCase() : '';
     if (hd && !oidc.hostedDomains.includes(hd)) {
+      await logAuthAttempt(
+        String(payload['email'] ?? '(google)').trim().toLowerCase() || '(google)',
+        getClientIp(req),
+        false,
+        `google-wrong-hosted-domain:${hd}`,
+      );
       redirectLoginAuthError(res, 'wrong_hosted_domain', returnTo, hd);
       return;
     }
 
     const email = String(payload['email'] ?? '').trim().toLowerCase();
     if (!emailAllowedForGoogleDomains(email, oidc.hostedDomains)) {
+      await logAuthAttempt(email || '(google)', getClientIp(req), false, 'google-domain-not-permitted');
       redirectLoginAuthError(res, 'domain_not_permitted', returnTo, email.split('@')[1]);
       return;
     }
     if (!payload['email_verified']) {
+      await logAuthAttempt(email || '(google)', getClientIp(req), false, 'google-email-not-verified');
       redirectLoginAuthError(res, 'email_not_verified', returnTo);
       return;
     }
 
     const sub   = payload['sub'] as string;
+    const ip = getClientIp(req);
+    const userAgent = req.get('user-agent') ?? '';
 
-    // Lookup employee by corporate email (case-insensitive)
-    const emp = await queryOne<{ emp_id: string; role: string }>(
-      `SELECT emp_id, role FROM employees
-        WHERE LOWER(email_corp) = ? AND ilg_state IN ('ACTIVE', 'REACTIVATED')`,
-      [email],
-    );
+    // Match email_corp / personal / local_accounts / Google link / unique domain alias
+    const emp = await resolveEmployeeForGoogleLogin({
+      email,
+      googleSub: sub,
+      hostedDomains: oidc.hostedDomains,
+    });
 
     if (!emp) {
       logger.warn({ email }, 'Google login: no active employee record');
+      await logAuthAttempt(email, ip, false, 'google-no-employee');
       redirectLoginAuthError(res, 'no_employee_record', returnTo);
       return;
     }
@@ -373,8 +392,6 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
       [emp.emp_id],
     );
     const sessionRole = portalAccount?.role ?? 'EMPLOYEE';
-    const ip = getClientIp(req);
-    const userAgent = req.get('user-agent') ?? '';
 
     // Bound post-auth gates — SP-initiated SAML returnTo=/saml/resume/... must not leave
     // the browser spinning on accounts.google.com waiting for this callback.
@@ -424,6 +441,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
 
     if (adaptive.action === 'BLOCK') {
       logger.warn({ empId: emp.emp_id, ip, signals: adaptive.signals }, 'Google login blocked by adaptive auth');
+      await logAuthAttempt(email, ip, false, 'google-adaptive-blocked');
       redirectLoginAuthError(res, 'adaptive_blocked', returnTo);
       return;
     }
@@ -463,6 +481,12 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
           logger.warn({ err, empId: emp.emp_id }, 'MFA grace start failed after Google login — continuing enroll');
         });
         const graceRemainingMs = await getGraceRemainingMs(emp.emp_id, mfaRequirements.gracePeriodHours);
+        await logAuthAttempt(
+          email,
+          ip,
+          true,
+          `google-ok-mfa-enroll-pending:${emp.matchedVia}`,
+        );
         const params = new URLSearchParams({
           enroll_challenge: enrollChallengeId,
           email,
@@ -495,6 +519,12 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
         'EX',
         MFA_CHALLENGE_TTL_S,
       );
+      await logAuthAttempt(
+        email,
+        ip,
+        true,
+        `google-ok-mfa-pending:${emp.matchedVia}`,
+      );
       const availableMethods = challengeMethodsFromStatus(mfa);
       const params = new URLSearchParams({
         mfa_challenge: challengeId,
@@ -523,6 +553,7 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
     if (deviceTrusted && mfaRequirements.rememberDeviceHours > 0) {
       setMfaDeviceTrustCookie(res, emp.emp_id, mfaRequirements.rememberDeviceHours, userAgent);
     }
+    await logAuthAttempt(email, ip, true, `google-ok:${emp.matchedVia}`);
     // Prefer 303 so browsers leave accounts.google.com promptly toward /saml/resume/...
     res.redirect(303, returnTo);
   } catch (err) {
@@ -541,6 +572,12 @@ export async function googleCallbackHandler(req: Request, res: Response): Promis
           : {}),
       },
       'Google OIDC callback failed',
+    );
+    await logAuthAttempt(
+      '(google)',
+      getClientIp(req),
+      false,
+      oauthErr ? `google-callback-failed:${oauthErr}` : 'google-callback-failed',
     );
     if (
       oauthErr === 'invalid_client'

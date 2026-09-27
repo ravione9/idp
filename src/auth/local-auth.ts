@@ -51,6 +51,7 @@ import { isPortalAccessible } from '../fsm/states.js';
 import { PORTAL_OPERATOR_ROLES } from '../services/portal-roles.js';
 import { markSessionMfaFresh } from '../services/app-mfa-stepup.js';
 import { clearMfaGrace, ensureMfaGraceStarted, getGraceRemainingMs } from './mfa-grace.js';
+import { logAuthAttempt } from './auth-attempts.js';
 
 export const MFA_CHALLENGE_PREFIX        = 'lilg:mfa-challenge:';
 export const MFA_ENROLL_CHALLENGE_PREFIX = 'lilg:mfa-enroll-challenge:';
@@ -294,14 +295,7 @@ export function isMfaChallengeRequired(opts: {
 }
 
 async function logAttempt(email: string, ip: string, success: boolean, reason?: string): Promise<void> {
-  try {
-    await query(
-      `INSERT INTO auth_attempts (email, ip, success, reason) VALUES (?, ?, ?, ?)`,
-      [email, ip || null, success ? 1 : 0, reason ?? null],
-    );
-  } catch (err) {
-    logger.warn({ err }, 'Failed to log auth attempt');
-  }
+  await logAuthAttempt(email, ip, success, reason);
 }
 
 async function issueSessionAndRespond(
@@ -407,8 +401,26 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
 
     if (!account) {
       // No local account at all — try AD corporate auth.
-      account = await authenticateAdCorporateUser(email, password);
-      if (!account) {
+      const ad = await authenticateAdCorporateUser(email, password);
+      if (ad.status === 'ok') {
+        account = ad.account;
+      } else if (ad.status === 'not_accessible') {
+        await logAttempt(email, ip, false, `account-suspended:${ad.ilg_state}`);
+        res.status(403).json({ error: 'Account is suspended', code: 'ACCOUNT_SUSPENDED' });
+        return;
+      } else if (ad.status === 'unavailable' || ad.status === 'no_connector') {
+        // Employee may exist — AD/LDAP was flaky. Do not log as no-such-account.
+        await logAttempt(email, ip, false, 'ad-unavailable');
+        res.status(503).json({
+          error: 'Directory sign-in is temporarily unavailable. Please try again in a moment.',
+          code: 'AD_UNAVAILABLE',
+        });
+        return;
+      } else if (ad.status === 'bad_credentials') {
+        await logAttempt(email, ip, false, 'bad-password');
+        res.status(401).json({ error: 'Invalid email or password' });
+        return;
+      } else {
         await logAttempt(email, ip, false, 'no-such-account');
         res.status(401).json({ error: 'Invalid email or password' });
         return;
@@ -420,13 +432,21 @@ export async function localLoginHandler(req: Request, res: Response): Promise<vo
       // Try AD before rejecting.
       const valid = await verifyLocalPassword(password, account.password_hash);
       if (!valid) {
-        const adAccount = await authenticateAdCorporateUser(email, password);
-        if (!adAccount) {
+        const ad = await authenticateAdCorporateUser(email, password);
+        if (ad.status === 'ok') {
+          account = ad.account;
+        } else if (ad.status === 'unavailable' || ad.status === 'no_connector') {
+          await logAttempt(email, ip, false, 'ad-unavailable');
+          res.status(503).json({
+            error: 'Directory sign-in is temporarily unavailable. Please try again in a moment.',
+            code: 'AD_UNAVAILABLE',
+          });
+          return;
+        } else {
           await logAttempt(email, ip, false, 'bad-password');
           res.status(401).json({ error: 'Invalid email or password' });
           return;
         }
-        account = adAccount; // refreshed account with updated hash
       }
     }
 
