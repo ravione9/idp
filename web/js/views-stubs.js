@@ -5824,6 +5824,30 @@ function initUsersTab(panel, me = null) {
     return `<span class="badge ${map[s]||'badge-neutral'}">${esc(s||'—')}</span>`;
   }
 
+  /** identity_sources may be string, array, or JSON-serialized Buffer — never call .split blindly. */
+  function parseIdentitySources(raw) {
+    if (raw == null || raw === '') return [];
+    if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean);
+    if (typeof raw === 'string') {
+      return raw.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    if (typeof raw === 'object') {
+      try {
+        if (Array.isArray(raw.data)) {
+          return new TextDecoder().decode(Uint8Array.from(raw.data))
+            .split(',').map((s) => s.trim()).filter(Boolean);
+        }
+        if (typeof raw.toString === 'function' && raw.toString !== Object.prototype.toString) {
+          const s = String(raw.toString());
+          if (s && s !== '[object Object]') {
+            return s.split(',').map((x) => x.trim()).filter(Boolean);
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    return [];
+  }
+
   // ── Build shell ──────────────────────────────────────────────────────────────
   panel.innerHTML = `
     <div id="ud-stats" class="stat-grid ds-stat-grid" hidden></div>
@@ -5970,45 +5994,37 @@ function initUsersTab(panel, me = null) {
     }
 
     const rows = users.map(u => {
-      const rawSources = u.identity_sources;
-      let sources = [];
-      if (Array.isArray(rawSources)) {
-        sources = rawSources.map(String).filter(Boolean);
-      } else if (typeof rawSources === 'string') {
-        sources = rawSources.split(',').map((s) => s.trim()).filter(Boolean);
-      } else if (rawSources && typeof rawSources === 'object' && Array.isArray(rawSources.data)) {
-        // JSON-serialized Node Buffer from a bad BLOB typeCast
-        try {
-          sources = new TextDecoder().decode(Uint8Array.from(rawSources.data))
-            .split(',').map((s) => s.trim()).filter(Boolean);
-        } catch { sources = []; }
-      }
-      const badges  = sources.length ? sources.map(srcBadge).join('') : srcBadge('LOCAL');
-      const displayId = u.employee_number || u.emp_id;
-      const init = (u.full_name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
-      const checked = selected.has(u.emp_id) ? 'checked' : '';
-      return `<tr style="cursor:pointer" class="ud-row" data-empid="${esc(u.emp_id)}">
-        <td onclick="event.stopPropagation()"><input type="checkbox" class="ud-check" data-empid="${esc(u.emp_id)}" ${checked}></td>
-        <td>
-          <div class="user-cell">
-            ${u.photo_url
-              ? `<img class="user-cell-avatar" src="${esc(u.photo_url)}" alt="" style="object-fit:cover;width:32px;height:32px;border-radius:50%">`
-              : `<div class="user-cell-avatar">${esc(init)}</div>`}
-            <div>
-              <div class="user-cell-name">${esc(u.full_name||'—')}</div>
-              <div class="user-cell-meta">${esc(displayId)}</div>
+      try {
+        const sources = parseIdentitySources(u.identity_sources);
+        const badges  = sources.length ? sources.map(srcBadge).join('') : srcBadge('LOCAL');
+        const displayId = u.employee_number || u.emp_id;
+        const init = String(u.full_name || '?').split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+        const checked = selected.has(u.emp_id) ? 'checked' : '';
+        return `<tr style="cursor:pointer" class="ud-row" data-empid="${esc(u.emp_id)}">
+          <td onclick="event.stopPropagation()"><input type="checkbox" class="ud-check" data-empid="${esc(u.emp_id)}" ${checked}></td>
+          <td>
+            <div class="user-cell">
+              ${u.photo_url
+                ? `<img class="user-cell-avatar" src="${esc(u.photo_url)}" alt="" style="object-fit:cover;width:32px;height:32px;border-radius:50%">`
+                : `<div class="user-cell-avatar">${esc(init)}</div>`}
+              <div>
+                <div class="user-cell-name">${esc(u.full_name||'—')}</div>
+                <div class="user-cell-meta">${esc(displayId)}</div>
+              </div>
             </div>
-          </div>
-        </td>
-        <td class="muted">${esc(u.email_corp||'—')}</td>
-        <td class="muted">${esc(u.dept_id||'—')}</td>
-        <td class="muted">${esc(u.designation || u.role || '—')}</td>
-        <td>${stateBadge(u.ilg_state)}</td>
-        <td>${badges}</td>
-        <td class="actions">
-          <button class="btn btn-sm btn-secondary ud-profile-btn" data-empid="${esc(u.emp_id)}">Profile</button>
-        </td>
-      </tr>`;
+          </td>
+          <td class="muted">${esc(u.email_corp||'—')}</td>
+          <td class="muted">${esc(u.dept_id||'—')}</td>
+          <td class="muted">${esc(u.designation || u.role || '—')}</td>
+          <td>${stateBadge(u.ilg_state)}</td>
+          <td>${badges}</td>
+          <td class="actions">
+            <button class="btn btn-sm btn-secondary ud-profile-btn" data-empid="${esc(u.emp_id)}">Profile</button>
+          </td>
+        </tr>`;
+      } catch (rowErr) {
+        return `<tr><td colspan="8"><div class="alert alert-error">${esc(rowErr?.message || 'Failed to render user row')}</div></td></tr>`;
+      }
     }).join('');
 
     const from = listTotal === 0 ? 0 : listOffset + 1;
