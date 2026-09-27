@@ -1135,6 +1135,15 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
+### (pending) — 2026-09-27 — Directory users search: harden identity_sources render
+
+**Why** — Universal Directory → Users could show “1 Matching current filters” with an empty red error bar: `identity_sources` from `GROUP_CONCAT` sometimes arrived as a non-string and the table renderer threw.
+
+**What changed:**
+
+- **`src/api/admin-users.ts`** — `CAST(... AS CHAR)` on `GROUP_CONCAT`; coerce `identity_sources` to a string before JSON.
+- **`web/js/views-stubs.js`** — `parseIdentitySources()` + per-row try/catch so one bad row cannot blank the list.
+
 ### (pending) — 2026-09-27 — Google SSO employee match + AD no-such-account mislabel
 
 **Why** — Login Attempts showed `no-such-account` for users who believed they used Google. That reason is only written by the **AD password** path (Gmail password on the AD form fails). Separately, Google SSO only matched exact `email_corp`, so `@lenskart.in` vs `@lenskart.com` looked like “account does not exist”, and Google outcomes were not audited.

@@ -198,9 +198,9 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
             e.mobile, e.location, e.cost_center, e.photo_url, e.attrs_synced_at, e.sync_status,
             CASE WHEN la.role IN ('ADMIN','SUPER_ADMIN','APP_CONTRIBUTOR','USER_GROUP_MANAGER','CUSTOM') THEN la.role ELSE NULL END AS portal_role,
             la.last_login_at, la.active AS local_active,
-            COALESCE(
+            CAST(COALESCE(
               GROUP_CONCAT(DISTINCT il.\`system\` ORDER BY il.\`system\` SEPARATOR ','), ''
-            ) AS identity_sources,
+            ) AS CHAR CHARACTER SET utf8mb4) AS identity_sources,
             MAX(il.last_synced_at) AS last_synced_at,
             COUNT(DISTINCT il.id) AS identity_link_count
        FROM employees e
@@ -252,7 +252,11 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   ).catch(() => null);
 
   res.json({
-    data: rows,
+    // Always stringify identity_sources — mysql2 may still surface GROUP_CONCAT as Buffer.
+    data: rows.map((row) => ({
+      ...row,
+      identity_sources: coerceIdentitySources(row['identity_sources']),
+    })),
     total: total?.n ?? 0,
     limit,
     offset,
@@ -264,6 +268,23 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     },
   });
 });
+
+/** Normalize GROUP_CONCAT / BLOB identity_sources to a plain CSV string for the SPA. */
+function coerceIdentitySources(raw: unknown): string {
+  if (raw == null) return '';
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean).join(',');
+  if (Buffer.isBuffer(raw)) return raw.toString('utf8');
+  if (raw instanceof Uint8Array) return Buffer.from(raw).toString('utf8');
+  if (typeof raw === 'object' && Array.isArray((raw as { data?: unknown }).data)) {
+    try {
+      return Buffer.from((raw as { data: number[] }).data).toString('utf8');
+    } catch {
+      return '';
+    }
+  }
+  return String(raw);
+}
 
 // ---------------------------------------------------------------------------
 // GET /export  — CSV export of directory users (must be before /:empId)
