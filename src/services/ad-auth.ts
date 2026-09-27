@@ -55,6 +55,41 @@ export interface AdLoginAccount {
   hrms_status:   string;
 }
 
+/** Structured AD login outcome — never collapse infra/password failures into "no account". */
+export type AdCorporateAuthResult =
+  | { status: 'ok'; account: AdLoginAccount }
+  | { status: 'no_employee' }
+  | { status: 'not_accessible'; ilg_state: string }
+  | { status: 'no_connector' }
+  | { status: 'bad_credentials'; detail?: string }
+  | { status: 'unavailable'; detail?: string };
+
+function isAdTransientFailure(msg: string): boolean {
+  return /ECONNRESET|ECONNABORTED|EPIPE|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|socket hang up|connection (?:closed|reset|timed? ?out)|timed? ?out|unavailable|Circuit open|LDAP_SERVER_DOWN|connect\s+E/i
+    .test(msg);
+}
+
+function isAdInvalidCredentials(msg: string): boolean {
+  return /invalidCredentials|LDAP_INVALID_CREDENTIALS|\b49e?\b|data 52e|data 532|data 533|data 701|data 773|AcceptSecurityContext|80090308|logon failure|bad password|wrong password|credential/i
+    .test(msg);
+}
+
+function classifyAdVerifyFailure(detail: string | undefined): 'bad_credentials' | 'unavailable' {
+  const msg = detail ?? '';
+  if (isAdInvalidCredentials(msg) && !isAdTransientFailure(msg)) {
+    return 'bad_credentials';
+  }
+  if (isAdTransientFailure(msg)) {
+    return 'unavailable';
+  }
+  // Ambiguous LDAP bind failures after a known employee row — treat as bad credentials
+  // (do not claim the account is missing).
+  if (isAdInvalidCredentials(msg)) {
+    return 'bad_credentials';
+  }
+  return 'unavailable';
+}
+
 async function upsertAdIdentityLink(empId: string, sam: string): Promise<void> {
   await execute(
     `INSERT INTO identity_links (emp_id, \`system\`, external_id, status, auth_kind, last_synced_at)
@@ -121,6 +156,24 @@ async function verifyAdLoginPassword(
   return { ok: false, error: errors.join(' | ') || 'AD login verification failed' };
 }
 
+async function verifyAdLoginPasswordWithRetry(
+  cfg: Record<string, unknown>,
+  email: string,
+  password: string,
+  samHint?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const first = await verifyAdLoginPassword(cfg, email, password, samHint);
+  if (first.ok) return first;
+  if (!isAdTransientFailure(first.error ?? '')) return first;
+
+  logger.warn(
+    { email, error: first.error },
+    'AD corporate login: transient LDAP failure — retrying once',
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  return verifyAdLoginPassword(cfg, email, password, samHint);
+}
+
 /**
  * Verify corporate email + password against Active Directory and provision a local_accounts
  * row so MFA and future local-hash logins work.
@@ -128,7 +181,7 @@ async function verifyAdLoginPassword(
 export async function authenticateAdCorporateUser(
   email: string,
   password: string,
-): Promise<AdLoginAccount | null> {
+): Promise<AdCorporateAuthResult> {
   const normalizedEmail = email.toLowerCase().trim();
 
   const employee = await queryOne<{
@@ -144,17 +197,17 @@ export async function authenticateAdCorporateUser(
   );
   if (!employee) {
     logger.info({ email: normalizedEmail }, 'AD login: no employee row for corporate email');
-    return null;
+    return { status: 'no_employee' };
   }
   if (!isPortalAccessible(employee.ilg_state)) {
     logger.info({ email: normalizedEmail, ilg_state: employee.ilg_state }, 'AD login: employee not portal-accessible');
-    return null;
+    return { status: 'not_accessible', ilg_state: employee.ilg_state };
   }
 
   const cfg = await loadActiveAdConnectorConfig();
   if (!cfg) {
     logger.warn({ email: normalizedEmail }, 'AD login: no AD/LDAP connector config found');
-    return null;
+    return { status: 'no_connector' };
   }
 
   const { empId: effectiveEmpId } = await backfillAdIdentityLinkIfMissing(
@@ -168,18 +221,26 @@ export async function authenticateAdCorporateUser(
     [effectiveEmpId],
   );
 
-  const verified = await verifyAdLoginPassword(
+  const verified = await verifyAdLoginPasswordWithRetry(
     cfg,
     normalizedEmail,
     password,
     adLink?.external_id,
   );
   if (!verified.ok) {
+    const kind = classifyAdVerifyFailure(verified.error);
     logger.warn(
-      { email: normalizedEmail, empId: effectiveEmpId, error: verified.error },
+      { email: normalizedEmail, empId: effectiveEmpId, error: verified.error, kind },
       'AD corporate login failed',
     );
-    return null;
+    if (kind === 'bad_credentials') {
+      return verified.error
+        ? { status: 'bad_credentials', detail: verified.error }
+        : { status: 'bad_credentials' };
+    }
+    return verified.error
+      ? { status: 'unavailable', detail: verified.error }
+      : { status: 'unavailable' };
   }
 
   if (!adLink?.external_id) {
@@ -229,9 +290,9 @@ export async function authenticateAdCorporateUser(
 
   if (!account) {
     logger.error({ empId: effectiveEmpId, email: normalizedEmail }, 'AD login: local account upsert failed');
-    return null;
+    return { status: 'unavailable', detail: 'local account upsert failed' };
   }
 
   logger.info({ empId: effectiveEmpId, email: normalizedEmail }, 'AD corporate login succeeded');
-  return account;
+  return { status: 'ok', account };
 }

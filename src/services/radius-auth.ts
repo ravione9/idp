@@ -244,18 +244,31 @@ export async function authenticateRadius(req: RadiusAuthRequest): Promise<Radius
 
   let account = await findLocalAccountByEmail(username);
   if (!account) {
-    account = await authenticateAdCorporateUser(username, password);
-    if (!account) {
+    const ad = await authenticateAdCorporateUser(username, password);
+    if (ad.status === 'ok') {
+      account = ad.account;
+    } else if (ad.status === 'unavailable' || ad.status === 'no_connector') {
+      return fail('ad-unavailable', { clientId: clientIdOf(client), policyId: policy.id });
+    } else if (ad.status === 'bad_credentials') {
+      return fail('bad-password', { clientId: clientIdOf(client), policyId: policy.id });
+    } else if (ad.status === 'not_accessible') {
+      return fail(`account-suspended:${ad.ilg_state}`, {
+        clientId: clientIdOf(client), policyId: policy.id,
+      });
+    } else {
       return fail('no-such-account', { clientId: clientIdOf(client), policyId: policy.id });
     }
   } else {
     const valid = await verifyLocalPassword(password, account.password_hash);
     if (!valid) {
       const ad = await authenticateAdCorporateUser(username, password);
-      if (!ad) {
+      if (ad.status === 'ok') {
+        account = ad.account;
+      } else if (ad.status === 'unavailable' || ad.status === 'no_connector') {
+        return fail('ad-unavailable', { clientId: clientIdOf(client), policyId: policy.id });
+      } else {
         return fail('bad-password', { clientId: clientIdOf(client), policyId: policy.id });
       }
-      account = ad;
     }
   }
 

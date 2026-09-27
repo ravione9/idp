@@ -115,13 +115,17 @@ export async function findLocalAccountByEmail(email: string): Promise<{
   ilg_state: string;
   hrms_status: string;
 } | null> {
+  const normalized = email.toLowerCase().trim();
   return queryOne(
     `SELECT la.id, la.emp_id, la.email, la.password_hash, la.role, la.active,
             e.ilg_state, e.hrms_status
        FROM local_accounts la
        JOIN employees e ON e.emp_id = la.emp_id
-      WHERE la.email = ? AND la.active = 1`,
-    [email.toLowerCase().trim()],
+      WHERE la.active = 1
+        AND (LOWER(la.email) = ? OR LOWER(e.email_corp) = ?)
+      ORDER BY CASE WHEN LOWER(la.email) = ? THEN 0 ELSE 1 END
+      LIMIT 1`,
+    [normalized, normalized, normalized],
   );
 }
 
