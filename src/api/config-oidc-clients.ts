@@ -21,6 +21,11 @@ import {
   resolveAppIdFromOidcClientId,
   storeApplicationIcon,
 } from '../services/app-icons.js';
+import {
+  configureAppScimProvisioningByAppId,
+  disableAppScimProvisioningByAppId,
+} from '../services/app-protocol-config.js';
+import { openSecret } from '../utils/secret-box.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -35,6 +40,61 @@ async function ensureAppIdForOidcClient(oidcClientId: string): Promise<string | 
   await ensureOidcAppMirrored(oidcClientId);
   return resolveAppIdFromOidcClientId(oidcClientId);
 }
+
+async function enrichOidcRowWithScim(row: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const appId = typeof row['app_id'] === 'string' ? row['app_id'] : null;
+  if (!appId) {
+    return {
+      ...row,
+      provisioning: 0,
+      scim_configured: 0,
+      scim_token_stored: 0,
+      scim_base_url: null,
+    };
+  }
+  const scim = await queryOne<{
+    provisioning: number;
+    scim_configured: number;
+    scim_token_stored: number;
+    scim_base_url: string | null;
+  }>(
+    `SELECT
+       COALESCE(a.provisioning, 0) AS provisioning,
+       EXISTS (
+         SELECT 1 FROM app_protocol_configs c
+          WHERE c.app_id = a.id AND c.protocol = 'SCIM' AND c.active = 1
+       ) AS scim_configured,
+       EXISTS (
+         SELECT 1 FROM app_protocol_configs c
+          WHERE c.app_id = a.id AND c.protocol = 'SCIM'
+       ) AS scim_token_stored,
+       (
+         SELECT JSON_UNQUOTE(JSON_EXTRACT(c.config, '$.baseUrl'))
+           FROM app_protocol_configs c
+          WHERE c.app_id = a.id AND c.protocol = 'SCIM'
+          ORDER BY c.active DESC
+          LIMIT 1
+       ) AS scim_base_url
+       FROM applications a
+      WHERE a.id = ?
+      LIMIT 1`,
+    [appId],
+  );
+  return {
+    ...row,
+    provisioning: Number(scim?.provisioning ?? 0),
+    scim_configured: Number(scim?.scim_configured ?? 0),
+    scim_token_stored: Number(scim?.scim_token_stored ?? 0),
+    scim_base_url: scim?.scim_base_url ?? null,
+  };
+}
+
+const scimConfigSchema = z.object({
+  baseUrl: z.string().url(),
+  bearerToken: z.string().min(1).max(4096).optional(),
+  deprovisionMode: z.enum(['DEACTIVATE', 'DELETE']).optional(),
+  provisionPath: z.string().min(1).max(120).optional(),
+});
 
 async function oidcColumns(): Promise<Set<string>> {
   const colRows = await query<{ COLUMN_NAME: string }>(
@@ -98,17 +158,20 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   );
   const enriched = await Promise.all(rows.map(async (row) => {
     const appId = cols.has('app_id') ? (row['app_id'] as string | null) : null;
-    if (!appId) return { ...row, icon_url: null, has_icon_upload: 0 };
-    const icon = await queryOne<{ icon_url: string | null; has_icon_upload: number }>(
-      `SELECT icon_url, CASE WHEN icon_data IS NOT NULL THEN 1 ELSE 0 END AS has_icon_upload
-         FROM applications WHERE id = ? LIMIT 1`,
-      [appId],
-    );
-    return {
-      ...row,
-      icon_url: icon?.icon_url ?? null,
-      has_icon_upload: Number(icon?.has_icon_upload ?? 0),
-    };
+    let next: Record<string, unknown> = { ...row, icon_url: null, has_icon_upload: 0 };
+    if (appId) {
+      const icon = await queryOne<{ icon_url: string | null; has_icon_upload: number }>(
+        `SELECT icon_url, CASE WHEN icon_data IS NOT NULL THEN 1 ELSE 0 END AS has_icon_upload
+           FROM applications WHERE id = ? LIMIT 1`,
+        [appId],
+      );
+      next = {
+        ...next,
+        icon_url: icon?.icon_url ?? null,
+        has_icon_upload: Number(icon?.has_icon_upload ?? 0),
+      };
+    }
+    return enrichOidcRowWithScim(next);
   }));
   res.json({ data: enriched });
 }));
@@ -149,7 +212,7 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
     row['icon_url'] = null;
     row['has_icon_upload'] = 0;
   }
-  res.json(row);
+  res.json(await enrichOidcRowWithScim(row));
 }));
 
 // POST /
@@ -391,6 +454,99 @@ router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
   }
 
   res.json({ success: true });
+}));
+
+// PUT /:id/scim-config — outbound SCIM create/disable on access grant/revoke (same engine as SAML)
+router.put('/:id/scim-config', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing client id' });
+    return;
+  }
+
+  const parsed = scimConfigSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const appId = await ensureAppIdForOidcClient(id);
+  if (!appId) {
+    res.status(404).json({ error: 'OIDC client or catalog application not found' });
+    return;
+  }
+
+  const existing = await queryOne<{ config: unknown }>(
+    `SELECT config FROM app_protocol_configs
+      WHERE app_id = ? AND protocol = 'SCIM'
+      ORDER BY active DESC
+      LIMIT 1`,
+    [appId],
+  );
+
+  let bearerToken = parsed.data.bearerToken?.trim();
+  if (!bearerToken && existing?.config) {
+    const cfg = typeof existing.config === 'string'
+      ? JSON.parse(existing.config) as Record<string, unknown>
+      : existing.config as Record<string, unknown>;
+    const stored = String(cfg['bearerToken'] ?? '').trim();
+    if (stored) {
+      try {
+        bearerToken = openSecret(stored);
+      } catch {
+        bearerToken = stored;
+      }
+    }
+  }
+  if (!bearerToken) {
+    res.status(400).json({ error: 'bearerToken is required when SCIM is not yet configured' });
+    return;
+  }
+
+  try {
+    const scimInput: {
+      baseUrl: string;
+      bearerToken: string;
+      deprovisionMode?: 'DEACTIVATE' | 'DELETE';
+      provisionPath?: string;
+    } = {
+      baseUrl: parsed.data.baseUrl,
+      bearerToken,
+    };
+    if (parsed.data.deprovisionMode) scimInput.deprovisionMode = parsed.data.deprovisionMode;
+    if (parsed.data.provisionPath) scimInput.provisionPath = parsed.data.provisionPath;
+
+    await configureAppScimProvisioningByAppId(appId, scimInput);
+    logger.info({ id, appId }, 'SCIM config updated for OIDC client');
+    res.json({ success: true, app_id: appId, provisioning: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to save SCIM config';
+    res.status(400).json({ error: msg });
+  }
+}));
+
+// DELETE /:id/scim-config — disable outbound SCIM (keeps sealed token for re-enable)
+router.delete('/:id/scim-config', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params['id'];
+  if (!id) {
+    res.status(400).json({ error: 'Missing client id' });
+    return;
+  }
+
+  const appId = await ensureAppIdForOidcClient(id);
+  if (!appId) {
+    res.status(404).json({ error: 'OIDC client or catalog application not found' });
+    return;
+  }
+
+  try {
+    await disableAppScimProvisioningByAppId(appId);
+    logger.info({ id, appId }, 'SCIM provisioning disabled for OIDC client');
+    res.json({ success: true, app_id: appId, provisioning: false });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to disable SCIM';
+    res.status(400).json({ error: msg });
+  }
 }));
 
 // POST /:id/icon — upload portal tile icon (stored on linked applications row)

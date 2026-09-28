@@ -156,6 +156,8 @@ Object.assign(api, {
   updateOidcClient:   (id, data) => f(`/api/admin/oidc-clients/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteOidcClient:   (id) => f(`/api/admin/oidc-clients/${id}`, { method: 'DELETE' }),
   rotateOidcSecret:   (id) => f(`/api/admin/oidc-clients/${id}/rotate-secret`, { method: 'POST' }),
+  updateOidcScimConfig: (id, data) => f(`/api/admin/oidc-clients/${id}/scim-config`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteOidcScimConfig: (id) => f(`/api/admin/oidc-clients/${id}/scim-config`, { method: 'DELETE' }),
 
   // PAM,
   listPamResources:    () => f('/api/admin/pam/resources'),

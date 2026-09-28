@@ -107,19 +107,43 @@ export async function configureAppScimProvisioning(
 ): Promise<void> {
   const appId = await getApplicationIdBySlug(slug);
   if (!appId) throw new Error(`Application catalog row missing for slug ${slug}`);
-  await upsertScimProtocolConfig(appId, scim);
-  await setApplicationProvisioning(slug, true);
+  await configureAppScimProvisioningByAppId(appId, scim);
   logger.info({ slug, baseUrl: scim.baseUrl }, 'SCIM protocol config saved for application');
+}
+
+/** Configure outbound SCIM by catalog application id (SAML or OIDC-linked apps). */
+export async function configureAppScimProvisioningByAppId(
+  appId: string,
+  scim: ScimProtocolConfigInput,
+): Promise<void> {
+  const app = await queryOne<{ id: string; slug: string }>(
+    `SELECT id, slug FROM applications WHERE id = ? LIMIT 1`,
+    [appId],
+  );
+  if (!app) throw new Error(`Application catalog row missing for id ${appId}`);
+  await upsertScimProtocolConfig(app.id, scim);
+  await setApplicationProvisioning(app.slug, true);
+  logger.info({ appId, slug: app.slug, baseUrl: scim.baseUrl }, 'SCIM protocol config saved for application');
 }
 
 /** Turn off outbound SCIM (keeps sealed token for optional re-enable). */
 export async function disableAppScimProvisioning(slug: string): Promise<void> {
   const appId = await getApplicationIdBySlug(slug);
   if (!appId) throw new Error(`Application catalog row missing for slug ${slug}`);
-  await execute(
-    `UPDATE app_protocol_configs SET active = 0 WHERE app_id = ? AND protocol = 'SCIM'`,
+  await disableAppScimProvisioningByAppId(appId);
+  logger.info({ slug }, 'SCIM provisioning disabled for application');
+}
+
+export async function disableAppScimProvisioningByAppId(appId: string): Promise<void> {
+  const app = await queryOne<{ id: string; slug: string }>(
+    `SELECT id, slug FROM applications WHERE id = ? LIMIT 1`,
     [appId],
   );
-  await setApplicationProvisioning(slug, false);
-  logger.info({ slug }, 'SCIM provisioning disabled for application');
+  if (!app) throw new Error(`Application catalog row missing for id ${appId}`);
+  await execute(
+    `UPDATE app_protocol_configs SET active = 0 WHERE app_id = ? AND protocol = 'SCIM'`,
+    [app.id],
+  );
+  await setApplicationProvisioning(app.slug, false);
+  logger.info({ appId, slug: app.slug }, 'SCIM provisioning disabled for application');
 }

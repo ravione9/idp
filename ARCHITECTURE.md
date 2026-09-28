@@ -397,7 +397,7 @@ This IdP is also an OpenID Provider. Relying parties register in `oidc_clients` 
 
 **Discovery hardening:** `code_challenge_methods_supported` is **`S256` only** (plain PKCE rejected). `token_endpoint_auth_methods_supported` advertises `client_secret_basic` and `client_secret_post` only. Registered **PUBLIC** clients still use `token_endpoint_auth_method=none` with **mandatory S256 PKCE** (not advertised in discovery).
 
-**Admin registry:** `GET/POST/PUT/DELETE /api/admin/oidc-clients`, `POST …/rotate-secret` (module: `authentication`). Secrets are bcrypt-hashed; plaintext shown once on create/rotate. Auth codes and refresh tokens are hashed in `oauth_tokens`; access/ID tokens are short-lived JWTs (not stored).
+**Admin registry:** `GET/POST/PUT/DELETE /api/admin/oidc-clients`, `POST …/rotate-secret`, `PUT/DELETE …/scim-config` (module: `authentication` / `applications`). Secrets are bcrypt-hashed; plaintext shown once on create/rotate. Optional **outbound SCIM** on the mirrored catalog app creates/deactivates SaaS users when Application Access Policy grants change (same engine as SAML SCIM). Auth codes and refresh tokens are hashed in `oauth_tokens`; access/ID tokens are short-lived JWTs (not stored).
 
 ### 6.4 Pre-seeded SAML applications
 
@@ -628,7 +628,8 @@ To add a new migration:
 | `GET` | `/saml/metadata` | IdP metadata XML (ADMIN+ session) |
 | `POST` | `/api/admin/saml-apps/parse-metadata` | Parse uploaded SP metadata XML → entity ID, ACS, SLO, NameID format |
 | `GET`/`PUT` | `/api/admin/general-settings/google-oidc` | Read/update Google inbound OIDC credentials (SUPER_ADMIN) |
-| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/oidc-clients[/:id]` | OIDC RP client registry (redirect URIs, scopes, grants, rotate secret) |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/oidc-clients[/:id]` | OIDC RP client registry (redirect URIs, scopes, grants, rotate secret; list/detail include `scim_configured` / `scim_base_url`) |
+| `PUT`/`DELETE` | `/api/admin/oidc-clients/:id/scim-config` | Outbound SCIM provisioning for the mirrored catalog app (create/deactivate on access grant/revoke) |
 | `POST`/`DELETE` | `/api/admin/oidc-clients/:id/icon` | Upload / remove portal tile icon for the linked catalog app |
 | `GET` | `/.well-known/openid-configuration` | OIDC discovery (public) |
 | `GET` | `/.well-known/jwks.json` | OIDC JWKS (public) |
@@ -1134,6 +1135,17 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 ## 15. Change log
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
+
+### (pending) — 2026-09-28 — OIDC apps: outbound SCIM provision / deprovision
+
+**Why** — SAML apps could enable SCIM lifecycle; OIDC clients could only SSO, so SaaS accounts were not auto-disabled on access revoke.
+
+**What changed:**
+
+- **`PUT/DELETE /api/admin/oidc-clients/:id/scim-config`** — same outbound SCIM config as SAML (base URL, bearer, DEACTIVATE/DELETE).
+- **`src/services/app-protocol-config.ts`** — configure/disable SCIM by catalog `app_id` (OIDC-mirrored applications).
+- **Admin → OIDC / OAuth** edit modal — Enable SCIM provisioning; list shows Lifecycle badge.
+- **`docs/Application_Integration_Requirements.md`** — OIDC + SCIM documented.
 
 ### (pending) — 2026-09-27 — Directory users search: harden identity_sources render
 

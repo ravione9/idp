@@ -3821,13 +3821,16 @@ export async function viewOidcApps(content, opts = {}) {
           <td class="muted" style="font-size:0.8rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
               title="${esc(parseJsonArr(c.redirect_uris).join(', '))}">${esc(parseJsonArr(c.redirect_uris).join(', ') || '—')}</td>
           <td>${c.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Off</span>'}</td>
+          <td>${c.scim_configured || c.provisioning
+            ? '<span class="badge badge-success">SCIM</span>'
+            : '<span class="muted" style="font-size:0.78rem">—</span>'}</td>
           <td class="actions" style="white-space:nowrap">
             <button class="btn btn-sm btn-secondary edit-oidc" data-id="${esc(String(c.id))}">Edit</button>
             <button class="btn btn-sm btn-secondary rotate-oidc" data-id="${esc(String(c.id))}" data-name="${esc(c.name || c.client_name || '')}">Rotate secret</button>
             <button class="btn btn-sm btn-danger del-oidc" data-id="${esc(String(c.id))}">Delete</button>
           </td>
         </tr>`).join('')
-        : `<tr><td colspan="6"><div class="empty-state"><p>No applications registered yet.</p><p class="muted" style="font-size:0.85rem">Register an app to create a Client ID and Client Secret.</p></div></td></tr>`;
+        : `<tr><td colspan="7"><div class="empty-state"><p>No applications registered yet.</p><p class="muted" style="font-size:0.85rem">Register an app to create a Client ID and Client Secret.</p></div></td></tr>`;
 
       wrap.querySelector('#list-area').innerHTML = `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.75rem">
@@ -3836,7 +3839,7 @@ export async function viewOidcApps(content, opts = {}) {
           </h2>
         </div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Name</th><th>Client ID</th><th>Grants</th><th>Redirect URIs</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Client ID</th><th>Grants</th><th>Redirect URIs</th><th>Status</th><th>Lifecycle</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>`;
 
@@ -3870,6 +3873,8 @@ export async function viewOidcApps(content, opts = {}) {
     const uris = parseJsonArr(c.redirect_uris).join('\n');
     const scopes = parseJsonArr(c.scopes).join(' ');
     const grants = parseJsonArr(c.grant_types);
+    const scimOn = !!(c.scim_configured || c.provisioning);
+    const scimBase = (scimOn || c.scim_token_stored) && c.scim_base_url ? String(c.scim_base_url) : '';
     const bd = openModal(`<div class="modal"><div class="modal-header"><h2>Edit application</h2></div>
       <div class="modal-body">
         <div class="form-group"><label class="form-label">Display name</label>
@@ -3890,6 +3895,35 @@ export async function viewOidcApps(content, opts = {}) {
             <option value="1" ${c.active ? 'selected' : ''}>Active</option>
             <option value="0" ${!c.active ? 'selected' : ''}>Off</option>
           </select></div>
+        <div class="form-group" style="margin-top:0.5rem;padding-top:1rem;border-top:1px solid var(--border)">
+          <label class="mfa-toggle-row" style="display:flex;gap:0.55rem;align-items:flex-start;cursor:pointer;margin:0 0 0.75rem">
+            <input type="checkbox" id="e-scim-enabled" ${scimOn ? 'checked' : ''} style="margin-top:0.2rem">
+            <span>
+              <strong>Enable SCIM provisioning</strong>
+              <span class="badge ${scimOn ? 'badge-success' : 'badge-neutral'}" style="margin-left:0.35rem">${scimOn ? 'Configured' : 'Optional'}</span>
+              <span class="muted" style="display:block;font-size:0.78rem;font-weight:400;margin-top:0.2rem">
+                Auto-create / deactivate users in the SaaS when Application Access Policy grants are added or revoked. OIDC login alone does not disable accounts.
+              </span>
+            </span>
+          </label>
+          <div id="e-scim-fields" ${scimOn ? '' : 'hidden'}>
+            <div class="form-group">
+              <label class="form-label">SCIM Base URL</label>
+              <input class="form-input" id="e-scim-url" type="url" value="${esc(scimBase)}" placeholder="https://api.example.com/scim/v2">
+            </div>
+            <div class="form-group">
+              <label class="form-label">SCIM Bearer Token ${scimOn || c.scim_token_stored ? '<span class="muted" style="font-weight:400">(leave blank to keep existing)</span>' : '<span style="color:var(--danger)">*</span>'}</label>
+              <input class="form-input" id="e-scim-token" type="password" value="" placeholder="Token from app admin → Provisioning" autocomplete="off">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Deprovision action</label>
+              <select class="form-select" id="e-scim-deprov">
+                <option value="DEACTIVATE">Deactivate user (recommended)</option>
+                <option value="DELETE">Delete user</option>
+              </select>
+            </div>
+          </div>
+        </div>
         <div id="e-err"></div>
       </div>
       <div class="modal-footer">
@@ -3902,6 +3936,11 @@ export async function viewOidcApps(content, opts = {}) {
       resolveTarget: () => ({ oidcClientId: c.id }),
       onError: (msg) => { bd.querySelector('#e-err').innerHTML = `<div class="alert alert-error">${esc(msg)}</div>`; },
     });
+    const scimEnabled = bd.querySelector('#e-scim-enabled');
+    const scimFields = bd.querySelector('#e-scim-fields');
+    scimEnabled?.addEventListener('change', () => {
+      if (scimFields) scimFields.hidden = !scimEnabled.checked;
+    });
     bd.querySelector('#e-cancel').addEventListener('click', () => bd.remove());
     bd.querySelector('#e-save').addEventListener('click', async () => {
       const errEl = bd.querySelector('#e-err');
@@ -3913,6 +3952,22 @@ export async function viewOidcApps(content, opts = {}) {
       if (bd.querySelector('#e-g-refresh').checked) grant_types.push('refresh_token');
       if (!redirect_uris.length) { errEl.innerHTML = `<div class="alert alert-error">At least one redirect URI is required.</div>`; return; }
       if (!scopesArr.includes('openid')) { errEl.innerHTML = `<div class="alert alert-error">Scopes must include openid.</div>`; return; }
+
+      const scimChecked = !!bd.querySelector('#e-scim-enabled')?.checked;
+      let scimPayload = null;
+      if (scimChecked) {
+        const baseUrl = bd.querySelector('#e-scim-url')?.value?.trim().replace(/\/+$/, '');
+        const token = bd.querySelector('#e-scim-token')?.value?.trim();
+        const deprovisionMode = bd.querySelector('#e-scim-deprov')?.value || 'DEACTIVATE';
+        if (!baseUrl) { errEl.innerHTML = `<div class="alert alert-error">SCIM base URL is required when SCIM is enabled.</div>`; return; }
+        if (!token && !(c.scim_configured || c.scim_token_stored || c.provisioning)) {
+          errEl.innerHTML = `<div class="alert alert-error">SCIM bearer token is required when SCIM is enabled.</div>`;
+          return;
+        }
+        scimPayload = { baseUrl, deprovisionMode };
+        if (token) scimPayload.bearerToken = token;
+      }
+
       try {
         await api.updateOidcClient(c.id, {
           name: bd.querySelector('#e-name').value.trim(),
@@ -3921,6 +3976,11 @@ export async function viewOidcApps(content, opts = {}) {
           grant_types,
           active: Number(bd.querySelector('#e-active').value),
         });
+        if (!scimChecked && (c.scim_configured || c.provisioning)) {
+          await api.deleteOidcScimConfig(c.id);
+        } else if (scimPayload) {
+          await api.updateOidcScimConfig(c.id, scimPayload);
+        }
         bd.remove();
         if (onDone) onDone();
       } catch (e) {
