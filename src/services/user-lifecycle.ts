@@ -457,3 +457,168 @@ export async function deprovisionUser(empId: string, reason: string, initiatedBy
 
   logger.info({ empId, oldState, initiatedBy }, 'Employee deprovisioned');
 }
+
+export type EnableByEmailResult =
+  | { email: string; status: 'enabled'; empId: string; fromState: string }
+  | { email: string; status: 'already_enabled'; empId: string }
+  | { email: string; status: 'not_found' }
+  | { email: string; status: 'failed'; error: string };
+
+/**
+ * Enable an already-present ILG user by corporate email (unsuspend / reactivate / restore).
+ * Does not create users — email must match employees.email_corp.
+ */
+export async function enableExistingUserByEmail(
+  email: string,
+  initiatedBy: string,
+): Promise<EnableByEmailResult> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized || !normalized.includes('@')) {
+    return { email: normalized || email, status: 'failed', error: 'Invalid email' };
+  }
+
+  const emp = await queryOne<{ emp_id: string; ilg_state: string; email_corp: string }>(
+    `SELECT emp_id, ilg_state, email_corp FROM employees WHERE LOWER(email_corp) = ? LIMIT 1`,
+    [normalized],
+  );
+  if (!emp) {
+    return { email: normalized, status: 'not_found' };
+  }
+
+  const empId = emp.emp_id;
+  const fromState = emp.ilg_state as ILGState;
+  if (fromState === ILGState.ACTIVE) {
+    return { email: normalized, status: 'already_enabled', empId };
+  }
+
+  try {
+    // Restore local login after deprovision; revive soft-disabled directory links for ENABLE outbox.
+    await execute('UPDATE local_accounts SET active = 1 WHERE emp_id = ?', [empId]);
+    await execute(
+      `UPDATE identity_links SET status = 'ACTIVE', last_synced_at = UTC_TIMESTAMP()
+        WHERE emp_id = ? AND status = 'DISABLED'`,
+      [empId],
+    );
+
+    const reason = `Admin enable by email (${fromState} → ACTIVE)`;
+
+    if (fromState === ILGState.REACTIVATED) {
+      await fsm.transition({
+        empId,
+        toState: ILGState.ACTIVE,
+        actor: TransitionActor.ADMIN,
+        actorId: initiatedBy,
+        origin: TransitionOrigin.LILG,
+        reasonCode: 'ENABLE_BY_EMAIL:ACTIVE',
+        evidence: { email: normalized, fromState, action: 'USER_ENABLE_BY_EMAIL' },
+      });
+    } else if (isValidTransition(fromState, ILGState.REACTIVATED)) {
+      await fsm.transition({
+        empId,
+        toState: ILGState.REACTIVATED,
+        actor: TransitionActor.ADMIN,
+        actorId: initiatedBy,
+        origin: TransitionOrigin.LILG,
+        reasonCode: `ENABLE_BY_EMAIL:${fromState}`,
+        evidence: { email: normalized, action: 'USER_ENABLE_BY_EMAIL' },
+      });
+      await fsm.transition({
+        empId,
+        toState: ILGState.ACTIVE,
+        actor: TransitionActor.ADMIN,
+        actorId: initiatedBy,
+        origin: TransitionOrigin.LILG,
+        reasonCode: 'ENABLE_BY_EMAIL:ACTIVE',
+        evidence: { email: normalized, fromState, action: 'USER_ENABLE_BY_EMAIL' },
+      });
+    } else if (isValidTransition(fromState, ILGState.ACTIVE)) {
+      await fsm.transition({
+        empId,
+        toState: ILGState.ACTIVE,
+        actor: TransitionActor.ADMIN,
+        actorId: initiatedBy,
+        origin: TransitionOrigin.LILG,
+        reasonCode: 'ENABLE_BY_EMAIL:ACTIVE',
+        evidence: { email: normalized, fromState, action: 'USER_ENABLE_BY_EMAIL' },
+      });
+    } else {
+      return {
+        email: normalized,
+        status: 'failed',
+        error: `Cannot enable from state ${fromState}`,
+      };
+    }
+
+    await propagatePortalEnableToAd(empId).catch((err) =>
+      logger.warn({ empId, err }, 'enableExistingUserByEmail: immediate AD enable failed'),
+    );
+
+    await query(
+      `INSERT INTO lifecycle_events (emp_id, event_type, old_state, new_state, reason, initiated_by)
+       VALUES (?, 'ENABLE_BY_EMAIL', ?, ?, ?, ?)`,
+      [empId, fromState, ILGState.ACTIVE, reason, initiatedBy],
+    );
+
+    await appendAuditLog(
+      initiatedBy,
+      'USER_ENABLE_BY_EMAIL',
+      `employee:${empId}`,
+      { empId, email: normalized, fromState, toState: ILGState.ACTIVE },
+    ).catch((err) => logger.warn({ err }, 'Failed to write audit log for USER_ENABLE_BY_EMAIL'));
+
+    logger.info({ empId, email: normalized, fromState, initiatedBy }, 'Employee enabled by email');
+    return { email: normalized, status: 'enabled', empId, fromState };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn({ err, email: normalized, empId, fromState }, 'Enable by email failed');
+    return { email: normalized, status: 'failed', error: message };
+  }
+}
+
+/**
+ * Bulk-enable already-present users from a list of emails (deduped, case-insensitive).
+ */
+export async function bulkEnableUsersByEmails(
+  emails: string[],
+  initiatedBy: string,
+): Promise<{
+  total: number;
+  enabled: number;
+  alreadyEnabled: number;
+  notFound: number;
+  failed: number;
+  results: EnableByEmailResult[];
+}> {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const raw of emails) {
+    const e = String(raw || '').trim().toLowerCase();
+    if (!e || !e.includes('@') || seen.has(e)) continue;
+    seen.add(e);
+    unique.push(e);
+  }
+
+  const results: EnableByEmailResult[] = [];
+  let enabled = 0;
+  let alreadyEnabled = 0;
+  let notFound = 0;
+  let failed = 0;
+
+  for (const email of unique) {
+    const r = await enableExistingUserByEmail(email, initiatedBy);
+    results.push(r);
+    if (r.status === 'enabled') enabled++;
+    else if (r.status === 'already_enabled') alreadyEnabled++;
+    else if (r.status === 'not_found') notFound++;
+    else failed++;
+  }
+
+  return {
+    total: unique.length,
+    enabled,
+    alreadyEnabled,
+    notFound,
+    failed,
+    results,
+  };
+}

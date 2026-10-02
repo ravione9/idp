@@ -40,7 +40,7 @@ import {
 } from '../auth/mfa-methods.js';
 import { PORTAL_ACCESSIBLE_STATES } from '../fsm/states.js';
 import { enforcePasswordPolicy } from '../services/password-policy.js';
-import { suspendUser, deprovisionUser } from '../services/user-lifecycle.js';
+import { suspendUser, deprovisionUser, bulkEnableUsersByEmails } from '../services/user-lifecycle.js';
 import { appendAuditLog } from '../utils/audit-log.js';
 import { writeDirectoryUserAudit } from '../services/google-attr-map.js';
 import crypto from 'crypto';
@@ -381,6 +381,29 @@ router.post('/bulk-action', asyncHandler(async (req: Request, res: Response) => 
     failed: results.filter((r) => !r.ok).length,
     results,
   });
+}));
+
+const bulkEnableByEmailSchema = z.object({
+  emails: z.array(z.string().min(1)).min(1).max(5000),
+});
+
+/** Enable already-present users by corporate email (no create). Must be before /:empId. */
+router.post('/bulk-enable-by-email', asyncHandler(async (req: Request, res: Response) => {
+  const parsed = bulkEnableByEmailSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+  const adminId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? 'system';
+  const summary = await bulkEnableUsersByEmails(parsed.data.emails, adminId);
+  await appendAuditLog(adminId, 'BULK_ENABLE_BY_EMAIL', 'employees', {
+    total: summary.total,
+    enabled: summary.enabled,
+    alreadyEnabled: summary.alreadyEnabled,
+    notFound: summary.notFound,
+    failed: summary.failed,
+  }).catch((err) => logger.warn({ err }, 'Failed to write audit log for BULK_ENABLE_BY_EMAIL'));
+  res.json(summary);
 }));
 
 // ---------------------------------------------------------------------------

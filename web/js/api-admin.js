@@ -367,6 +367,8 @@ Object.assign(api, {
   exportUsers:         (source = '', state = '') =>
     f(`/api/admin/users/export?source=${encodeURIComponent(source)}&state=${encodeURIComponent(state)}`),
   bulkUserAction:      (data) => f('/api/admin/users/bulk-action', { method: 'POST', body: JSON.stringify(data) }),
+  bulkEnableUsersByEmail: (emails) =>
+    f('/api/admin/users/bulk-enable-by-email', { method: 'POST', body: JSON.stringify({ emails }) }),
   adminMfaStatus:      (empId) => f(`/api/admin/users/${empId}/mfa`),
   adminMfaEnroll:      (empId) => f(`/api/admin/users/${empId}/mfa/enroll`, { method: 'POST' }),
   adminMfaConfirm:     (empId, code) => f(`/api/admin/users/${empId}/mfa/confirm`, { method: 'POST', body: JSON.stringify({ code }) }),

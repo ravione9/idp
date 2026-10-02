@@ -98,7 +98,8 @@ export const VALID_TRANSITIONS: Record<ILGState, ILGState[]> = {
     ILGState.ACTIVE,
   ],
   [ILGState.DEPROVISIONED]: [
-    // Terminal state — no further transitions allowed
+    // Admin restore when the person still exists in Google/AD (bulk enable by email).
+    ILGState.REACTIVATED,
   ],
 };
 

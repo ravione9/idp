@@ -4464,7 +4464,7 @@ function connectorStatusBadge(status) {
 }
 
 export async function viewDirectorySync(content, initialTab = 'sources', me = null) {
-  const allowed = new Set(['sources', 'users', 'mapping', 'sync']);
+  const allowed = new Set(['sources', 'users', 'mapping', 'sync', 'enable']);
   const validTab = allowed.has(initialTab) ? initialTab : 'sources';
   const headerActions = `
     <a class="btn btn-secondary btn-sm btn-with-icon" href="${esc(api.adAgentPackageUrl())}" download="lilg-ad-connector.zip">
@@ -4480,17 +4480,19 @@ export async function viewDirectorySync(content, initialTab = 'sources', me = nu
       <button type="button" class="inline-tab${validTab === 'users' ? ' active' : ''}" data-tab="users">Users</button>
       <button type="button" class="inline-tab${validTab === 'mapping' ? ' active' : ''}" data-tab="mapping">Attribute Mapping</button>
       <button type="button" class="inline-tab${validTab === 'sync' ? ' active' : ''}" data-tab="sync">Sync Settings</button>
+      <button type="button" class="inline-tab${validTab === 'enable' ? ' active' : ''}" data-tab="enable">Enable users</button>
     </div>
     <div id="tab-sources"></div>
     <div id="tab-users" style="display:none"></div>
     <div id="tab-mapping" style="display:none"></div>
     <div id="tab-sync" style="display:none"></div>
+    <div id="tab-enable" style="display:none"></div>
   </div>`));
   const wrap = content.firstChild;
 
   function showTab(name) {
     wrap.querySelectorAll('#ds-tabs .inline-tab').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
-    ['sources', 'users', 'mapping', 'sync'].forEach((t) => {
+    ['sources', 'users', 'mapping', 'sync', 'enable'].forEach((t) => {
       const elTab = wrap.querySelector('#tab-' + t);
       if (elTab) elTab.style.display = name === t ? '' : 'none';
     });
@@ -4507,6 +4509,7 @@ export async function viewDirectorySync(content, initialTab = 'sources', me = nu
   initUsersTab(wrap.querySelector('#tab-users'), me);
   initAttrMappingTab(wrap.querySelector('#tab-mapping'));
   initSyncSettingsTab(wrap.querySelector('#tab-sync'));
+  initEnableUsersTab(wrap.querySelector('#tab-enable'));
   showTab(validTab);
 }
 
@@ -5311,6 +5314,179 @@ function initSourcesTab(panel) {
   panel.querySelector('#ds-add-btn')?.addEventListener('click', openAddWizard);
   panel.closest('.admin-page')?.querySelector('#ds-add-header-btn')?.addEventListener('click', openAddWizard);
   load();
+}
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  TAB: Enable users by email (already-present only)          ║
+// ╚══════════════════════════════════════════════════════════════╝
+function initEnableUsersTab(panel) {
+  panel.innerHTML = `
+    <div class="ent-panel">
+      <div class="ent-panel-head">
+        <div class="panel-meta">
+          <h2>Enable users by email</h2>
+          <p class="subtitle">Reactivate already-present directory users (suspended, departed, or removed). Does not create new accounts.</p>
+        </div>
+      </div>
+      <div class="ent-panel-body">
+        <p class="muted" style="font-size:0.85rem;margin:0 0 1rem;line-height:1.55">
+          Paste corporate emails (one per line) or upload a CSV with an <code>email</code> column.
+          Matching users are set to <strong>ACTIVE</strong> and directory ENABLE is queued when links exist.
+        </p>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;align-items:center">
+          <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
+            Upload CSV… <input type="file" id="eu-file" accept=".csv,text/csv" hidden>
+          </label>
+          <span class="muted" style="font-size:0.8rem" id="eu-file-label"></span>
+        </div>
+        <label class="form-label" for="eu-emails">Email addresses</label>
+        <textarea class="form-textarea" id="eu-emails" rows="12" placeholder="user1@company.com&#10;user2@company.com"></textarea>
+        <div id="eu-err" style="margin-top:0.75rem"></div>
+        <div id="eu-summary" style="margin-top:0.75rem"></div>
+        <div id="eu-results" style="margin-top:0.75rem"></div>
+      </div>
+      <div class="ent-panel-body" style="display:flex;gap:0.5rem;flex-wrap:wrap;border-top:1px solid rgba(255,255,255,0.06)">
+        <button type="button" class="btn btn-primary" id="eu-run">Enable users</button>
+        <button type="button" class="btn btn-secondary" id="eu-clear">Clear</button>
+        <button type="button" class="btn btn-secondary" id="eu-download" hidden>Download report</button>
+      </div>
+    </div>`;
+
+  let lastResults = [];
+
+  function parseEmailsFromText(text) {
+    const seen = new Set();
+    const out = [];
+    for (const line of String(text || '').split(/[\r\n,;]+/)) {
+      const e = line.trim().toLowerCase().replace(/^["']|["']$/g, '');
+      if (!e || !e.includes('@') || seen.has(e)) continue;
+      seen.add(e);
+      out.push(e);
+    }
+    return out;
+  }
+
+  function parseEmailsFromCsv(text) {
+    const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim());
+    if (!lines.length) return [];
+    const headers = lines[0].split(',').map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
+    let emailIdx = headers.findIndex((h) => ['email', 'email_corp', 'corporate_email', 'work_email'].includes(h));
+    const start = emailIdx >= 0 ? 1 : 0;
+    if (emailIdx < 0) emailIdx = 0;
+    const seen = new Set();
+    const out = [];
+    for (let i = start; i < lines.length; i++) {
+      const cols = lines[i].split(',').map((c) => c.trim().replace(/^["']|["']$/g, ''));
+      const e = (cols[emailIdx] || '').toLowerCase();
+      if (!e || !e.includes('@') || seen.has(e)) continue;
+      seen.add(e);
+      out.push(e);
+    }
+    return out;
+  }
+
+  panel.querySelector('#eu-file')?.addEventListener('change', async (ev) => {
+    const file = ev.target.files?.[0];
+    panel.querySelector('#eu-err').innerHTML = '';
+    if (!file) return;
+    if (!/\.csv$/i.test(file.name) && file.type && !/csv|text/.test(file.type)) {
+      panel.querySelector('#eu-err').innerHTML = errHtml('Please upload a .csv file');
+      return;
+    }
+    try {
+      const text = await file.text();
+      const emails = parseEmailsFromCsv(text);
+      const ta = panel.querySelector('#eu-emails');
+      const existing = parseEmailsFromText(ta.value);
+      const merged = [...new Set([...existing, ...emails])];
+      ta.value = merged.join('\n');
+      panel.querySelector('#eu-file-label').textContent = `${file.name} — ${emails.length} email(s) loaded`;
+    } catch (e) {
+      panel.querySelector('#eu-err').innerHTML = errHtml(e.message || 'Could not read file');
+    }
+    ev.target.value = '';
+  });
+
+  panel.querySelector('#eu-clear')?.addEventListener('click', () => {
+    panel.querySelector('#eu-emails').value = '';
+    panel.querySelector('#eu-file-label').textContent = '';
+    panel.querySelector('#eu-err').innerHTML = '';
+    panel.querySelector('#eu-summary').innerHTML = '';
+    panel.querySelector('#eu-results').innerHTML = '';
+    panel.querySelector('#eu-download').hidden = true;
+    lastResults = [];
+  });
+
+  panel.querySelector('#eu-download')?.addEventListener('click', () => {
+    if (!lastResults.length) return;
+    csvDownload('enable-users-by-email-report.csv', [
+      ['email', 'status', 'emp_id', 'from_state', 'error'],
+      ...lastResults.map((r) => [
+        r.email || '',
+        r.status || '',
+        r.empId || '',
+        r.fromState || '',
+        r.error || '',
+      ]),
+    ]);
+  });
+
+  panel.querySelector('#eu-run')?.addEventListener('click', async () => {
+    const emails = parseEmailsFromText(panel.querySelector('#eu-emails').value);
+    panel.querySelector('#eu-err').innerHTML = '';
+    panel.querySelector('#eu-summary').innerHTML = '';
+    panel.querySelector('#eu-results').innerHTML = '';
+    if (!emails.length) {
+      panel.querySelector('#eu-err').innerHTML = errHtml('Add at least one email address');
+      return;
+    }
+    if (emails.length > 5000) {
+      panel.querySelector('#eu-err').innerHTML = errHtml('Maximum 5000 emails per run');
+      return;
+    }
+    const btn = panel.querySelector('#eu-run');
+    btn.disabled = true;
+    btn.textContent = `Enabling ${emails.length}…`;
+    try {
+      const r = await api.bulkEnableUsersByEmail(emails);
+      lastResults = r.results || [];
+      panel.querySelector('#eu-summary').innerHTML = `
+        <div class="alert alert-info" style="margin:0">
+          Processed <strong>${r.total ?? 0}</strong> —
+          enabled <strong>${r.enabled ?? 0}</strong>,
+          already active <strong>${r.alreadyEnabled ?? 0}</strong>,
+          not found <strong>${r.notFound ?? 0}</strong>,
+          failed <strong>${r.failed ?? 0}</strong>
+        </div>`;
+      if (lastResults.length) {
+        const rows = lastResults.map((row) => {
+          const badge = row.status === 'enabled' ? 'success'
+            : row.status === 'already_enabled' ? 'info'
+            : row.status === 'not_found' ? 'warning' : 'danger';
+          return `<tr>
+            <td>${esc(row.email || '')}</td>
+            <td><span class="badge badge-${badge}">${esc(row.status || '')}</span></td>
+            <td>${esc(row.empId || '—')}</td>
+            <td>${esc(row.fromState || '—')}</td>
+            <td class="muted">${esc(row.error || '')}</td>
+          </tr>`;
+        }).join('');
+        panel.querySelector('#eu-results').innerHTML = `
+          <div class="table-wrap" style="max-height:360px;overflow:auto">
+            <table class="data-table">
+              <thead><tr><th>Email</th><th>Status</th><th>Emp ID</th><th>From state</th><th>Error</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>`;
+        panel.querySelector('#eu-download').hidden = false;
+      }
+    } catch (e) {
+      panel.querySelector('#eu-err').innerHTML = errHtml(e.message || 'Enable failed');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Enable users';
+    }
+  });
 }
 
 // ╔══════════════════════════════════════════════════════════════╗
