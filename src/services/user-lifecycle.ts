@@ -299,7 +299,9 @@ export async function terminateUser(empId: string, reason: string, initiatedBy: 
 // Directory sync — propagate disable/enable from AD / Google within sync cycle
 // ---------------------------------------------------------------------------
 
-/** Suspend portal access when AD or Google marks a user disabled (sets ilg_state_since for 24h cleanup). */
+/** Suspend portal access when AD or Google marks a user disabled (sets ilg_state_since for 24h cleanup).
+ *  Skips portal suspend when admin setting skip_suspend_if_active_elsewhere is on and another
+ *  AD/Google identity link is still ACTIVE. */
 export async function applyDirectorySourceDisabled(
   empId: string,
   source: 'AD' | 'GOOGLE',
@@ -313,6 +315,15 @@ export async function applyDirectorySourceDisabled(
 
   if (!isPortalAccessible(emp.ilg_state)) {
     logger.debug({ empId, source, ilg_state: emp.ilg_state }, 'Directory disable: already suspended, skipping side effects');
+    return;
+  }
+
+  // Dual-directory rollout: keep portal ACTIVE if another AD/Google link is still ACTIVE.
+  if (await shouldSkipSuspendBecauseActiveElsewhere(empId, source)) {
+    logger.info(
+      { empId, source, reason },
+      'Directory disable: skip portal suspend — still ACTIVE in another directory (admin setting)',
+    );
     return;
   }
 
@@ -336,6 +347,38 @@ export async function applyDirectorySourceDisabled(
   }).catch((err) => logger.warn({ empId, source, err }, 'Directory disable: app access revoke failed'));
 
   logger.info({ empId, source, ilg_state: emp.ilg_state }, 'Directory source disabled — portal and app access revoked');
+}
+
+/**
+ * When general_settings.skip_suspend_if_active_elsewhere is on, do not portal-suspend
+ * if the employee still has an ACTIVE AD or Google identity link on a different system.
+ */
+async function shouldSkipSuspendBecauseActiveElsewhere(
+  empId: string,
+  disablingSource: 'AD' | 'GOOGLE',
+): Promise<boolean> {
+  try {
+    const setting = await queryOne<{ skip_suspend_if_active_elsewhere: number | boolean }>(
+      `SELECT skip_suspend_if_active_elsewhere FROM general_settings WHERE id = 1`,
+      [],
+    );
+    if (!setting || !Number(setting.skip_suspend_if_active_elsewhere)) return false;
+
+    const other = await queryOne<{ c: number }>(
+      `SELECT COUNT(*) AS c
+         FROM identity_links
+        WHERE emp_id = ?
+          AND status = 'ACTIVE'
+          AND \`system\` IN ('AD', 'GOOGLE')
+          AND \`system\` <> ?`,
+      [empId, disablingSource],
+    );
+    return Number(other?.c ?? 0) > 0;
+  } catch (err) {
+    // Column missing on older DBs before migration — fail open to previous behaviour (suspend).
+    logger.debug({ empId, disablingSource, err }, 'Directory disable: could not evaluate skip-suspend setting');
+    return false;
+  }
 }
 
 /** Re-enable portal access when directory source reports user active again (does not override admin suspend). */

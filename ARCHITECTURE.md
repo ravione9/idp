@@ -512,7 +512,7 @@ To add a new migration:
 | `vpn_profiles` | **(044)** VPN gateway catalog (AnyConnect, GlobalProtect, FortiClient, …) |
 | `radius_auth_log` | **(044)** RADIUS Accept/Reject audit trail |
 | `notifications` | **(003, 011, 049, 050)** Outbox — UUID `id`, service columns, legacy `recipient`/`template`/`payload` nullable; MFA Email OTP uses transactional send + audit (code not stored) |
-| `general_settings` | **(006, 012, 021)** Singleton operational settings (login toggles, maintenance mode, portal TLS certs, Google OIDC GUI overrides) |
+| `general_settings` | **(006, 012, 021, 070)** Singleton operational settings (login toggles, maintenance mode, portal TLS certs, Google OIDC GUI overrides, `skip_suspend_if_active_elsewhere` dual-directory lifecycle) |
 | `user_vault_entries` | **(051)** Personal credential vault — owner-scoped (`emp_id`); AES-256-GCM sealed secrets; separate from PAM `credential_vault_entries` |
 
 > The legacy `src/db/schema.sql` is **still present** for reference; it is NOT applied automatically — the `migrations/` folder is authoritative.
@@ -604,7 +604,7 @@ To add a new migration:
 | `POST` | `/api/admin/users/bulk-action` | Bulk enable/disable/delete/reset/assign/welcome |
 | `POST` | `/api/admin/users/bulk-enable-by-email` | Enable already-present users by `email_corp` (body `{ emails: string[] }`, max 5000). Does not create users. Returns per-email `enabled` / `already_enabled` / `not_found` / `failed`. FSM: suspended → `REACTIVATED` → `ACTIVE`; `DEPROVISIONED` → `REACTIVATED` → `ACTIVE`; `DEPARTED` → `ACTIVE`. |
 | `GET/PUT` | `/api/admin/directory/google/attr-maps` | Google → local attribute mapping |
-| `GET/PUT` | `/api/admin/directory/google/sync-settings` | Per-attribute sync toggles + frequency |
+| `GET/PUT` | `/api/admin/directory/google/sync-settings` | Per-attribute sync toggles + frequency; also reads/writes `general_settings.skip_suspend_if_active_elsewhere` (do not portal-suspend when another directory link is still ACTIVE) |
 | `POST` | `/api/admin/directory/google/sync-now` | Synchronous incremental Google sync |
 | `POST` | `/api/admin/directory/google/full-sync` | Full Google directory resync |
 | `GET` | `/api/admin/directory/google/lookup?email=` | Diagnose a Google email (user vs group vs missing; alias → primary) |
@@ -1062,7 +1062,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - ✅ **Google Workspace Sync** — `src/services/google-sync.ts` + `src/services/google-directory-config.ts`: inbound import **skips suspended Google accounts** (same rules as AD); outbound provision via Admin SDK; connector `config_json` supports **sync scope** (`syncOrgUnits`, `syncGroups`, `syncUsers`, `includeSubOrgUnits`, `provisionOrgUnit`) — blank OU/user scope syncs the full directory; non-empty filters combine with AND logic; blank/`*` **Sync Groups** auto-mirrors all Workspace groups into `groups` / `group_members` (paginated Admin SDK; requires `admin.directory.group.readonly` domain-wide delegation)
 - ✅ **Connector sync scheduler** — `src/services/connector-sync-scheduler.ts` ticks every 60s (Redis `withSchedLock('connector-sync', …)`); reads each connector's `sync_schedule` (`every:15m`, `every:1h`, custom interval, or 5-field cron) and triggers `POST`-equivalent sync when due for `CONNECTED`/`ACTIVE` connectors; Directory Sync UI exposes presets + custom interval/cron
 - ✅ **Password Writeback** — `src/services/password-writeback.ts` writes password changes to AD (unicodePwd/LDAP) and Google (Admin SDK); auto-links AD/Google identity by corporate email before writeback when connectors are active; AD writeback auto-retries StartTLS/LDAPS when the connector uses plain LDAP; wired into admin reset and `PUT /api/me/password`; logs to `password_writeback_log`
-- ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate|deprovision-applications` — admin suspend sets `SUSPENDED_HR` (hidden from directory, login blocked); revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`; `deprovision-applications` retries SCIM deactivate for suspended users; **`POST /api/admin/users/bulk-enable-by-email`** + Directory Sync → **Enable users** tab reactivates existing users by corporate email (no create); FSM allows `DEPROVISIONED → REACTIVATED` for admin restore
+- ✅ **User Lifecycle** — `src/services/user-lifecycle.ts` + `src/api/admin-lifecycle.ts`: `POST /api/admin/users/:empId/suspend|unsuspend|terminate|deprovision-applications` — admin suspend sets `SUSPENDED_HR` (hidden from directory, login blocked); revokes sessions (DB + Redis), enqueues DISABLE/ENABLE outbox ops to AD + Google, records `lifecycle_events`; `deprovision-applications` retries SCIM deactivate for suspended users; **`POST /api/admin/users/bulk-enable-by-email`** + Directory Sync → **Enable users** tab reactivates existing users by corporate email (no create); FSM allows `DEPROVISIONED → REACTIVATED` for admin restore; optional **`skip_suspend_if_active_elsewhere`** (General / Sync Settings) skips auto portal suspend when another AD/Google link remains ACTIVE
 - ✅ **Access review campaign generator** — `POST /api/iga/access-reviews` + `POST /api/iga/access-reviews/:id/items/:itemId/decision` in `src/services/access-review.ts` (scopes: ALL_USERS, APP_SPECIFIC, HIGH_RISK; auto-closes campaign when all items reviewed; REVOKE triggers user_entitlement revocation)
 - ✅ **SoD evaluator** — `src/services/sod-evaluator.ts` runs on every entitlement grant; populates `sod_violations`; full-scan available
 - ✅ **Notification dispatcher** — `src/services/notification.ts` dispatches EMAIL (nodemailer), SLACK (webhook), TEAMS, IN_APP; called by access-request, lifecycle, and review workflows
@@ -1132,15 +1132,25 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### \a91ac0\ — 2026-10-02 — Directory Sync: Enable users by email
+### `5c3d0f0` — 2026-10-03 — Skip portal suspend when still active in another directory
+
+**Why** — During dual-directory rollout, many users are suspended in one directory (e.g. Google) but still active in another (e.g. AD). Auto-suspend was locking them out of the portal.
+
+**What changed:**
+
+- **`migrations/070_skip_suspend_if_active_elsewhere.sql`** — `general_settings.skip_suspend_if_active_elsewhere` (default off).
+- **`applyDirectorySourceDisabled`** — when the setting is on, skip `SUSPENDED_AUTO` if another AD/Google identity link is still `ACTIVE` (the disabling source link is still marked disabled).
+- **UI** — checkbox in **Settings → General** and **Directory Sync → Sync Settings**.
+
+### `ba91ac0` — 2026-10-02 — Directory Sync: Enable users by email
 
 **Why** — Admins need to bulk-reactivate already-present users (suspended / departed / removed) from a list of corporate emails without creating new accounts.
 
 **What changed:**
 
-- **\src/fsm/states.ts\** — allow \DEPROVISIONED → REACTIVATED\ for admin restore.
-- **\src/services/user-lifecycle.ts\** — \nableExistingUserByEmail\ / \ulkEnableUsersByEmails\ (match \mail_corp\, FSM to \ACTIVE\, revive local account + disabled identity links).
-- **\POST /api/admin/users/bulk-enable-by-email\** — body \{ emails }\ (max 5000); returns per-email results.
+- **`src/fsm/states.ts`** — allow `DEPROVISIONED → REACTIVATED` for admin restore.
+- **`src/services/user-lifecycle.ts`** — `enableExistingUserByEmail` / `bulkEnableUsersByEmails` (match `email_corp`, FSM to `ACTIVE`, revive local account + disabled identity links).
+- **`POST /api/admin/users/bulk-enable-by-email`** — body `{ emails }` (max 5000); returns per-email results.
 - **Directory Sync → Enable users** tab — paste emails or upload CSV; summary + report download.
 
 ### `437a295` — 2026-09-25 — Enforce MFA grace end (no endless skip)

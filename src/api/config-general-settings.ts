@@ -156,17 +156,34 @@ router.put('/', asyncHandler(async (req: Request, res: Response) => {
     display_name, support_email, default_session_hours,
     session_absolute_hours, password_min_length, mfa_grace_period_days,
     audit_retention_days, allow_google_login, allow_local_login,
+    skip_suspend_if_active_elsewhere,
     maintenance_mode, maintenance_msg,
   } = req.body as Record<string, unknown>;
   const empId = (req as unknown as { user?: { empId?: string } }).user?.empId ?? null;
+
+  let skipSuspendFlag = 0;
+  if (skip_suspend_if_active_elsewhere !== undefined) {
+    skipSuspendFlag = skip_suspend_if_active_elsewhere ? 1 : 0;
+  } else {
+    try {
+      const cur = await queryOne<{ skip_suspend_if_active_elsewhere: number }>(
+        `SELECT skip_suspend_if_active_elsewhere FROM general_settings WHERE id = 1`,
+        [],
+      );
+      skipSuspendFlag = Number(cur?.skip_suspend_if_active_elsewhere ?? 0) ? 1 : 0;
+    } catch {
+      skipSuspendFlag = 0;
+    }
+  }
 
   await execute(
     `INSERT INTO general_settings
        (id, display_name, support_email, default_session_hours,
         session_absolute_hours, password_min_length, mfa_grace_period_days,
         audit_retention_days, allow_google_login, allow_local_login,
+        skip_suspend_if_active_elsewhere,
         maintenance_mode, maintenance_msg, updated_by, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())
      ON DUPLICATE KEY UPDATE
        display_name = VALUES(display_name),
        support_email = VALUES(support_email),
@@ -177,6 +194,7 @@ router.put('/', asyncHandler(async (req: Request, res: Response) => {
        audit_retention_days = VALUES(audit_retention_days),
        allow_google_login = VALUES(allow_google_login),
        allow_local_login = VALUES(allow_local_login),
+       skip_suspend_if_active_elsewhere = VALUES(skip_suspend_if_active_elsewhere),
        maintenance_mode = VALUES(maintenance_mode),
        maintenance_msg = VALUES(maintenance_msg),
        updated_by = VALUES(updated_by),
@@ -187,6 +205,7 @@ router.put('/', asyncHandler(async (req: Request, res: Response) => {
      audit_retention_days ?? 365,
      allow_google_login !== undefined ? (allow_google_login ? 1 : 0) : 1,
      allow_local_login !== undefined ? (allow_local_login ? 1 : 0) : 1,
+     skipSuspendFlag,
      maintenance_mode ? 1 : 0, maintenance_msg ?? null, empId],
   );
   invalidateSessionPolicyCache();

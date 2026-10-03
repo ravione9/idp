@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { requireAuth } from '../auth/middleware.js';
 import { requireRole, requireAnyPortalModule } from '../auth/rbac.js';
 import { asyncHandler } from '../utils/async-handler.js';
-import { query, queryOne } from '../db/connection.js';
+import { query, queryOne, execute } from '../db/connection.js';
 import { triggerConnectorSync } from '../services/connector-dispatcher.js';
 import { runGoogleFullSync, runGoogleSync, syncGoogleUserByEmail } from '../services/google-sync.js';
 import {
@@ -85,7 +85,22 @@ router.put('/attr-maps', asyncHandler(async (req: Request, res: Response) => {
 
 router.get('/sync-settings', asyncHandler(async (_req: Request, res: Response) => {
   const settings = await getGoogleSyncSettings();
-  res.json({ data: settings });
+  let skipSuspendIfActiveElsewhere = 0;
+  try {
+    const gs = await queryOne<{ skip_suspend_if_active_elsewhere: number }>(
+      `SELECT skip_suspend_if_active_elsewhere FROM general_settings WHERE id = 1`,
+      [],
+    );
+    skipSuspendIfActiveElsewhere = Number(gs?.skip_suspend_if_active_elsewhere ?? 0) ? 1 : 0;
+  } catch {
+    skipSuspendIfActiveElsewhere = 0;
+  }
+  res.json({
+    data: {
+      ...settings,
+      skip_suspend_if_active_elsewhere: skipSuspendIfActiveElsewhere,
+    },
+  });
 }));
 
 const settingsSchema = z.object({
@@ -100,6 +115,7 @@ const settingsSchema = z.object({
   sync_office_address: z.boolean().optional(),
   frequency: z.enum(['15m', '30m', '1h', 'manual']).optional(),
   disable_deleted: z.boolean().optional(),
+  skip_suspend_if_active_elsewhere: z.boolean().optional(),
 });
 
 router.put('/sync-settings', asyncHandler(async (req: Request, res: Response) => {
@@ -123,8 +139,38 @@ router.put('/sync-settings', asyncHandler(async (req: Request, res: Response) =>
     ...(d.frequency !== undefined ? { frequency: d.frequency } : {}),
     ...(d.disable_deleted !== undefined ? { disable_deleted: toFlag(d.disable_deleted)! } : {}),
   }, actor(req));
+
+  let skipSuspendIfActiveElsewhere = 0;
+  if (d.skip_suspend_if_active_elsewhere !== undefined) {
+    await execute(
+      `INSERT INTO general_settings (id, skip_suspend_if_active_elsewhere, updated_by, updated_at)
+       VALUES (1, ?, ?, UTC_TIMESTAMP())
+       ON DUPLICATE KEY UPDATE
+         skip_suspend_if_active_elsewhere = VALUES(skip_suspend_if_active_elsewhere),
+         updated_by = VALUES(updated_by),
+         updated_at = UTC_TIMESTAMP()`,
+      [d.skip_suspend_if_active_elsewhere ? 1 : 0, actor(req)],
+    );
+    skipSuspendIfActiveElsewhere = d.skip_suspend_if_active_elsewhere ? 1 : 0;
+  } else {
+    try {
+      const gs = await queryOne<{ skip_suspend_if_active_elsewhere: number }>(
+        `SELECT skip_suspend_if_active_elsewhere FROM general_settings WHERE id = 1`,
+        [],
+      );
+      skipSuspendIfActiveElsewhere = Number(gs?.skip_suspend_if_active_elsewhere ?? 0) ? 1 : 0;
+    } catch {
+      skipSuspendIfActiveElsewhere = 0;
+    }
+  }
+
   await appendAuditLog(actor(req), 'DIRECTORY_SYNC_SETTINGS_UPDATE', 'GOOGLE', { ...d });
-  res.json({ data: settings });
+  res.json({
+    data: {
+      ...settings,
+      skip_suspend_if_active_elsewhere: skipSuspendIfActiveElsewhere,
+    },
+  });
 }));
 
 router.post('/sync', asyncHandler(async (req: Request, res: Response) => {

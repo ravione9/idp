@@ -5670,7 +5670,7 @@ function initSyncSettingsTab(panel) {
     const defaults = {
       sync_employee_id: 1, sync_department: 1, sync_designation: 1, sync_manager: 1,
       sync_cost_center: 1, sync_mobile: 1, sync_location: 1, sync_profile_photo: 1,
-      sync_office_address: 1, disable_deleted: 0, frequency: 'manual',
+      sync_office_address: 1, disable_deleted: 0, skip_suspend_if_active_elsewhere: 0, frequency: 'manual',
     };
     let s = defaults;
     let apiReady = true;
@@ -5712,6 +5712,18 @@ function initSyncSettingsTab(panel) {
             ${chk('ss_sync_office_address', s.sync_office_address)}
             ${chk('ss_disable_deleted', s.disable_deleted)}
           </div>
+        </div>
+        <div class="ds-sync-options" style="margin-top:1.25rem">
+          <h3 class="ds-config-section__title">Directory lifecycle</h3>
+          <label class="form-check-row" style="align-items:flex-start;gap:0.5rem;max-width:42rem">
+            <input type="checkbox" id="ss_skip_suspend_elsewhere" ${s.skip_suspend_if_active_elsewhere ? 'checked' : ''} style="margin-top:3px">
+            <span>
+              Do not suspend portal user if still active in another directory
+              <span class="muted" style="display:block;font-size:0.8rem;margin-top:0.2rem;line-height:1.45">
+                If Google suspends (or AD disables) a user but they still have an ACTIVE link in the other directory, keep portal access. Turn this on during dual-directory rollout.
+              </span>
+            </span>
+          </label>
         </div>
         <div class="ds-sync-schedule">
           <div class="form-group" style="max-width:280px;margin:0">
@@ -5758,6 +5770,7 @@ function initSyncSettingsTab(panel) {
           sync_profile_photo: panel.querySelector('#ss_sync_profile_photo').checked,
           sync_office_address: panel.querySelector('#ss_sync_office_address').checked,
           disable_deleted: panel.querySelector('#ss_disable_deleted').checked,
+          skip_suspend_if_active_elsewhere: panel.querySelector('#ss_skip_suspend_elsewhere').checked,
           frequency: panel.querySelector('#ss_frequency').value,
         };
         try {
@@ -9025,6 +9038,18 @@ export async function viewGeneralSettings(content) {
             <label class="form-check"><input type="checkbox" id="gs-local" ${chk(s.allow_local_login)}> Allow Local Login</label>
             <label class="form-check"><input type="checkbox" id="gs-google" ${chk(s.allow_google_login !== 0 && s.allow_google_login !== false)}> Allow Google Login</label>
           </div>
+          <h2 style="margin-top:1.5rem">Directory lifecycle</h2>
+          <div class="form-group">
+            <label class="form-check" style="align-items:flex-start;gap:0.5rem">
+              <input type="checkbox" id="gs-skip-suspend-elsewhere" ${chk(s.skip_suspend_if_active_elsewhere)} style="margin-top:3px">
+              <span>
+                Do not suspend portal user if still active in another directory
+                <span class="muted" style="display:block;font-size:0.8rem;font-weight:400;margin-top:0.2rem">
+                  When AD or Google reports disabled/suspended, keep the user ACTIVE in the portal if they still have an ACTIVE link in the other directory (useful during dual-directory rollout).
+                </span>
+              </span>
+            </label>
+          </div>
           <p class="muted" style="font-size:0.8rem;margin:0 0 0.75rem">MFA policy and SMTP/SMS delivery are configured under Authentication → Strong Auth Methods → MFA Methods.</p>
           <div class="form-group"><label class="form-label">Password Min Length</label><input class="form-input" id="gs-pwmin" type="number" value="${s.password_min_length??10}"></div>
           <div class="form-group"><label class="form-label">MFA Grace Period (days)</label><input class="form-input" id="gs-mfagrace" type="number" value="${s.mfa_grace_period_days??14}"></div>
@@ -9122,6 +9147,7 @@ export async function viewGeneralSettings(content) {
         session_absolute_hours: parseInt(wrap.querySelector('#gs-abs').value, 10) || 24,
         allow_local_login: wrap.querySelector('#gs-local').checked,
         allow_google_login: wrap.querySelector('#gs-google').checked,
+        skip_suspend_if_active_elsewhere: wrap.querySelector('#gs-skip-suspend-elsewhere').checked,
         password_min_length: parseInt(wrap.querySelector('#gs-pwmin').value, 10) || 10,
         mfa_grace_period_days: parseInt(wrap.querySelector('#gs-mfagrace').value, 10) || 14,
         audit_retention_days: parseInt(wrap.querySelector('#gs-audit').value, 10) || 365,
