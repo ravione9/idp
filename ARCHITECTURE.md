@@ -1132,7 +1132,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 
 > **Convention:** newest entries at the top. Each entry includes commit hash, date, summary.
 
-### `5c3d0f0` — 2026-10-03 — Skip portal suspend when still active in another directory
+### `c7a22ee` — 2026-10-03 — Skip portal suspend when still active in another directory
 
 **Why** — During dual-directory rollout, many users are suspended in one directory (e.g. Google) but still active in another (e.g. AD). Auto-suspend was locking them out of the portal.
 
@@ -1142,7 +1142,7 @@ The platform is being delivered in **phases**. Schema is ahead of service code s
 - **`applyDirectorySourceDisabled`** — when the setting is on, skip `SUSPENDED_AUTO` if another AD/Google identity link is still `ACTIVE` (the disabling source link is still marked disabled).
 - **UI** — checkbox in **Settings → General** and **Directory Sync → Sync Settings**.
 
-### `ba91ac0` — 2026-10-02 — Directory Sync: Enable users by email
+### `4557742` — 2026-10-02 — Directory Sync: Enable users by email
 
 **Why** — Admins need to bulk-reactivate already-present users (suspended / departed / removed) from a list of corporate emails without creating new accounts.
 
